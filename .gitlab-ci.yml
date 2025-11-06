@@ -1,15 +1,15 @@
 stages: [lint, build, test]
 
-default:
-  cache:
-    key: "deps-${CI_JOB_NAME}-${CI_COMMIT_REF_SLUG}"
-    paths:
-      - target/
-      - src-tauri/target/
-      - .cargo/registry/
-      - .pnpm-store/
-      - node_modules/
-    policy: pull-push
+# Cache global simple (pas de key.files)
+cache:
+  key: "deps-${CI_JOB_NAME}-${CI_COMMIT_REF_SLUG}"
+  paths:
+    - target/
+    - src-tauri/target/
+    - .cargo/registry/
+    - .pnpm-store/
+    - node_modules/
+  policy: pull-push
 
 variables:
   CARGO_TERM_COLOR: always
