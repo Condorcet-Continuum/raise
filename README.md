@@ -17,7 +17,7 @@ Interface **IA Native multimodale** qui traduit automatiquement l'intention ing�
 - **Desktop**: Tauri 2.0+ (Rust + React)
 - **Frontend**: React 18, TypeScript, TailwindCSS
 - **Performance**: WebAssembly (Rust)
-- **IA**: Claude API / GPT-4 API
+- **IA**: - BenchMark (GPT-5 API / Claude API / Mistral API)
 - **Modélisation**: Arcadia/Capella (XMI/XML)
 
 ## 📦 Installation

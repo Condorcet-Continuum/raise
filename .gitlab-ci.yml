@@ -2,8 +2,7 @@ stages: [lint, build, test]
 
 default:
   cache:
-    key:
-      files: [Cargo.lock, pnpm-lock.yaml, yarn.lock, package-lock.json]
+    key: "deps-${CI_JOB_NAME}-${CI_COMMIT_REF_SLUG}"
     paths:
       - target/
       - src-tauri/target/
@@ -19,8 +18,9 @@ rust:lint:
   stage: lint
   image: rust:1
   rules:
-    - if: $CI_PROJECT_URL =~ /gitlab\.com/
-      when: on_success
+    - exists:
+        - Cargo.toml
+        - src-tauri/Cargo.toml
   script:
     - |
       if [ -f Cargo.toml ]; then MANIFEST="Cargo.toml"; \
@@ -84,6 +84,8 @@ web:build:
     elif [ -f yarn.lock ]; then yarn install --frozen-lockfile && yarn -s build; \
     else npm ci && npm run -s build; fi
   artifacts:
-    paths: [ "dist/", "build/" ]
+    paths:
+      - dist/
+      - build/
     when: on_success
     expire_in: 1 week
