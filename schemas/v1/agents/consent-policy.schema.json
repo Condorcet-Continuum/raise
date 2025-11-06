@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/agents/consent-policy.schema.json",
+  "title": "Consentement & Politiques",
+  "description": "Règles d’accès, consentements et politiques (allow/deny).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "consentRequired": {
+      "type": "boolean",
+      "default": true
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "../common/types/primitive-types.schema.json#/$defs/slug"
+          },
+          "effect": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/uriReference"
+            },
+            "uniqueItems": true
+          },
+          "condition": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "effect"
+        ]
+      },
+      "default": []
+    }
+  },
+  "examples": [
+    {
+      "consentRequired": true,
+      "policies": []
+    }
+  ]
+}

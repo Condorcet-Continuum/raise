@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/db/index.schema.json",
+  "title": "GenAptitude DB Index",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "space": {
+      "type": "string",
+      "minLength": 1
+    },
+    "database": {
+      "type": "string",
+      "minLength": 1
+    },
+    "collections": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "actors": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "actors/actor.schema.json",
+            "items": []
+          }
+        },
+        "roles": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "roles/role.schema.json",
+            "items": []
+          }
+        },
+        "mediators": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "mediators/mediator.schema.json",
+            "items": []
+          }
+        },
+        "agents": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "agents/agent-base.schema.json",
+            "items": []
+          }
+        },
+        "events": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "events/event.schema.json",
+            "items": []
+          }
+        },
+        "transactions": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "transactions/transaction.schema.json",
+            "items": []
+          }
+        },
+        "entities": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "entities/entity.schema.json",
+            "items": []
+          }
+        },
+        "articles": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "articles/article.schema.json",
+            "items": []
+          }
+        },
+        "workunits": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "workunits/workunit.schema.json",
+            "items": []
+          }
+        },
+        "views": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "views/view.schema.json",
+            "items": []
+          }
+        },
+        "orders": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "orders/order.schema.json",
+            "items": []
+          }
+        },
+        "configs": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "configs/config.schema.json",
+            "items": []
+          }
+        },
+        "dapps": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "dapps/dapp.schema.json",
+            "items": []
+          }
+        },
+        "compilers": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "compilers/compiler.schema.json",
+            "items": []
+          }
+        },
+        "contracts": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
+          "default": {
+            "schema": "contracts/contract.schema.json",
+            "items": []
+          }
+        }
+      },
+      "required": [
+        "actors",
+        "roles",
+        "mediators",
+        "agents",
+        "events",
+        "transactions",
+        "entities",
+        "articles",
+        "workunits",
+        "views",
+        "orders",
+        "configs",
+        "dapps",
+        "compilers",
+        "contracts"
+      ]
+    }
+  },
+  "required": ["version", "space", "database", "collections"],
+  "examples": [
+    {
+      "version": 1,
+      "space": "x",
+      "database": "x",
+      "collections": {
+        "actors": {
+          "schema": "actors/actor.schema.json",
+          "items": []
+        },
+        "roles": {
+          "schema": "roles/role.schema.json",
+          "items": []
+        },
+        "mediators": {
+          "schema": "mediators/mediator.schema.json",
+          "items": []
+        },
+        "agents": {
+          "schema": "agents/agent-base.schema.json",
+          "items": []
+        },
+        "events": {
+          "schema": "events/event.schema.json",
+          "items": []
+        },
+        "transactions": {
+          "schema": "transactions/transaction.schema.json",
+          "items": []
+        },
+        "entities": {
+          "schema": "entities/entity.schema.json",
+          "items": []
+        },
+        "articles": {
+          "schema": "articles/article.schema.json",
+          "items": []
+        },
+        "workunits": {
+          "schema": "workunits/workunit.schema.json",
+          "items": []
+        },
+        "views": {
+          "schema": "views/view.schema.json",
+          "items": []
+        },
+        "orders": {
+          "schema": "orders/order.schema.json",
+          "items": []
+        },
+        "configs": {
+          "schema": "configs/config.schema.json",
+          "items": []
+        },
+        "dapps": {
+          "schema": "dapps/dapp.schema.json",
+          "items": []
+        },
+        "compilers": {
+          "schema": "compilers/compiler.schema.json",
+          "items": []
+        },
+        "contracts": {
+          "schema": "contracts/contract.schema.json",
+          "items": []
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "@context": {
+    "@vocab": "https://genaptitude.io/vocab/system#",
+    "Requirement": "https://genaptitude.io/vocab/system#Requirement",
+    "id": "@id",
+    "title": "http://purl.org/dc/terms/title",
+    "description": "http://purl.org/dc/terms/description",
+    "traces_to": {
+      "@id": "https://genaptitude.io/vocab/system#tracesTo",
+      "@type": "@id"
+    },
+    "compliance": "https://genaptitude.io/vocab/system#compliance"
+  }
+}

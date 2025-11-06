@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://genaptitude.io/schemas/software/component",
+  "title": "Software Component",
+  "description": "Schéma pour un composant logiciel",
+  "type": "object",
+  "required": ["id", "name", "type"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Identifiant unique du composant"
+    },
+    "name": {
+      "type": "string",
+      "description": "Nom du composant"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["service", "library", "module", "function"],
+      "description": "Type de composant"
+    },
+    "description": {
+      "type": "string",
+      "description": "Description du composant"
+    },
+    "interfaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["input", "output", "bidirectional"] },
+          "protocol": { "type": "string" }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

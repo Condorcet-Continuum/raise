@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/prompts/prompt-template.schema.json",
+  "title": "Prompt Template (GenAptitude)",
+  "x_schemaVersion": "1.0.0",
+  "x_label": { "fr": "Modèle de prompt", "en": "Prompt Template" },
+  "x_description": {
+    "fr": "Décrit un modèle de prompt destiné à un système multi‑agents (MAS) et/ou MCP. Permet de définir le moteur de templating, les variables d'entrée (schémas JSON), les fragments réutilisables (partials) et la sortie sous forme de messages (system/user/assistant).",
+    "en": "Describes a prompt template for MAS/MCP. Defines templating engine, JSON‑schema‑based inputs, reusable partials and an output as ordered chat messages (system/user/assistant)."
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/slug",
+      "description": "Identifiant court du template (stable)."
+    },
+    "handle": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/slug",
+      "description": "Handle unique (peut servir de clé dans un registre de templates)."
+    },
+    "displayName": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+    "label": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+    },
+    "emoji": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/x_emoji"
+    },
+    "description": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+    },
+    "engine": {
+      "title": "Moteur de templating",
+      "type": "string",
+      "enum": ["handlebars", "mustache", "tera", "liquid", "jinja2", "plain"],
+      "default": "handlebars"
+    },
+    "format": {
+      "title": "Format principal de rendu",
+      "type": "string",
+      "enum": ["markdown", "yaml", "json", "text"],
+      "default": "markdown"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "$ref": "../common/types/primitive-types.schema.json#/$defs/slug" },
+      "uniqueItems": true,
+      "default": []
+    },
+    "inputs": {
+      "title": "Variables d'entrée (schémas JSON)",
+      "type": "array",
+      "items": { "$ref": "#/$defs/Input" },
+      "uniqueItems": true,
+      "default": []
+    },
+    "partials": {
+      "title": "Fragments de template réutilisables",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+      },
+      "default": {}
+    },
+    "messages": {
+      "title": "Messages rendus (ordre d'envoi)",
+      "type": "array",
+      "items": { "$ref": "#/$defs/Message" },
+      "minItems": 1
+    },
+    "createdAt": {
+      "title": "Date de création (UTC)",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime" },
+        {
+          "x_compute": {
+            "engine": "plan/v1",
+            "scope": "self",
+            "update": "if_missing",
+            "plan": { "op": "now_rfc3339" }
+          }
+        }
+      ]
+    },
+    "version": {
+      "title": "Version fonctionnelle du template",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/version/properties/version" },
+        { "default": "0.1.0" }
+      ]
+    }
+  },
+  "required": ["id", "handle", "displayName", "engine", "messages"],
+  "patternProperties": {
+    "^x_": {}
+  },
+  "$defs": {
+    "Role": {
+      "type": "string",
+      "enum": ["system", "developer", "user", "assistant", "tool"]
+    },
+    "Input": {
+      "title": "Entrée",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/slug",
+          "description": "Nom de la variable dans le contexte du template (ex: data, meta)."
+        },
+        "schema": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/uriReference",
+          "description": "URI $id d'un schéma JSON ou référence relative dans le repo."
+        },
+        "source": {
+          "title": "Stratégie de remplissage",
+          "type": "string",
+          "enum": ["provided", "instantiate"],
+          "default": "provided",
+          "description": "provided: attendu depuis l'appelant ; instantiate: généré minimalement depuis le schéma (en utilisant les defaults)."
+        },
+        "required": { "type": "boolean", "default": true },
+        "description": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+        },
+        "default": {
+          "description": "Valeur par défaut brute si l'entrée est absente.",
+          "nullable": true
+        }
+      },
+      "required": ["id", "schema"]
+    },
+    "Message": {
+      "title": "Message",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": { "$ref": "#/$defs/Role" },
+        "name": { "$ref": "../common/types/primitive-types.schema.json#/$defs/slug" },
+        "content": { "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString" },
+        "contentType": {
+          "type": "string",
+          "description": "MIME du contenu rendu",
+          "default": "text/markdown"
+        }
+      },
+      "required": ["role", "content"],
+      "patternProperties": { "^x_": {} }
+    }
+  },
+  "examples": [
+    {
+      "id": "plan-task",
+      "handle": "plan-task",
+      "displayName": "Planificateur de tâches",
+      "emoji": "🧭",
+      "engine": "handlebars",
+      "format": "markdown",
+      "tags": ["prompt", "template", "mas", "mcp"],
+      "inputs": [
+        {
+          "id": "data",
+          "schema": "https://genaptitude.local/schemas/v1/agents/agent.schema.json",
+          "source": "provided",
+          "required": true
+        },
+        {
+          "id": "meta",
+          "schema": "https://genaptitude.local/schemas/v1/common/types/primitive-types.schema.json",
+          "source": "instantiate",
+          "required": false
+        }
+      ],
+      "partials": {
+        "footer": "\n---\n_Schéma: {{data.$schema}} — Rendu: {{now_utc}}_\n"
+      },
+      "messages": [
+        {
+          "role": "system",
+          "content": "Tu es un agent de planification. Respecte strictement le format de sortie demandé."
+        },
+        {
+          "role": "user",
+          "contentType": "text/markdown",
+          "content": "# 🎯 Objectif\n\n{{meta.task}}\n\n# 📦 Données\n```json\n{{{data_pretty}}}\n```\n\n# ✅ Sortie attendue\n{{meta.expected}}\n\n{{> footer}}"
+        }
+      ]
+    }
+  ]
+}

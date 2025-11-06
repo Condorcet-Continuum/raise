@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/agents/mcp/core.schema.json",
+  "title": "MCP Core",
+  "description": "Schéma de base d’un serveur MCP (transport stdio/http/sse, ressources, outils, prompts).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "transport": {
+      "type": "string",
+      "enum": [
+        "stdio",
+        "http",
+        "sse"
+      ]
+    },
+    "stdio": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          },
+          "default": []
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          }
+        }
+      }
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base_url": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/url"
+        },
+        "sse_url": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/url"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Resource"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ToolRef"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "schemas": {
+      "type": "array",
+      "items": {
+        "$ref": "../../common/types/primitive-types.schema.json#/$defs/uriReference"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "prompts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Prompt"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "timeouts_ms": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "connect": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "read": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "retry_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "initial_interval_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_interval_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_elapsed_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "required": [
+    "transport"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "transport": {
+            "const": "stdio"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "stdio"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "transport": {
+            "const": "http"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "http"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "transport": {
+            "const": "sse"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "http"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "Resource": {
+      "title": "Ressource",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+        },
+        "uri": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/uriReference"
+        },
+        "description": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+        }
+      },
+      "required": [
+        "name",
+        "uri"
+      ],
+      "patternProperties": {
+        "^x_": {}
+      }
+    },
+    "ToolRef": {
+      "title": "Référence d’outil",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/slug"
+        },
+        "version": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "patternProperties": {
+        "^x_": {}
+      }
+    },
+    "Prompt": {
+      "title": "Prompt nommé",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/slug"
+        },
+        "name": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+        },
+        "content": {
+          "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+        }
+      },
+      "required": [
+        "id",
+        "content"
+      ],
+      "patternProperties": {
+        "^x_": {}
+      }
+    }
+  },
+  "examples": [
+    {
+      "transport": "stdio"
+    }
+  ]
+}

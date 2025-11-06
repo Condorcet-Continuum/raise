@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/configs/config.schema.json",
+  "title": "Config",
+  "description": "Paramètre de configuration typé.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Config",
+    "en": "Config"
+  },
+  "x_description": {
+    "fr": "Paramètre de configuration typé.",
+    "en": "Typed configuration entry."
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "unevaluatedProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri-reference"
+    },
+    "id": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/uuid"
+    },
+    "handle": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/slug",
+      "description": "Identifiant court lisible unique dans l’espace."
+    },
+    "displayName": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+    "label": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+    },
+    "emoji": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/x_emoji"
+    },
+    "domain": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/DomainName"
+    },
+    "description": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+      },
+      "default": []
+    },
+    "createdAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime"
+    },
+    "updatedAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Métadonnées libres."
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "../common/types/primitive-types.schema.json#/$defs/uri"
+      }
+    },
+    "key": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/slug"
+    },
+    "scope": {
+      "enum": [
+        "system",
+        "space",
+        "project",
+        "user"
+      ]
+    },
+    "value": {
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "object",
+        "array",
+        "null"
+      ]
+    },
+    "version": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/version"
+    }
+  },
+  "required": [
+    "id",
+    "handle",
+    "displayName",
+    "createdAt",
+    "key",
+    "value"
+  ],
+  "examples": [
+    {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "handle": "sample-slug",
+      "displayName": "example",
+      "createdAt": "1970-01-01T00:00:00Z",
+      "key": "sample-slug",
+      "value": {}
+    }
+  ]
+}

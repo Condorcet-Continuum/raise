@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/agents/mcp/gitlab.schema.json",
+  "title": "MCP GitLab",
+  "description": "Spécifique GitLab (API, projet, scopes).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "./core.schema.json"
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "projectId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+      },
+      "uniqueItems": true
+    }
+  },
+  "examples": [
+    {
+      "projectId": 1,
+      "scopes": [
+        "example"
+      ]
+    }
+  ]
+}

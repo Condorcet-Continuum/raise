@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/agents/mcp/drools.schema.json",
+  "title": "MCP Drools",
+  "description": "Spécifique Drools (kjar, règles, agenda).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "./core.schema.json"
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kjar": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+    "knowledgeBase": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+    "sessionName": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+    "ruleset": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    }
+  },
+  "examples": [
+    {
+      "kjar": "example",
+      "knowledgeBase": "example",
+      "sessionName": "example",
+      "ruleset": "example"
+    }
+  ]
+}

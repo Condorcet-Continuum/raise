@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/events/event.schema.json",
+  "title": "Event",
+  "x_schemaVersion": "1.1.2",
+  "x_label": {
+    "fr": "Événement",
+    "en": "Event"
+  },
+  "x_description": {
+    "fr": "Événement de type CloudEvents-like, enrichi d’un tableau optionnel de transactions liées (0..n).",
+    "en": "CloudEvents-like event, enriched with an optional array of related transactions (0..n)."
+  },
+  "x_tags": ["uo", "event", "transactions"],
+  "type": "object",
+  "additionalProperties": false,
+  "unevaluatedProperties": false,
+
+  "properties": {
+    "$schema": {
+      "title": "URI du schéma JSON de l’instance",
+      "type": "string",
+      "format": "uri-reference",
+      "default": "https://genaptitude.local/schemas/v1/events/event.schema.json"
+    },
+
+    "id": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/_id"
+    },
+
+    "type": {
+      "title": "Type d’événement",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString" },
+        { "default": "generic.event" }
+      ]
+    },
+
+    "source": {
+      "title": "Source (URI de l’émetteur)",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/uriReference" },
+        { "default": "https://example.com" }
+      ]
+    },
+
+    "subject": {
+      "title": "Sujet (identifiant logique de la ressource)",
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+
+    "time": {
+      "title": "Horodatage de l’événement (UTC)",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime" },
+        {
+          "default": "1970-01-01T00:00:00Z",
+          "x_compute": {
+            "engine": "plan/v1",
+            "scope": "self",
+            "update": "if_missing",
+            "plan": { "op": "now_rfc3339" }
+          }
+        }
+      ]
+    },
+
+    "version": {
+      "title": "Version de l’événement",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/version/properties/version" },
+        { "default": "1.0.0" }
+      ]
+    },
+
+    "actor": {
+      "title": "Acteur (ex. user:alice, system:planner)",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString" },
+        { "default": "system:unknown" }
+      ]
+    },
+
+    "entity": {
+      "title": "Entité métier concernée (ex. workunit, order, case)",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString" },
+        { "default": "unknown" }
+      ]
+    },
+
+    "correlationId": {
+      "title": "ID de corrélation (UUID)",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/uuid" },
+        {
+          "default": "00000000-0000-0000-0000-000000000000",
+          "x_compute": {
+            "engine": "plan/v1",
+            "scope": "self",
+            "update": "if_missing",
+            "plan": { "op": "uuid_v4" }
+          }
+        }
+      ]
+    },
+
+    "parentId": {
+      "title": "ID parent (UUID) pour chaînage d’événements",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/uuid" },
+        {
+          "x_compute": {
+            "engine": "plan/v1",
+            "scope": "self",
+            "update": "if_missing",
+            "plan": { "op": "uuid_v4" }
+          }
+        }
+      ]
+    },
+
+    "dataContentType": {
+      "title": "Type MIME de la charge utile",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString" },
+        { "default": "application/json" }
+      ]
+    },
+
+    "dataSchema": {
+      "title": "URI du schéma de la charge utile",
+      "allOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/uriReference" },
+        { "default": "about:blank" }
+      ]
+    },
+
+    "data": {
+      "title": "Payload métier",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+
+    "meta": {
+      "title": "Méta-données additionnelles",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+
+    "transactions": {
+      "title": "Transactions liées (0..n)",
+      "type": "array",
+      "items": { "$ref": "../transactions/transaction.schema.json" },
+      "default": []
+    }
+  },
+
+  "required": ["id", "type", "source", "time"],
+
+  "patternProperties": {
+    "^x_": {},
+    "^\\$schema$": { "type": "string", "format": "uri-reference" }
+  },
+
+  "examples": [
+    {
+      "type": "workunit.created",
+      "source": "https://example.com/workunits",
+      "subject": "wu-20250115-0001",
+      "time": "2025-01-15T10:23:45Z",
+      "version": "1.0.0",
+      "actor": "user:alice",
+      "entity": "workunit",
+      "dataContentType": "application/json",
+      "data": {
+        "title": "Création d’une UO",
+        "priority": "normal"
+      },
+      "meta": { "traceId": "9c1f7c2b8e12" },
+      "transactions": []
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "@context": {
+    "@vocab": "https://genaptitude.io/vocab/hardware#",
+    "Component": "https://genaptitude.io/vocab/hardware#Component",
+    "id": "@id",
+    "name": "http://schema.org/name",
+    "manufacturer": "http://schema.org/manufacturer",
+    "specifications": "https://genaptitude.io/vocab/hardware#specifications"
+  }
+}

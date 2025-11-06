@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://genaptitude.io/schemas/system/requirement",
+  "title": "System Requirement",
+  "description": "Schéma pour une exigence système",
+  "type": "object",
+  "required": ["id", "title", "level"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^REQ-[A-Z]+-[0-9]+$"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "level": {
+      "type": "string",
+      "enum": ["stakeholder", "system", "subsystem", "component"]
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "approved", "implemented", "verified"]
+    },
+    "traces_to": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "compliance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "standard": { "type": "string" },
+          "section": { "type": "string" }
+        }
+      }
+    }
+  }
+}

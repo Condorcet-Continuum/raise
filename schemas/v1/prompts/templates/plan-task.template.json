@@ -1,0 +1,39 @@
+{
+  "$schema": "https://genaptitude.local/schemas/v1/prompts/prompt-template.schema.json",
+  "id": "plan-task",
+  "handle": "plan-task",
+  "displayName": "Planificateur de tâches",
+  "emoji": "🧭",
+  "engine": "handlebars",
+  "format": "markdown",
+  "tags": ["prompt", "template", "mas", "mcp"],
+  "inputs": [
+    {
+      "id": "data",
+      "schema": "https://genaptitude.local/schemas/v1/agents/agent.schema.json",
+      "source": "provided",
+      "required": true
+    },
+    {
+      "id": "meta",
+      "schema": "https://genaptitude.local/schemas/v1/common/types/primitive-types.schema.json",
+      "source": "provided",
+      "required": false
+    }
+  ],
+  "partials": {
+    "footer": "\n---\n_Schéma: {{data.$schema}} — Rendu: {{now_utc}}_\n"
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "Tu es un agent de planification. Respecte strictement le format de sortie demandé."
+    },
+    {
+      "role": "user",
+      "contentType": "text/markdown",
+      "content": "# 🎯 Objectif\n\n{{meta.task}}\n\n# 📦 Données\n```json\n{{{data_pretty}}}\n```\n\n# ✅ Sortie attendue\n{{meta.expected}}\n\n{{> footer}}"
+    }
+  ],
+  "version": "0.1.0"
+}

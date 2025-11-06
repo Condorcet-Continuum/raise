@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/workunits/workunit.schema.json",
+  "title": "Work Unit",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Unité d’œuvre",
+    "en": "Work Unit"
+  },
+  "x_description": {
+    "fr": "Représentation d’une Unité d’Œuvre (UO) : identité, statut, méta, entrées/sorties, liens et bloc finance.",
+    "en": "Representation of a Work Unit (UO): identity, status, metadata, inputs/outputs, links and finance block."
+  },
+  "x_tags": [
+    "uo",
+    "workunit"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "unevaluatedProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri-reference"
+    },
+    "id": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/version/properties/version"
+    },
+    "code": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/slug"
+    },
+    "name": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+    },
+    "description": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "ready",
+        "in_progress",
+        "blocked",
+        "done",
+        "archived",
+        "canceled"
+      ],
+      "default": "draft"
+    },
+    "owner": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "createdAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime"
+    },
+    "updatedAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime"
+    },
+    "dueAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime"
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "../common/types/primitive-types.schema.json#/$defs/uri"
+      },
+      "default": {}
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "finance": {
+      "$ref": "./finance.schema.json"
+    }
+  },
+  "required": [
+    "id",
+    "code",
+    "name",
+    "status",
+    "createdAt",
+    "version"
+  ],
+  "patternProperties": {
+    "^x_": {},
+    "^\\$schema$": {
+      "type": "string",
+      "format": "uri-reference"
+    }
+  },
+  "examples": [
+    {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "code": "sample-slug",
+      "name": {
+        "fr": "Exemple",
+        "en": "Example"
+      },
+      "status": "draft",
+      "createdAt": "1970-01-01T00:00:00Z",
+      "version": "1.0.0"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://genaptitude.local/schemas/v1/prompts/prompt-request.schema.json",
+  "template": { "handle": "plan-task" },
+  "bindings": {
+    "data": {
+      "mode": "instantiate",
+      "schema": "https://genaptitude.local/schemas/v1/agents/agent.schema.json"
+    }
+  },
+  "renderOptions": { "strict": true },
+  "output": { "packaging": "single_text", "contentType": "text/markdown" }
+}

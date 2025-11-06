@@ -1,0 +1,18 @@
+{
+  "@context": {
+    "@vocab": "https://genaptitude.io/vocab/software#",
+    "id": "@id",
+    "type": "@type",
+    "Component": "https://genaptitude.io/vocab/software#Component",
+    "name": "http://schema.org/name",
+    "description": "http://schema.org/description",
+    "interfaces": {
+      "@id": "https://genaptitude.io/vocab/software#hasInterface",
+      "@type": "@id"
+    },
+    "dependencies": {
+      "@id": "https://genaptitude.io/vocab/software#dependsOn",
+      "@type": "@id"
+    }
+  }
+}
