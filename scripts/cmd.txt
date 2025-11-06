@@ -1,0 +1,4 @@
+git remote add origin https://gitlab.com/VOTRE-USERNAME/genaptitude.git
+
+
+git remote add origin https://gitlab.com/genaptitude/genaptitude.git
