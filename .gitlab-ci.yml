@@ -1,0 +1,89 @@
+stages: [lint, build, test]
+
+default:
+  cache:
+    key:
+      files: [Cargo.lock, pnpm-lock.yaml, yarn.lock, package-lock.json]
+    paths:
+      - target/
+      - src-tauri/target/
+      - .cargo/registry/
+      - .pnpm-store/
+      - node_modules/
+    policy: pull-push
+
+variables:
+  CARGO_TERM_COLOR: always
+
+rust:lint:
+  stage: lint
+  image: rust:1
+  rules:
+    - if: $CI_PROJECT_URL =~ /gitlab\.com/
+      when: on_success
+  script:
+    - |
+      if [ -f Cargo.toml ]; then MANIFEST="Cargo.toml"; \
+      elif [ -f src-tauri/Cargo.toml ]; then MANIFEST="src-tauri/Cargo.toml"; \
+      else echo "No Cargo.toml found"; exit 0; fi
+    - rustup component add rustfmt clippy || true
+    - cargo fmt --manifest-path "$MANIFEST" -- --check || true
+    - cargo clippy --manifest-path "$MANIFEST" -- -D warnings || true
+  allow_failure: true
+
+rust:build:
+  stage: build
+  image: rust:1
+  rules:
+    - exists:
+        - Cargo.toml
+        - src-tauri/Cargo.toml
+  script:
+    - |
+      if [ -f Cargo.toml ]; then
+        echo "Building workspace (root)"; cargo build --workspace --release;
+      elif [ -f src-tauri/Cargo.toml ]; then
+        echo "Building Tauri app"; cargo build --manifest-path src-tauri/Cargo.toml --release;
+      else
+        echo "No Cargo project detected"; exit 0;
+      fi
+  artifacts:
+    paths:
+      - target/release/
+      - src-tauri/target/release/
+    expire_in: 1 week
+
+rust:test:
+  stage: test
+  image: rust:1
+  needs: ["rust:build"]
+  rules:
+    - exists:
+        - Cargo.toml
+        - src-tauri/Cargo.toml
+  script:
+    - |
+      if [ -f Cargo.toml ]; then
+        cargo test --workspace --all-features --no-fail-fast;
+      elif [ -f src-tauri/Cargo.toml ]; then
+        cargo test --manifest-path src-tauri/Cargo.toml --all-features --no-fail-fast;
+      else
+        echo "No Cargo project detected"; exit 0;
+      fi
+
+web:build:
+  stage: build
+  image: node:20
+  rules:
+    - exists:
+        - package.json
+  before_script:
+    - corepack enable || true
+  script: |
+    if [ -f pnpm-lock.yaml ]; then pnpm i --frozen-lockfile && pnpm -s build; \
+    elif [ -f yarn.lock ]; then yarn install --frozen-lockfile && yarn -s build; \
+    else npm ci && npm run -s build; fi
+  artifacts:
+    paths: [ "dist/", "build/" ]
+    when: on_success
+    expire_in: 1 week
