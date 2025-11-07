@@ -46,7 +46,7 @@ web:build:
     when: on_success
     expire_in: 1 week
 
-# Build Tauri (besoins système + récup artefacts du front)
+# Build + bundle Tauri (dépend du front)
 tauri:bundle:
   stage: build
   image: rust:1-bookworm
@@ -69,34 +69,7 @@ tauri:bundle:
       - src-tauri/target/release/bundle/
     expire_in: 1 week
 
-# (Optionnel) Build Rust racine si un workspace existe
-rust:build:
-  stage: build
-  image: rust:1
-  rules:
-    - exists: [Cargo.toml]
-  script:
-    - cargo build --workspace --release
-  artifacts:
-    paths: [ "target/release/" ]
-    expire_in: 1 week
-
-# Tests Rust (workspace ou Tauri)
-rust:test:
-  stage: test
-  image: rust:1
-  needs: ["rust:build"]
-  rules:
-    - exists: [Cargo.toml, src-tauri/Cargo.toml]
-  script: |
-    if [ -f Cargo.toml ]; then
-      cargo test --workspace --all-features --no-fail-fast;
-    elif [ -f src-tauri/Cargo.toml ]; then
-      cargo test --manifest-path src-tauri/Cargo.toml --all-features --no-fail-fast;
-    else
-      echo "No Cargo project detected"; exit 0;
-    fi
-
+# Build WASM (2 cibles)
 wasm:build:
   stage: build
   image: rust:1
@@ -112,3 +85,14 @@ wasm:build:
       - target/wasm32-unknown-unknown/release/*.wasm
       - target/wasm32-wasip1/release/*.wasm
     expire_in: 1 week
+
+# Tests Rust (WASM uniquement → évite GTK/WebKit)
+rust:test:
+  stage: test
+  image: rust:1
+  needs: ["wasm:build"]
+  rules:
+    - exists:
+        - src-wasm/Cargo.toml
+  script:
+    - cargo test --manifest-path src-wasm/Cargo.toml --all-features --no-fail-fast
