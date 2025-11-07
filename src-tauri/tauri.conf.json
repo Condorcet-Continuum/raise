@@ -2,10 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "GenAptitude",
   "version": "0.1.0",
-  "identifier": "io.genaptitude.app",
+  "identifier": "io.genaptitude.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
