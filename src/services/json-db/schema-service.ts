@@ -2,7 +2,7 @@
  * Service de gestion des schémas JSON Schema
  */
 
-import { invoke } from '@tauri-apps/api/tauri';
+//import { invoke } from '@tauri-apps/api/core';
 
 export interface JsonSchema {
   id: string;
@@ -14,17 +14,17 @@ export interface JsonSchema {
 }
 
 export class SchemaService {
-  async validateDocument(collection: string, document: any): Promise<boolean> {
-    return await invoke('validate_document', { collection, document });
+  // Paramètre inutilisé → préfixe avec _
+  async registerSchema(_schema: JsonSchema): Promise<void> {
+    // TODO: quand le backend Tauri sera prêt
+    // await invoke('register_schema', { schema: _schema });
   }
 
-  async registerSchema(schema: JsonSchema): Promise<void> {
-    // TODO: Implémenter
-  }
-
-  async getSchema(schemaId: string): Promise<JsonSchema> {
-    // TODO: Implémenter
-    throw new Error('Not implemented');
+  // Paramètre inutilisé → préfixe avec _
+  async getSchema(_schemaId: string): Promise<JsonSchema> {
+    // TODO: quand le backend Tauri sera prêt
+    // return await invoke<JsonSchema>('get_schema', { schemaId: _schemaId });
+    throw new Error('getSchema not implemented yet');
   }
 }
 
