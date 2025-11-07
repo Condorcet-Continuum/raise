@@ -2,3 +2,7 @@ git remote add origin https://gitlab.com/VOTRE-USERNAME/genaptitude.git
 
 
 git remote add origin https://gitlab.com/genaptitude/genaptitude.git
+
+
+
+J'ai un vrai pproblème avec toi, je ne peux pas travailler correctement. Ton message : "Claude a atteint la limite maximale ...attendre 18h...etc."
