@@ -56,21 +56,17 @@ tauri:bundle:
   before_script:
     - |
       set -e
-      # Activer les backports pour disposer de WebKitGTK/JavaScriptCore 4.1
       echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/sources.list.d/backports.list
       apt-get update
-      # Outils de build + dépendances Tauri
       apt-get install -y --no-install-recommends \
         pkg-config build-essential curl ca-certificates \
         libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
         libssl-dev patchelf desktop-file-utils appstream
-      # WebKitGTK/JSCore/Soup en 4.1 (depuis backports)
       apt-get install -y --no-install-recommends -t bookworm-backports \
         libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
     - cargo install tauri-cli --locked
   script:
     - echo "Bundling Tauri app"
-    # Sanity checks pkg-config
     - pkg-config --modversion javascriptcoregtk-4.1
     - pkg-config --modversion webkit2gtk-4.1
     - pkg-config --modversion libsoup-3.0
@@ -78,7 +74,7 @@ tauri:bundle:
     - cargo tauri build
   artifacts:
     paths:
-      - src-tauri/target/release/bundle/
+      - target/release/bundle/**    # <-- corrige le chemin
     expire_in: 1 week
 
 # Build WASM (2 cibles)
