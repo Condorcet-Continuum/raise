@@ -120,8 +120,7 @@ sbom:generate:
   stage: sbom
   image: rust:1-bookworm
   rules:
-    - if: '$CI_COMMIT_TAG'                # tags (release)
-    - if: '$CI_COMMIT_BRANCH == "main"'   # et aussi sur main
+    - if: '$CI_COMMIT_TAG'   # tourne sur les tags (ex: v0.1.0) — ajuste si tu veux à chaque push
   needs: []
   cache:
     key: "sbom-${CI_COMMIT_REF_SLUG}"
@@ -130,24 +129,31 @@ sbom:generate:
   before_script:
     - set -euo pipefail
     - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-    # cargo-cyclonedx (Rust SBOM)
+    # cargo-cyclonedx (SBOM Rust)
     - cargo install cargo-cyclonedx --locked || true
-    # syft (JS/artefacts)
+    # syft (SBOM JS/front)
     - SYFT_VERSION="v0.104.0"
     - curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin ${SYFT_VERSION}
   script: |
-    # SBOM Rust (projet)
-    cargo cyclonedx --format json --output target/sbom-rust.cdx.json
-    # SBOM JS (dépendances)
-    syft packages dir:. -o cyclonedx-json > target/sbom-js.cdx.json
-    # SBOM bundles Tauri si présents
-    if [ -d target/release/bundle ]; then
-      syft packages dir:target/release/bundle -o cyclonedx-json > target/sbom-bundles.cdx.json || true
+    mkdir -p target/sbom
+
+    # SBOM Rust (binaire Tauri)
+    cargo cyclonedx --format json --manifest-path src-tauri/Cargo.toml || true
+    [ -f src-tauri/bom.json ] && mv src-tauri/bom.json target/sbom/sbom-rust-tauri.cdx.json
+
+    # SBOM Rust (wasm) si présent
+    if [ -f src-wasm/Cargo.toml ]; then
+      cargo cyclonedx --format json --manifest-path src-wasm/Cargo.toml || true
+      [ -f src-wasm/bom.json ] && mv src-wasm/bom.json target/sbom/sbom-rust-wasm.cdx.json
     fi
+
+    # SBOM JS/Node (tout le repo) au format CycloneDX JSON
+    syft dir:. -o cyclonedx-json > target/sbom/sbom-js.cdx.json
   artifacts:
     paths:
-      - target/sbom-*.cdx.json
+      - target/sbom/*.json
     expire_in: 2 weeks
+
 
 # Release "sans signature" : SHA256 + regroupe SBOM
 release:package:
