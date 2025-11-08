@@ -120,7 +120,9 @@ sbom:generate:
   stage: sbom
   image: rust:1-bookworm
   rules:
-    - if: '$CI_COMMIT_TAG'   # tourne sur les tags (ex: v0.1.0) — ajuste si tu veux à chaque push
+    - if: '$CI_COMMIT_TAG'                # sur tags
+    - if: '$CI_COMMIT_BRANCH'    
+    - if: '$CI_COMMIT_BRANCH == "main"'   # et sur main
   needs: []
   cache:
     key: "sbom-${CI_COMMIT_REF_SLUG}"
@@ -131,28 +133,51 @@ sbom:generate:
     - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
     # cargo-cyclonedx (SBOM Rust)
     - cargo install cargo-cyclonedx --locked || true
-    # syft (SBOM JS/front)
-    - SYFT_VERSION="v0.104.0"
-    - curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin ${SYFT_VERSION}
+    # syft (SBOM JS/artefacts) — dernière version, pas d’auto-update
+    - curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
   script: |
-    mkdir -p target/sbom
+    set -euo pipefail
+    OUT_DIR="target/sbom"
+    mkdir -p "$OUT_DIR"
 
-    # SBOM Rust (binaire Tauri)
-    cargo cyclonedx --format json --manifest-path src-tauri/Cargo.toml || true
-    [ -f src-tauri/bom.json ] && mv src-tauri/bom.json target/sbom/sbom-rust-tauri.cdx.json
+    # Version “propre” pour tagger les SBOMs
+    VERSION="${CI_COMMIT_TAG:-$CI_COMMIT_REF_NAME}"
 
-    # SBOM Rust (wasm) si présent
+    # ---- SBOM Rust (Tauri) ----
+    cargo cyclonedx --format json --manifest-path src-tauri/Cargo.toml >/dev/null 2>>"$OUT_DIR/sbom_ci.log" || true
+    [ -f src-tauri/bom.json ] && mv -f src-tauri/bom.json "$OUT_DIR/sbom-rust-tauri.cdx.json"
+
+    # ---- SBOM Rust (WASM) si présent ----
     if [ -f src-wasm/Cargo.toml ]; then
-      cargo cyclonedx --format json --manifest-path src-wasm/Cargo.toml || true
-      [ -f src-wasm/bom.json ] && mv src-wasm/bom.json target/sbom/sbom-rust-wasm.cdx.json
+      cargo cyclonedx --format json --manifest-path src-wasm/Cargo.toml >/dev/null 2>>"$OUT_DIR/sbom_ci.log" || true
+      [ -f src-wasm/bom.json ] && mv -f src-wasm/bom.json "$OUT_DIR/sbom-rust-wasm.cdx.json"
     fi
 
-    # SBOM JS/Node (tout le repo) au format CycloneDX JSON
-    syft dir:. -o cyclonedx-json > target/sbom/sbom-js.cdx.json
+    # ---- SBOM JS (repo) ----
+    SYFT_LOG=error SYFT_CHECK_FOR_APP_UPDATE=false \
+      syft dir:. \
+        -o "cyclonedx-json=$OUT_DIR/sbom-js.cdx.json" \
+        --source-name "genaptitude" \
+        --source-version "$VERSION" \
+        >/dev/null 2>>"$OUT_DIR/sbom_ci.log"
+
+    # ---- SBOM des bundles Tauri (si présents) ----
+    if [ -d target/release/bundle ]; then
+      SYFT_LOG=error SYFT_CHECK_FOR_APP_UPDATE=false \
+        syft dir:target/release/bundle \
+          -o "cyclonedx-json=$OUT_DIR/sbom-bundles.cdx.json" \
+          --source-name "genaptitude-bundles" \
+          --source-version "$VERSION" \
+          >/dev/null 2>>"$OUT_DIR/sbom_ci.log" || true
+    fi
+
+    echo "SBOMs générés dans $OUT_DIR"
   artifacts:
     paths:
       - target/sbom/*.json
+      - target/sbom/sbom_ci.log
     expire_in: 2 weeks
+
 
 
 # Release "sans signature" : SHA256 + regroupe SBOM

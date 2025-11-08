@@ -1,0 +1,58 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.3",
+  "version": 1,
+  "serialNumber": "urn:uuid:5f810e89-1d80-4166-a16b-173cae41a94e",
+  "metadata": {
+    "timestamp": "2025-11-08T11:35:49.612203070Z",
+    "tools": [
+      {
+        "vendor": "CycloneDX",
+        "name": "cargo-cyclonedx",
+        "version": "0.5.7"
+      }
+    ],
+    "authors": [
+      {
+        "name": "GenAptitude Team"
+      }
+    ],
+    "component": {
+      "type": "library",
+      "bom-ref": "path+file:///home/zair/genaptitude/src-wasm#ga_wasm@0.1.0",
+      "author": "GenAptitude Team",
+      "name": "ga_wasm",
+      "version": "0.1.0",
+      "description": "GenAptitude — module WASM (placeholder)",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "purl": "pkg:cargo/ga_wasm@0.1.0?download_url=file://.",
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "path+file:///home/zair/genaptitude/src-wasm#ga_wasm@0.1.0 bin-target-0",
+          "name": "ga_wasm",
+          "version": "0.1.0",
+          "purl": "pkg:cargo/ga_wasm@0.1.0?download_url=file://.#src/lib.rs"
+        }
+      ]
+    },
+    "properties": [
+      {
+        "name": "cdx:rustc:sbom:target:triple",
+        "value": "x86_64-unknown-linux-gnu"
+      }
+    ]
+  },
+  "components": [],
+  "dependencies": [
+    {
+      "ref": "path+file:///home/zair/genaptitude/src-wasm#ga_wasm@0.1.0",
+      "dependsOn": []
+    }
+  ]
+}

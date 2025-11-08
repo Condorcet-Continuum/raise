@@ -5,3 +5,4 @@ git remote add origin https://gitlab.com/genaptitude/genaptitude.git
 
 
 
+    - if: '$CI_COMMIT_BRANCH'
