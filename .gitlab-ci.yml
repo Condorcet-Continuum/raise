@@ -1,4 +1,4 @@
-stages: [lint, build, test]
+stages: [lint, build, test, sbom, release]
 
 variables:
   CARGO_TERM_COLOR: always
@@ -45,7 +45,7 @@ web:build:
     when: on_success
     expire_in: 1 week
 
-# Bundle Tauri (avec backports 4.1) — consomme dist/ produit par web:build
+# Bundle Tauri (consomme dist/)
 tauri:bundle:
   stage: build
   image: rust:1-bookworm
@@ -54,7 +54,7 @@ tauri:bundle:
   needs: ["web:build"]
   cache:
     key: "tauri-${CI_COMMIT_REF_SLUG}"
-    paths: [ ".cargo/", ".rustup/", "target/" ]   # <-- pas de src-tauri/target/ pour éviter le warning
+    paths: [ ".cargo/", ".rustup/", "target/" ]
     policy: pull-push
   before_script:
     - |
@@ -77,7 +77,7 @@ tauri:bundle:
     - cargo tauri build
   artifacts:
     paths:
-      - target/release/bundle/**         # <-- chemin correct (racine)
+      - target/release/bundle/**
     expire_in: 1 week
 
 # Build WASM
@@ -101,7 +101,7 @@ wasm:build:
       - target/wasm32-wasip1/release/*.wasm
     expire_in: 1 week
 
-# Tests Rust (WASM uniquement)
+# Tests Rust (WASM)
 rust:test:
   stage: test
   image: rust:1
@@ -114,3 +114,62 @@ rust:test:
     policy: pull-push
   script:
     - cargo test --manifest-path src-wasm/Cargo.toml --all-features --no-fail-fast
+
+# SBOM (CycloneDX Rust + JS + bundles)
+sbom:generate:
+  stage: sbom
+  image: rust:1-bookworm
+  rules:
+    - if: '$CI_COMMIT_TAG'                # tags (release)
+    - if: '$CI_COMMIT_BRANCH == "main"'   # et aussi sur main
+  needs: []
+  cache:
+    key: "sbom-${CI_COMMIT_REF_SLUG}"
+    paths: [ ".cargo/", ".rustup/" ]
+    policy: pull-push
+  before_script:
+    - set -euo pipefail
+    - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+    # cargo-cyclonedx (Rust SBOM)
+    - cargo install cargo-cyclonedx --locked || true
+    # syft (JS/artefacts)
+    - SYFT_VERSION="v0.104.0"
+    - curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin ${SYFT_VERSION}
+  script: |
+    # SBOM Rust (projet)
+    cargo cyclonedx --format json --output target/sbom-rust.cdx.json
+    # SBOM JS (dépendances)
+    syft packages dir:. -o cyclonedx-json > target/sbom-js.cdx.json
+    # SBOM bundles Tauri si présents
+    if [ -d target/release/bundle ]; then
+      syft packages dir:target/release/bundle -o cyclonedx-json > target/sbom-bundles.cdx.json || true
+    fi
+  artifacts:
+    paths:
+      - target/sbom-*.cdx.json
+    expire_in: 2 weeks
+
+# Release "sans signature" : SHA256 + regroupe SBOM
+release:package:
+  stage: release
+  image: debian:bookworm-slim
+  rules:
+    - if: '$CI_COMMIT_TAG'
+  needs:
+    - job: tauri:bundle
+      artifacts: true
+    - job: sbom:generate
+      artifacts: true
+  script: |
+    set -euo pipefail
+    mkdir -p release_out
+    # Hash de tous les artefacts produits par Tauri
+    (cd target/release/bundle && find . -type f -print0 | xargs -0 sha256sum) | tee release_out/SHA256SUMS.txt
+    # Regroupe les SBOM
+    cp -f target/sbom-*.cdx.json release_out/ 2>/dev/null || true
+    echo "✅ Release packagée (SHA256 + SBOM)."
+  artifacts:
+    paths:
+      - release_out/**
+      - target/release/bundle/**
+    expire_in: 2 weeks

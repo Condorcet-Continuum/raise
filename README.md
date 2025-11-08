@@ -1,4 +1,4 @@
-<p align="center"><img src="src/assets/images/logo.svg" alt="GenAptitude" width="180"></p>
+<p align="center"><img src="src/assets/images/logo-white.svg" alt="GenAptitude" width="180"></p>
 
 # GenAptitude · Workstation-First AI Use-Case Factory
 
@@ -16,7 +16,7 @@ GenAptitude embraces **MBAIE** to combine the strengths of **neural** (LLMs, emb
 
 ---
 
-## Overview
+## 📋 Overview
 
 - **Workstation-first & sovereign**: runs locally; no cloud lock-in.
 - **Tauri v2 desktop**: tiny footprint, native packaging.
