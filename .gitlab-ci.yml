@@ -1,26 +1,21 @@
 stages: [lint, build, test]
 
-# Cache global simple
-cache:
-  key: "deps-${CI_JOB_NAME}-${CI_COMMIT_REF_SLUG}"
-  paths:
-    - target/
-    - src-tauri/target/
-    - .cargo/registry/
-    - .pnpm-store/
-    - node_modules/
-  policy: pull-push
-
 variables:
   CARGO_TERM_COLOR: always
   DEBIAN_FRONTEND: noninteractive
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
 
-# Lint Rust (toléré en échec pour démarrer vite)
+# Lint Rust
 rust:lint:
   stage: lint
   image: rust:1
   rules:
     - exists: [Cargo.toml, src-tauri/Cargo.toml]
+  cache:
+    key: "lint-${CI_COMMIT_REF_SLUG}"
+    paths: [ ".cargo/", ".rustup/" ]
+    policy: pull-push
   script: |
     MANIFEST=""
     if [ -f Cargo.toml ]; then MANIFEST="Cargo.toml"; elif [ -f src-tauri/Cargo.toml ]; then MANIFEST="src-tauri/Cargo.toml"; else exit 0; fi
@@ -29,12 +24,16 @@ rust:lint:
     cargo clippy --manifest-path "$MANIFEST" -- -D warnings || true
   allow_failure: true
 
-# Build Web (crée dist/ à la racine, artefact partagé)
+# Build Web
 web:build:
   stage: build
   image: node:20
   rules:
     - exists: [package.json]
+  cache:
+    key: "web-${CI_COMMIT_REF_SLUG}"
+    paths: [ "node_modules/", ".pnpm-store/" ]
+    policy: pull-push
   before_script:
     - corepack enable || true
   script: |
@@ -46,13 +45,17 @@ web:build:
     when: on_success
     expire_in: 1 week
 
-# Build + bundle Tauri (dépend du front)
+# Bundle Tauri (avec backports 4.1) — consomme dist/ produit par web:build
 tauri:bundle:
   stage: build
   image: rust:1-bookworm
   rules:
     - exists: [src-tauri/Cargo.toml]
   needs: ["web:build"]
+  cache:
+    key: "tauri-${CI_COMMIT_REF_SLUG}"
+    paths: [ ".cargo/", ".rustup/", "target/" ]   # <-- pas de src-tauri/target/ pour éviter le warning
+    policy: pull-push
   before_script:
     - |
       set -e
@@ -74,15 +77,19 @@ tauri:bundle:
     - cargo tauri build
   artifacts:
     paths:
-      - target/release/bundle/**    # <-- corrige le chemin
+      - target/release/bundle/**         # <-- chemin correct (racine)
     expire_in: 1 week
 
-# Build WASM (2 cibles)
+# Build WASM
 wasm:build:
   stage: build
   image: rust:1
   rules:
     - exists: [ "src-wasm/Cargo.toml" ]
+  cache:
+    key: "wasm-${CI_COMMIT_REF_SLUG}"
+    paths: [ ".cargo/", ".rustup/", "target/" ]
+    policy: pull-push
   before_script:
     - rustup target add wasm32-unknown-unknown wasm32-wasip1
   script:
@@ -94,13 +101,16 @@ wasm:build:
       - target/wasm32-wasip1/release/*.wasm
     expire_in: 1 week
 
-# Tests Rust (WASM uniquement → évite GTK/WebKit)
+# Tests Rust (WASM uniquement)
 rust:test:
   stage: test
   image: rust:1
   needs: ["wasm:build"]
   rules:
-    - exists:
-        - src-wasm/Cargo.toml
+    - exists: [ "src-wasm/Cargo.toml" ]
+  cache:
+    key: "test-${CI_COMMIT_REF_SLUG}"
+    paths: [ ".cargo/", ".rustup/", "target/" ]
+    policy: pull-push
   script:
     - cargo test --manifest-path src-wasm/Cargo.toml --all-features --no-fail-fast
