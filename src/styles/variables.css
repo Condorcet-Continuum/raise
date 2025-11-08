@@ -1,0 +1,603 @@
+/**
+ * GenAptitude - Variables CSS
+ * Use-case Factory
+ * 
+ * Ce fichier contient toutes les variables CSS de la charte graphique.
+ * Importez-le au début de votre fichier CSS principal.
+ */
+
+:root {
+  /* ==================== COULEURS PRINCIPALES ==================== */
+  --color-primary: #4f46e5; /* Indigo principal */
+  --color-primary-dark: #4338ca; /* Indigo foncé */
+  --color-primary-light: #6366f1; /* Indigo clair */
+
+  --color-accent: #7c3aed; /* Violet accent */
+  --color-accent-dark: #6d28d9; /* Violet foncé */
+  --color-accent-light: #8b5cf6; /* Violet clair */
+
+  --color-secondary: #06b6d4; /* Cyan secondaire */
+  --color-secondary-dark: #0891b2; /* Cyan foncé */
+  --color-secondary-light: #22d3ee; /* Cyan clair */
+
+  --color-blue: #3b82f6; /* Bleu soutien */
+  --color-blue-dark: #2563eb; /* Bleu foncé */
+  --color-blue-light: #60a5fa; /* Bleu clair */
+
+  /* ==================== DÉGRADÉS ==================== */
+  --gradient-primary: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  --gradient-accent: linear-gradient(135deg, #06b6d4 0%, #3b82f6 50%, #4f46e5 100%);
+  --gradient-light: linear-gradient(
+    180deg,
+    rgba(79, 70, 229, 0.2) 0%,
+    rgba(124, 58, 237, 0.05) 100%
+  );
+
+  /* ==================== COULEURS NEUTRES ==================== */
+  --color-gray-900: #111827; /* Gris très foncé */
+  --color-gray-800: #1f2937; /* Gris foncé - Textes principaux */
+  --color-gray-700: #374151; /* Gris moyen-foncé */
+  --color-gray-600: #4b5563; /* Gris moyen */
+  --color-gray-500: #6b7280; /* Gris moyen-clair - Textes secondaires */
+  --color-gray-400: #9ca3af; /* Gris clair */
+  --color-gray-300: #d1d5db; /* Gris très clair */
+  --color-gray-200: #e5e7eb; /* Gris ultra-clair - Bordures */
+  --color-gray-100: #f3f4f6; /* Gris presque blanc */
+  --color-gray-50: #f9fafb; /* Gris minimal - Arrière-plans */
+
+  --color-white: #ffffff; /* Blanc pur */
+  --color-black: #000000; /* Noir pur */
+
+  /* ==================== COULEURS DE STATUT ==================== */
+  --color-success: #10b981; /* Vert succès */
+  --color-success-dark: #059669; /* Vert succès foncé */
+  --color-success-light: #34d399; /* Vert succès clair */
+  --color-success-bg: #ecfdf5; /* Fond vert succès */
+
+  --color-warning: #f59e0b; /* Orange avertissement */
+  --color-warning-dark: #d97706; /* Orange foncé */
+  --color-warning-light: #fbbf24; /* Orange clair */
+  --color-warning-bg: #fef3c7; /* Fond orange */
+
+  --color-error: #ef4444; /* Rouge erreur */
+  --color-error-dark: #dc2626; /* Rouge foncé */
+  --color-error-light: #f87171; /* Rouge clair */
+  --color-error-bg: #fef2f2; /* Fond rouge */
+
+  --color-info: #3b82f6; /* Bleu information */
+  --color-info-dark: #2563eb; /* Bleu info foncé */
+  --color-info-light: #60a5fa; /* Bleu info clair */
+  --color-info-bg: #eff6ff; /* Fond bleu info */
+
+  /* ==================== TYPOGRAPHIE ==================== */
+  --font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+
+  /* Tailles de police */
+  --font-size-xs: 0.75rem; /* 12px */
+  --font-size-sm: 0.875rem; /* 14px */
+  --font-size-base: 1rem; /* 16px */
+  --font-size-lg: 1.125rem; /* 18px */
+  --font-size-xl: 1.25rem; /* 20px */
+  --font-size-2xl: 1.5rem; /* 24px */
+  --font-size-3xl: 1.875rem; /* 30px */
+  --font-size-4xl: 2rem; /* 32px */
+  --font-size-5xl: 2.5rem; /* 40px */
+
+  /* Graisses de police */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Hauteur de ligne */
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.625;
+  --line-height-loose: 2;
+
+  /* ==================== ESPACEMENTS ==================== */
+  --spacing-0: 0;
+  --spacing-1: 0.25rem; /* 4px */
+  --spacing-2: 0.5rem; /* 8px */
+  --spacing-3: 0.75rem; /* 12px */
+  --spacing-4: 1rem; /* 16px */
+  --spacing-5: 1.25rem; /* 20px */
+  --spacing-6: 1.5rem; /* 24px */
+  --spacing-7: 1.75rem; /* 28px */
+  --spacing-8: 2rem; /* 32px */
+  --spacing-10: 2.5rem; /* 40px */
+  --spacing-12: 3rem; /* 48px */
+  --spacing-16: 4rem; /* 64px */
+  --spacing-20: 5rem; /* 80px */
+  --spacing-24: 6rem; /* 96px */
+
+  /* ==================== BORDER RADIUS ==================== */
+  --radius-none: 0;
+  --radius-sm: 0.25rem; /* 4px */
+  --radius-base: 0.5rem; /* 8px */
+  --radius-md: 0.75rem; /* 12px */
+  --radius-lg: 1rem; /* 16px */
+  --radius-xl: 1.5rem; /* 24px */
+  --radius-full: 9999px; /* Cercle complet */
+
+  /* ==================== OMBRES ==================== */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-base: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  --shadow-inner: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
+  --shadow-none: none;
+
+  /* Ombre pour les éléments primaires */
+  --shadow-primary: 0 4px 12px rgba(79, 70, 229, 0.4);
+  --shadow-accent: 0 4px 12px rgba(124, 58, 237, 0.4);
+
+  /* ==================== TRANSITIONS ==================== */
+  --transition-fast: 150ms ease-in-out;
+  --transition-base: 300ms ease-in-out;
+  --transition-slow: 500ms ease-in-out;
+
+  --transition-all: all var(--transition-base);
+  --transition-colors: color var(--transition-base), background-color var(--transition-base),
+    border-color var(--transition-base);
+  --transition-transform: transform var(--transition-base);
+  --transition-opacity: opacity var(--transition-base);
+
+  /* ==================== Z-INDEX ==================== */
+  --z-index-dropdown: 1000;
+  --z-index-sticky: 1020;
+  --z-index-fixed: 1030;
+  --z-index-modal-backdrop: 1040;
+  --z-index-modal: 1050;
+  --z-index-popover: 1060;
+  --z-index-tooltip: 1070;
+
+  /* ==================== BREAKPOINTS (pour référence) ==================== */
+  /* Utilisez ces valeurs dans vos media queries */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
+
+  /* ==================== DIMENSIONS ==================== */
+  --sidebar-width: 280px;
+  --sidebar-collapsed-width: 64px;
+  --header-height: 64px;
+  --footer-height: 56px;
+
+  --container-max-width: 1200px;
+  --content-max-width: 800px;
+
+  --input-height: 40px;
+  --input-height-sm: 32px;
+  --input-height-lg: 48px;
+
+  --button-height: 40px;
+  --button-height-sm: 32px;
+  --button-height-lg: 48px;
+
+  /* ==================== OPACITÉS ==================== */
+  --opacity-disabled: 0.5;
+  --opacity-hover: 0.8;
+  --opacity-active: 0.9;
+  --opacity-overlay: 0.75;
+}
+
+/* ==================== CLASSES UTILITAIRES ==================== */
+
+/* Couleurs de texte */
+.text-primary {
+  color: var(--color-primary);
+}
+.text-secondary {
+  color: var(--color-secondary);
+}
+.text-accent {
+  color: var(--color-accent);
+}
+.text-gray {
+  color: var(--color-gray-500);
+}
+.text-success {
+  color: var(--color-success);
+}
+.text-warning {
+  color: var(--color-warning);
+}
+.text-error {
+  color: var(--color-error);
+}
+.text-info {
+  color: var(--color-info);
+}
+
+/* Couleurs de fond */
+.bg-primary {
+  background-color: var(--color-primary);
+}
+.bg-secondary {
+  background-color: var(--color-secondary);
+}
+.bg-accent {
+  background-color: var(--color-accent);
+}
+.bg-gray-50 {
+  background-color: var(--color-gray-50);
+}
+.bg-success {
+  background-color: var(--color-success);
+}
+.bg-warning {
+  background-color: var(--color-warning);
+}
+.bg-error {
+  background-color: var(--color-error);
+}
+.bg-info {
+  background-color: var(--color-info);
+}
+
+/* Dégradés */
+.bg-gradient-primary {
+  background: var(--gradient-primary);
+}
+.bg-gradient-accent {
+  background: var(--gradient-accent);
+}
+
+/* Ombres */
+.shadow-sm {
+  box-shadow: var(--shadow-sm);
+}
+.shadow {
+  box-shadow: var(--shadow-base);
+}
+.shadow-md {
+  box-shadow: var(--shadow-md);
+}
+.shadow-lg {
+  box-shadow: var(--shadow-lg);
+}
+.shadow-xl {
+  box-shadow: var(--shadow-xl);
+}
+.shadow-2xl {
+  box-shadow: var(--shadow-2xl);
+}
+.shadow-primary {
+  box-shadow: var(--shadow-primary);
+}
+.shadow-none {
+  box-shadow: none;
+}
+
+/* Border radius */
+.rounded-sm {
+  border-radius: var(--radius-sm);
+}
+.rounded {
+  border-radius: var(--radius-base);
+}
+.rounded-md {
+  border-radius: var(--radius-md);
+}
+.rounded-lg {
+  border-radius: var(--radius-lg);
+}
+.rounded-xl {
+  border-radius: var(--radius-xl);
+}
+.rounded-full {
+  border-radius: var(--radius-full);
+}
+
+/* Transitions */
+.transition {
+  transition: var(--transition-all);
+}
+.transition-fast {
+  transition-duration: var(--transition-fast);
+}
+.transition-slow {
+  transition-duration: var(--transition-slow);
+}
+
+/* ==================== STYLES DE BASE ==================== */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--color-gray-800);
+  background-color: var(--color-gray-50);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Titres */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-gray-900);
+}
+
+h1 {
+  font-size: var(--font-size-5xl);
+  font-weight: var(--font-weight-bold);
+}
+h2 {
+  font-size: var(--font-size-4xl);
+}
+h3 {
+  font-size: var(--font-size-2xl);
+}
+h4 {
+  font-size: var(--font-size-xl);
+}
+h5 {
+  font-size: var(--font-size-lg);
+}
+h6 {
+  font-size: var(--font-size-base);
+}
+
+/* Liens */
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+  transition: var(--transition-colors);
+}
+
+a:hover {
+  color: var(--color-primary-dark);
+  text-decoration: underline;
+}
+
+/* Code */
+code,
+pre {
+  font-family: var(--font-family-mono);
+  font-size: 0.9em;
+}
+
+code {
+  background-color: var(--color-gray-100);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+}
+
+pre {
+  background-color: var(--color-gray-900);
+  color: var(--color-gray-100);
+  padding: var(--spacing-4);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+/* Sélection de texte */
+::selection {
+  background-color: var(--color-primary);
+  color: var(--color-white);
+}
+
+/* Scrollbar personnalisée (Webkit uniquement) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-gray-100);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-gray-400);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gray-500);
+}
+
+/* Focus visible pour l'accessibilité */
+*:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Désactiver l'outline par défaut */
+*:focus {
+  outline: none;
+}
+
+/* ==================== PRINT STYLES ==================== */
+
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* ==================== DARK MODE (à implémenter) ==================== */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-gray-50: #111827;
+    --color-gray-100: #1f2937;
+    --color-gray-200: #374151;
+  }
+}
+
+/* ==================== DARK MODE ==================== */
+
+[data-theme='dark'] {
+  /* Couleurs neutres inversées */
+  --color-gray-900: #f9fafb; /* Textes très clairs */
+  --color-gray-800: #f3f4f6; /* Textes principaux */
+  --color-gray-700: #e5e7eb; /* Textes moyen-clair */
+  --color-gray-600: #d1d5db; /* Textes moyens */
+  --color-gray-500: #9ca3af; /* Textes secondaires */
+  --color-gray-400: #6b7280; /* Gris moyen */
+  --color-gray-300: #4b5563; /* Gris moyen-foncé */
+  --color-gray-200: #374151; /* Bordures */
+  --color-gray-100: #1f2937; /* Arrière-plans secondaires */
+  --color-gray-50: #111827; /* Arrière-plan principal */
+
+  /* Couleurs principales ajustées pour le dark mode */
+  --color-primary: #6366f1; /* Indigo plus clair */
+  --color-primary-dark: #4f46e5; /* Indigo standard */
+  --color-primary-light: #818cf8; /* Indigo très clair */
+
+  --color-accent: #8b5cf6; /* Violet plus clair */
+  --color-accent-dark: #7c3aed; /* Violet standard */
+  --color-accent-light: #a78bfa; /* Violet très clair */
+
+  --color-secondary: #22d3ee; /* Cyan plus clair */
+  --color-secondary-dark: #06b6d4; /* Cyan standard */
+  --color-secondary-light: #67e8f9; /* Cyan très clair */
+
+  --color-blue: #60a5fa; /* Bleu plus clair */
+  --color-blue-dark: #3b82f6; /* Bleu standard */
+  --color-blue-light: #93c5fd; /* Bleu très clair */
+
+  /* Dégradés ajustés */
+  --gradient-primary: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  --gradient-accent: linear-gradient(135deg, #22d3ee 0%, #60a5fa 50%, #6366f1 100%);
+  --gradient-light: linear-gradient(
+    180deg,
+    rgba(99, 102, 241, 0.15) 0%,
+    rgba(139, 92, 246, 0.05) 100%
+  );
+
+  /* Couleurs de statut ajustées */
+  --color-success: #34d399; /* Vert plus clair */
+  --color-success-dark: #10b981; /* Vert standard */
+  --color-success-light: #6ee7b7; /* Vert très clair */
+  --color-success-bg: #064e3b; /* Fond vert foncé */
+
+  --color-warning: #fbbf24; /* Orange plus clair */
+  --color-warning-dark: #f59e0b; /* Orange standard */
+  --color-warning-light: #fcd34d; /* Orange très clair */
+  --color-warning-bg: #78350f; /* Fond orange foncé */
+
+  --color-error: #f87171; /* Rouge plus clair */
+  --color-error-dark: #ef4444; /* Rouge standard */
+  --color-error-light: #fca5a5; /* Rouge très clair */
+  --color-error-bg: #7f1d1d; /* Fond rouge foncé */
+
+  --color-info: #60a5fa; /* Bleu info plus clair */
+  --color-info-dark: #3b82f6; /* Bleu info standard */
+  --color-info-light: #93c5fd; /* Bleu info très clair */
+  --color-info-bg: #1e3a8a; /* Fond bleu info foncé */
+
+  /* Ombres ajustées pour le dark mode */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-base: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+  --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+
+  --shadow-primary: 0 4px 12px rgba(99, 102, 241, 0.5);
+  --shadow-accent: 0 4px 12px rgba(139, 92, 246, 0.5);
+
+  /* Arrière-plans de surfaces */
+  --surface-primary: #1f2937; /* Cartes, panels */
+  --surface-secondary: #111827; /* Arrière-plan app */
+  --surface-elevated: #374151; /* Éléments surélevés */
+}
+
+/* Auto dark mode basé sur les préférences système */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    /* Appliquer automatiquement le dark mode si pas de thème défini */
+    --color-gray-900: #f9fafb;
+    --color-gray-800: #f3f4f6;
+    --color-gray-700: #e5e7eb;
+    --color-gray-600: #d1d5db;
+    --color-gray-500: #9ca3af;
+    --color-gray-400: #6b7280;
+    --color-gray-300: #4b5563;
+    --color-gray-200: #374151;
+    --color-gray-100: #1f2937;
+    --color-gray-50: #111827;
+
+    --color-primary: #6366f1;
+    --color-primary-dark: #4f46e5;
+    --color-primary-light: #818cf8;
+
+    --color-accent: #8b5cf6;
+    --color-accent-dark: #7c3aed;
+    --color-accent-light: #a78bfa;
+
+    --color-secondary: #22d3ee;
+    --color-secondary-dark: #06b6d4;
+    --color-secondary-light: #67e8f9;
+
+    --color-blue: #60a5fa;
+    --color-blue-dark: #3b82f6;
+    --color-blue-light: #93c5fd;
+
+    --gradient-primary: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    --gradient-accent: linear-gradient(135deg, #22d3ee 0%, #60a5fa 50%, #6366f1 100%);
+    --gradient-light: linear-gradient(
+      180deg,
+      rgba(99, 102, 241, 0.15) 0%,
+      rgba(139, 92, 246, 0.05) 100%
+    );
+
+    --color-success: #34d399;
+    --color-success-dark: #10b981;
+    --color-success-light: #6ee7b7;
+    --color-success-bg: #064e3b;
+
+    --color-warning: #fbbf24;
+    --color-warning-dark: #f59e0b;
+    --color-warning-light: #fcd34d;
+    --color-warning-bg: #78350f;
+
+    --color-error: #f87171;
+    --color-error-dark: #ef4444;
+    --color-error-light: #fca5a5;
+    --color-error-bg: #7f1d1d;
+
+    --color-info: #60a5fa;
+    --color-info-dark: #3b82f6;
+    --color-info-light: #93c5fd;
+    --color-info-bg: #1e3a8a;
+
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+    --shadow-base: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+    --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+
+    --shadow-primary: 0 4px 12px rgba(99, 102, 241, 0.5);
+    --shadow-accent: 0 4px 12px rgba(139, 92, 246, 0.5);
+
+    --surface-primary: #1f2937;
+    --surface-secondary: #111827;
+    --surface-elevated: #374151;
+  }
+}
