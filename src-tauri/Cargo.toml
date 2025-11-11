@@ -7,13 +7,26 @@ license = "MIT"
 edition = "2021"
 repository = ""
 
+
+[lib]
+name = "genaptitude" # ← ou ton nom de package
+path = "src/lib.rs"
+
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+anyhow = "1"
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+dotenvy = "0.15"
+walkdir = "2"
+pathdiff = "0.2"
+url = "2.5"
+chrono = { version = "0.4", features = ["clock"] }
+uuid = { version = "1", features = ["v4"] }
 
 [features]
 # Utilisé pour les builds prod quand aucun dev server n'est défini

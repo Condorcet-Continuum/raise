@@ -1,23 +1,20 @@
-//! Validation de schémas JSON Schema
+//! Validation/instanciation de schémas JSON (impl. légère, sans lib externe)
 
-use serde::{Deserialize, Serialize};
+pub mod compute;
+pub mod registry;
+pub use registry::SchemaRegistry;
 
 pub mod validator;
-pub mod registry;
+pub use validator::SchemaValidator;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonSchema {
-    pub id: String,
-    pub title: String,
-    pub schema_type: String,
-    pub version: String,
-    pub schema: serde_json::Value,
-    pub created_at: i64,
-}
-
+// Optionnel : tu peux garder/étendre ce type pour mapper des erreurs fines
 #[derive(Debug)]
 pub enum ValidationError {
     SchemaNotFound(String),
+    InvalidRef(String),
     InvalidData(String),
     TypeMismatch(String),
+    MissingRequired(String),
+    AdditionalProperty(String),
+    Other(String),
 }

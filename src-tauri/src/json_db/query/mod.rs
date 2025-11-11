@@ -2,9 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
-pub mod parser;
 pub mod executor;
 pub mod optimizer;
+pub mod parser;
+
+#[allow(dead_code)]
+pub struct StorageEngine;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Query {
@@ -13,6 +16,15 @@ pub struct Query {
     pub sort: Option<Vec<SortField>>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+}
+
+#[derive(Debug, Default)]
+pub struct QueryEngine;
+
+impl QueryEngine {
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
