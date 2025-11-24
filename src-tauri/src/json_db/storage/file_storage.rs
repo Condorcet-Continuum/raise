@@ -195,17 +195,20 @@ pub fn create_collection(
 }
 
 /// Écriture atomique: .tmp puis rename
-fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
+/// Écriture atomique: .tmp puis rename
+pub fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).ok();
 
     let tmp = parent.join(format!(
-        ".{}.tmp",
-        path.file_name().unwrap().to_string_lossy()
+        ".{}.tmp-{}",
+        path.file_name().unwrap().to_string_lossy(),
+        std::process::id()
     ));
     {
         let mut f =
             fs::File::create(&tmp).with_context(|| format!("Création {}", tmp.display()))?;
+        // Utilisation de to_string_pretty pour la lisibilité (ou to_string pour la perf)
         let s = serde_json::to_string_pretty(value)?;
         f.write_all(s.as_bytes())?;
         f.sync_all().ok();
@@ -214,7 +217,6 @@ fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         .with_context(|| format!("Rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
 }
-
 /// Copie récursive de `<repo>/schemas/v1` vers `<db>/schemas/v1` si ce dernier est vide
 fn seed_schemas_if_empty(cfg: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
     let dst = cfg.db_schemas_root(space, db);
@@ -245,5 +247,26 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
                 .with_context(|| format!("Copie {} -> {}", sp.display(), dp.display()))?;
         }
     }
+    Ok(())
+}
+
+/// Écriture atomique de données binaires (pour Bincode)
+pub fn atomic_write_binary(path: &Path, data: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).ok();
+
+    let tmp = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().unwrap().to_string_lossy(),
+        std::process::id()
+    ));
+    {
+        let mut f =
+            fs::File::create(&tmp).with_context(|| format!("Création {}", tmp.display()))?;
+        f.write_all(data)?;
+        f.sync_all().ok();
+    }
+    fs::rename(&tmp, path)
+        .with_context(|| format!("Rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
 }

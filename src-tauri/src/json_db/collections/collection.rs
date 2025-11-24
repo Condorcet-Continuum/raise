@@ -4,9 +4,9 @@
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::json_db::storage::file_storage::atomic_write_json;
 use crate::json_db::storage::JsonDbConfig;
 
 /// Racine DB à partir de la racine des schémas (…/schemas/v1 → ..)
@@ -19,7 +19,7 @@ fn db_root(cfg: &JsonDbConfig, space: &str, db: &str) -> PathBuf {
 }
 
 /// Racine des collections : {db_root}/collections/{collection}
-fn collection_root(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str) -> PathBuf {
+pub fn collection_root(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str) -> PathBuf {
     db_root(cfg, space, db).join("collections").join(collection)
 }
 
@@ -61,33 +61,6 @@ fn extract_id(doc: &Value) -> Result<String> {
     Ok(id.to_string())
 }
 
-/// Écrit atomiquement un JSON (pretty) vers un chemin.
-fn atomic_write_json(path: &Path, value: &Value) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("no parent for {}", path.display()))?;
-    fs::create_dir_all(parent).with_context(|| format!("create_dir_all {}", parent.display()))?;
-
-    let tmp = parent.join(format!(
-        ".{}.tmp-{}",
-        path.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("doc.json"),
-        std::process::id()
-    ));
-    {
-        let mut f =
-            fs::File::create(&tmp).with_context(|| format!("create tmp file {}", tmp.display()))?;
-        let txt = serde_json::to_string_pretty(value)?;
-        f.write_all(txt.as_bytes())
-            .with_context(|| format!("write tmp file {}", tmp.display()))?;
-        f.sync_all().ok(); // best effort
-    }
-    fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
-}
-
 /// Insert (échec si l’id existe déjà).
 pub fn persist_insert(
     cfg: &JsonDbConfig,
@@ -101,6 +74,7 @@ pub fn persist_insert(
     if path.exists() {
         return Err(anyhow!("document with id '{}' already exists", id));
     }
+    // Appel à la version partagée
     atomic_write_json(&path, doc)?;
     Ok(())
 }
@@ -118,6 +92,7 @@ pub fn persist_update(
     if !path.exists() {
         return Err(anyhow!("document with id '{}' not found", id));
     }
+    // Appel à la version partagée
     atomic_write_json(&path, doc)?;
     Ok(())
 }
@@ -193,6 +168,7 @@ pub fn list_documents(
     }
     Ok(docs)
 }
+
 /// Liste tous les noms de collections (dossiers) existantes pour la DB.
 pub fn list_collection_names_fs(cfg: &JsonDbConfig, space: &str, db: &str) -> Result<Vec<String>> {
     let root = db_root(cfg, space, db).join("collections");

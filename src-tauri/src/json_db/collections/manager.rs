@@ -2,12 +2,14 @@
 //! - cache le SchemaRegistry
 //! - expose des méthodes CRUD cohérentes (avec et sans schéma)
 //! - centralise les chemins cibles de collection (dérivés du schéma)
+//! - Gère automatiquement la cohérence des INDEXES à chaque écriture
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use std::sync::RwLock;
 
 use crate::json_db::{
+    indexes::{create_collection_indexes, update_indexes},
     schema::{SchemaRegistry, SchemaValidator},
     storage::JsonDbConfig,
 };
@@ -61,7 +63,6 @@ impl<'a> CollectionsManager<'a> {
     }
 
     /// Helper interne pour s'assurer que le registre est chargé.
-    /// Ne retourne rien, s'assure juste que le RwLock contient Some.
     fn ensure_registry_loaded(&self) -> Result<()> {
         // Vérification rapide en lecture
         let is_none = {
@@ -107,11 +108,32 @@ impl<'a> CollectionsManager<'a> {
     }
 
     // ---------------------------
-    // Collections (dossiers)
+    // Collections (dossiers & indexes)
     // ---------------------------
 
+    /// Vérifie si la collection (et son index) existe, sinon l'initialise.
+    /// C'est ici qu'on garantit que `_config.json` est créé.
+    fn ensure_collection_ready(&self, collection: &str, schema_rel: &str) -> Result<()> {
+        let root = super::collection::collection_root(self.cfg, &self.space, &self.db, collection);
+
+        // Si le dossier collection n'existe pas, on l'initialise complètement
+        if !root.exists() {
+            create_collection_if_missing(self.cfg, &self.space, &self.db, collection)?;
+            // Création de la config d'index par défaut (id)
+            create_collection_indexes(self.cfg, &self.space, &self.db, collection, schema_rel)?;
+        } else {
+            // Si le dossier existe mais pas la config index, on la crée (migration implicite)
+            let config_path = root.join("_config.json");
+            if !config_path.exists() {
+                create_collection_indexes(self.cfg, &self.space, &self.db, collection, schema_rel)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn create_collection(&self, collection_name: &str) -> Result<()> {
-        create_collection_if_missing(self.cfg, &self.space, &self.db, collection_name)
+        // Création avec schéma "unknown" par défaut si appelé manuellement
+        self.ensure_collection_ready(collection_name, "unknown")
     }
 
     pub fn drop_collection(&self, collection_name: &str) -> Result<()> {
@@ -119,45 +141,122 @@ impl<'a> CollectionsManager<'a> {
     }
 
     // ---------------------------
-    // Inserts / Updates
+    // Inserts / Updates (avec gestion des Index)
     // ---------------------------
 
     /// Insert avec schéma :
-    /// - x_compute + validate (préremplit $schema, id, createdAt, updatedAt si manquants)
-    /// - persist en FS (échec si id existe)
+    /// - x_compute + validate
+    /// - ensure collection + index config
+    /// - persist FS
+    /// - update index
     pub fn insert_with_schema(&self, schema_rel: &str, mut doc: Value) -> Result<Value> {
         let validator = self.compile(schema_rel)?;
         validator.compute_then_validate(&mut doc)?;
 
-        // Utilisation de collection_from_schema_rel importé
         let collection = collection_from_schema_rel(schema_rel);
-        self.create_collection(&collection)?;
 
-        // Utilisation de persist_insert importé
+        // 1. S'assurer que la structure existe
+        self.ensure_collection_ready(&collection, schema_rel)?;
+
+        // 2. Persistance fichier (atomique)
         persist_insert(self.cfg, &self.space, &self.db, &collection, &doc)?;
+
+        // 3. Mise à jour des index (nouveau doc uniquement)
+        // Note: doc["id"] est garanti par x_compute/validate
+        if let Some(id) = doc.get("id").and_then(|v| v.as_str()) {
+            update_indexes(
+                self.cfg,
+                &self.space,
+                &self.db,
+                &collection,
+                id,
+                None,       // Pas d'ancien doc
+                Some(&doc), // Nouveau doc
+            )?;
+        }
+
         Ok(doc)
     }
 
-    /// Insert direct (sans schéma). À utiliser si déjà conforme.
+    /// Insert direct (sans schéma).
     pub fn insert_raw(&self, collection: &str, doc: &Value) -> Result<()> {
-        self.create_collection(collection)?;
-        persist_insert(self.cfg, &self.space, &self.db, collection, doc)
+        self.ensure_collection_ready(collection, "unknown")?;
+        persist_insert(self.cfg, &self.space, &self.db, collection, doc)?;
+
+        // Mise à jour index si ID présent
+        if let Some(id) = doc.get("id").and_then(|v| v.as_str()) {
+            update_indexes(
+                self.cfg,
+                &self.space,
+                &self.db,
+                collection,
+                id,
+                None,
+                Some(doc),
+            )?;
+        }
+        Ok(())
     }
 
-    /// Update avec schéma : recompute + validate + persist (remplace par id ; erreur si absent)
+    /// Update avec schéma :
+    /// - Lit l'ancien document (pour nettoyer l'index)
+    /// - Compute + Validate
+    /// - Persist FS
+    /// - Update index (remove old keys + add new keys)
     pub fn update_with_schema(&self, schema_rel: &str, mut doc: Value) -> Result<Value> {
         let validator = self.compile(schema_rel)?;
         validator.compute_then_validate(&mut doc)?;
 
         let collection = collection_from_schema_rel(schema_rel);
-        // Utilisation de persist_update importé
+        let id = doc
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Document missing id"))?;
+
+        // 1. Lecture de l'ancien document (nécessaire pour update_indexes)
+        // On ignore l'erreur si le fichier n'existe pas encore (cas limite),
+        // mais persist_update échouera de toute façon après.
+        let old_doc = read_document_fs(self.cfg, &self.space, &self.db, &collection, id).ok();
+
+        // 2. Persistance
         persist_update(self.cfg, &self.space, &self.db, &collection, &doc)?;
+
+        // 3. Mise à jour des index
+        update_indexes(
+            self.cfg,
+            &self.space,
+            &self.db,
+            &collection,
+            id,
+            old_doc.as_ref(),
+            Some(&doc),
+        )?;
+
         Ok(doc)
     }
 
-    /// Update direct (sans schéma). Remplacement complet (erreur si absent).
+    /// Update direct (sans schéma).
     pub fn update_raw(&self, collection: &str, doc: &Value) -> Result<()> {
-        persist_update(self.cfg, &self.space, &self.db, collection, doc)
+        let id = doc
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Document missing id"))?;
+
+        let old_doc = read_document_fs(self.cfg, &self.space, &self.db, collection, id).ok();
+
+        persist_update(self.cfg, &self.space, &self.db, collection, doc)?;
+
+        update_indexes(
+            self.cfg,
+            &self.space,
+            &self.db,
+            collection,
+            id,
+            old_doc.as_ref(),
+            Some(doc),
+        )?;
+
+        Ok(())
     }
 
     // ---------------------------
@@ -168,8 +267,28 @@ impl<'a> CollectionsManager<'a> {
         read_document_fs(self.cfg, &self.space, &self.db, collection, id)
     }
 
+    /// Delete : supprime le fichier et nettoie les index.
     pub fn delete(&self, collection: &str, id: &str) -> Result<()> {
-        delete_document_fs(self.cfg, &self.space, &self.db, collection, id)
+        // 1. Lire le document avant suppression pour l'index
+        let old_doc = read_document_fs(self.cfg, &self.space, &self.db, collection, id).ok();
+
+        // 2. Suppression FS
+        delete_document_fs(self.cfg, &self.space, &self.db, collection, id)?;
+
+        // 3. Nettoyage index (si le document existait)
+        if let Some(doc) = old_doc {
+            update_indexes(
+                self.cfg,
+                &self.space,
+                &self.db,
+                collection,
+                id,
+                Some(&doc),
+                None, // Pas de nouveau doc = suppression
+            )?;
+        }
+
+        Ok(())
     }
 
     pub fn list_ids(&self, collection: &str) -> Result<Vec<String>> {
@@ -184,22 +303,18 @@ impl<'a> CollectionsManager<'a> {
     // Helpers pratiques
     // ---------------------------
 
-    /// Déduit le nom de collection à partir d’un schéma et liste les ids.
     pub fn list_ids_for_schema(&self, schema_rel: &str) -> Result<Vec<String>> {
         let collection = collection_from_schema_rel(schema_rel);
         self.list_ids(&collection)
     }
 
-    /// Upsert basé schéma : insert si absent, sinon update (selon présence de `id`)
     pub fn upsert_with_schema(&self, schema_rel: &str, doc: Value) -> Result<Value> {
-        // On clone le doc pour l'essai d'insertion, car insert_with_schema le consomme
         match self.insert_with_schema(schema_rel, doc.clone()) {
             Ok(stored) => Ok(stored),
             Err(_e) => self.update_with_schema(schema_rel, doc),
         }
     }
 
-    /// Renvoie le (space, db) courants
     pub fn context(&self) -> (&str, &str) {
         (&self.space, &self.db)
     }

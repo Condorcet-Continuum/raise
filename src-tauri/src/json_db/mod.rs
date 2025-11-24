@@ -25,6 +25,8 @@ pub mod schema;
 pub mod storage;
 pub mod transactions;
 
+#[doc(hidden)]
+pub mod test_utils;
 // ===========================================================================
 // STRUCTURE PRINCIPALE : JsonDb (Définition UNIQUE - L35)
 // ===========================================================================

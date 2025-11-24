@@ -21,6 +21,8 @@ pub fn index_path(
     let extension = match index_type {
         IndexType::Hash => "hash.idx",
         IndexType::BTree => "btree.idx",
+        // CORRECTION : Ajout du cas manquant pour les index textuels
+        IndexType::Text => "text.idx",
     };
     indexes_root(cfg, space, db, collection).join(format!("{index_name}.{extension}"))
 }
