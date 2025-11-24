@@ -1,61 +1,40 @@
-/**
- * Service de gestion des collections
- */
-
 import { invoke } from '@tauri-apps/api/core';
 
-export interface Collection {
-  name: string;
-  schema_id: string;
-  jsonld_context?: string;
-  indexes: string[];
-  created_at: number;
-  updated_at: number;
-}
+const DEFAULT_SPACE = 'un2';
+const DEFAULT_DB = '_system';
 
-export interface Document {
+// On utilise T pour typer le champ "data" si besoin, ou les champs racines
+export interface Document<T = any> {
   id: string;
-  collection: string;
-  data: any;
-  version: number;
-  created_at: number;
-  updated_at: number;
+  // On permet d'accéder aux propriétés typées par T
+  [key: string]: T | any; 
 }
 
 export class CollectionService {
-  async createCollection(
-    name: string,
-    schema: any,
-    context?: any
-  ): Promise<Collection> {
-    return await invoke('create_collection', { name, schema, context });
-  }
-
-  async insertDocument(collection: string, document: any): Promise<Document> {
-    return await invoke('insert_document', { collection, document });
-  }
-
-  async queryDocuments(collection: string, query: any): Promise<Document[]> {
-    return await invoke('query_documents', { collection, query });
-  }
-
-  async updateDocument(
-    collection: string,
-    id: string,
-    document: any
-  ): Promise<Document> {
-    return await invoke('update_document', { collection, id, document });
-  }
-
-  async deleteDocument(collection: string, id: string): Promise<void> {
-    await invoke('delete_document', { collection, id });
-  }
-
-  async getDocument(collection: string, id: string): Promise<Document> {
-    const results = await this.queryDocuments(collection, {
-      filter: { operator: 'and', conditions: [{ field: 'id', operator: 'eq', value: id }] }
+  
+  async createCollection(name: string): Promise<void> {
+    await invoke('jsondb_create_collection', { 
+      space: DEFAULT_SPACE, 
+      db: DEFAULT_DB, 
+      collection: name 
     });
-    return results[0];
+  }
+
+  async insertRaw(collection: string, doc: any): Promise<void> {
+    await invoke('jsondb_insert_raw', { 
+      space: DEFAULT_SPACE, 
+      db: DEFAULT_DB, 
+      collection, 
+      doc 
+    });
+  }
+
+  async listAll(collection: string): Promise<Document[]> {
+    return await invoke<Document[]>('jsondb_list_all', { 
+      space: DEFAULT_SPACE, 
+      db: DEFAULT_DB, 
+      collection 
+    });
   }
 }
 

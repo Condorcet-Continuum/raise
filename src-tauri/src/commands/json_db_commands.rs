@@ -23,14 +23,21 @@ fn cfg_from_repo_env() -> Result<JsonDbConfig, String> {
 }
 
 /// Helper pour obtenir un manager lié (space, db)
+/// Tente d'ouvrir la DB, et si elle n'existe pas, la crée.
 fn mgr(space: &str, db: &str) -> Result<(JsonDbConfig, CollectionsManager<'static>), String> {
     // On construit une config puis un manager qui l’emprunte.
     // Pour satisfaire les durées de vie, on "leake" la config en 'static'
     let cfg_owned = cfg_from_repo_env()?;
     let cfg_static: &'static JsonDbConfig = Box::leak(Box::new(cfg_owned));
-    // S’assure que la DB existe
-    file_storage::create_db(cfg_static, space, db).map_err(|e| e.to_string())?;
+
+    // CORRECTION ICI : Logique "Open OR Create"
+    // On essaie d'ouvrir. Si ça échoue (n'existe pas), on crée.
+    if file_storage::open_db(cfg_static, space, db).is_err() {
+        file_storage::create_db(cfg_static, space, db).map_err(|e| e.to_string())?;
+    }
+
     let m = CollectionsManager::new(cfg_static, space, db);
+
     Ok((cfg_static.clone(), unsafe {
         // Safety: cfg_static est 'static via leak, on peut retourner un manager lié à 'static
         std::mem::transmute::<CollectionsManager<'_>, CollectionsManager<'static>>(m)
