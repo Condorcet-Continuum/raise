@@ -31,9 +31,10 @@ use super::collection_from_schema_rel;
 /// Manager lié à un couple (space, db)
 #[derive(Debug)]
 pub struct CollectionsManager<'a> {
-    cfg: &'a JsonDbConfig,
-    space: String,
-    db: String,
+    // CORRECTION: Champs publics pour accès depuis QueryExecutor
+    pub cfg: &'a JsonDbConfig,
+    pub space: String,
+    pub db: String,
     // RwLock pour la mutabilité interne thread-safe
     registry: RwLock<Option<SchemaRegistry>>,
 }
@@ -112,7 +113,6 @@ impl<'a> CollectionsManager<'a> {
     // ---------------------------
 
     /// Vérifie si la collection (et son index) existe, sinon l'initialise.
-    /// C'est ici qu'on garantit que `_config.json` est créé.
     fn ensure_collection_ready(&self, collection: &str, schema_rel: &str) -> Result<()> {
         let root = super::collection::collection_root(self.cfg, &self.space, &self.db, collection);
 
@@ -144,11 +144,6 @@ impl<'a> CollectionsManager<'a> {
     // Inserts / Updates (avec gestion des Index)
     // ---------------------------
 
-    /// Insert avec schéma :
-    /// - x_compute + validate
-    /// - ensure collection + index config
-    /// - persist FS
-    /// - update index
     pub fn insert_with_schema(&self, schema_rel: &str, mut doc: Value) -> Result<Value> {
         let validator = self.compile(schema_rel)?;
         validator.compute_then_validate(&mut doc)?;
@@ -162,7 +157,6 @@ impl<'a> CollectionsManager<'a> {
         persist_insert(self.cfg, &self.space, &self.db, &collection, &doc)?;
 
         // 3. Mise à jour des index (nouveau doc uniquement)
-        // Note: doc["id"] est garanti par x_compute/validate
         if let Some(id) = doc.get("id").and_then(|v| v.as_str()) {
             update_indexes(
                 self.cfg,
@@ -178,7 +172,6 @@ impl<'a> CollectionsManager<'a> {
         Ok(doc)
     }
 
-    /// Insert direct (sans schéma).
     pub fn insert_raw(&self, collection: &str, doc: &Value) -> Result<()> {
         self.ensure_collection_ready(collection, "unknown")?;
         persist_insert(self.cfg, &self.space, &self.db, collection, doc)?;
@@ -198,11 +191,6 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    /// Update avec schéma :
-    /// - Lit l'ancien document (pour nettoyer l'index)
-    /// - Compute + Validate
-    /// - Persist FS
-    /// - Update index (remove old keys + add new keys)
     pub fn update_with_schema(&self, schema_rel: &str, mut doc: Value) -> Result<Value> {
         let validator = self.compile(schema_rel)?;
         validator.compute_then_validate(&mut doc)?;
@@ -214,8 +202,6 @@ impl<'a> CollectionsManager<'a> {
             .ok_or_else(|| anyhow!("Document missing id"))?;
 
         // 1. Lecture de l'ancien document (nécessaire pour update_indexes)
-        // On ignore l'erreur si le fichier n'existe pas encore (cas limite),
-        // mais persist_update échouera de toute façon après.
         let old_doc = read_document_fs(self.cfg, &self.space, &self.db, &collection, id).ok();
 
         // 2. Persistance
@@ -235,7 +221,6 @@ impl<'a> CollectionsManager<'a> {
         Ok(doc)
     }
 
-    /// Update direct (sans schéma).
     pub fn update_raw(&self, collection: &str, doc: &Value) -> Result<()> {
         let id = doc
             .get("id")
@@ -267,7 +252,6 @@ impl<'a> CollectionsManager<'a> {
         read_document_fs(self.cfg, &self.space, &self.db, collection, id)
     }
 
-    /// Delete : supprime le fichier et nettoie les index.
     pub fn delete(&self, collection: &str, id: &str) -> Result<()> {
         // 1. Lire le document avant suppression pour l'index
         let old_doc = read_document_fs(self.cfg, &self.space, &self.db, collection, id).ok();
@@ -321,5 +305,19 @@ impl<'a> CollectionsManager<'a> {
 
     pub fn list_collection_names(&self) -> Result<Vec<String>> {
         list_collection_names_fs(self.cfg, &self.space, &self.db)
+    }
+
+    // ---------------------------
+    // Méthodes pour le QueryEngine
+    // ---------------------------
+
+    /// Récupère la liste des index définis pour une collection
+    /// CORRECTION: Nouvelle méthode pour exposer les index au QueryExecutor
+    pub fn get_indexes(
+        &self,
+        collection: &str,
+    ) -> Result<Vec<crate::json_db::indexes::IndexDefinition>> {
+        use crate::json_db::indexes::manager::get_collection_index_definitions;
+        get_collection_index_definitions(self.cfg, &self.space, &self.db, collection)
     }
 }

@@ -22,7 +22,7 @@ fn collection_config_path(cfg: &JsonDbConfig, space: &str, db: &str, collection:
     collection::collection_root(cfg, space, db, collection).join("_config.json")
 }
 
-fn get_collection_index_definitions(
+pub fn get_collection_index_definitions(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
