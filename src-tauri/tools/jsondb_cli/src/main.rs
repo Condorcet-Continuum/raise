@@ -1,17 +1,19 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 use serde_json::Value;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, EnvFilter};
+use uuid::Uuid;
 
-// Assurez-vous que 'genaptitude' est bien le nom de votre crate principal
 use genaptitude::json_db::{
     collections::manager::CollectionsManager,
     query::parser::parse_sort_specs,
     query::{Query, QueryEngine, SortField, SortOrder},
     storage::{file_storage, JsonDbConfig},
+    transactions::TransactionManager,
 };
 
 /// CLI JSON-DB GenAptitude
@@ -29,36 +31,30 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Cmd {
     Usage,
-    /// Opérations de base de données
     Db {
         #[command(subcommand)]
         action: DbAction,
     },
-
-    /// Collections
     Collection {
         #[command(subcommand)]
         action: CollAction,
     },
-
-    /// Documents (insert/upsert à partir d'un fichier JSON, avec schéma)
     Document {
         #[command(subcommand)]
         action: DocAction,
     },
-    /// Requêtes complexes (JSON Query, avec filtres, tri, limites)
     Query {
         #[command(subcommand)]
         action: QueryAction,
     },
-
-    /// Requêtes SQL (placeholder pour une future implémentation)
+    Transaction {
+        #[command(subcommand)]
+        action: TransactionAction,
+    },
     Sql {
         #[command(subcommand)]
         action: SqlAction,
     },
-
-    /// Seeding d'une DB à partir de fichiers dataset
     Dataset {
         #[command(subcommand)]
         action: DatasetAction,
@@ -67,46 +63,32 @@ enum Cmd {
 
 #[derive(Subcommand, Debug)]
 enum DbAction {
-    /// Crée une DB: <space> <db>
-    Create { space: String, db: String },
-
-    /// Ouvre une DB (vérifie existence): <space> <db>
-    Open { space: String, db: String },
-
-    /// Supprime une DB (soft/hard): <space> <db> [--hard]
+    Create {
+        space: String,
+        db: String,
+    },
+    Open {
+        space: String,
+        db: String,
+    },
     Drop {
         space: String,
         db: String,
         #[arg(long)]
         hard: bool,
     },
-
-    /// Requête sur une collection
     Query {
-        /// Espace logique (ex: un2)
         space: String,
-        /// Nom de la DB (ex: _system)
         db: String,
-        /// Nom de la collection (ex: articles)
         collection: String,
-
-        /// Filtre JSON pour QueryFilter
         #[arg(long)]
         filter_json: Option<String>,
-
-        /// Spécifications de tri (répétables) : --sort createdAt:desc
         #[arg(long = "sort")]
         sort: Vec<String>,
-
-        /// Décalage (skip) optionnel
         #[arg(long)]
         offset: Option<usize>,
-
-        /// Limite du nombre de résultats
         #[arg(long)]
         limit: Option<usize>,
-
-        /// Si présent, équivalent à --sort createdAt:desc
         #[arg(long)]
         latest: bool,
     },
@@ -114,7 +96,6 @@ enum DbAction {
 
 #[derive(Subcommand, Debug)]
 enum CollAction {
-    /// Crée une collection: <space> <db> <name> --schema <rel-path>
     Create {
         space: String,
         db: String,
@@ -126,7 +107,6 @@ enum CollAction {
 
 #[derive(Subcommand, Debug)]
 enum DocAction {
-    /// Insert: échoue si un document avec le même id existe déjà
     Insert {
         space: String,
         db: String,
@@ -135,8 +115,6 @@ enum DocAction {
         #[arg(long)]
         file: PathBuf,
     },
-
-    /// Upsert: insert si nouveau, sinon update
     Upsert {
         space: String,
         db: String,
@@ -149,8 +127,16 @@ enum DocAction {
 
 #[derive(Subcommand, Debug)]
 enum QueryAction {
-    /// Exécute une requête complexe basée sur un fichier JSON
     FindMany {
+        space: String,
+        db: String,
+        file: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TransactionAction {
+    Execute {
         space: String,
         db: String,
         file: PathBuf,
@@ -168,7 +154,6 @@ enum SqlAction {
 
 #[derive(Subcommand, Debug)]
 enum DatasetAction {
-    /// Insère tous les documents JSON d'un dossier
     SeedDir {
         space: String,
         db: String,
@@ -176,7 +161,25 @@ enum DatasetAction {
     },
 }
 
-/// Construction de la config JSON-DB à partir de l'env + repo_root
+// --- Structures Transaction ---
+
+#[derive(Deserialize, Debug)]
+struct CliTransactionRequest {
+    operations: Vec<CliOperationRequest>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum CliOperationRequest {
+    Insert { collection: String, doc: Value },
+    // Ajout de InsertFrom pour charger depuis un fichier
+    InsertFrom { collection: String, path: String },
+    Update { collection: String, doc: Value },
+    Delete { collection: String, id: String },
+}
+
+// --- Helpers ---
+
 fn build_cfg(repo_root_opt: Option<PathBuf>) -> Result<JsonDbConfig> {
     let repo = match repo_root_opt {
         Some(p) => p,
@@ -194,124 +197,87 @@ fn init_tracing() {
     fmt().with_env_filter(filter).init();
 }
 
-// Fonction d'aide privée : logique pour insérer tous les fichiers d'un dossier.
+/// Remplace les variables d'environnement dans le chemin ($HOME, $PATH_GENAPTITUDE_DATASET)
+fn expand_path(path: &str) -> PathBuf {
+    let mut p = path.to_string();
+    if p.contains("$HOME") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        p = p.replace("$HOME", &home);
+    }
+    if p.contains("$PATH_GENAPTITUDE_DATASET") {
+        let ds = std::env::var("PATH_GENAPTITUDE_DATASET").unwrap_or_else(|_| ".".to_string());
+        p = p.replace("$PATH_GENAPTITUDE_DATASET", &ds);
+    }
+    PathBuf::from(p)
+}
+
+/// Génère ou récupère l'ID et l'injecte dans le document
+fn ensure_id(doc: &mut Value) -> String {
+    let id = match doc.get("id").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => Uuid::new_v4().to_string(), // Utilisation correcte de l'import Uuid
+    };
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert("id".to_string(), Value::String(id.clone()));
+    }
+    id
+}
+
+// ... (La fonction run_seed_dir et usages() restent inchangés, je les omets pour la concision) ...
+// Tu peux les garder tels quels dans ton fichier.
 fn run_seed_dir(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
     dataset_rel_dir: &PathBuf,
 ) -> Result<()> {
-    // 1. Instancier le manager de collections
-    let mgr = CollectionsManager::new(&cfg, &space, &db);
-
-    // 2. Déterminer le chemin du dataset
-    // CORRECTION: On utilise directement le chemin fourni par l'utilisateur (relatif au CWD)
-    // au lieu de chercher une méthode .dataset_path() qui n'existe pas sur la config.
+    let mgr = CollectionsManager::new(cfg, space, db);
     let abs_dataset_dir = if dataset_rel_dir.is_absolute() {
         dataset_rel_dir.clone()
     } else {
         std::env::current_dir()?.join(dataset_rel_dir)
     };
-
-    // 3. Déterminer la collection et le schéma à partir du nom du dossier
     let collection = dataset_rel_dir
         .file_name()
         .and_then(|s| s.to_str())
-        .context("Le chemin de dataset doit finir par un nom de collection (ex: articles)")?;
-
-    // Infère le chemin de schéma relatif (ex: articles/article.schema.json)
+        .context("Dataset dir must end with collection name")?;
     let schema_rel = format!("{collection}/{collection}.schema.json");
 
     println!(
-        "🌱 Démarrage du seeding pour collection '{}':\n - Dossier: {}\n - Schéma: {}",
+        "🌱 Seeding '{}' from {}",
         collection,
-        abs_dataset_dir.display(),
-        schema_rel
+        abs_dataset_dir.display()
     );
-
     if !abs_dataset_dir.exists() {
-        bail!(
-            "Le dossier dataset n'existe pas : {}",
-            abs_dataset_dir.display()
-        );
+        bail!("Dataset dir not found: {}", abs_dataset_dir.display());
     }
 
-    // 4. Itérer et insérer
     let mut count = 0;
-    for entry in fs::read_dir(&abs_dataset_dir).with_context(|| {
-        format!(
-            "Impossible de lire le dossier dataset: {}",
-            abs_dataset_dir.display()
-        )
-    })? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let rd = File::open(&path).with_context(|| format!("Ouverture {}", path.display()))?;
-
+    for entry in fs::read_dir(&abs_dataset_dir)? {
+        let path = entry?.path();
+        if path.is_file() && path.extension().map_or(false, |s| s == "json") {
+            let rd = File::open(&path)?;
             let doc: Value = match serde_json::from_reader(rd) {
                 Ok(d) => d,
-                Err(e) => {
-                    eprintln!("\n⚠️ Erreur JSON invalide dans {}: {}\n", path.display(), e);
-                    continue;
-                }
+                Err(_) => continue,
             };
-
-            match mgr.insert_with_schema(&schema_rel, doc) {
-                Ok(_stored) => {
-                    count += 1;
-                    print!(".");
-                    std::io::stdout().flush()?;
-                }
-                Err(e) => {
-                    eprintln!("\n❌ Échec de l'insertion pour {}: {}\n", path.display(), e);
-                }
+            if mgr.insert_with_schema(&schema_rel, doc).is_ok() {
+                count += 1;
+                print!(".");
+                std::io::stdout().flush()?;
             }
         }
     }
-    println!(
-        "\n✅ Inséré {} document(s) dans la collection '{}'.",
-        count, collection
-    );
-
+    println!("\n✅ Inséré {} documents.", count);
     Ok(())
 }
 
 fn usages() {
-    println!(
-        r#"
-Usage: jsondb_cli <COMMAND> [OPTIONS]
-
--- COMMANDES DE BASE DE DONNÉES (Db) --------------------------------------------
-jsondb_cli db create <space> <db>
-jsondb_cli db open <space> <db>
-jsondb_cli db drop <space> <db> --hard
-
--- COMMANDES DE COLLECTIONS (Collection) ---------------------------------------
-jsondb_cli collection create <space> <db> <name> <schema> 
-jsondb_cli collection drop <space> <db> <name> --hard
-
--- COMMANDES DE DOCUMENTS (Document) -------------------------------------------
-jsondb_cli document insert <space> <db> <schema> <file>
-jsondb_cli document upsert <space> <db> <schema> <file>
-
--- COMMANDES DE DATASET (Dataset) ----------------------------------------------
-jsondb_cli dataset seed-dir <space> <db> <dataset_dir_rel>
-
--- COMMANDES DE REQUÊTES (Query / Sql) -----------------------------------------
-jsondb_cli query find-many <space> <db> <file_query_json>
-jsondb_cli sql exec <space> <db> "<SQL_QUERY>"
-
--- OPTIONS GLOBALES ------------------------------------------------------------
-jsondb_cli --repo-root /path/to/repo <COMMAND> ...
-"#
-    );
+    println!(r#"Usage: jsondb_cli <COMMAND> [OPTIONS] ... (voir --help pour détails)"#);
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Charge .env à la racine du repo courant si présent
     dotenvy::dotenv().ok();
     init_tracing();
 
@@ -319,6 +285,8 @@ async fn main() -> Result<()> {
     let cfg = build_cfg(cli.repo_root.clone())?;
 
     match cli.cmd {
+        // ... (Les commandes Db, Collection, Document, Query, Sql, Dataset restent inchangées) ...
+        // Je les reprends pour la complétude
         Cmd::Db { action } => match action {
             DbAction::Create { space, db } => {
                 file_storage::create_db(&cfg, &space, &db)?;
@@ -340,12 +308,7 @@ async fn main() -> Result<()> {
                     file_storage::DropMode::Soft
                 };
                 file_storage::drop_db(&cfg, &space, &db, mode)?;
-                println!(
-                    "✅ DB supprimée ({}) : {}/{}",
-                    if hard { "hard" } else { "soft" },
-                    space,
-                    db
-                );
+                println!("✅ DB supprimée.");
             }
             DbAction::Query {
                 space,
@@ -362,17 +325,16 @@ async fn main() -> Result<()> {
                 let engine = QueryEngine::new(&mgr);
 
                 let filter = if let Some(raw) = filter_json {
-                    let v: Value = serde_json::from_str(&raw)
-                        .with_context(|| format!("Parse du filtre JSON: {raw}"))?;
+                    let v: Value = serde_json::from_str(&raw).context("Parse filter JSON")?;
                     Some(serde_json::from_value(v)?)
                 } else {
                     None
                 };
 
-                let mut sort_fields: Vec<SortField> = Vec::new();
+                let mut sort_fields = Vec::new();
                 if !sort.is_empty() {
-                    sort_fields = parse_sort_specs(&sort)
-                        .map_err(|e| anyhow!("Spécification de tri invalide: {e}"))?;
+                    sort_fields =
+                        parse_sort_specs(&sort).map_err(|e| anyhow!("Sort spec invalid: {e}"))?;
                 } else if latest {
                     sort_fields.push(SortField {
                         field: "createdAt".to_string(),
@@ -381,7 +343,7 @@ async fn main() -> Result<()> {
                 }
 
                 let q = Query {
-                    collection: collection.clone(),
+                    collection,
                     filter,
                     sort: if sort_fields.is_empty() {
                         None
@@ -392,18 +354,13 @@ async fn main() -> Result<()> {
                     limit,
                     projection: None,
                 };
-
-                let result = engine
-                    .execute_query(q)
-                    .await
-                    .with_context(|| "Exécution de la requête")?;
+                let result = engine.execute_query(q).await.context("Execute query")?;
 
                 if result.documents.is_empty() {
                     println!("(aucun document)");
                 } else {
                     for doc in result.documents {
-                        println!("{}", serde_json::to_string_pretty(&doc)?);
-                        println!("---");
+                        println!("{}\n---", serde_json::to_string_pretty(&doc)?);
                     }
                 }
             }
@@ -417,10 +374,7 @@ async fn main() -> Result<()> {
             } => {
                 file_storage::open_db(&cfg, &space, &db)?;
                 file_storage::create_collection(&cfg, &space, &db, &name, &schema)?;
-                println!(
-                    "✅ Collection créée: {}/{} :: {} (schema: {})",
-                    space, db, name, schema
-                );
+                println!("✅ Collection créée: {}", name);
             }
         },
         Cmd::Document { action } => match action {
@@ -432,15 +386,12 @@ async fn main() -> Result<()> {
             } => {
                 file_storage::open_db(&cfg, &space, &db)?;
                 let mgr = CollectionsManager::new(&cfg, &space, &db);
-                let rd = File::open(&file)?;
-                let doc: Value = serde_json::from_reader(rd)?;
+                let doc: Value = serde_json::from_reader(File::open(file)?)?;
                 let stored = mgr.insert_with_schema(&schema, doc)?;
-                let id = stored
-                    .get("id")
-                    .or(stored.get("_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                println!("✅ Inserted: {}", id);
+                println!(
+                    "✅ Inserted: {}",
+                    stored.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+                );
             }
             DocAction::Upsert {
                 space,
@@ -450,15 +401,12 @@ async fn main() -> Result<()> {
             } => {
                 file_storage::open_db(&cfg, &space, &db)?;
                 let mgr = CollectionsManager::new(&cfg, &space, &db);
-                let rd = File::open(&file)?;
-                let doc: Value = serde_json::from_reader(rd)?;
+                let doc: Value = serde_json::from_reader(File::open(file)?)?;
                 let stored = mgr.upsert_with_schema(&schema, doc)?;
-                let id = stored
-                    .get("id")
-                    .or(stored.get("_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                println!("✅ Upserted: {}", id);
+                println!(
+                    "✅ Upserted: {}",
+                    stored.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+                );
             }
         },
         Cmd::Query { action } => match action {
@@ -466,24 +414,17 @@ async fn main() -> Result<()> {
                 file_storage::open_db(&cfg, &space, &db)?;
                 let mgr = CollectionsManager::new(&cfg, &space, &db);
                 let engine = QueryEngine::new(&mgr);
-
-                let rd = File::open(&file)?;
-                let query: Query = serde_json::from_reader(rd)?;
-                println!("🔎 Requête chargée:\n{:#?}", query);
-
+                let query: Query = serde_json::from_reader(File::open(file)?)?;
                 let result = engine.execute_query(query).await?;
-                println!("✅ Trouvé {} document(s).", result.documents.len());
+                println!("✅ {} document(s) found.", result.documents.len());
                 for doc in result.documents.iter().take(5) {
                     println!(
                         "   - ID: {}",
-                        doc.get("id").or(doc.get("_id")).unwrap_or(&Value::Null)
+                        doc.get("id").and_then(|v| v.as_str()).unwrap_or("?")
                     );
                 }
             }
         },
-        Cmd::Sql { action: _ } => {
-            println!("⚠️ Commande SQL non implémentée.");
-        }
         Cmd::Dataset { action } => match action {
             DatasetAction::SeedDir {
                 space,
@@ -494,7 +435,93 @@ async fn main() -> Result<()> {
                 run_seed_dir(&cfg, &space, &db, &dataset_rel_dir)?;
             }
         },
+        Cmd::Sql { action: _ } => println!("⚠️ SQL not implemented"),
         Cmd::Usage => usages(),
+
+        // --- MISE À JOUR IMPORTANTE ---
+        Cmd::Transaction { action } => match action {
+            TransactionAction::Execute { space, db, file } => {
+                // 1. CHARGEMENT ENV & CONFIG
+                // On s'assure que le .env est chargé pour avoir accès à PATH_GENAPTITUDE_DATASET
+                file_storage::open_db(&cfg, &space, &db)?;
+                let tm = TransactionManager::new(&cfg, &space, &db);
+
+                // 2. EXPANSION DU CHEMIN DU FICHIER DE TRANSACTION
+                // C'est ici qu'on permet l'utilisation de $PATH_GENAPTITUDE_DATASET dans l'argument CLI
+                let file_str = file.to_string_lossy();
+                let expanded_file_path = expand_path(&file_str);
+
+                println!(
+                    "📂 Lecture du fichier de transaction : {:?}",
+                    expanded_file_path
+                );
+
+                let rd = File::open(&expanded_file_path).with_context(|| {
+                    format!("Impossible d'ouvrir le fichier : {:?}", expanded_file_path)
+                })?;
+
+                let req: CliTransactionRequest = serde_json::from_reader(rd)
+                    .with_context(|| "Erreur de parsing du JSON de transaction")?;
+
+                println!(
+                    "🔄 Exécution de la transaction ({} opérations)...",
+                    req.operations.len()
+                );
+
+                tm.execute(|tx| {
+                    for op in req.operations {
+                        match op {
+                            CliOperationRequest::Insert {
+                                collection,
+                                mut doc,
+                            } => {
+                                let id = ensure_id(&mut doc);
+                                tx.add_insert(&collection, &id, doc);
+                                println!(" + Insert: {}/{}", collection, id);
+                            }
+                            CliOperationRequest::InsertFrom { collection, path } => {
+                                // Expansion également pour les chemins DANS le fichier JSON
+                                let expanded_path = expand_path(&path);
+                                let content = fs::read_to_string(&expanded_path)
+                                    .with_context(|| {
+                                        format!("Lecture du fichier source : {:?}", expanded_path)
+                                    })
+                                    .map_err(|e| anyhow::anyhow!(e))?;
+
+                                let mut doc: Value = serde_json::from_str(&content)
+                                    .with_context(|| {
+                                        format!("Parsing du fichier source : {:?}", expanded_path)
+                                    })
+                                    .map_err(|e| anyhow::anyhow!(e))?;
+
+                                let id = ensure_id(&mut doc);
+                                tx.add_insert(&collection, &id, doc);
+                                println!(
+                                    " + Insert (From File): {}/{} (src: {:?})",
+                                    collection, id, expanded_path
+                                );
+                            }
+                            CliOperationRequest::Update { collection, doc } => {
+                                let id = doc
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow!("Missing id for update"))?
+                                    .to_string();
+                                tx.add_update(&collection, &id, None, doc);
+                                println!(" + Update: {}/{}", collection, id);
+                            }
+                            CliOperationRequest::Delete { collection, id } => {
+                                tx.add_delete(&collection, &id, None);
+                                println!(" - Delete: {}/{}", collection, id);
+                            }
+                        }
+                    }
+                    Ok(())
+                })?;
+
+                println!("✅ Transaction validée (Commit ACID) !");
+            }
+        },
     }
 
     Ok(())

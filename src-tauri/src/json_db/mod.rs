@@ -58,12 +58,6 @@ impl JsonDb {
 // 💡 EXPORT 2: Types de requête (Résout L64)
 pub use self::query::{QueryEngine, QueryInput, QueryResult};
 
-// Les autres types (CollectionsManager, StorageEngine) sont déjà rendus publics par le module/chemin.
-// Il n'est PAS NÉCESSAIRE de les ré-exporter ici, car ils sont déjà accessibles.
-
-// pub use self::collections::manager::CollectionsManager; // ❌ Était la cause du conflit L68
-// pub use self::storage::StorageEngine;                   // ❌ Était la cause du conflit L71
-
 // On exporte uniquement les types non conflictuels :
 pub use self::jsonld::JsonLdContext;
 pub use self::schema::SchemaValidator;

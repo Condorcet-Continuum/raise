@@ -195,7 +195,6 @@ pub fn create_collection(
 }
 
 /// Écriture atomique: .tmp puis rename
-/// Écriture atomique: .tmp puis rename
 pub fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).ok();
@@ -217,6 +216,7 @@ pub fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         .with_context(|| format!("Rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
 }
+
 /// Copie récursive de `<repo>/schemas/v1` vers `<db>/schemas/v1` si ce dernier est vide
 fn seed_schemas_if_empty(cfg: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
     let dst = cfg.db_schemas_root(space, db);
@@ -269,4 +269,22 @@ pub fn atomic_write_binary(path: &Path, data: &[u8]) -> Result<()> {
     fs::rename(&tmp, path)
         .with_context(|| format!("Rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
+}
+
+// --- NOUVELLES FONCTIONS POUR LA GESTION DE L'INDEX (TRANSACTIONS) ---
+
+/// Lit l'index brut (_system.json)
+pub fn read_index(cfg: &JsonDbConfig, space: &str, db: &str) -> Result<DbIndex> {
+    let path = cfg.index_path(space, db);
+    let data =
+        fs::read_to_string(&path).with_context(|| format!("Lecture index {}", path.display()))?;
+    let idx: DbIndex =
+        serde_json::from_str(&data).with_context(|| "Parse JSON de _system.json".to_string())?;
+    Ok(idx)
+}
+
+/// Écrit l'index brut
+pub fn write_index(cfg: &JsonDbConfig, space: &str, db: &str, index: &DbIndex) -> Result<()> {
+    let path = cfg.index_path(space, db);
+    atomic_write_json(&path, index)
 }

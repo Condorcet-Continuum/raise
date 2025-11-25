@@ -66,3 +66,12 @@ export type TransactionOperation =
   | { type: 'insert'; collection: string; document: any }
   | { type: 'update'; collection: string; id: string; document: any }
   | { type: 'delete'; collection: string; id: string };
+
+export interface TransactionRequest {
+  operations: OperationRequest[];
+}
+
+export type OperationRequest =
+  | { type: 'insert'; collection: string; doc: Record<string, any> }
+  | { type: 'update'; collection: string; doc: Record<string, any> }
+  | { type: 'delete'; collection: string; id: string };

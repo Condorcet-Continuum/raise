@@ -63,6 +63,7 @@ fn main() {
             json_db_commands::jsondb_upsert,
             json_db_commands::jsondb_list_collections,
             json_db_commands::jsondb_query_collection,
+            json_db_commands::jsondb_execute_transaction,
             // 🔗 Blockchain / VPN (module blockchain_commands)
             blockchain_commands::fabric_ping,
             blockchain_commands::fabric_submit_transaction,

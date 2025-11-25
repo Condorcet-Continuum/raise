@@ -10,11 +10,18 @@ pub struct JsonDbConfig {
 
 impl JsonDbConfig {
     pub fn from_env(repo_root: impl AsRef<Path>) -> anyhow::Result<Self> {
+        // 1. Charge le .env
         let _ = dotenvy::dotenv();
-        let domain_root = std::env::var("PATH_GENAPTITUDE_DOMAIN")
-            .map(PathBuf::from)
+
+        // 2. Récupère la variable brute
+        let domain_path_str = std::env::var("PATH_GENAPTITUDE_DOMAIN")
             .map_err(|e| anyhow::anyhow!("ENV PATH_GENAPTITUDE_DOMAIN manquant: {e}"))?;
+
+        // 3. Expansion manuelle de $HOME
+        let domain_root = expand_path(&domain_path_str);
+
         let schemas_dev_root = repo_root.as_ref().join("schemas").join("v1");
+
         Ok(Self {
             domain_root,
             schemas_dev_root,
@@ -39,6 +46,26 @@ impl JsonDbConfig {
     }
 }
 
-// Stub temporaire attendu ailleurs; ne gêne pas les tests DB
+/// Helper local pour remplacer $HOME ou ~ par le vrai chemin home
+fn expand_path(path: &str) -> PathBuf {
+    let mut p = path.to_string();
+
+    // Si le chemin contient $HOME ou commence par ~
+    if p.contains("$HOME") || p.starts_with("~/") {
+        // On récupère le HOME du système
+        if let Ok(home) = std::env::var("HOME") {
+            p = p.replace("$HOME", &home);
+            if p.starts_with("~/") {
+                p = p.replacen("~", &home, 1);
+            }
+        }
+    }
+
+    // Si après tout ça on a encore un chemin relatif qui n'est pas absolu
+    // on peut vouloir le rendre absolu par rapport au CWD, mais restons simples pour l'instant.
+    PathBuf::from(p)
+}
+
+// Stub temporaire attendu ailleurs
 #[allow(dead_code)]
 pub struct StorageEngine;

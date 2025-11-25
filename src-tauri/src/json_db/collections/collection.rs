@@ -4,23 +4,15 @@
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::json_db::storage::file_storage::atomic_write_json;
 use crate::json_db::storage::JsonDbConfig;
 
-/// Racine DB à partir de la racine des schémas (…/schemas/v1 → ..)
-fn db_root(cfg: &JsonDbConfig, space: &str, db: &str) -> PathBuf {
-    let schemas = cfg.db_schemas_root(space, db);
-    schemas
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| Path::new(".").to_path_buf())
-}
-
 /// Racine des collections : {db_root}/collections/{collection}
 pub fn collection_root(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str) -> PathBuf {
-    db_root(cfg, space, db).join("collections").join(collection)
+    // CORRECTION : On utilise directement cfg.db_root() qui pointe vers "un2/_system"
+    cfg.db_root(space, db).join("collections").join(collection)
 }
 
 /// Fichier d’un document : {collection_root}/{id}.json
@@ -171,7 +163,8 @@ pub fn list_documents(
 
 /// Liste tous les noms de collections (dossiers) existantes pour la DB.
 pub fn list_collection_names_fs(cfg: &JsonDbConfig, space: &str, db: &str) -> Result<Vec<String>> {
-    let root = db_root(cfg, space, db).join("collections");
+    // CORRECTION : Utilisation directe de cfg.db_root()
+    let root = cfg.db_root(space, db).join("collections");
     let mut out = Vec::new();
     if !root.exists() {
         return Ok(out);

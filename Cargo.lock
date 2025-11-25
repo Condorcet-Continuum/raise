@@ -1676,11 +1676,13 @@ dependencies = [
  "clap",
  "dotenvy",
  "genaptitude",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-log",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

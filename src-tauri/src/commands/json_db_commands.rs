@@ -7,6 +7,7 @@ use std::path::Path;
 
 // 2. QueryInput est dans json_db::query
 use crate::json_db::query::{QueryEngine, QueryInput, QueryResult};
+use crate::json_db::transactions::TransactionManager;
 
 use crate::json_db::{
     collections::manager::CollectionsManager,
@@ -50,11 +51,14 @@ pub fn jsondb_create_collection(
     space: String,
     db: String,
     collection: String,
+    schema: Option<String>, // <--- 1. Ajout du paramètre dans la commande Tauri
 ) -> Result<(), String> {
     let (_cfg, m) = mgr(&space, &db)?;
-    m.create_collection(&collection).map_err(|e| e.to_string())
-}
 
+    // <--- 2. Passage du paramètre au manager (qui attend maintenant 2 arguments)
+    m.create_collection(&collection, schema)
+        .map_err(|e| e.to_string())
+}
 /// Supprime une collection (dossier)
 #[tauri::command]
 pub fn jsondb_drop_collection(space: String, db: String, collection: String) -> Result<(), String> {
@@ -241,4 +245,82 @@ pub fn jsondb_list_collections(space: String, db: String) -> Result<Vec<String>,
     let (_cfg, m) = mgr(&space, &db)?;
     // 💡 CORRECTION : Utilisation de list_collection_names
     m.list_collection_names().map_err(|e| e.to_string())
+}
+
+/// Structure d'entrée pour une transaction depuis le frontend
+#[derive(serde::Deserialize)]
+pub struct TransactionRequest {
+    pub operations: Vec<OperationRequest>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum OperationRequest {
+    Insert { collection: String, doc: Value },
+    Update { collection: String, doc: Value },
+    Delete { collection: String, id: String },
+}
+
+/// Exécute une transaction atomique (ACID)
+#[tauri::command]
+pub fn jsondb_execute_transaction(
+    space: String,
+    db: String,
+    request: TransactionRequest,
+) -> Result<(), String> {
+    // 1. Init Config & Manager
+    let cfg = cfg_from_repo_env()?;
+
+    // On s'assure que la DB existe
+    if crate::json_db::storage::file_storage::open_db(&cfg, &space, &db).is_err() {
+        return Err(format!("Database {}/{} does not exist", space, db));
+    }
+
+    let tm = TransactionManager::new(&cfg, &space, &db);
+
+    // 2. Exécution transactionnelle
+    tm.execute(|tx| {
+        for op in request.operations {
+            match op {
+                OperationRequest::Insert {
+                    collection,
+                    mut doc,
+                } => {
+                    // CORRECTION : On extrait l'ID et on le transforme immédiatement en String (owned)
+                    // Cela libère l'emprunt sur `doc` avant de le modifier/déplacer.
+                    let id = match doc.get("id").and_then(|v| v.as_str()) {
+                        Some(s) => s.to_string(),
+                        None => uuid::Uuid::new_v4().to_string(),
+                    };
+
+                    // Maintenant que l'emprunt est fini, on peut muter `doc`
+                    if let Some(obj) = doc.as_object_mut() {
+                        obj.insert("id".to_string(), serde_json::Value::String(id.clone()));
+                    }
+
+                    // Et on peut déplacer `doc` sans erreur
+                    tx.add_insert(&collection, &id, doc);
+                }
+                OperationRequest::Update { collection, doc } => {
+                    // CORRECTION : Même problème ici, `id` ne doit pas être une référence (&str)
+                    // car `doc` est déplacé (move) dans `add_update` juste après.
+                    let id = doc
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()) // On clone en String ici
+                        .ok_or_else(|| anyhow::anyhow!("Missing id for update"))?;
+
+                    // On passe `None` pour old_doc pour l'instant (TODO: Rollback)
+                    tx.add_update(&collection, &id, None, doc);
+                }
+                OperationRequest::Delete { collection, id } => {
+                    tx.add_delete(&collection, &id, None);
+                }
+            }
+        }
+        Ok(())
+    })
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
