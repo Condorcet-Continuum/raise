@@ -1,30 +1,17 @@
-//! JSON-DB Tauri commands
-
-use serde::Serialize;
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::query::{Query, QueryEngine, QueryResult};
+use crate::json_db::storage::StorageEngine;
 use serde_json::Value;
 use tauri::{command, State};
 
-use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::query::sql::parse_sql;
-use crate::json_db::query::{Query, QueryEngine};
-use crate::json_db::storage::{file_storage, StorageEngine};
-
-#[derive(Serialize)]
-pub struct QueryResponse {
-    pub documents: Vec<Value>,
-    pub total: usize,
-}
-
+// Helper pour instancier le manager rapidement
 fn mgr<'a>(
-    storage: &'a State<StorageEngine>,
+    storage: &'a State<'_, StorageEngine>,
     space: &str,
     db: &str,
 ) -> Result<CollectionsManager<'a>, String> {
-    let config = &storage.config;
-    if file_storage::open_db(config, space, db).is_err() {
-        file_storage::create_db(config, space, db).map_err(|e| e.to_string())?;
-    }
-    Ok(CollectionsManager::new(storage.inner(), space, db))
+    // Ici, vous pouvez ajouter une validation si space/db n'existent pas
+    Ok(CollectionsManager::new(storage, space, db))
 }
 
 #[command]
@@ -34,12 +21,11 @@ pub async fn jsondb_create_collection(
     db: String,
     collection: String,
     schema_uri: Option<String>,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .create_collection(&collection, schema_uri)
-        .map_err(|e| e.to_string())?;
-    Ok(format!("Collection '{}' created.", collection))
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -61,23 +47,9 @@ pub async fn jsondb_insert_document(
     document: Value,
 ) -> Result<Value, String> {
     let manager = mgr(&storage, &space, &db)?;
-    let inserted_doc = manager
-        .insert_with_schema(&collection, document)
-        .map_err(|e| format!("Insert Failed: {}", e))?;
-    Ok(inserted_doc)
-}
-
-#[command]
-pub async fn jsondb_get_document(
-    storage: State<'_, StorageEngine>,
-    space: String,
-    db: String,
-    collection: String,
-    id: String,
-) -> Result<Option<Value>, String> {
-    let manager = mgr(&storage, &space, &db)?;
+    // Utilise insert_with_schema pour garantir les IDs et validations
     manager
-        .get_document(&collection, &id)
+        .insert_with_schema(&collection, document)
         .map_err(|e| e.to_string())
 }
 
@@ -93,7 +65,21 @@ pub async fn jsondb_update_document(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .update_document(&collection, &id, document)
-        .map_err(|e| format!("Update Failed: {}", e))
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn jsondb_get_document(
+    storage: State<'_, StorageEngine>,
+    space: String,
+    db: String,
+    collection: String,
+    id: String,
+) -> Result<Option<Value>, String> {
+    let manager = mgr(&storage, &space, &db)?;
+    manager
+        .get_document(&collection, &id)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -116,20 +102,10 @@ pub async fn jsondb_execute_query(
     space: String,
     db: String,
     query: Query,
-) -> Result<QueryResponse, String> {
+) -> Result<QueryResult, String> {
     let manager = mgr(&storage, &space, &db)?;
     let engine = QueryEngine::new(&manager);
-
-    let result = engine
-        .execute_query(query)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(QueryResponse {
-        documents: result.documents,
-        // CORRECTION : Cast u64 -> usize
-        total: result.total_count as usize,
-    })
+    engine.execute_query(query).await.map_err(|e| e.to_string())
 }
 
 #[command]
@@ -138,20 +114,27 @@ pub async fn jsondb_execute_sql(
     space: String,
     db: String,
     sql: String,
-) -> Result<QueryResponse, String> {
+) -> Result<QueryResult, String> {
     let manager = mgr(&storage, &space, &db)?;
 
-    let query = parse_sql(&sql).map_err(|e| format!("SQL Parse Error: {}", e))?;
+    // Parsing SQL
+    let query = crate::json_db::query::sql::parse_sql(&sql)
+        .map_err(|e| format!("SQL Parse Error: {}", e))?;
 
     let engine = QueryEngine::new(&manager);
-    let result = engine
-        .execute_query(query)
-        .await
-        .map_err(|e| format!("Execution Error: {}", e))?;
+    engine.execute_query(query).await.map_err(|e| e.to_string())
+}
 
-    Ok(QueryResponse {
-        documents: result.documents,
-        // CORRECTION : Cast u64 -> usize
-        total: result.total_count as usize,
-    })
+// CELLE QUI MANQUAIT :
+#[command]
+pub async fn jsondb_list_all(
+    storage: State<'_, StorageEngine>,
+    space: String,
+    db: String,
+    collection: String,
+) -> Result<Vec<Value>, String> {
+    let manager = mgr(&storage, &space, &db)?;
+    manager
+        .list_all(&collection)
+        .map_err(|e| format!("List All Failed: {}", e))
 }

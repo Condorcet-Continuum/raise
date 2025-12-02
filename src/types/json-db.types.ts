@@ -1,77 +1,70 @@
 /**
- * Types pour la base de données JSON
+ * Types synchronisés avec le backend Rust (genaptitude::json_db)
  */
 
-export interface Collection {
-  name: string;
-  schema_id: string;
-  jsonld_context?: string;
-  indexes: string[];
-  created_at: number;
-  updated_at: number;
+// --- Query Engine Types ---
+
+export type SortOrder = 'Asc' | 'Desc';
+
+export interface SortField {
+  field: string;
+  order: SortOrder;
 }
 
-export interface Document<T = any> {
-  id: string;
+export type FilterOperator = 'And' | 'Or' | 'Not';
+
+export type ComparisonOperator =
+  | 'Eq'
+  | 'Ne'
+  | 'Gt'
+  | 'Gte'
+  | 'Lt'
+  | 'Lte'
+  | 'In'
+  | 'Contains'
+  | 'StartsWith'
+  | 'EndsWith'
+  | 'Matches';
+
+export interface Condition {
+  field: string;
+  operator: ComparisonOperator;
+  value: any;
+}
+
+export interface QueryFilter {
+  operator: FilterOperator;
+  conditions: Condition[];
+}
+
+export interface Query {
   collection: string;
-  data: T;
-  version: number;
-  created_at: number;
-  updated_at: number;
+  filter?: QueryFilter;
+  sort?: SortField[];
+  limit?: number;
+  offset?: number;
+  projection?: string[];
 }
 
-export interface JsonSchema {
-  id: string;
-  title: string;
-  schema_type: string;
-  version: string;
-  schema: Record<string, any>;
-  created_at: number;
+export interface QueryResponse {
+  documents: any[];
+  total: number;
 }
 
-export interface Index {
-  name: string;
-  collection: string;
-  fields: string[];
-  index_type: 'btree' | 'hash' | 'text';
-  unique: boolean;
-}
+// --- Transaction Types ---
 
-export interface Migration {
-  id: string;
-  version: string;
-  description: string;
-  up: MigrationStep[];
-  down: MigrationStep[];
-  applied_at?: number;
-}
-
-export type MigrationStep =
-  | { type: 'create_collection'; name: string; schema: any }
-  | { type: 'drop_collection'; name: string }
-  | { type: 'add_field'; collection: string; field: string; default?: any }
-  | { type: 'remove_field'; collection: string; field: string }
-  | { type: 'rename_field'; collection: string; old_name: string; new_name: string }
-  | { type: 'create_index'; collection: string; fields: string[] }
-  | { type: 'drop_index'; collection: string; name: string };
-
-export interface Transaction {
-  id: string;
-  operations: TransactionOperation[];
-  status: 'pending' | 'committed' | 'aborted';
-  started_at: number;
-}
-
-export type TransactionOperation =
-  | { type: 'insert'; collection: string; document: any }
-  | { type: 'update'; collection: string; id: string; document: any }
-  | { type: 'delete'; collection: string; id: string };
+export type OperationRequest =
+  | { type: 'Insert'; collection: string; id: string; document: any }
+  | { type: 'Update'; collection: string; id: string; document: any }
+  | { type: 'Delete'; collection: string; id: string };
 
 export interface TransactionRequest {
   operations: OperationRequest[];
 }
 
-export type OperationRequest =
-  | { type: 'insert'; collection: string; doc: Record<string, any> }
-  | { type: 'update'; collection: string; doc: Record<string, any> }
-  | { type: 'delete'; collection: string; id: string };
+// --- General Types ---
+
+export interface Document<T = any> {
+  id: string;
+  [key: string]: T | any;
+}

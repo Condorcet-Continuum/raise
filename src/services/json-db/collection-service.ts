@@ -1,42 +1,24 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Query } from './query-service';
+import { queryService } from './query-service';
+import type { Query, Document } from '@/types/json-db.types';
 
 const DEFAULT_SPACE = 'un2';
 const DEFAULT_DB = '_system';
 
-export interface Document<T = any> {
-  id: string;
-  [key: string]: T | any;
-}
-
-export interface QueryResult<T = any> {
-  documents: T[];
-  total_count: number;
-  offset: number;
-  limit: number | null;
-}
-
 export class CollectionService {
-  /**
-   * Crée une collection avec un schéma spécifique.
-   * @param name Nom de la collection
-   * @param schema Chemin relatif du schéma (ex: "sandbox/generic.schema.json")
-   */
-  async createCollection(name: string, schema?: string): Promise<void> {
+  async createCollection(name: string, schemaUri?: string): Promise<void> {
     await invoke('jsondb_create_collection', {
       space: DEFAULT_SPACE,
       db: DEFAULT_DB,
       collection: name,
-      schema: schema ?? 'sandbox/generic.schema.json',
+      schemaUri: schemaUri || null,
     });
   }
 
-  async insertRaw(collection: string, doc: any): Promise<void> {
-    await invoke('jsondb_insert_raw', {
+  async listAllCollections(): Promise<string[]> {
+    return await invoke<string[]>('jsondb_list_collections', {
       space: DEFAULT_SPACE,
       db: DEFAULT_DB,
-      collection,
-      doc,
     });
   }
 
@@ -48,25 +30,54 @@ export class CollectionService {
     });
   }
 
-  /**
-   * Exécute une requête complexe via le moteur de recherche backend.
-   * @param collection Nom de la collection
-   * @param query Objet Query construit via createQuery()
-   */
-  async queryDocuments(collection: string, query: Query): Promise<Document[]> {
-    // On s'assure que le champ collection est bien rempli dans l'objet Query
-    const queryObj = { ...query, collection };
-
-    // Appel de la commande Rust
-    // Note : le paramètre '_bucket' est un placeholder requis par la signature Rust actuelle
-    const result = await invoke<QueryResult>('jsondb_query_collection', {
+  async insertDocument(collection: string, doc: any): Promise<any> {
+    return await invoke('jsondb_insert_document', {
       space: DEFAULT_SPACE,
       db: DEFAULT_DB,
-      _bucket: collection,
-      queryJson: JSON.stringify(queryObj),
+      collection,
+      document: doc,
     });
+  }
 
-    return result.documents;
+  async getDocument(collection: string, id: string): Promise<any | null> {
+    return await invoke('jsondb_get_document', {
+      space: DEFAULT_SPACE,
+      db: DEFAULT_DB,
+      collection,
+      id,
+    });
+  }
+
+  async updateDocument(collection: string, id: string, doc: any): Promise<any> {
+    return await invoke('jsondb_update_document', {
+      space: DEFAULT_SPACE,
+      db: DEFAULT_DB,
+      collection,
+      id,
+      document: doc,
+    });
+  }
+
+  async deleteDocument(collection: string, id: string): Promise<boolean> {
+    return await invoke('jsondb_delete_document', {
+      space: DEFAULT_SPACE,
+      db: DEFAULT_DB,
+      collection,
+      id,
+    });
+  }
+
+  /**
+   * Proxy vers le QueryService.
+   * CORRECTION MAJEURE : Signature alignée pour accepter (collection, query, options).
+   */
+  async queryDocuments(
+    collection: string,
+    query: Query,
+    options?: { latest?: boolean },
+  ): Promise<any[]> {
+    query.collection = collection;
+    return queryService.execute(query, options);
   }
 }
 

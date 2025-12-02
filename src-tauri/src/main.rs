@@ -38,6 +38,7 @@ fn main() {
             json_db_commands::jsondb_delete_document,
             json_db_commands::jsondb_execute_query,
             json_db_commands::jsondb_execute_sql,
+            json_db_commands::jsondb_list_all,
             // Commandes Modèle
             model_commands::load_project_model,
             // Commandes Blockchain

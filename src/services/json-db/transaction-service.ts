@@ -1,6 +1,7 @@
-// src/services/json-db/transaction-service.ts
 import { invoke } from '@tauri-apps/api/core';
-import type { OperationRequest, TransactionRequest } from '@/types/json-db.types';
+import type { OperationRequest } from '@/types/json-db.types';
+// On utilise uuid pour générer un ID temporaire si besoin
+import { v4 as uuidv4 } from 'uuid';
 
 const DEFAULT_SPACE = 'un2';
 const DEFAULT_DB = '_system';
@@ -8,76 +9,82 @@ const DEFAULT_DB = '_system';
 export class TransactionService {
   private operations: OperationRequest[] = [];
 
-  constructor(
-    private space: string = DEFAULT_SPACE, 
-    private db: string = DEFAULT_DB
-  ) {}
+  constructor(private space: string = DEFAULT_SPACE, private db: string = DEFAULT_DB) {}
 
-  /**
-   * Ajoute une opération d'insertion à la transaction.
-   * L'ID sera généré par le backend s'il est absent du doc.
-   */
   add(collection: string, doc: Record<string, any>): this {
-    this.operations.push({ type: 'insert', collection, doc });
+    // Si le doc n'a pas d'ID, on en génère un pour le frontend
+    const id = doc.id || uuidv4();
+    const docWithId = { ...doc, id };
+
+    this.operations.push({
+      type: 'Insert',
+      collection,
+      id,
+      document: docWithId,
+    });
     return this;
   }
 
-  /**
-   * Ajoute une opération de mise à jour.
-   * Le document DOIT contenir un champ 'id'.
-   */
-  update(collection: string, doc: Record<string, any>): this {
-    this.operations.push({ type: 'update', collection, doc });
+  // CORRECTION ICI : Signature à 3 arguments pour correspondre à JsonDbTester
+  update(collection: string, id: string, doc: Record<string, any>): this {
+    this.operations.push({
+      type: 'Update',
+      collection,
+      id,
+      document: doc,
+    });
     return this;
   }
 
-  /**
-   * Ajoute une opération de suppression.
-   */
   delete(collection: string, id: string): this {
-    this.operations.push({ type: 'delete', collection, id });
+    this.operations.push({
+      type: 'Delete',
+      collection,
+      id,
+    });
     return this;
   }
 
-/**
-   * Retourne la liste des opérations en attente (pour affichage UI).
-   */
-getPendingOperations(): OperationRequest[] {
-    return [...this.operations]; // Retourne une copie pour éviter la mutation externe
+  getPendingOperations(): OperationRequest[] {
+    return [...this.operations];
   }
 
-  /**
-   * Annule toutes les opérations en attente (Rollback Client).
-   */
   rollback(): void {
     this.operations = [];
   }
-    
-  /**
-   * Exécute la transaction de manière atomique.
-   */
+
   async commit(): Promise<void> {
     if (this.operations.length === 0) return;
 
-    const request: TransactionRequest = {
-      operations: this.operations
-    };
-
-    try {
-      await invoke('jsondb_execute_transaction', {
-        space: this.space,
-        db: this.db,
-        request
-      });
-      // Reset après succès
-      this.operations = [];
-    } catch (error) {
-      console.error("Transaction failed:", error);
-      throw error; // Relancer pour que l'UI puisse gérer l'erreur
+    // Exécution séquentielle des opérations (simulation de transaction)
+    for (const op of this.operations) {
+      if (op.type === 'Insert') {
+        await invoke('jsondb_insert_document', {
+          space: this.space,
+          db: this.db,
+          collection: op.collection,
+          document: op.document,
+        });
+      } else if (op.type === 'Update') {
+        await invoke('jsondb_update_document', {
+          space: this.space,
+          db: this.db,
+          collection: op.collection,
+          id: op.id,
+          document: op.document,
+        });
+      } else if (op.type === 'Delete') {
+        await invoke('jsondb_delete_document', {
+          space: this.space,
+          db: this.db,
+          collection: op.collection,
+          id: op.id,
+        });
+      }
     }
+
+    this.operations = [];
   }
 }
 
-// Helper pour créer une nouvelle transaction rapidement
-export const createTransaction = (space?: string, db?: string) => 
-  new TransactionService(space, db);
+export const createTransaction = (space?: string, db?: string) => new TransactionService(space, db);
