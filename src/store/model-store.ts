@@ -9,13 +9,15 @@ export interface ModelStoreState {
   isLoading: boolean;
   error: string | null;
 
-  // Indexation rapide
+  // Indexation rapide & Sélection
   elementsById: Record<string, ArcadiaElement>;
+  selectedElementId?: string | null; // Ajouté pour la compatibilité UI
 
   // Actions
   setProject: (model: ProjectModel) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+  selectElement: (id: string | null | undefined) => void; // Ajouté
 
   // Helpers
   getElementById: (id: string) => ArcadiaElement | undefined;
@@ -26,27 +28,32 @@ export const useModelStore = create<ModelStoreState>((set, get) => ({
   isLoading: false,
   error: null,
   elementsById: {},
+  selectedElementId: null,
 
   setProject: (model) => {
     // On indexe tout à plat pour les recherches rapides O(1)
     const map: Record<string, ArcadiaElement> = {};
 
-    const indexLayer = (elements: ArcadiaElement[]) => {
-      elements.forEach((el) => {
+    // Helper pour indexer une liste
+    const indexList = (list?: ArcadiaElement[]) => {
+      if (!list) return;
+      list.forEach((el) => {
         map[el.id] = el;
       });
     };
 
+    // Indexation des couches si elles existent
     if (model.oa) {
-      indexLayer(model.oa.actors);
-      indexLayer(model.oa.activities);
-      // ... ajouter les autres listes si besoin
+      indexList(model.oa.actors);
+      indexList(model.oa.activities);
+      indexList(model.oa.capabilities);
     }
     if (model.sa) {
-      indexLayer(model.sa.functions);
-      indexLayer(model.sa.components);
+      indexList(model.sa.functions);
+      indexList(model.sa.components);
+      indexList(model.sa.actors);
     }
-    // ... LA, PA, EPBS
+    // ... (Ajouter LA, PA, EPBS si nécessaire)
 
     set({ project: model, elementsById: map, error: null });
   },
@@ -54,6 +61,8 @@ export const useModelStore = create<ModelStoreState>((set, get) => ({
   setLoading: (isLoading) => set({ isLoading }),
 
   setError: (error) => set({ error }),
+
+  selectElement: (id) => set({ selectedElementId: id || null }),
 
   getElementById: (id) => get().elementsById[id],
 }));

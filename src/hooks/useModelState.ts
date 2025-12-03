@@ -1,26 +1,35 @@
-import { useModelStore } from '@/store/model-store'
+// FICHIER : src/hooks/useModelState.ts
+
+import { useModelStore } from '@/store/model-store';
 
 export function useModelState() {
   const {
-    currentModelId,
+    project, // Remplaçant de currentModelId
     elementsById,
     selectedElementId,
-    setCurrentModel,
-    setElements,
+    setProject, // Remplaçant de setElements / setCurrentModel
     selectElement,
-  } = useModelStore()
+  } = useModelStore();
 
-  const selectedElement = selectedElementId
-    ? elementsById[selectedElementId]
-    : undefined
+  const selectedElement =
+    selectedElementId && elementsById[selectedElementId]
+      ? elementsById[selectedElementId]
+      : undefined;
 
   return {
-    currentModelId,
+    // On expose le projet complet
+    project,
+    // Rétro-compatibilité : si l'UI a besoin d'un ID, on peut renvoyer un ID fictif ou l'ID du projet si dispo
+    currentModelId: project ? 'loaded-project' : undefined,
+
     elementsById,
     selectedElementId,
     selectedElement,
-    setCurrentModel,
-    setElements,
+
+    // Actions mises à jour
+    setProject,
+    // Alias pour la compatibilité si d'autres composants appellent setElements
+    setElements: () => console.warn('setElements is deprecated, use setProject via ModelService'),
     selectElement,
-  }
+  };
 }
