@@ -1,3 +1,4 @@
+use crate::ai::nlp::tokenizers;
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 
 pub struct SimpleRetriever {
@@ -16,7 +17,6 @@ impl SimpleRetriever {
 
         let mut found_elements = Vec::new();
 
-        // 1. Recherche dans la couche OA (Analyse Opérationnelle)
         self.scan_layer(
             "OA:Acteur",
             &self.model.oa.actors,
@@ -29,8 +29,6 @@ impl SimpleRetriever {
             &keywords,
             &mut found_elements,
         );
-
-        // 2. Recherche dans la couche SA (Analyse Système)
         self.scan_layer(
             "SA:Fonction",
             &self.model.sa.functions,
@@ -44,18 +42,18 @@ impl SimpleRetriever {
             &mut found_elements,
         );
 
-        // 3. Construction du contexte texte pour le LLM
         if found_elements.is_empty() {
-            return "Aucun élément spécifique du modèle n'a été trouvé pour cette requête."
-                .to_string();
+            return "Aucun élément spécifique du modèle n'a été trouvé.".to_string();
         }
 
         let mut context_str = String::from("### CONTEXTE DU PROJET (Données réelles) ###\n");
-        for (kind, name, description) in found_elements.iter().take(15) {
-            // Limite à 15 pour ne pas saturer le prompt
+
+        for (kind, name, description) in found_elements {
             context_str.push_str(&format!("- [{}] {} : {}\n", kind, name, description));
         }
-        context_str
+
+        // Optimisation NLP
+        tokenizers::truncate_tokens(&context_str, 2000)
     }
 
     fn scan_layer(
@@ -66,9 +64,7 @@ impl SimpleRetriever {
         results: &mut Vec<(String, String, String)>,
     ) {
         for el in elements {
-            // On vérifie si le nom ou la description contient un des mots-clés
             let name_lower = el.name.to_lowercase();
-            // Pour l'instant, on suppose que properties["description"] est une string simple si elle existe
             let desc = el
                 .properties
                 .get("description")
@@ -81,10 +77,7 @@ impl SimpleRetriever {
                 .iter()
                 .any(|&k| k.len() > 3 && (name_lower.contains(k) || desc_lower.contains(k)));
 
-            // Si match, ou si la requête demande "tout" (liste, lister, tous)
-            let ask_all = keywords.contains(&"liste")
-                || keywords.contains(&"tous")
-                || keywords.contains(&"quels");
+            let ask_all = keywords.contains(&"liste") || keywords.contains(&"tous");
 
             if matches || ask_all {
                 results.push((kind_label.to_string(), el.name.clone(), desc));

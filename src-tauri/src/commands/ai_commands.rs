@@ -1,5 +1,5 @@
 use crate::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
-use crate::ai::agents::{system_agent::SystemAgent, Agent}; // <-- Nouveaux imports
+use crate::ai::agents::{system_agent::SystemAgent, Agent};
 use crate::ai::context::retriever::SimpleRetriever;
 use crate::ai::llm::client::{LlmBackend, LlmClient};
 use crate::json_db::storage::StorageEngine;
@@ -13,7 +13,7 @@ pub async fn ai_chat(
     storage: State<'_, StorageEngine>,
     user_input: String,
 ) -> Result<String, String> {
-    // 1. Config (Inchangé)
+    // 1. CONFIGURATION
     let mode_dual =
         env::var("GENAPTITUDE_MODE_DUAL").unwrap_or_else(|_| "false".to_string()) == "true";
     let gemini_key = env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
@@ -22,20 +22,19 @@ pub async fn ai_chat(
         env::var("GENAPTITUDE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
     let client = LlmClient::new(&local_url, &gemini_key, model_name.clone());
-
-    // 2. Classification d'intention
     let classifier = IntentClassifier::new(client.clone());
+
     println!("🧠 Analyse de l'intention...");
     let intent = classifier.classify(&user_input).await;
 
-    // 3. ROUTAGE : Action ou Discussion ?
+    // 2. ROUTAGE DE L'INTENTION
     match intent {
-        // CAS A : L'utilisateur veut AGIR (Créer quelque chose)
+        // CAS A : CRÉATION D'ÉLÉMENT (Acteur, Fonction...)
+        // On utilise 'ref' pour ne pas consommer la variable 'intent' (ownership)
         EngineeringIntent::CreateElement { .. } => {
-            // On instancie l'agent Système
             let sys_agent = SystemAgent::new(client.clone(), storage.inner().clone());
 
-            // On lui demande de traiter l'intention
+            // On délègue à l'agent
             if let Some(result_msg) = sys_agent
                 .process(&intent)
                 .await
@@ -44,27 +43,57 @@ pub async fn ai_chat(
                 return Ok(result_msg);
             }
 
-            Ok("⚠️ Je n'ai pas trouvé d'agent compétent pour cette création.".to_string())
+            Ok("⚠️ Je n'ai pas trouvé d'agent compétent pour ce type d'élément.".to_string())
         }
 
-        // CAS B : Discussion / RAG (Code existant)
-        EngineeringIntent::Chat | EngineeringIntent::Unknown => {
-            // ... (Code RAG existant : chargement modèle, retrieve, prompt) ...
-            // COPIEZ ICI VOTRE LOGIQUE RAG PRÉCÉDENTE
+        // CAS B : CRÉATION DE RELATION (Nouveau !)
+        EngineeringIntent::CreateRelationship {
+            ref source_name,
+            ref target_name,
+            ref relation_type,
+        } => {
+            let sys_agent = SystemAgent::new(client.clone(), storage.inner().clone());
 
-            // Pour rappel rapide du bloc RAG :
+            println!(
+                "🔗 Tentative de liaison : {} -> {} ({})",
+                source_name, target_name, relation_type
+            );
+
+            // On délègue à l'agent
+            if let Some(result_msg) = sys_agent
+                .process(&intent)
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                Ok(result_msg)
+            } else {
+                // Fallback temporaire tant que SystemAgent::process ne gère pas ce cas
+                Ok(format!(
+                    "⚠️ J'ai bien compris que vous voulez lier **{}** et **{}**, mais je ne sais pas encore le faire techniquement. (En cours de dev)", 
+                    source_name, target_name
+                ))
+            }
+        }
+
+        // CAS C : DISCUSSION / RAG (Consultation)
+        EngineeringIntent::Chat | EngineeringIntent::Unknown => {
+            println!("📂 Chargement du contexte métier pour RAG...");
+
+            // 1. Chargement du modèle en mémoire (Thread blocking)
             let storage_clone = storage.inner().clone();
             let project_model = tauri::async_runtime::spawn_blocking(move || {
                 let loader = ModelLoader::from_engine(&storage_clone, "un2", "_system");
                 loader.load_full_model()
             })
             .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Erreur thread: {}", e))?
+            .map_err(|e| format!("Erreur chargement modèle: {}", e))?;
 
+            // 2. Recherche contextuelle
             let retriever = SimpleRetriever::new(project_model);
             let context_data = retriever.retrieve_context(&user_input);
 
+            // 3. Choix du backend (Dual Mode)
             let use_cloud = mode_dual && !gemini_key.is_empty() && is_complex_task(&user_input);
             let (backend, display_name) = if use_cloud {
                 let name = model_name.unwrap_or_else(|| "Gemini Pro".to_string());
@@ -73,22 +102,39 @@ pub async fn ai_chat(
                 (LlmBackend::LocalLlama, "🏠 Mistral (Local)".to_string())
             };
 
-            let system_prompt = format!("Tu es GenAptitude. Contexte:\n{}", context_data);
+            // 4. Prompt Système Augmenté
+            let system_prompt = format!(
+                "Tu es GenAptitude, expert en ingénierie système (Arcadia).
+                 Utilise le contexte ci-dessous pour répondre précisément sur le projet en cours.
+                 
+                 CONTEXTE:
+                 {}
+                 ",
+                context_data
+            );
 
+            // 5. Appel LLM
             let response = client
                 .ask(backend, &system_prompt, &user_input)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("Erreur IA: {}", e))?;
 
             Ok(format!("**{}**\n\n{}", display_name, response))
         }
     }
 }
 
+/// Helper pour détecter si la requête nécessite un LLM Cloud puissant
 fn is_complex_task(input: &str) -> bool {
-    let keywords = ["sml", "architecture", "analyse", "complexe", "génère"];
-    input
-        .to_lowercase()
-        .split_whitespace()
-        .any(|w| keywords.contains(&w))
+    let keywords = [
+        "sml",
+        "architecture",
+        "analyse",
+        "complexe",
+        "génère",
+        "entrainement",
+        "synthèse",
+    ];
+    let input_lower = input.to_lowercase();
+    keywords.iter().any(|&k| input_lower.contains(k))
 }

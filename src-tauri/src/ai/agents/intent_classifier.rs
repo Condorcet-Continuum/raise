@@ -1,7 +1,6 @@
 use crate::ai::llm::client::{LlmBackend, LlmClient};
 use serde::{Deserialize, Serialize};
 
-// 1. Définition des intentions possibles
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "intent", content = "params")]
 pub enum EngineeringIntent {
@@ -10,6 +9,12 @@ pub enum EngineeringIntent {
         layer: String,
         element_type: String,
         name: String,
+    },
+    #[serde(rename = "create_relationship")]
+    CreateRelationship {
+        source_name: String,
+        target_name: String,
+        relation_type: String,
     },
     #[serde(rename = "chat")]
     Chat,
@@ -27,17 +32,37 @@ impl IntentClassifier {
     }
 
     pub async fn classify(&self, user_input: &str) -> EngineeringIntent {
+        // PROMPT "CHIRURGICAL"
         let system_prompt = r#"
-        Tu es le moteur de classification de GenAptitude.
-        Ta seule tâche est d'analyser la demande de l'utilisateur et de retourner un objet JSON strict.
-        
-        FORMATS ACCEPTÉS :
-        1. Pour créer un élément : { "intent": "create_element", "params": { "layer": "OA"|"SA"|"LA"|"PA", "element_type": "Actor"|"Function"|"Component", "name": "Nom" } }
-        2. Pour discuter : { "intent": "chat", "params": null }
+        RÔLE : Classificateur d'intention JSON strict pour ingénierie système.
+        CONSIGNE : Analyse la phrase et retourne 1 seul JSON.
 
-        RÈGLES :
-        - UNIQUEMENT le JSON. Pas de phrase.
-        - Déduis la couche si absente.
+        ALGORITHME DE DÉCISION :
+
+        SI la phrase contient un verbe d'action ("réalise", "exécute", "pilote", "contient", "est lié à") :
+           ALORS -> "create_relationship"
+           IMPORTANT : Ne génère JAMAIS "create_element" ici, même si des types sont mentionnés.
+
+        SINON SI la phrase est un ordre de création ("Crée", "Ajoute", "Nouveau", "Défini") :
+           ALORS -> "create_element"
+
+        SINON :
+           ALORS -> "chat"
+
+        MAPPING TYPES :
+        - Acteur/Activity -> "OA"
+        - Fonction/Composant -> "SA"
+
+        EXEMPLES DE RÉFÉRENCE (A SUIVRE) :
+
+        Input: "Crée une activité Voler"
+        Output: {"intent":"create_element","params":{"layer":"OA","element_type":"Activity","name":"Voler"}}
+
+        Input: "Le Pilote réalise l'activité Voler"
+        Output: {"intent":"create_relationship","params":{"source_name":"Pilote","target_name":"Voler","relation_type":"allocation"}}
+
+        Input: "Le Moteur fournit l'énergie"
+        Output: {"intent":"create_relationship","params":{"source_name":"Moteur","target_name":"énergie","relation_type":"exchange"}}
         "#;
 
         match self
@@ -46,40 +71,90 @@ impl IntentClassifier {
             .await
         {
             Ok(raw_response) => {
-                let json_str = extract_json(&raw_response);
+                println!("🔍 [DEBUG LLM RAW]:\n{}", raw_response);
 
-                // CORRECTION : Nettoyage des échappements Markdown parasites (ex: create\_element -> create_element)
+                let json_str = extract_json(&raw_response);
                 let clean_json = json_str.replace(r"\_", "_");
 
-                println!("🔍 Intent JSON nettoyé: {}", clean_json);
-
                 match serde_json::from_str::<EngineeringIntent>(&clean_json) {
-                    Ok(intent) => intent,
+                    Ok(mut intent) => {
+                        // Filet de sécurité couches
+                        if let EngineeringIntent::CreateElement {
+                            layer,
+                            element_type,
+                            ..
+                        } = &mut intent
+                        {
+                            if layer.contains("<")
+                                || layer.is_empty()
+                                || (layer != "OA" && layer != "SA")
+                            {
+                                *layer = match element_type.as_str() {
+                                    "Activity" | "Activité" => "OA".to_string(),
+                                    "Actor" | "Acteur" => "OA".to_string(),
+                                    "Function" | "Fonction" => "SA".to_string(),
+                                    "Component" | "Composant" => "SA".to_string(),
+                                    _ => "OA".to_string(),
+                                };
+                            }
+                        }
+                        intent
+                    }
                     Err(e) => {
-                        println!("⚠️ Erreur parsing intent: {}", e);
-                        // On affiche le JSON fautif pour debug
-                        println!("   Contenu reçu: {}", clean_json);
-                        EngineeringIntent::Chat
+                        println!("⚠️ Erreur parsing JSON: {}", e);
+                        println!("   Chaîne extraite: '{}'", clean_json);
+                        EngineeringIntent::Unknown
                     }
                 }
             }
-            Err(_) => EngineeringIntent::Unknown,
+            Err(e) => {
+                println!("❌ Erreur LLM: {}", e);
+                EngineeringIntent::Unknown
+            }
         }
     }
 }
 
-/// Helper pour extraire le JSON d'un bloc Markdown éventuel
 fn extract_json(text: &str) -> String {
-    let start_tag = "```json";
-    let end_tag = "```";
-
-    if let Some(start) = text.find(start_tag) {
-        if let Some(end_offset) = text[start + start_tag.len()..].find(end_tag) {
-            let start_content = start + start_tag.len();
-            let end_content = start_content + end_offset;
-            return text[start_content..end_content].trim().to_string();
+    // 1. Stratégie : Priorité au mot clé "intent"
+    let key_patterns = ["\"intent\"", "'intent'"];
+    for pattern in key_patterns {
+        if let Some(key_idx) = text.find(pattern) {
+            // On remonte au '{' précédent
+            if let Some(start) = text[..key_idx].rfind('{') {
+                // On cherche le '}' correspondant en comptant la balance
+                let sub = &text[start..];
+                let mut balance = 0;
+                for (i, c) in sub.chars().enumerate() {
+                    if c == '{' {
+                        balance += 1;
+                    }
+                    if c == '}' {
+                        balance -= 1;
+                        if balance == 0 {
+                            return text[start..=start + i].trim().to_string();
+                        }
+                    }
+                }
+            }
         }
     }
-    // Si pas de balises, on suppose que tout le texte est du JSON
+
+    // 2. Fallback Markdown
+    if let Some(start) = text.find("```json") {
+        if let Some(real_end) = text[start + 7..].find("```") {
+            return text[start + 7..start + 7 + real_end].trim().to_string();
+        }
+    }
+
+    // 3. Fallback Brut
+    if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            if end > start {
+                return text[start..=end].trim().to_string();
+            }
+        }
+    }
+
     text.trim().to_string()
 }
