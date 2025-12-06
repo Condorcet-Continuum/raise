@@ -1,16 +1,21 @@
 // FICHIER : src-tauri/tools/jsondb_cli/src/main.rs
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
+use dotenvy::dotenv;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 // Imports depuis la librairie core 'genaptitude'
 use genaptitude::json_db::collections::manager::CollectionsManager;
 use genaptitude::json_db::query::{Query, QueryEngine};
-use genaptitude::json_db::storage::{file_storage, JsonDbConfig, StorageEngine};
+use genaptitude::json_db::storage::{
+    file_storage::{self, DropMode},
+    JsonDbConfig, StorageEngine,
+};
 use genaptitude::json_db::transactions::manager::TransactionManager;
 use genaptitude::json_db::transactions::Operation;
 
@@ -23,45 +28,19 @@ use genaptitude::json_db::transactions::Operation;
     long_about = r#"
 🚀 GENAPTITUDE JSON-DB CLI
 
-Outil en ligne de commande pour administrer, interroger et debugger la base de données 
-JSON locale de GenAptitude sans avoir à lancer l'interface graphique complète.
-
-FONCTIONNALITÉS :
-  - Gestion des collections et schémas
-  - CRUD (Create, Read, Update, Delete) sur les documents
-  - Moteur de requête SQL
-  - Import/Export de données
-  - Exécution de transactions atomiques (ACID) avec support WAL
-
-VARIABLES D'ENVIRONNEMENT :
-  JSONDB_DATA_ROOT : Chemin vers le dossier de stockage (défaut: ./data)
-  PATH_GENAPTITUDE_DATASET : Racine pour les imports relatifs (InsertFrom)
+Outil en ligne de commande pour administrer la base de données JSON locale.
 "#
 )]
 struct Cli {
-    /// Espace de noms (tenant)
-    #[arg(
-        short,
-        long,
-        default_value = "default_space",
-        help = "L'espace logique (ex: 'un2', 'system')"
-    )]
+    #[arg(short, long, default_value = "default_space")]
     space: String,
 
-    /// Nom de la base de données
-    #[arg(
-        short,
-        long,
-        default_value = "default_db",
-        help = "Le nom de la base (ex: '_system')"
-    )]
+    #[arg(short, long, default_value = "default_db")]
     db: String,
 
-    /// Chemin racine du stockage
     #[arg(
         long,
-        env = "JSONDB_DATA_ROOT",
-        default_value = "./data",
+        env = "PATH_GENAPTITUDE_DOMAIN",
         help = "Dossier racine contenant les fichiers JSON"
     )]
     root: PathBuf,
@@ -72,148 +51,207 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Crée une nouvelle collection
-    #[command(
-        long_about = "Crée un dossier pour la collection et initialise son fichier de métadonnées."
-    )]
+    CreateDb,
+    DropDb {
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
     CreateCollection {
-        /// Nom de la collection (ex: 'actors')
         name: String,
-
-        /// URI du schéma optionnel (ex: 'db://space/db/schemas/v1/actor.json')
         #[arg(long)]
         schema: Option<String>,
     },
-
-    /// Liste toutes les collections existantes
     ListCollections,
-
-    /// Affiche tous les documents d'une collection
-    #[command(
-        long_about = "Récupère et affiche tous les documents JSON d'une collection.\nAttention : Peut être lent sur de très grosses collections."
-    )]
     ListAll {
-        /// Nom de la collection cible
         collection: String,
     },
-
-    /// Insère un document JSON
-    #[command(long_about = r#"
-Insère un document dans la collection.
-Gère automatiquement la génération d'ID (UUID v4) et les champs calculés (x_compute) si un schéma est lié.
-
-MODES D'ENTRÉE :
-  1. JSON Direct : --data '{"name": "Test"}'
-  2. Fichier :     --data '@./mon_fichier.json'
-"#)]
     Insert {
-        /// Nom de la collection cible
         collection: String,
-
-        /// Contenu JSON ou chemin de fichier (préfixé par @)
         data: String,
     },
-
-    /// Exécute une requête structurée (Filtres JSON)
-    #[command(
-        long_about = "Effectue une recherche via le moteur de requête interne (QueryEngine).\nSupporte la pagination."
-    )]
     Query {
-        /// Collection à interroger
         collection: String,
-
-        /// Filtre JSON (Non implémenté complètement en CLI, placeholder)
         #[arg(long)]
         filter: Option<String>,
-
-        /// Nombre maximum de résultats
         #[arg(long)]
         limit: Option<usize>,
-
-        /// Nombre de résultats à sauter
         #[arg(long)]
         offset: Option<usize>,
     },
-
-    /// Exécute une requête SQL
-    #[command(long_about = r#"
-Exécute une requête SQL standard sur les fichiers JSON.
-
-EXEMPLES :
-  jsondb_cli sql --query "SELECT * FROM actors WHERE kind = 'human' ORDER BY age DESC"
-  jsondb_cli sql --query "SELECT handle, displayName FROM users"
-
-LIMITATIONS ACTUELLES :
-  - Clauses LIMIT et OFFSET ignorées (filtrage et tri ok)
-  - Pas de JOIN
-"#)]
     Sql {
-        /// La chaîne SQL à exécuter
         query: String,
     },
-
-    /// Importe des fichiers JSON en masse
-    #[command(
-        long_about = "Importe un fichier unique ou tout un dossier de fichiers .json dans une collection."
-    )]
     Import {
-        /// Collection de destination
         collection: String,
-
-        /// Chemin du fichier ou du dossier à importer
         path: PathBuf,
     },
-
-    /// Exécute une transaction atomique depuis un fichier
-    #[command(long_about = r#"
-Lit un fichier JSON contenant un tableau d'opérations et les exécute de manière atomique.
-Supporte l'opération spéciale 'insertFrom' pour charger des données externes.
-
-FORMAT DU FICHIER :
-{
-  "operations": [
-    { "type": "insert", "collection": "logs", "id": "1", "document": {...} },
-    { "type": "insertFrom", "collection": "data", "path": "$PATH_GENAPTITUDE_DATASET/file.json" },
-    { "type": "update", "collection": "users", "id": "u1", "document": {...} },
-    { "type": "delete", "collection": "temp", "id": "t1" }
-  ]
-}
-"#)]
     Transaction {
-        /// Chemin vers le fichier de transaction (.json)
         file: PathBuf,
     },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenv().ok();
     let cli = Cli::parse();
 
-    // 1. Configuration du stockage
     let config = JsonDbConfig {
         data_root: cli.root.clone(),
     };
 
-    // Assure l'existence de la DB physique
-    if !config.db_root(&cli.space, &cli.db).exists() {
-        println!(
-            "ℹ️  Initialisation de la base de données à : {:?}",
-            config.db_root(&cli.space, &cli.db)
-        );
-        file_storage::create_db(&config, &cli.space, &cli.db)?;
+    // Auto-init sauf pour commandes admin
+    if !matches!(cli.command, Commands::CreateDb | Commands::DropDb { .. }) {
+        if !config.db_root(&cli.space, &cli.db).exists() {
+            file_storage::create_db(&config, &cli.space, &cli.db)?;
+        }
     }
 
     let storage = StorageEngine::new(config.clone());
     let mgr = CollectionsManager::new(&storage, &cli.space, &cli.db);
 
     match cli.command {
+        // --- GESTION DB ---
+        Commands::CreateDb => {
+            println!("🔨 Création de la base '{}/{}'...", cli.space, cli.db);
+
+            let schema_rel_path = env::var("GENAPTITUDE_DB_SCHEMA")
+                .context("❌ Variable ENV 'GENAPTITUDE_DB_SCHEMA' manquante")?;
+
+            file_storage::create_db(&config, &cli.space, &cli.db)?;
+
+            let schema_path = config.db_root(&cli.space, &cli.db).join(&schema_rel_path);
+            if !schema_path.exists() {
+                return Err(anyhow!(
+                    "CRITIQUE: Schéma maître introuvable : {:?}",
+                    schema_path
+                ));
+            }
+
+            // Initialisation Index
+            let index_file_path = config.db_root(&cli.space, &cli.db).join("_system.json");
+
+            let system_index = if !index_file_path.exists() {
+                println!("📄 Génération de _system.json...");
+                let content = fs::read_to_string(&schema_path)?;
+                let schema_json: Value = serde_json::from_str(&content)?;
+
+                let mut idx = schema_json
+                    .get("examples")
+                    .and_then(|ex| ex.as_array())
+                    .and_then(|arr| arr.first())
+                    .cloned()
+                    .ok_or_else(|| anyhow!("Aucun 'examples' trouvé dans index.schema.json"))?;
+
+                if let Some(obj) = idx.as_object_mut() {
+                    obj.insert("space".to_string(), json!(cli.space));
+                    obj.insert("database".to_string(), json!(cli.db));
+                    obj.insert("$schema".to_string(), json!(schema_rel_path));
+                }
+                fs::write(&index_file_path, serde_json::to_string_pretty(&idx)?)?;
+                idx
+            } else {
+                println!("ℹ️  Lecture de l'index existant...");
+                let content = fs::read_to_string(&index_file_path)?;
+                serde_json::from_str(&content)?
+            };
+
+            // Initialisation physique des collections
+            if let Some(collections) = system_index.get("collections").and_then(|c| c.as_object()) {
+                println!("📂 Initialisation des collections définies dans l'index :");
+                for (col_name, col_def) in collections {
+                    let rel_schema = col_def.get("schema").and_then(|s| s.as_str());
+
+                    // Construction URI absolue db://
+                    let abs_uri = rel_schema
+                        .map(|s| format!("db://{}/{}/schemas/v1/{}", cli.space, cli.db, s));
+
+                    print!("   - {} ... ", col_name);
+                    match mgr.create_collection(col_name, abs_uri) {
+                        Ok(_) => println!("OK"),
+                        Err(e) => println!("Erreur ({})", e),
+                    }
+                }
+            }
+
+            println!("✅ Base de données prête.");
+        }
+
+        Commands::DropDb { force } => {
+            let mode = if force {
+                DropMode::Hard
+            } else {
+                DropMode::Soft
+            };
+            println!("🗑️  Suppression [Mode: {:?}]...", mode);
+            file_storage::drop_db(&config, &cli.space, &cli.db, mode)?;
+            println!("✅ Terminé.");
+        }
+
+        // --- GESTION COLLECTIONS ---
         Commands::CreateCollection { name, schema } => {
-            mgr.create_collection(&name, schema.clone())?;
-            println!("✅ Collection '{}' créée.", name);
-            if let Some(s) = schema {
-                println!("   Lien Schéma : {}", s);
+            // CORRECTION : Initialisation directe pour éviter le warning "unused assignment"
+            let final_uri = if let Some(s) = schema {
+                // Cas 1 : Schéma fourni manuellement
+                s
+            } else {
+                // Cas 2 : Résolution via _system.json
+                println!("🔍 Recherche de '{}' dans l'index système...", name);
+
+                let sys_path = config.db_root(&cli.space, &cli.db).join("_system.json");
+                if !sys_path.exists() {
+                    return Err(anyhow!("❌ Index _system.json introuvable."));
+                }
+
+                let content = fs::read_to_string(&sys_path)?;
+                let sys_json: Value = serde_json::from_str(&content)?;
+
+                // Pointeur pour trouver le chemin relatif
+                let ptr = format!("/collections/{}/schema", name);
+
+                if let Some(rel_path) = sys_json.pointer(&ptr).and_then(|v| v.as_str()) {
+                    // A. Vérification physique (dans schemas/v1/)
+                    let schema_file_path = config
+                        .db_schemas_root(&cli.space, &cli.db) // .../_system/schemas
+                        .join("v1")
+                        .join(rel_path);
+
+                    if !schema_file_path.exists() {
+                        return Err(anyhow!(
+                            "❌ INCOHÉRENCE : Le schéma '{}' est défini dans l'index mais introuvable sur le disque.\n   Chemin cherché : {:?}",
+                            rel_path, schema_file_path
+                        ));
+                    }
+
+                    println!("✅ Fichier schéma validé : {:?}", schema_file_path);
+
+                    // B. Construction de l'URI logique
+                    let abs_uri = format!("db://{}/{}/schemas/v1/{}", cli.space, cli.db, rel_path);
+                    println!("🔗 URI Logique résolue : {}", abs_uri);
+
+                    abs_uri
+                } else {
+                    return Err(anyhow!(
+                        "❌ Collection '{}' non trouvée dans _system.json et aucun --schema fourni.",
+                        name
+                    ));
+                }
+            };
+
+            // Création effective
+            println!("🚀 Création de '{}'...", name);
+            mgr.create_collection(&name, Some(final_uri))?;
+
+            // Vérification Ultime
+            let col_path = config.db_collection_path(&cli.space, &cli.db, &name);
+            let meta_path = col_path.join("_meta.json");
+
+            if col_path.exists() && meta_path.exists() {
+                println!("✅ SUCCÈS : Collection créée à {:?}", col_path);
+            } else {
+                return Err(anyhow!("❌ ERREUR : Le dossier n'a pas été créé."));
             }
         }
+
         Commands::ListCollections => {
             let cols = mgr.list_collections()?;
             println!("📂 Collections dans {}/{}:", cli.space, cli.db);
@@ -221,82 +259,59 @@ async fn main() -> Result<()> {
                 println!("  - {}", c);
             }
         }
+
         Commands::ListAll { collection } => {
             let docs = mgr.list_all(&collection)?;
-            println!("--- {} documents dans '{}' ---", docs.len(), collection);
+            println!("--- {} documents ---", docs.len());
             for doc in docs {
                 println!("{}", serde_json::to_string(&doc)?);
             }
         }
+
         Commands::Insert { collection, data } => {
             let content = if data.starts_with('@') {
-                let path = &data[1..];
-                fs::read_to_string(path)
-                    .map_err(|e| anyhow::anyhow!("Impossible de lire le fichier {}: {}", path, e))?
+                fs::read_to_string(&data[1..])?
             } else {
                 data
             };
-
-            let doc: Value = serde_json::from_str(&content)
-                .map_err(|e| anyhow::anyhow!("JSON invalide : {}", e))?;
-
-            // Utilise la méthode intelligente qui gère les schémas et IDs
+            let doc: Value = serde_json::from_str(&content)?;
             let res = mgr.insert_with_schema(&collection, doc)?;
-            println!("✅ Document inséré avec succès.");
             println!(
-                "   ID : {}",
+                "✅ Inséré ID: {}",
                 res.get("id").and_then(|v| v.as_str()).unwrap_or("?")
             );
         }
+
         Commands::Query {
             collection,
-            filter,
+            filter: _,
             limit,
             offset,
         } => {
-            let filter_obj = if let Some(f) = filter {
-                println!("⚠️  Note: Le parsing de filtre complexe depuis CLI n'est pas complet.");
-                println!("    Reçu: {}", f);
-                None
-            } else {
-                None
-            };
-
             let query = Query {
                 collection: collection.clone(),
-                filter: filter_obj,
+                filter: None,
                 sort: None,
                 limit,
                 offset,
                 projection: None,
             };
-
-            let engine = QueryEngine::new(&mgr);
-            let result = engine.execute_query(query).await?;
-
-            println!(
-                "🔎 Résultat : {} documents (Total estimé: {})",
-                result.documents.len(),
-                result.total_count
-            );
+            let result = QueryEngine::new(&mgr).execute_query(query).await?;
+            println!("🔎 Résultat : {} documents", result.documents.len());
             for doc in result.documents {
                 println!("{}", doc);
             }
         }
+
         Commands::Sql { query } => {
-            // Utilise le parser SQL intégré à la librairie
             let q = genaptitude::json_db::query::sql::parse_sql(&query)?;
-            let engine = QueryEngine::new(&mgr);
-            let result = engine.execute_query(q).await?;
-
-            println!(
-                "⚡ SQL Result : {} documents trouvés",
-                result.documents.len()
-            );
+            let result = QueryEngine::new(&mgr).execute_query(q).await?;
+            println!("⚡ SQL Result : {} documents", result.documents.len());
             for doc in result.documents {
                 println!("{}", doc);
             }
         }
+
         Commands::Import { collection, path } => {
             let mut count = 0;
             if path.is_dir() {
@@ -313,35 +328,25 @@ async fn main() -> Result<()> {
                 }
             } else {
                 let content = fs::read_to_string(path)?;
-                let doc: Value = serde_json::from_str(&content)?;
+                let doc = serde_json::from_str::<Value>(&content)?;
                 mgr.insert_with_schema(&collection, doc)?;
                 count += 1;
             }
-            println!(
-                "\n📦 Import terminé : {} documents ajoutés à '{}'.",
-                count, collection
-            );
+            println!("\n📦 Import terminé : {} documents.", count);
         }
-        Commands::Transaction { file } => {
-            let content = fs::read_to_string(&file).map_err(|e| {
-                anyhow::anyhow!("Impossible de lire le fichier de transaction : {}", e)
-            })?;
 
-            // On désérialise d'abord dans une structure wrapper
+        Commands::Transaction { file } => {
+            let content = fs::read_to_string(&file)?;
             #[derive(Deserialize)]
             struct TxRequest {
                 operations: Vec<TxOp>,
             }
-            // Supporte à la fois le format { "operations": [...] } et le format direct [...]
             let ops: Vec<TxOp> = if let Ok(req) = serde_json::from_str::<TxRequest>(&content) {
                 req.operations
             } else {
-                serde_json::from_str::<Vec<TxOp>>(&content)
-                    .map_err(|e| anyhow::anyhow!("Format de transaction invalide : {}", e))?
+                serde_json::from_str::<Vec<TxOp>>(&content)?
             };
-
             let tm = TransactionManager::new(&config, &cli.space, &cli.db);
-
             tm.execute(|tx| {
                 for op in ops {
                     match op {
@@ -371,30 +376,17 @@ async fn main() -> Result<()> {
                             tx.operations.push(Operation::Delete { collection, id });
                         }
                         TxOp::InsertFrom { collection, path } => {
-                            // Gestion spéciale pour charger le JSON depuis un fichier externe
-                            // Supporte les variables d'env simples comme $PATH_GENAPTITUDE_DATASET
                             let dataset_root = std::env::var("PATH_GENAPTITUDE_DATASET")
                                 .unwrap_or_else(|_| ".".to_string());
-
                             let resolved_path =
                                 path.replace("$PATH_GENAPTITUDE_DATASET", &dataset_root);
-                            let path_buf = PathBuf::from(&resolved_path);
-
-                            let content = fs::read_to_string(&path_buf).with_context(|| {
-                                format!("InsertFrom: impossible de lire {}", resolved_path)
-                            })?;
-
-                            let doc: Value = serde_json::from_str(&content).with_context(|| {
-                                format!("InsertFrom: JSON invalide dans {}", resolved_path)
-                            })?;
-
-                            // Si le document n'a pas d'ID, on en génère un pour la transaction
+                            let content = fs::read_to_string(&resolved_path)?;
+                            let doc: Value = serde_json::from_str(&content)?;
                             let id = doc
                                 .get("id")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string())
                                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
                             tx.operations.push(Operation::Insert {
                                 collection,
                                 id,
@@ -405,16 +397,15 @@ async fn main() -> Result<()> {
                 }
                 Ok(())
             })?;
-            println!("🔄 Transaction exécutée avec succès (WAL commit).");
+            println!("🔄 Transaction exécutée.");
         }
     }
 
     Ok(())
 }
 
-// Structure locale pour désérialiser le fichier de transaction JSON
 #[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")] // camelCase pour aligner avec le reste
+#[serde(tag = "type", rename_all = "camelCase")]
 enum TxOp {
     Insert {
         collection: String,
@@ -430,7 +421,6 @@ enum TxOp {
         collection: String,
         id: String,
     },
-    // Opération spéciale CLI : charge un fichier JSON
     InsertFrom {
         collection: String,
         path: String,

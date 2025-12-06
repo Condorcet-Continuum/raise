@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/quality-rule.schema.json",
+  "title": "Quality Rule",
+  "description": "Règle de vérification de la qualité du modèle ou du système (Model Validation Rule).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "ruleId": {
+      "type": "string",
+      "description": "Identifiant unique de la règle (ex: RULE-MODEL-01)."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["Info", "Warning", "Error", "Critical"],
+      "default": "Warning"
+    },
+    "targetType": {
+      "type": "string",
+      "description": "Type d'élément ciblé (ex: 'SystemFunction', 'PhysicalLink')."
+    },
+    "expression": {
+      "type": "string",
+      "description": "Logique de validation (OCL, Python, ou requête JSON-DB)."
+    },
+    "remediation": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nString",
+      "description": "Conseil pour corriger le problème."
+    }
+  },
+  "required": ["name", "ruleId", "severity"]
+}

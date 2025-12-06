@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/agents/mcp/ledger.schema.json",
+  "title": "MCP Ledger",
+  "description": "Spécifique Ledger (réseau, contrats).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "./core.schema.json"
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/instanceSchemaUri"
+    },
+    "id": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/_id"
+    },
+    "createdAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/createdAt"
+    },
+    "updatedAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/updatedAt"
+    },
+    "network": {
+      "type": "string",
+      "enum": ["dev", "test", "prod"]
+    },
+    "contracts": {
+      "type": "array",
+      "uniqueItems": true,
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          },
+          "address": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          },
+          "version": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          }
+        },
+        "required": ["name", "address"]
+      }
+    }
+  },
+  "examples": [
+    {
+      "network": "dev",
+      "contracts": []
+    }
+  ]
+}

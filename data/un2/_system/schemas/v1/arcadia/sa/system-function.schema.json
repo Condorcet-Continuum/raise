@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/sa/system-function.schema.json",
+  "title": "System Function",
+  "description": "Action ou transformation effectuée par le système.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "realizedActivities": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Traçabilité : Activités Opérationnelles (OA) réalisées par cette fonction."
+    },
+    "allocatedTo": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Allocation : Composant Système (souvent 'Le Système') ou Acteur Système qui exécute cette fonction."
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Flux entrants (Functional Exchanges)."
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Flux sortants (Functional Exchanges)."
+    }
+  },
+  "required": ["name"]
+}

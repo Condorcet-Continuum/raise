@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/epbs/configuration-item.schema.json",
+  "title": "Configuration Item (EPBS)",
+  "description": "Élément de configuration (CI) ou Partie Système (System Part).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "Hardware",
+        "Software",
+        "SystemPart",
+        "Data",
+        "Documentation",
+        "Service",
+        "System",
+        "COTS"
+      ],
+      "default": "Hardware",
+      "description": "Nature de l'article. 'SystemPart' désigne un noeud de décomposition."
+    },
+    "partNumber": {
+      "type": "string",
+      "description": "Référence industrielle (P/N)."
+    },
+    "versionId": {
+      "type": "string",
+      "description": "Version de l'élément."
+    },
+    "composition": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Arborescence produit : CIs enfants ou SystemParts inclus."
+    },
+    "allocatedPhysicalArtifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Traçabilité : Composants Physiques (Node/Behavior) ou Liens Physiques implémentés par ce CI."
+    }
+  },
+  "required": ["name", "kind"]
+}

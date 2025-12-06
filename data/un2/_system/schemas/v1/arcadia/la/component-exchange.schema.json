@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/la/component-exchange.schema.json",
+  "title": "Component Exchange (Logical)",
+  "description": "Connexion structurelle entre deux composants logiques (ex: lien réseau, dépendance logicielle).",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "source": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "Composant source."
+    },
+    "target": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "Composant cible."
+    },
+    "allocatesFunctionalExchanges": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Flux fonctionnels transitant par ce lien."
+    },
+    "orientation": {
+      "type": "string",
+      "enum": ["Unidirectional", "Bidirectional"],
+      "default": "Unidirectional"
+    }
+  },
+  "required": ["name", "source", "target"]
+}

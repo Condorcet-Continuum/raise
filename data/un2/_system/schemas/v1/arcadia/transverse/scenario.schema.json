@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/scenario.schema.json",
+  "title": "Exchange Scenario",
+  "description": "Description temporelle des interactions (Diagramme de Séquence).",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["Functional", "Interface", "Data"],
+      "default": "Functional"
+    },
+    "lifelines": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Participants au scénario (Acteurs, Fonctions, Composants)."
+    },
+    "messages": {
+      "type": "array",
+      "description": "Séquence chronologique des messages échangés.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "source": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+          "target": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+          "refersTo": {
+            "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+            "description": "Lien vers l'Exchange (SA/LA/PA) réel correspondant."
+          },
+          "sequenceOrder": { "type": "integer" }
+        },
+        "required": ["source", "target", "sequenceOrder"]
+      }
+    }
+  },
+  "required": ["name"]
+}

@@ -21,11 +21,17 @@ fn query_get_article_by_id() {
     ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB);
 
     let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    mgr.create_collection("articles", Some("articles/article.schema.json".to_string()))
+
+    // CORRECTION : Construction de l'URI absolue pour le schéma
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/articles/article.schema.json",
+        TEST_SPACE, TEST_DB
+    );
+
+    mgr.create_collection("articles", Some(schema_uri.clone()))
         .ok();
 
     let mut json_doc = load_base_article(&test_env.cfg);
-    // On ne touche pas à l'ID, on laisse le moteur le générer.
     if let Some(obj) = json_doc.as_object_mut() {
         obj.insert(
             "handle".to_string(),
@@ -62,8 +68,13 @@ fn query_find_one_article_by_handle() {
     let test_env = init_test_env();
     ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    mgr.create_collection("articles", Some("articles/article.schema.json".to_string()))
-        .ok();
+
+    // CORRECTION : URI absolue
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/articles/article.schema.json",
+        TEST_SPACE, TEST_DB
+    );
+    mgr.create_collection("articles", Some(schema_uri)).ok();
 
     let base_doc = load_base_article(&test_env.cfg);
     let target_handle = "handle-002";
@@ -102,8 +113,13 @@ fn query_find_many_with_sort_and_limit_simulated() {
     let test_env = init_test_env();
     ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    mgr.create_collection("articles", Some("articles/article.schema.json".to_string()))
-        .ok();
+
+    // CORRECTION : URI absolue
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/articles/article.schema.json",
+        TEST_SPACE, TEST_DB
+    );
+    mgr.create_collection("articles", Some(schema_uri)).ok();
 
     let base_doc = load_base_article(&test_env.cfg);
 

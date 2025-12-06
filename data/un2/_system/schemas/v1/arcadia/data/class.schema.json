@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/data/class.schema.json",
+  "title": "Data Class",
+  "description": "Structure de données complexe composée d'attributs.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "isAbstract": {
+      "type": "boolean",
+      "default": false
+    },
+    "superClasses": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Héritage : classes parentes."
+    },
+    "attributes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          },
+          "typeRef": {
+            "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+            "description": "Référence vers un DataType ou une autre Class."
+          },
+          "minCardinality": { "type": "integer", "default": 1 },
+          "maxCardinality": { "type": "integer", "default": 1 },
+          "description": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nString"
+          }
+        },
+        "required": ["name", "typeRef"]
+      }
+    }
+  }
+}

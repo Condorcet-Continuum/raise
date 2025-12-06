@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/test-execution.schema.json",
+  "title": "Test Execution",
+  "description": "Résultat de l'exécution d'une procédure de test.",
+  "type": "object",
+  "allOf": [{ "$ref": "../../common/base.schema.json" }],
+  "properties": {
+    "procedure": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "La procédure testée."
+    },
+    "campaign": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "La campagne de test parente."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["Pass", "Fail", "Inconclusive", "Blocked"],
+      "description": "Résultat global."
+    },
+    "executedBy": { "type": "string", "description": "Nom du testeur ou de l'agent IA." },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "filename": { "type": "string" },
+          "uri": { "type": "string", "format": "uri" },
+          "description": { "type": "string" }
+        }
+      },
+      "description": "Preuves (Logs, Screenshots, Rapports)."
+    },
+    "defects": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs des anomalies (bugs) levées."
+    }
+  },
+  "required": ["procedure", "verdict"]
+}

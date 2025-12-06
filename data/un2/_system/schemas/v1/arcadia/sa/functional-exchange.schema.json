@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/sa/functional-exchange.schema.json",
+  "title": "Functional Exchange",
+  "description": "Flux d'échange entre deux Fonctions Système.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "source": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "Fonction émettrice."
+    },
+    "target": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "Fonction réceptrice."
+    },
+    "exchangeItems": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Référence aux Exchange Items (Data) transportés."
+    },
+    "realizedExchanges": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Traçabilité : Échanges Opérationnels (OA) réalisés par ce flux."
+    }
+  },
+  "required": ["name", "source", "target"]
+}

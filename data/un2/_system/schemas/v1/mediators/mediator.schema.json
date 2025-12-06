@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/mediators/mediator.schema.json",
+  "title": "Mediator",
+  "description": "Orchestrateur d’agents : écoute des événements, déclenche des actions et émet de nouveaux événements.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": { "fr": "Médiateur", "en": "Mediator" },
+  "x_description": {
+    "fr": "Coordonne plusieurs agents selon une stratégie d’orchestration et un ensemble de déclencheurs.",
+    "en": "Coordinates multiple agents according to an orchestration strategy and triggers."
+  },
+
+  "type": "object",
+  "additionalProperties": false,
+  "unevaluatedProperties": false,
+
+  "properties": {
+    "$schema": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/instanceSchemaUri"
+    },
+    "id": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/_id"
+    },
+    "createdAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/createdAt"
+    },
+    "updatedAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/updatedAt"
+    },
+
+    "handle": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/slug",
+      "description": "Identifiant lisible (kebab-case) unique dans l’espace."
+    },
+
+    "displayName": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString",
+      "description": "Nom d’affichage principal."
+    },
+
+    "label": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString",
+      "description": "Libellé localisé (FR/EN)."
+    },
+
+    "emoji": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/x_emoji",
+      "description": "Emoji associé au médiateur."
+    },
+
+    "domain": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/DomainName",
+      "description": "Domaine opérationnel principal."
+    },
+
+    "description": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/oneOrManyNonEmptyString",
+      "description": "Description courte ou multiligne."
+    },
+
+    "active": {
+      "type": "boolean",
+      "default": true,
+      "description": "Médiateur actif/inactif."
+    },
+
+    "priority": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/ordinal",
+      "description": "Ordre d’évaluation/planification (1 = plus prioritaire)."
+    },
+
+    "strategy": {
+      "type": "string",
+      "description": "Stratégie d’orchestration des agents.",
+      "enum": ["sequential", "parallel", "race", "all", "custom"],
+      "default": "sequential",
+      "x_enumLabels": {
+        "sequential": { "fr": "Séquentielle", "en": "Sequential" },
+        "parallel": { "fr": "Parallèle", "en": "Parallel" },
+        "race": { "fr": "Course", "en": "Race" },
+        "all": { "fr": "Tous", "en": "All" },
+        "custom": { "fr": "Custom", "en": "Custom" }
+      }
+    },
+
+    "agents": {
+      "type": "array",
+      "description": "Cibles orchestraites : identifiants d’agent (uuid) ou handles (slug).",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          { "$ref": "../common/types/primitive-types.schema.json#/$defs/uuid" },
+          { "$ref": "../common/types/primitive-types.schema.json#/$defs/slug" }
+        ]
+      },
+      "uniqueItems": true
+    },
+
+    "listens": {
+      "type": "array",
+      "description": "Événements (handles/slug) écoutés par le médiateur.",
+      "items": { "$ref": "../common/types/primitive-types.schema.json#/$defs/slug" },
+      "uniqueItems": true,
+      "default": []
+    },
+
+    "emits": {
+      "type": "array",
+      "description": "Événements (handles/slug) potentiellement émis.",
+      "items": { "$ref": "../common/types/primitive-types.schema.json#/$defs/slug" },
+      "uniqueItems": true,
+      "default": []
+    },
+
+    "owner": {
+      "description": "Propriétaire (acteur) du médiateur : id (uuid) ou handle (slug).",
+      "oneOf": [
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/uuid" },
+        { "$ref": "../common/types/primitive-types.schema.json#/$defs/slug" }
+      ]
+    },
+
+    "config": {
+      "type": "object",
+      "description": "Paramètres spécifiques d’orchestration/implémentation.",
+      "default": {},
+      "additionalProperties": true,
+      "patternProperties": {
+        "^x_": {}
+      }
+    },
+
+    "tags": {
+      "type": "array",
+      "description": "Tags libres de classification.",
+      "items": { "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString" },
+      "uniqueItems": true,
+      "default": []
+    }
+  },
+
+  "required": ["id", "handle", "displayName", "agents", "createdAt"],
+
+  "patternProperties": {
+    "^x_": {},
+    "^\\$schema$": { "type": "string", "format": "uri-reference" }
+  },
+
+  "examples": [
+    {
+      "$schema": "schemas/v1/mediators/mediator.schema.json",
+      "id": "550e8400-e29b-41d4-a716-446655440010",
+      "handle": "order-to-invoice",
+      "displayName": "Order ➜ Invoice",
+      "label": { "fr": "Commande ➜ Facture", "en": "Order ➜ Invoice" },
+      "emoji": "🤝",
+      "domain": "business",
+      "description": [
+        "Transforme un événement de commande validée en facture.",
+        "Orchestre pricing et génération de document."
+      ],
+      "active": true,
+      "priority": 2,
+      "strategy": "sequential",
+      "agents": ["pricing-engine", "550e8400-e29b-41d4-a716-446655440099"],
+      "listens": ["order-confirmed"],
+      "emits": ["invoice-created"],
+      "owner": "ops-team",
+      "config": {
+        "retry": { "max": 3, "backoff": "exponential" },
+        "timeoutMs": 5000
+      },
+      "tags": ["orchestration", "billing"],
+      "createdAt": "2025-01-01T00:00:00Z",
+      "updatedAt": "2025-01-02T12:00:00Z"
+    }
+  ]
+}

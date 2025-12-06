@@ -4,6 +4,7 @@ members = [
     "src-wasm",
     "src-tauri/tools/jsondb_cli",
     "src-tauri/tools/ai_cli",
+    "src-tauri/tools/validator_cli",
 ]
 resolver = "2"
 

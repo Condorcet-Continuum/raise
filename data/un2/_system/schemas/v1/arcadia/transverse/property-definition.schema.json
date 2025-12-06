@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/property-definition.schema.json",
+  "title": "Property Definition (PVMT)",
+  "description": "Définition d'un groupe de propriétés personnalisées (ex: 'Bilan de Masse', 'Sécurité').",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "domain": {
+      "type": "string",
+      "description": "Domaine métier concerné (ex: 'Mechanical', 'Safety', 'Cost')."
+    },
+    "appliesTo": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Liste des types d'objets Arcadia compatibles (ex: ['PhysicalComponent', 'PhysicalLink'])."
+    },
+    "fields": {
+      "type": "array",
+      "description": "Liste des champs de données définis par ce groupe.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["Integer", "Float", "Boolean", "String", "Enum", "Date"],
+            "default": "String"
+          },
+          "unit": { "type": "string", "description": "Unité physique (kg, W, €...)" },
+          "defaultValue": { "type": ["string", "number", "boolean", "null"] },
+          "description": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nString"
+          },
+          "enumValues": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Si type=Enum, liste des valeurs possibles."
+          }
+        },
+        "required": ["name", "type"]
+      }
+    }
+  },
+  "required": ["name", "fields"]
+}

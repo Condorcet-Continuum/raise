@@ -9,8 +9,13 @@ use serde_json::{json, Value};
 use std::fs;
 
 fn seed_actors_from_dataset(mgr: &CollectionsManager, cfg: &JsonDbConfig) {
-    // On lie un schéma (optionnel mais bonne pratique)
-    mgr.create_collection("actors", Some("actors/actor.schema.json".to_string()))
+    // CORRECTION : URI absolue pour le schéma
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/actors/actor.schema.json",
+        TEST_SPACE, TEST_DB
+    );
+
+    mgr.create_collection("actors", Some(schema_uri))
         .expect("create collection actors");
 
     let actors_data = vec![
@@ -27,12 +32,19 @@ fn seed_actors_from_dataset(mgr: &CollectionsManager, cfg: &JsonDbConfig) {
         let rel_path = format!("actors/{}.json", handle);
         let file_path = get_dataset_file(cfg, &rel_path);
 
+        // IMPORTANT : Création du dossier parent (nécessaire car get_dataset_file pointe vers <tmp>/dataset/...)
+        if let Some(parent) = file_path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).expect("Failed to create actor dataset dir");
+            }
+        }
+
         let content = serde_json::to_string_pretty(&actor).unwrap();
         fs::write(&file_path, &content).expect("write dataset file");
 
         let loaded_doc: Value = serde_json::from_str(&content).expect("json parse");
 
-        // Insertion via schéma (génère ID si manquant via le fallback dans manager)
+        // Insertion via schéma
         mgr.insert_with_schema("actors", loaded_doc)
             .expect("Failed to insert actor");
     }
@@ -114,8 +126,7 @@ async fn test_sql_order_by_x_prop() {
     let query = parse_sql(sql).expect("Parsing SQL");
     let result = engine.execute_query(query).await.expect("Exec");
 
-    // CORRECTION : Le parser SQL actuel ignore temporairement LIMIT pour assurer la compilation.
-    // On vérifie donc que l'on a AU MOINS 2 résultats et que l'ordre est correct.
+    // On vérifie que l'on a AU MOINS 2 résultats et que l'ordre est correct.
     assert!(
         result.documents.len() >= 2,
         "Doit retourner au moins 2 résultats"

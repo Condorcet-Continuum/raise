@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/sa/system-actor.schema.json",
+  "title": "System Actor",
+  "description": "Entité externe interagissant avec le système étudié.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "isHuman": {
+      "type": "boolean",
+      "default": true
+    },
+    "realizedActors": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Traçabilité : Acteurs Opérationnels (OA) incarnés par cet acteur système."
+    },
+    "allocatedFunctions": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Fonctions système exécutées par cet acteur (ex: 'Saisir mot de passe')."
+    }
+  },
+  "required": ["name"]
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/oa/operational-role.schema.json",
+  "title": "Operational Role",
+  "description": "Ensemble cohérent de responsabilités et d'activités, endossé par un ou plusieurs acteurs.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "allocatedActivities": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Activités opérationnelles qui définissent ce rôle."
+    },
+    "playedBy": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Acteurs ou Entités qui jouent ce rôle dans le contexte actuel."
+    },
+    "involvedInExchanges": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Interactions (Operational Exchanges) spécifiques à ce rôle."
+    }
+  },
+  "required": ["name"]
+}

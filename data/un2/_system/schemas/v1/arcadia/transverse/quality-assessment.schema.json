@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/quality-assessment.schema.json",
+  "title": "Quality Assessment",
+  "description": "Résultat d'une analyse qualité, d'une revue de pairs ou d'un audit.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    }
+  ],
+  "properties": {
+    "assessedElement": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "L'élément (ou le package) audité."
+    },
+    "date": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/dateTime"
+    },
+    "auditor": {
+      "type": "string",
+      "description": "Personne ou Agent IA ayant réalisé l'évaluation."
+    },
+    "violations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rule": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+          "comment": { "type": "string" }
+        },
+        "required": ["rule"]
+      },
+      "description": "Liste des règles de qualité non respectées."
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Indicateurs calculés (ex: { 'complexity': 12, 'coupling': 5 }).",
+      "additionalProperties": { "type": "number" }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["Compliant", "Non-Compliant", "Waiver"],
+      "default": "Non-Compliant"
+    }
+  },
+  "required": ["assessedElement", "status"]
+}

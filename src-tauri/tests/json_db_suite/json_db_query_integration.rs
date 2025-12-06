@@ -15,7 +15,6 @@ use genaptitude::json_db::{
 };
 
 fn load_test_doc(cfg: &JsonDbConfig) -> Value {
-    // CORRECTION : Passage de la config
     let path = get_dataset_file(cfg, "arcadia/v1/data/articles/article.json");
     if !path.exists() {
         panic!("❌ Dataset article.json introuvable : {}", path.display());
@@ -40,8 +39,12 @@ fn seed_article<'a>(mgr: &'a CollectionsManager<'a>, handle: &str, doc_template:
         );
     }
 
-    mgr.create_collection("articles", Some("articles/article.schema.json".to_string()))
-        .ok();
+    // CORRECTION : Utilisation de l'URI absolue
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/articles/article.schema.json",
+        TEST_SPACE, TEST_DB
+    );
+    mgr.create_collection("articles", Some(schema_uri)).ok();
 
     let stored = mgr
         .insert_with_schema("articles", doc)

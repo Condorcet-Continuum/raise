@@ -16,6 +16,12 @@ pub enum EngineeringIntent {
         target_name: String,
         relation_type: String,
     },
+    #[serde(rename = "generate_code")]
+    GenerateCode {
+        language: String,
+        context: String,
+        filename: String,
+    },
     #[serde(rename = "chat")]
     Chat,
     #[serde(rename = "unknown")]
@@ -32,37 +38,37 @@ impl IntentClassifier {
     }
 
     pub async fn classify(&self, user_input: &str) -> EngineeringIntent {
-        // PROMPT "CHIRURGICAL"
         let system_prompt = r#"
         RÔLE : Classificateur d'intention JSON strict pour ingénierie système.
         CONSIGNE : Analyse la phrase et retourne 1 seul JSON.
 
         ALGORITHME DE DÉCISION :
 
-        SI la phrase contient un verbe d'action ("réalise", "exécute", "pilote", "contient", "est lié à") :
-           ALORS -> "create_relationship"
-           IMPORTANT : Ne génère JAMAIS "create_element" ici, même si des types sont mentionnés.
+        1. GÉNÉRATION DE CODE :
+           Si l'utilisateur demande explicitement du "Code", un "Script", un "Fichier", ou cite un langage.
+           -> "generate_code"
 
-        SINON SI la phrase est un ordre de création ("Crée", "Ajoute", "Nouveau", "Défini") :
-           ALORS -> "create_element"
+        2. RELATIONS (Action) :
+           Si la phrase contient un verbe d'action entre deux concepts ("réalise", "exécute", "pilote").
+           -> "create_relationship"
 
-        SINON :
-           ALORS -> "chat"
-
+        3. CRÉATION (Modélisation) :
+           Si la phrase est un ordre de création d'élément d'architecture ("Crée", "Défini", "Ajoute").
+           -> "create_element"
+           
         MAPPING TYPES :
         - Acteur/Activity -> "OA"
         - Fonction/Composant -> "SA"
 
-        EXEMPLES DE RÉFÉRENCE (A SUIVRE) :
+        EXEMPLES :
+        Input: "Génère le code Rust pour Superviseur"
+        Output: {"intent":"generate_code","params":{"language":"Rust","filename":"Superviseur.rs","context":"..."}}
 
-        Input: "Crée une activité Voler"
-        Output: {"intent":"create_element","params":{"layer":"OA","element_type":"Activity","name":"Voler"}}
+        Input: "Crée une fonction Démarrer"
+        Output: {"intent":"create_element","params":{"layer":"SA","element_type":"Function","name":"Démarrer"}}
 
-        Input: "Le Pilote réalise l'activité Voler"
-        Output: {"intent":"create_relationship","params":{"source_name":"Pilote","target_name":"Voler","relation_type":"allocation"}}
-
-        Input: "Le Moteur fournit l'énergie"
-        Output: {"intent":"create_relationship","params":{"source_name":"Moteur","target_name":"énergie","relation_type":"exchange"}}
+        Input: "Le Pilote réalise Démarrer"
+        Output: {"intent":"create_relationship","params":{"source_name":"Pilote","target_name":"Démarrer","relation_type":"allocation"}}
         "#;
 
         match self
@@ -73,7 +79,10 @@ impl IntentClassifier {
             Ok(raw_response) => {
                 println!("🔍 [DEBUG LLM RAW]:\n{}", raw_response);
 
+                // Extraction robuste
                 let json_str = extract_json(&raw_response);
+
+                // Nettoyage des backslashes parasites
                 let clean_json = json_str.replace(r"\_", "_");
 
                 match serde_json::from_str::<EngineeringIntent>(&clean_json) {
@@ -115,45 +124,24 @@ impl IntentClassifier {
     }
 }
 
+/// Extrait le JSON en prenant tout ce qu'il y a entre le premier '{' et le dernier '}'
+/// Cette méthode est beaucoup plus robuste aux erreurs de formatage des LLM.
 fn extract_json(text: &str) -> String {
-    // 1. Stratégie : Priorité au mot clé "intent"
-    let key_patterns = ["\"intent\"", "'intent'"];
-    for pattern in key_patterns {
-        if let Some(key_idx) = text.find(pattern) {
-            // On remonte au '{' précédent
-            if let Some(start) = text[..key_idx].rfind('{') {
-                // On cherche le '}' correspondant en comptant la balance
-                let sub = &text[start..];
-                let mut balance = 0;
-                for (i, c) in sub.chars().enumerate() {
-                    if c == '{' {
-                        balance += 1;
-                    }
-                    if c == '}' {
-                        balance -= 1;
-                        if balance == 0 {
-                            return text[start..=start + i].trim().to_string();
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // 1. Trouver le début du JSON (première accolade)
+    let start_index = match text.find('{') {
+        Some(i) => i,
+        None => return text.to_string(), // Pas de JSON trouvé
+    };
 
-    // 2. Fallback Markdown
-    if let Some(start) = text.find("```json") {
-        if let Some(real_end) = text[start + 7..].find("```") {
-            return text[start + 7..start + 7 + real_end].trim().to_string();
-        }
-    }
+    // 2. Trouver la fin du JSON (dernière accolade)
+    let end_index = match text.rfind('}') {
+        Some(i) => i,
+        None => return text[start_index..].to_string(), // JSON malfermé ? On tente quand même
+    };
 
-    // 3. Fallback Brut
-    if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            if end > start {
-                return text[start..=end].trim().to_string();
-            }
-        }
+    // 3. Extraire le bloc si valide
+    if end_index > start_index {
+        return text[start_index..=end_index].trim().to_string();
     }
 
     text.trim().to_string()

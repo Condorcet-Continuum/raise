@@ -1,0 +1,831 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/workunits/finance.schema.json",
+  "title": "Finance",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Finances",
+    "en": "Finance"
+  },
+  "x_description": {
+    "fr": "Hypothèses, coûts et prix (Build/Run) d’une UO, incluant les lignes 37–60 du modèle Excel : base forfait, aléas, prix catalogue (Build/Run/Crédits), charges par sprint et synthèse (COGS/Marge).",
+    "en": "Assumptions, costs and pricing (Build/Run) for a Work Unit, including Excel rows 37–60: forfait base, contingency, catalog prices (Build/Run/Credits), sprint costs, and summary (COGS/Margin)."
+  },
+  "x_tags": ["uo", "finance", "costs", "economics"],
+  "type": "object",
+  "additionalProperties": false,
+  "unevaluatedProperties": false,
+  "$defs": {
+    "billingFrequency": {
+      "type": "string",
+      "enum": ["monthly", "quarterly", "yearly"],
+      "x_enumLabels": {
+        "monthly": {
+          "fr": "Mensuel",
+          "en": "Monthly"
+        },
+        "quarterly": {
+          "fr": "Trimestriel",
+          "en": "Quarterly"
+        },
+        "yearly": {
+          "fr": "Annuel",
+          "en": "Yearly"
+        }
+      }
+    },
+    "SkillLoadItem": {
+      "title": "Charge par compétence",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "role": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+        },
+        "jh": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": ["role", "jh"]
+    },
+    "SprintBreakdown": {
+      "title": "Détail d’un sprint",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "items": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "$ref": "#/$defs/SkillLoadItem"
+          },
+          "uniqueItems": false
+        },
+        "totaux": {
+          "title": "Totaux du sprint",
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x_": {},
+            "^\\$schema$": {
+              "type": "string",
+              "format": "uri-reference"
+            }
+          },
+          "properties": {
+            "jh": {
+              "type": "number",
+              "minimum": 0,
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "self",
+                "update": "always",
+                "plan": {
+                  "op": "sum",
+                  "from": "#/../items",
+                  "path": "jh"
+                }
+              }
+            },
+            "cost_eur": {
+              "allOf": [
+                {
+                  "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+                },
+                {
+                  "x_compute": {
+                    "engine": "plan/v1",
+                    "scope": "root",
+                    "update": "always",
+                    "plan": {
+                      "op": "round",
+                      "scale": 2,
+                      "mode": "half_up",
+                      "args": [
+                        {
+                          "op": "mul",
+                          "args": [
+                            {
+                              "ptr": "#/jh"
+                            },
+                            {
+                              "ptr": "#/../../../tjm_eur"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "required": ["items"]
+    }
+  },
+  "properties": {
+    "$schema": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/instanceSchemaUri"
+    },
+    "id": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/_id"
+    },
+    "createdAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/createdAt"
+    },
+    "updatedAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/updatedAt"
+    },
+    "x_emoji": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/x_emoji"
+    },
+    "version": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/version"
+    },
+    "catalog_pricing": {
+      "title": "Prix catalogue (Build/Run/Crédits)",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "base_forfait_eur": {
+          "title": "Base forfait (€/UO)",
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        },
+        "aleas_variations_pct": {
+          "title": "Aléas & variations (0–1)",
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/percent0to1"
+        },
+        "total_interne_eur": {
+          "title": "Total interne (€/UO)",
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        },
+        "gross_margin_target_pct": {
+          "title": "Marge brute visée (0–1)",
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/percent0to1"
+        },
+        "build_forfait_eur": {
+          "title": "Prix Build - forfait (€/UO)",
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        },
+        "run_subscription_eur": {
+          "title": "Prix Run - abonnement (€/UO)",
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        },
+        "run_billing_frequency": {
+          "title": "Fréquence facturation Run",
+          "$ref": "#/$defs/billingFrequency"
+        },
+        "activation_credit_unit_eur": {
+          "title": "Crédit d’activation - prix unitaire (€)",
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "always",
+                "plan": {
+                  "ptr": "#/activation_credit/prix_eur"
+                }
+              }
+            }
+          ]
+        },
+        "activation_credit_quantity": {
+          "title": "Crédit d’activation - quantité",
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/quantity"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "always",
+                "plan": {
+                  "ptr": "#/activation_credit/volume"
+                }
+              }
+            }
+          ]
+        },
+        "activation_credit_total_eur": {
+          "title": "Crédit d’activation - total (€)",
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "always",
+                "plan": {
+                  "ptr": "#/activation_credit/total_eur"
+                }
+              }
+            }
+          ]
+        },
+        "build_total_eur": {
+          "title": "Total Build (€/UO)",
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "self",
+                "update": "always",
+                "plan": {
+                  "op": "round",
+                  "scale": 2,
+                  "mode": "half_up",
+                  "args": [
+                    {
+                      "op": "add",
+                      "args": [
+                        {
+                          "ptr": "#/base_forfait_eur"
+                        },
+                        {
+                          "ptr": "#/activation_credit_total_eur"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "charges_par_sprint": {
+      "title": "Détail des charges par sprint",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "tjm_eur": {
+          "title": "TJM/ETP moyen (€)",
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        },
+        "sprints": {
+          "title": "Ventilation par sprint",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x_": {},
+            "^\\$schema$": {
+              "type": "string",
+              "format": "uri-reference"
+            }
+          },
+          "properties": {
+            "sprint_0_1": {
+              "$ref": "#/$defs/SprintBreakdown"
+            },
+            "sprint_2": {
+              "$ref": "#/$defs/SprintBreakdown"
+            }
+          },
+          "required": ["sprint_0_1", "sprint_2"]
+        },
+        "totaux": {
+          "title": "Totaux globaux",
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x_": {},
+            "^\\$schema$": {
+              "type": "string",
+              "format": "uri-reference"
+            }
+          },
+          "properties": {
+            "sprint_0_1_jh": {
+              "type": "number",
+              "minimum": 0,
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "self",
+                "update": "always",
+                "plan": {
+                  "ptr": "#/../sprints/sprint_0_1/totaux/jh"
+                }
+              }
+            },
+            "sprint_2_jh": {
+              "type": "number",
+              "minimum": 0,
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "self",
+                "update": "always",
+                "plan": {
+                  "ptr": "#/../sprints/sprint_2/totaux/jh"
+                }
+              }
+            },
+            "total_jh": {
+              "type": "number",
+              "minimum": 0,
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "self",
+                "update": "always",
+                "plan": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "ptr": "#/sprint_0_1_jh"
+                    },
+                    {
+                      "ptr": "#/sprint_2_jh"
+                    }
+                  ]
+                }
+              }
+            },
+            "cost_eur": {
+              "allOf": [
+                {
+                  "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+                },
+                {
+                  "x_compute": {
+                    "engine": "plan/v1",
+                    "scope": "self",
+                    "update": "always",
+                    "plan": {
+                      "op": "round",
+                      "scale": 2,
+                      "mode": "half_up",
+                      "args": [
+                        {
+                          "op": "add",
+                          "args": [
+                            {
+                              "ptr": "#/../sprints/sprint_0_1/totaux/cost_eur"
+                            },
+                            {
+                              "ptr": "#/../sprints/sprint_2/totaux/cost_eur"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "required": ["tjm_eur", "sprints"]
+    },
+    "synthese_build": {
+      "title": "Synthèse (Build)",
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "prix_build_actuel_eur_per_uo": {
+          "title": "Prix Build actuel (€/UO)",
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "always",
+                "plan": {
+                  "ptr": "#/catalog_pricing/build_total_eur"
+                }
+              }
+            }
+          ]
+        },
+        "cogs_build_eur_per_uo": {
+          "title": "COGS Build (€/UO)",
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "always",
+                "plan": {
+                  "ptr": "#/charges_par_sprint/totaux/cost_eur"
+                }
+              }
+            }
+          ]
+        },
+        "marge_brute_build_eur_per_uo": {
+          "title": "Marge brute Build (€/UO)",
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "self",
+                "update": "always",
+                "plan": {
+                  "op": "round",
+                  "scale": 2,
+                  "mode": "half_up",
+                  "args": [
+                    {
+                      "op": "sub",
+                      "args": [
+                        {
+                          "ptr": "#/prix_build_actuel_eur_per_uo"
+                        },
+                        {
+                          "ptr": "#/cogs_build_eur_per_uo"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "marge_brute_build_pct": {
+          "title": "Marge brute Build (0–1)",
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/percent0to1"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "self",
+                "update": "always",
+                "plan": {
+                  "op": "div",
+                  "args": [
+                    {
+                      "ptr": "#/marge_brute_build_eur_per_uo"
+                    },
+                    {
+                      "ptr": "#/prix_build_actuel_eur_per_uo"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "controle": {
+          "title": "Contrôle (optionnel)",
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x_": {},
+            "^\\$schema$": {
+              "type": "string",
+              "format": "uri-reference"
+            }
+          },
+          "properties": {
+            "cogs_controle_eur": {
+              "title": "COGS (contrôle j.h × TJM) (€)",
+              "allOf": [
+                {
+                  "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+                },
+                {
+                  "x_compute": {
+                    "engine": "plan/v1",
+                    "scope": "root",
+                    "update": "always",
+                    "plan": {
+                      "ptr": "#/charges_par_sprint/totaux/cost_eur"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "required": ["controle"]
+    },
+    "tjm": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+    },
+    "capex_estimate_eur": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+    },
+    "activation_credit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prix_eur", "volume", "unite"],
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "prix_eur": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        },
+        "volume": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/quantity"
+        },
+        "unite": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+        },
+        "total_eur": {
+          "title": "Crédit d’activation – total (€)",
+          "x_label": {
+            "fr": "Crédit d’activation – total (€)",
+            "en": "Activation credit – total (€)"
+          },
+          "allOf": [
+            {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+            },
+            {
+              "x_compute": {
+                "engine": "plan/v1",
+                "scope": "self",
+                "update": "always",
+                "plan": {
+                  "op": "mul",
+                  "args": [
+                    {
+                      "ptr": "#/prix_eur"
+                    },
+                    {
+                      "ptr": "#/volume"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "opex_monthly_eur": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+    },
+    "unit_cost_eur": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+    },
+    "billing_model": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+    "billing_details": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+    },
+    "revenue_scenarios": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "low_eur": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        },
+        "mid_eur": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        },
+        "high_eur": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/euroAmount"
+        }
+      }
+    },
+    "gross_margin": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "low_pct": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/percent0to1"
+        },
+        "mid_pct": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/percent0to1"
+        },
+        "high_pct": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/percent0to1"
+        },
+        "assumptions": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "patternProperties": {
+        "^x_": {},
+        "^\\$schema$": {
+          "type": "string",
+          "format": "uri-reference"
+        }
+      },
+      "properties": {
+        "mid_margin_eur": {
+          "type": "number",
+          "minimum": 0,
+          "x_compute": {
+            "engine": "plan/v1",
+            "scope": "root",
+            "update": "always",
+            "plan": {
+              "op": "round",
+              "scale": 2,
+              "mode": "half_up",
+              "args": [
+                {
+                  "op": "mul",
+                  "args": [
+                    {
+                      "ptr": "#/revenue_scenarios/mid_eur"
+                    },
+                    {
+                      "ptr": "#/gross_margin/mid_pct"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "high_margin_eur": {
+          "type": "number",
+          "minimum": 0,
+          "x_compute": {
+            "engine": "plan/v1",
+            "scope": "root",
+            "update": "always",
+            "plan": {
+              "op": "round",
+              "scale": 2,
+              "mode": "half_up",
+              "args": [
+                {
+                  "op": "mul",
+                  "args": [
+                    {
+                      "ptr": "#/revenue_scenarios/high_eur"
+                    },
+                    {
+                      "ptr": "#/gross_margin/high_pct"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "low_margin_eur": {
+          "type": "number",
+          "minimum": 0,
+          "x_compute": {
+            "engine": "plan/v1",
+            "scope": "root",
+            "update": "always",
+            "plan": {
+              "op": "round",
+              "scale": 2,
+              "mode": "half_up",
+              "args": [
+                {
+                  "op": "mul",
+                  "args": [
+                    {
+                      "ptr": "#/revenue_scenarios/low_eur"
+                    },
+                    {
+                      "ptr": "#/gross_margin/low_pct"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "mid_is_profitable": {
+          "type": "boolean",
+          "x_compute": {
+            "engine": "plan/v1",
+            "scope": "root",
+            "update": "always",
+            "plan": {
+              "op": "gt",
+              "args": [
+                {
+                  "op": "mul",
+                  "args": [
+                    {
+                      "ptr": "#/revenue_scenarios/mid_eur"
+                    },
+                    {
+                      "ptr": "#/gross_margin/mid_pct"
+                    }
+                  ]
+                },
+                0
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "version",
+    "billing_model",
+    "revenue_scenarios",
+    "gross_margin",
+    "summary",
+    "synthese_build"
+  ],
+  "patternProperties": {
+    "^x_": {},
+    "^\\$schema$": {
+      "type": "string",
+      "format": "uri-reference"
+    }
+  },
+  "examples": [
+    {
+      "version": "1.0.0",
+      "billing_model": "example",
+      "revenue_scenarios": {},
+      "gross_margin": {},
+      "summary": {},
+      "synthese_build": {}
+    }
+  ]
+}

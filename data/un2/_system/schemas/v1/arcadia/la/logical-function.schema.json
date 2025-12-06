@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/la/logical-function.schema.json",
+  "title": "Logical Function",
+  "description": "Comportement ou transformation allouée à un composant logique.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "realizedSystemFunctions": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Traçabilité : Fonctions Système (SA) réalisées par cette fonction logique."
+    },
+    "allocatedTo": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Allocation : Composant Logique exécutant cette fonction."
+    },
+    "inputs": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Flux entrants (Functional Exchanges)."
+    },
+    "outputs": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Flux sortants (Functional Exchanges)."
+    },
+    "subFunctions": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Décomposition fonctionnelle."
+    }
+  },
+  "required": ["name"]
+}

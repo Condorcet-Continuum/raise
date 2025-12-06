@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/sa/system-capability.schema.json",
+  "title": "System Capability",
+  "description": "Aptitude du système à rendre un service attendu par les utilisateurs.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "realizedCapabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Traçabilité : Capacités Opérationnelles (OA) satisfaites par cette capacité système."
+    },
+    "involvedFunctions": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Fonctions système impliquées dans cette capacité."
+    },
+    "involvedChains": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Chaînes fonctionnelles décrivant cette capacité."
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Scénarios système illustrant cette capacité."
+    }
+  },
+  "required": ["name"]
+}

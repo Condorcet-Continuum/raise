@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 // Imports Métier (Librairie GenAptitude)
 use genaptitude::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
-use genaptitude::ai::agents::{system_agent::SystemAgent, Agent};
+use genaptitude::ai::agents::{software_agent::SoftwareAgent, system_agent::SystemAgent, Agent};
 use genaptitude::ai::llm::client::{LlmBackend, LlmClient};
 use genaptitude::json_db::storage::{JsonDbConfig, StorageEngine};
 
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
         env::var("PATH_GENAPTITUDE_DOMAIN").unwrap_or_else(|_| "./genaptitude_db".to_string());
     let db_root = PathBuf::from(db_path_str);
 
-    // Initialisation DB (déclenche l'auto-bootstrap des schémas si nécessaire)
+    // Initialisation DB
     let config = JsonDbConfig::new(db_root);
     let storage = StorageEngine::new(config);
 
@@ -105,6 +105,7 @@ async fn main() -> Result<()> {
 
                     if execute {
                         println!("⚡ Exécution SystemAgent...");
+                        // On passe storage à l'agent
                         let agent = SystemAgent::new(client.clone(), storage);
                         match agent.process(&intent).await {
                             Ok(Some(res)) => println!("\n✅ SUCCÈS :\n{}", res),
@@ -116,7 +117,7 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                // CAS 2 : CRÉATION DE RELATION (Nouveau)
+                // CAS 2 : CRÉATION DE RELATION
                 EngineeringIntent::CreateRelationship {
                     ref source_name,
                     ref target_name,
@@ -140,12 +141,41 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                // CAS 3 : DISCUSSION
+                // CAS 3 : GÉNÉRATION DE CODE
+                EngineeringIntent::GenerateCode {
+                    ref language,
+                    ref context,
+                    ref filename,
+                } => {
+                    println!("\n💻 PLAN D'ACTION : CODAGE");
+                    println!("   • Langage : {}", language);
+                    println!("   • Fichier : {}", filename);
+                    println!("   • Contexte: {}", context);
+
+                    if execute {
+                        println!("⚡ Exécution SoftwareAgent...");
+                        // On définit la racine du projet comme espace de travail
+                        let root = std::env::current_dir()?;
+
+                        // CORRECTION : On passe 'storage' au SoftwareAgent pour le mode hybride
+                        let agent = SoftwareAgent::new(client.clone(), storage, root);
+
+                        match agent.process(&intent).await {
+                            Ok(Some(res)) => println!("\n✅ SUCCÈS :\n{}", res),
+                            Ok(None) => println!("ℹ️ Ignoré."),
+                            Err(e) => eprintln!("❌ ÉCHEC : {}", e),
+                        }
+                    } else {
+                        println!("\n(Dry Run - Utilisez -x pour générer le fichier)");
+                    }
+                }
+
+                // CAS 4 : DISCUSSION
                 EngineeringIntent::Chat => {
                     println!("\n💬 Mode DISCUSSION (Pas d'action technique)");
                 }
 
-                // CAS 4 : INCONNU
+                // CAS 5 : INCONNU
                 EngineeringIntent::Unknown => {
                     println!("\n❓ INTENTION INCONNUE");
                 }

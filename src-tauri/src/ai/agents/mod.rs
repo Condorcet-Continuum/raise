@@ -3,12 +3,12 @@ use async_trait::async_trait;
 
 // 1. On déclare les modules qui sont DANS ce dossier (agents/)
 pub mod intent_classifier;
+pub mod software_agent;
 pub mod system_agent;
-// pub mod software_agent;
 // pub mod hardware_agent;
 
 // 2. On importe le type depuis le module local (pas de 'super::')
-use self::intent_classifier::EngineeringIntent;
+pub use self::intent_classifier::EngineeringIntent;
 
 #[cfg(test)]
 mod tests;

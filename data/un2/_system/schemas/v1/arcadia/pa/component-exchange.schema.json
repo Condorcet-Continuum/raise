@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/pa/component-exchange.schema.json",
+  "title": "Component Exchange (Physical)",
+  "description": "Connexion (souvent logicielle) entre deux composants physiques.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "source": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+    },
+    "target": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+    },
+    "allocatedToPhysicalLink": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Le Lien Physique (câble) qui transporte cet échange."
+    },
+    "allocatesFunctionalExchanges": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Flux fonctionnels portés par cet échange."
+    }
+  },
+  "required": ["name", "source", "target"]
+}

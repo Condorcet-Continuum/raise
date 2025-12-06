@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/test-campaign.schema.json",
+  "title": "Test Campaign",
+  "description": "Regroupement d'exécutions de tests pour une version ou un jalon donné.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "targetVersion": {
+      "type": "string",
+      "description": "Version du système testée."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["Planned", "Running", "Completed", "Archived"],
+      "default": "Planned"
+    }
+  },
+  "required": ["name"]
+}

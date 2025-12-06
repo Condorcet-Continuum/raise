@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/la/logical-interface.schema.json",
+  "title": "Logical Interface",
+  "description": "Définition d'un contrat d'interface (ensemble d'Exchange Items ou Opérations).",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "isProvidedBy": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Composants qui fournissent (implémentent) cette interface."
+    },
+    "isRequiredBy": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Composants qui requièrent (utilisent) cette interface."
+    },
+    "exchangeItems": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Liste des données (Exchange Items) regroupées par cette interface."
+    }
+  },
+  "required": ["name"]
+}

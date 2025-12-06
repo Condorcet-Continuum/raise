@@ -48,7 +48,7 @@ reqwest = { version = "0.12.24", features = ["json"] }
 async-trait = "0.1"
 tiktoken-rs = "0.9.1"
 text-splitter = { version = "0.28.0", features = ["markdown"] }
-
+tera = "1.19"
 
 [features]
 # Utilisé pour les builds prod quand aucun dev server n'est défini

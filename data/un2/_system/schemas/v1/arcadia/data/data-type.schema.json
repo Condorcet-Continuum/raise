@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/data/data-type.schema.json",
+  "title": "Data Type",
+  "description": "Type de données élémentaire (Primitif, Énumération).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["Boolean", "Integer", "Float", "String", "Enumeration"],
+      "default": "String",
+      "description": "Nature du type de données."
+    },
+    "pattern": {
+      "type": "string",
+      "description": "Regex de validation (pour les Strings)."
+    },
+    "literals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          },
+          "value": { "type": "string" }
+        },
+        "required": ["name"]
+      },
+      "description": "Liste des valeurs possibles (pour les Énumérations)."
+    },
+    "unit": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString",
+      "description": "Unité physique (ex: 'kg', 'm/s')."
+    }
+  },
+  "required": ["kind"]
+}

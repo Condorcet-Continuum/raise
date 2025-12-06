@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/state-machine.schema.json",
+  "title": "State Machine",
+  "description": "Automate décrivant les Modes ou les États d'un élément.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "allocatedTo": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "Composant, Fonction ou Acteur dont on décrit le comportement."
+    },
+    "regions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "states": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "format": "uuid" },
+                "name": { "type": "string" },
+                "kind": {
+                  "type": "string",
+                  "enum": ["State", "Mode", "Initial", "Final", "Fork", "Join"]
+                },
+                "entryActivities": {
+                  "type": "array",
+                  "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" }
+                },
+                "doActivities": {
+                  "type": "array",
+                  "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" }
+                },
+                "exitActivities": {
+                  "type": "array",
+                  "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" }
+                }
+              },
+              "required": ["id", "name", "kind"]
+            }
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sourceState": { "type": "string", "format": "uuid" },
+                "targetState": { "type": "string", "format": "uuid" },
+                "triggers": {
+                  "type": "array",
+                  "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+                  "description": "Événements ou Échanges déclencheurs."
+                },
+                "guard": { "type": "string", "description": "Condition logique." }
+              },
+              "required": ["sourceState", "targetState"]
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": ["name"]
+}

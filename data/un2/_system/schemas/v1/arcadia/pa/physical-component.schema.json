@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/pa/physical-component.schema.json",
+  "title": "Physical Component",
+  "description": "Composant matériel (Node) ou comportemental (Behavior) de l'architecture physique.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "nature": {
+      "type": "string",
+      "enum": ["Node", "Behavior"],
+      "default": "Node",
+      "description": "Node = Matériel/Hébergeur. Behavior = Logiciel/Déployé."
+    },
+    "subComponents": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Sous-composants physiques."
+    },
+    "allocatedFunctions": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Fonctions physiques exécutées par ce composant."
+    },
+    "realizedLogicalComponents": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Traçabilité : Composants Logiques (LA) concrétisés par ce composant."
+    },
+    "deployedOn": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Si c'est un Behavior : référence au(x) Node(s) qui l'hébergent."
+    },
+    "deployedComponents": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Si c'est un Node : référence aux composants logiciels hébergés."
+    }
+  },
+  "required": ["name", "nature"]
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/requirement.schema.json",
+  "title": "Requirement",
+  "description": "Exigence formelle (fonctionnelle ou non-fonctionnelle) à laquelle le système doit satisfaire.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "reqId": {
+      "type": "string",
+      "description": "Identifiant lisible et unique de l'exigence (ex: REQ-SYS-001), différent de l'UUID technique."
+    },
+    "statement": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nString",
+      "description": "L'énoncé textuel de l'exigence (Le système DOIT...)."
+    },
+    "rationale": {
+      "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nString",
+      "description": "Justification ou raison d'être de l'exigence."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "Functional",
+        "Performance",
+        "Interface",
+        "Safety",
+        "Security",
+        "Operational",
+        "Constraint"
+      ],
+      "default": "Functional"
+    },
+    "maturity": {
+      "type": "string",
+      "enum": ["Draft", "Review", "Approved", "Obsolete"],
+      "default": "Draft"
+    },
+    "satisfiedBy": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Traçabilité aval : Liste des éléments d'architecture (Fonctions, Composants) qui satisfont cette exigence."
+    },
+    "verifiedBy": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Traçabilité de vérification : Liste des Scénarios de test ou preuves de conformité."
+    }
+  },
+  "required": ["name", "reqId", "statement"]
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/pa/physical-link.schema.json",
+  "title": "Physical Link",
+  "description": "Liaison matérielle (Câble, Bus, Réseau, Ondes) connectant deux composants Node.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "linkType": {
+      "type": "string",
+      "enum": ["Bus", "Ethernet", "Serial", "Wireless", "Mechanical", "Power", "Other"],
+      "default": "Ethernet",
+      "description": "Nature technique de la liaison."
+    },
+    "source": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "Composant Node source."
+    },
+    "target": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "Composant Node cible."
+    },
+    "transports": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Composants Exchanges (flux logiques/sw) transportés par ce lien physique."
+    }
+  },
+  "required": ["name", "source", "target"]
+}

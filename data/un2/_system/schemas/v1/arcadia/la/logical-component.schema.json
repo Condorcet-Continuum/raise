@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/la/logical-component.schema.json",
+  "title": "Logical Component",
+  "description": "Composant structurel de l'architecture logique (non-physique).",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "isAbstract": {
+      "type": "boolean",
+      "default": false,
+      "description": "Si vrai, ce composant sert de modèle mais n'est pas instancié."
+    },
+    "subComponents": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Décomposition : sous-composants logiques contenus."
+    },
+    "allocatedFunctions": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Fonctions logiques exécutées par ce composant."
+    },
+    "realizedSystemComponents": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Traçabilité : Composants Système (SA) raffinés par ce composant."
+    },
+    "providedInterfaces": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Interfaces fournies (services offerts)."
+    },
+    "requiredInterfaces": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Interfaces requises (services consommés)."
+    }
+  },
+  "required": ["name"]
+}

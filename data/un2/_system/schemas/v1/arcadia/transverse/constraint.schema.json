@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/constraint.schema.json",
+  "title": "Constraint",
+  "description": "Restriction limitant la liberté de conception (ex: Poids max, Norme électrique).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "../../common/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "expression": {
+      "type": "string",
+      "description": "Expression formelle de la contrainte (ex: 'Weight <= 10kg' ou expression OCL/Python)."
+    },
+    "constrainedElements": {
+      "type": "array",
+      "items": {
+        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Les éléments du modèle (Composants, Flux, Fonctions) qui subissent cette contrainte."
+    },
+    "relatedRequirement": {
+      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "L'exigence parente que cette contrainte formalise (Raffinement)."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["Safety", "Performance", "Physical", "Environmental"],
+      "default": "Physical"
+    }
+  },
+  "required": ["name", "expression"]
+}

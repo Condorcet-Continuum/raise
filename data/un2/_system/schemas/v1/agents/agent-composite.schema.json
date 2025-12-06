@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/agents/agent-composite.schema.json",
+  "title": "Agent IA – Composite",
+  "description": "Assemblage complet de l’agent (Base + Planner + HITL + Consent/Policy + Workflow + Mémoire + MCPs).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/_id"
+    },
+    "createdAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/createdAt"
+    },
+    "updatedAt": {
+      "$ref": "../common/types/primitive-types.schema.json#/$defs/updatedAt"
+    },
+    "base": {
+      "$ref": "./agent-base.schema.json"
+    },
+    "planner": {
+      "$ref": "./agent-planner.schema.json"
+    },
+    "hitl": {
+      "$ref": "./hitl.schema.json"
+    },
+    "consentPolicy": {
+      "$ref": "./consent-policy.schema.json"
+    },
+    "workflow": {
+      "$ref": "./workflow.schema.json"
+    },
+    "memory": {
+      "$ref": "./memory/rag.schema.json"
+    },
+    "mcps": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "qdrant": {
+          "title": "C2A – MCP Qdrant",
+          "type": "array",
+          "items": {
+            "$ref": "./mcp/qdrant.schema.json"
+          },
+          "default": []
+        },
+        "drools": {
+          "title": "C2A – MCP Drools",
+          "type": "array",
+          "items": {
+            "$ref": "./mcp/drools.schema.json"
+          },
+          "default": []
+        },
+        "gitlab": {
+          "title": "C2A – MCP GitLab",
+          "type": "array",
+          "items": {
+            "$ref": "./mcp/gitlab.schema.json"
+          },
+          "default": []
+        },
+        "ledger": {
+          "title": "C2A – MCP Ledger",
+          "type": "array",
+          "items": {
+            "$ref": "./mcp/ledger.schema.json"
+          },
+          "default": []
+        },
+        "a2a": {
+          "title": "A2A – liaisons inter-MCP",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+              },
+              "to": {
+                "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+              },
+              "protocol": {
+                "type": "string",
+                "enum": ["http", "sse", "pubsub"]
+              }
+            },
+            "required": ["from", "to"]
+          }
+        }
+      }
+    }
+  },
+  "required": ["id", "createdAt", "base", "planner", "consentPolicy", "workflow"],
+  "examples": [
+    {
+      "base": {},
+      "planner": {},
+      "consentPolicy": {},
+      "workflow": {}
+    }
+  ]
+}

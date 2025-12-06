@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/arcadia/pa/physical-actor.schema.json",
+  "title": "Physical Actor",
+  "description": "Entité externe interagissant physiquement avec le système.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "../../common/base.schema.json" },
+    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+  ],
+  "properties": {
+    "realizedLogicalActors": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "description": "Traçabilité : Acteurs Logiques (LA) incarnés par cet acteur physique."
+    },
+    "allocatedFunctions": {
+      "type": "array",
+      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" }
+    }
+  },
+  "required": ["name"]
+}

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genaptitude.local/schemas/v1/agents/hitl.schema.json",
+  "title": "HITL (Human-in-the-Loop)",
+  "description": "Passerelles de validation humaine et niveaux de revue.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "levels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "../common/types/primitive-types.schema.json#/$defs/slug"
+          },
+          "name": {
+            "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          },
+          "criteria": {
+            "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
+            },
+            "uniqueItems": true
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "default": []
+    }
+  },
+  "examples": [
+    {
+      "enabled": true,
+      "levels": []
+    }
+  ]
+}

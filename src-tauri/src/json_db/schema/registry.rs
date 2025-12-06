@@ -31,6 +31,10 @@ impl SchemaRegistry {
         }
     }
 
+    pub fn add(&mut self, uri: &str, schema: Value) {
+        self.by_uri.insert(uri.to_string(), schema);
+    }
+
     pub fn from_db(cfg: &JsonDbConfig, space: &str, db: &str) -> Result<Self> {
         // CORRECTION : Utilisation de db_schemas_root pour inclure le dossier _system
         let root = cfg.db_schemas_root(space, db).join("v1");
