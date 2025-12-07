@@ -1,11 +1,13 @@
-use anyhow::Result; // CORRECTION : suppression de anyhow inutile
+// FICHIER : src-tauri/src/json_db/query/executor.rs
+
+use anyhow::Result;
 use serde_json::Value;
 use std::cmp::Ordering;
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{
-    ComparisonOperator, Condition, FilterOperator, Query, QueryFilter, QueryResult, SortField,
-    SortOrder,
+    optimizer::QueryOptimizer, ComparisonOperator, Condition, FilterOperator, Projection, Query,
+    QueryFilter, QueryResult, SortField, SortOrder,
 };
 
 pub struct QueryEngine<'a> {
@@ -17,13 +19,20 @@ impl<'a> QueryEngine<'a> {
         Self { manager }
     }
 
-    pub async fn execute_query(&self, query: Query) -> Result<QueryResult> {
+    pub async fn execute_query(&self, mut query: Query) -> Result<QueryResult> {
+        let optimizer = QueryOptimizer::new();
+        // On remplace la requête brute par sa version optimisée
+        query = optimizer.optimize(query)?;
+
+        // 1. Chargement (Optimisable plus tard avec des streams/iterateurs)
         let mut documents = self.manager.list_all(&query.collection)?;
 
+        // 2. Filtrage
         if let Some(filter) = &query.filter {
             documents.retain(|doc| self.evaluate_filter(doc, filter));
         }
 
+        // 3. Tri
         if let Some(sort_fields) = &query.sort {
             documents.sort_by(|a, b| self.compare_docs(a, b, sort_fields));
         }
@@ -32,17 +41,51 @@ impl<'a> QueryEngine<'a> {
         let offset = query.offset.unwrap_or(0);
         let limit = query.limit.unwrap_or(documents.len());
 
-        let paged_docs = documents.into_iter().skip(offset).take(limit).collect();
+        // 4. Pagination
+        let mut paged_docs: Vec<Value> = documents.into_iter().skip(offset).take(limit).collect();
+
+        // 5. PROJECTION (Selection des champs)
+        if let Some(projection) = &query.projection {
+            for doc in &mut paged_docs {
+                *doc = self.project_fields(doc, projection);
+            }
+        }
 
         Ok(QueryResult {
             documents: paged_docs,
             total_count,
-            offset: Some(offset), // CORRECTION: Option<usize>
-            limit: Some(limit),   // CORRECTION: Option<usize>
+            offset: Some(offset),
+            limit: Some(limit),
         })
     }
 
-    // --- Filtres ---
+    fn project_fields(&self, doc: &Value, projection: &Projection) -> Value {
+        if let Value::Object(map) = doc {
+            let mut new_map = serde_json::Map::new();
+            match projection {
+                Projection::Include(fields) => {
+                    if fields.is_empty() {
+                        return doc.clone();
+                    }
+                    for field in fields {
+                        if let Some(val) = map.get(field) {
+                            new_map.insert(field.clone(), val.clone());
+                        }
+                    }
+                }
+                Projection::Exclude(fields) => {
+                    for (k, v) in map {
+                        if !fields.contains(k) {
+                            new_map.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+            Value::Object(new_map)
+        } else {
+            doc.clone()
+        }
+    }
 
     fn evaluate_filter(&self, document: &Value, filter: &QueryFilter) -> bool {
         match filter.operator {
@@ -62,65 +105,53 @@ impl<'a> QueryEngine<'a> {
     }
 
     fn evaluate_condition(&self, document: &Value, condition: &Condition) -> bool {
-        let field_value = self.get_field_value(document, &condition.field);
+        let val = self.get_field_value(document, &condition.field);
         match &condition.operator {
-            ComparisonOperator::Eq => field_value == Some(&condition.value),
-            ComparisonOperator::Ne => field_value != Some(&condition.value),
-            // ... (Comparaisons numriques ok) ...
+            ComparisonOperator::Eq => val == Some(&condition.value),
+            ComparisonOperator::Ne => val != Some(&condition.value),
             ComparisonOperator::Gt => {
-                self.compare_values(field_value, &condition.value) == Some(Ordering::Greater)
+                self.compare_values(val, &condition.value) == Some(Ordering::Greater)
             }
             ComparisonOperator::Gte => {
-                let ord = self.compare_values(field_value, &condition.value);
-                ord == Some(Ordering::Greater) || ord == Some(Ordering::Equal)
+                let o = self.compare_values(val, &condition.value);
+                o == Some(Ordering::Greater) || o == Some(Ordering::Equal)
             }
             ComparisonOperator::Lt => {
-                self.compare_values(field_value, &condition.value) == Some(Ordering::Less)
+                self.compare_values(val, &condition.value) == Some(Ordering::Less)
             }
             ComparisonOperator::Lte => {
-                let ord = self.compare_values(field_value, &condition.value);
-                ord == Some(Ordering::Less) || ord == Some(Ordering::Equal)
+                let o = self.compare_values(val, &condition.value);
+                o == Some(Ordering::Less) || o == Some(Ordering::Equal)
             }
-            ComparisonOperator::In => {
-                if let (Some(val), Some(arr)) = (field_value, condition.value.as_array()) {
-                    return arr.contains(val);
+            ComparisonOperator::Contains | ComparisonOperator::Like => {
+                if let (Some(s1), Some(s2)) =
+                    (val.and_then(|v| v.as_str()), condition.value.as_str())
+                {
+                    s1.contains(s2)
+                } else if let (Some(arr), _) = (val.and_then(|v| v.as_array()), &condition.value) {
+                    arr.contains(&condition.value)
+                } else {
+                    false
                 }
-                false
             }
-            ComparisonOperator::Contains => {
-                if let Some(val) = field_value {
-                    if let Some(arr) = val.as_array() {
-                        return arr.contains(&condition.value);
-                    }
-                    if let Some(s) = val.as_str() {
-                        if let Some(sub) = condition.value.as_str() {
-                            return s.contains(sub);
-                        }
-                    }
-                }
-                false
-            }
-            // ... (Autres opérateurs)
             _ => false,
         }
     }
 
-    // --- Tri ---
-
     fn compare_docs(&self, a: &Value, b: &Value, sort_fields: &[SortField]) -> Ordering {
-        for sort in sort_fields {
-            let va = self.get_field_value(a, &sort.field);
-            let vb = self.get_field_value(b, &sort.field);
-            let ord = match (va, vb) {
-                (Some(a), Some(b)) => self.compare_json_values(a, b),
+        for s in sort_fields {
+            let va = self.get_field_value(a, &s.field);
+            let vb = self.get_field_value(b, &s.field);
+            let cmp = match (va, vb) {
+                (Some(x), Some(y)) => self.compare_json_values(x, y),
                 (None, Some(_)) => Ordering::Less,
                 (Some(_), None) => Ordering::Greater,
                 (None, None) => Ordering::Equal,
             };
-            if ord != Ordering::Equal {
-                return match sort.order {
-                    SortOrder::Asc => ord,
-                    SortOrder::Desc => ord.reverse(),
+            if cmp != Ordering::Equal {
+                return match s.order {
+                    SortOrder::Asc => cmp,
+                    SortOrder::Desc => cmp.reverse(),
                 };
             }
         }
@@ -135,30 +166,18 @@ impl<'a> QueryEngine<'a> {
     }
 
     fn compare_values(&self, a: Option<&Value>, b: &Value) -> Option<Ordering> {
-        match a {
-            Some(val_a) => {
-                if let (Some(na), Some(nb)) = (val_a.as_f64(), b.as_f64()) {
-                    return na.partial_cmp(&nb);
-                }
-                if let (Some(sa), Some(sb)) = (val_a.as_str(), b.as_str()) {
-                    return Some(sa.cmp(sb));
-                }
-                // CORRECTION: Comparaison bool
-                if let (Some(ba), Some(bb)) = (val_a.as_bool(), b.as_bool()) {
-                    return Some(ba.cmp(&bb)); // &bb car cmp attend une référence
-                }
-                None
-            }
-            None => None,
-        }
+        a.map(|v| self.compare_json_values(v, b))
     }
 
     fn compare_json_values(&self, a: &Value, b: &Value) -> Ordering {
-        if let (Some(na), Some(nb)) = (a.as_f64(), b.as_f64()) {
-            return na.partial_cmp(&nb).unwrap_or(Ordering::Equal);
+        if let (Some(n1), Some(n2)) = (a.as_f64(), b.as_f64()) {
+            return n1.partial_cmp(&n2).unwrap_or(Ordering::Equal);
         }
-        if let (Some(sa), Some(sb)) = (a.as_str(), b.as_str()) {
-            return sa.cmp(sb);
+        if let (Some(s1), Some(s2)) = (a.as_str(), b.as_str()) {
+            return s1.cmp(s2);
+        }
+        if let (Some(b1), Some(b2)) = (a.as_bool(), b.as_bool()) {
+            return b1.cmp(&b2);
         }
         a.to_string().cmp(&b.to_string())
     }

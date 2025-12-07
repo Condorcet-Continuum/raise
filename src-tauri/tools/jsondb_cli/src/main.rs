@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tools/jsondb_cli/src/main.rs
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result}; // "Context" retiré
 use clap::{Parser, Subcommand};
 use dotenvy::dotenv;
 use serde::Deserialize;
@@ -9,7 +9,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-// Imports depuis la librairie core 'genaptitude'
+// Imports GenAptitude
 use genaptitude::json_db::collections::manager::CollectionsManager;
 use genaptitude::json_db::query::{Query, QueryEngine};
 use genaptitude::json_db::storage::{
@@ -17,19 +17,14 @@ use genaptitude::json_db::storage::{
     JsonDbConfig, StorageEngine,
 };
 use genaptitude::json_db::transactions::manager::TransactionManager;
-use genaptitude::json_db::transactions::Operation;
+use genaptitude::json_db::transactions::TransactionRequest;
 
 #[derive(Parser)]
 #[command(
     name = "jsondb_cli",
     author = "GenAptitude Team",
     version,
-    about = "Outil d'administration pour GenAptitude JSON-DB",
-    long_about = r#"
-🚀 GENAPTITUDE JSON-DB CLI
-
-Outil en ligne de commande pour administrer la base de données JSON locale.
-"#
+    about = "Outil d'administration pour GenAptitude JSON-DB"
 )]
 struct Cli {
     #[arg(short, long, default_value = "default_space")]
@@ -38,11 +33,7 @@ struct Cli {
     #[arg(short, long, default_value = "default_db")]
     db: String,
 
-    #[arg(
-        long,
-        env = "PATH_GENAPTITUDE_DOMAIN",
-        help = "Dossier racine contenant les fichiers JSON"
-    )]
+    #[arg(long, env = "PATH_GENAPTITUDE_DOMAIN", help = "Dossier racine")]
     root: PathBuf,
 
     #[command(subcommand)]
@@ -99,7 +90,6 @@ async fn main() -> Result<()> {
         data_root: cli.root.clone(),
     };
 
-    // Auto-init sauf pour commandes admin
     if !matches!(cli.command, Commands::CreateDb | Commands::DropDb { .. }) {
         if !config.db_root(&cli.space, &cli.db).exists() {
             file_storage::create_db(&config, &cli.space, &cli.db)?;
@@ -113,9 +103,8 @@ async fn main() -> Result<()> {
         // --- GESTION DB ---
         Commands::CreateDb => {
             println!("🔨 Création de la base '{}/{}'...", cli.space, cli.db);
-
             let schema_rel_path = env::var("GENAPTITUDE_DB_SCHEMA")
-                .context("❌ Variable ENV 'GENAPTITUDE_DB_SCHEMA' manquante")?;
+                .map_err(|_| anyhow!("❌ Variable ENV 'GENAPTITUDE_DB_SCHEMA' manquante"))?;
 
             file_storage::create_db(&config, &cli.space, &cli.db)?;
 
@@ -127,10 +116,9 @@ async fn main() -> Result<()> {
                 ));
             }
 
-            // Initialisation Index
             let index_file_path = config.db_root(&cli.space, &cli.db).join("_system.json");
 
-            let system_index = if !index_file_path.exists() {
+            let system_index: Value = if !index_file_path.exists() {
                 println!("📄 Génération de _system.json...");
                 let content = fs::read_to_string(&schema_path)?;
                 let schema_json: Value = serde_json::from_str(&content)?;
@@ -152,19 +140,16 @@ async fn main() -> Result<()> {
             } else {
                 println!("ℹ️  Lecture de l'index existant...");
                 let content = fs::read_to_string(&index_file_path)?;
-                serde_json::from_str(&content)?
+                // CORRECTION ICI : Type explicit ::<Value>
+                serde_json::from_str::<Value>(&content)?
             };
 
-            // Initialisation physique des collections
             if let Some(collections) = system_index.get("collections").and_then(|c| c.as_object()) {
                 println!("📂 Initialisation des collections définies dans l'index :");
                 for (col_name, col_def) in collections {
                     let rel_schema = col_def.get("schema").and_then(|s| s.as_str());
-
-                    // Construction URI absolue db://
                     let abs_uri = rel_schema
                         .map(|s| format!("db://{}/{}/schemas/v1/{}", cli.space, cli.db, s));
-
                     print!("   - {} ... ", col_name);
                     match mgr.create_collection(col_name, abs_uri) {
                         Ok(_) => println!("OK"),
@@ -172,7 +157,6 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-
             println!("✅ Base de données prête.");
         }
 
@@ -189,14 +173,10 @@ async fn main() -> Result<()> {
 
         // --- GESTION COLLECTIONS ---
         Commands::CreateCollection { name, schema } => {
-            // CORRECTION : Initialisation directe pour éviter le warning "unused assignment"
             let final_uri = if let Some(s) = schema {
-                // Cas 1 : Schéma fourni manuellement
                 s
             } else {
-                // Cas 2 : Résolution via _system.json
                 println!("🔍 Recherche de '{}' dans l'index système...", name);
-
                 let sys_path = config.db_root(&cli.space, &cli.db).join("_system.json");
                 if !sys_path.exists() {
                     return Err(anyhow!("❌ Index _system.json introuvable."));
@@ -204,52 +184,42 @@ async fn main() -> Result<()> {
 
                 let content = fs::read_to_string(&sys_path)?;
                 let sys_json: Value = serde_json::from_str(&content)?;
-
-                // Pointeur pour trouver le chemin relatif
                 let ptr = format!("/collections/{}/schema", name);
 
-                if let Some(rel_path) = sys_json.pointer(&ptr).and_then(|v| v.as_str()) {
-                    // A. Vérification physique (dans schemas/v1/)
-                    let schema_file_path = config
-                        .db_schemas_root(&cli.space, &cli.db) // .../_system/schemas
-                        .join("v1")
-                        .join(rel_path);
+                if let Some(raw_path) = sys_json.pointer(&ptr).and_then(|v| v.as_str()) {
+                    let relative_path = if let Some(idx) = raw_path.find("/schemas/v1/") {
+                        &raw_path[idx + "/schemas/v1/".len()..]
+                    } else {
+                        raw_path
+                    };
 
+                    let schema_file_path = config
+                        .db_schemas_root(&cli.space, &cli.db)
+                        .join("v1")
+                        .join(relative_path);
                     if !schema_file_path.exists() {
                         return Err(anyhow!(
-                            "❌ INCOHÉRENCE : Le schéma '{}' est défini dans l'index mais introuvable sur le disque.\n   Chemin cherché : {:?}",
-                            rel_path, schema_file_path
+                            "❌ INCOHÉRENCE : Schéma introuvable sur disque.\n   Chemin : {:?}",
+                            schema_file_path
                         ));
                     }
-
                     println!("✅ Fichier schéma validé : {:?}", schema_file_path);
 
-                    // B. Construction de l'URI logique
-                    let abs_uri = format!("db://{}/{}/schemas/v1/{}", cli.space, cli.db, rel_path);
+                    let abs_uri =
+                        format!("db://{}/{}/schemas/v1/{}", cli.space, cli.db, relative_path);
                     println!("🔗 URI Logique résolue : {}", abs_uri);
-
                     abs_uri
                 } else {
                     return Err(anyhow!(
-                        "❌ Collection '{}' non trouvée dans _system.json et aucun --schema fourni.",
+                        "❌ Collection '{}' non trouvée dans _system.json.",
                         name
                     ));
                 }
             };
 
-            // Création effective
             println!("🚀 Création de '{}'...", name);
             mgr.create_collection(&name, Some(final_uri))?;
-
-            // Vérification Ultime
-            let col_path = config.db_collection_path(&cli.space, &cli.db, &name);
-            let meta_path = col_path.join("_meta.json");
-
-            if col_path.exists() && meta_path.exists() {
-                println!("✅ SUCCÈS : Collection créée à {:?}", col_path);
-            } else {
-                return Err(anyhow!("❌ ERREUR : Le dossier n'a pas été créé."));
-            }
+            println!("✅ Collection créée.");
         }
 
         Commands::ListCollections => {
@@ -338,91 +308,21 @@ async fn main() -> Result<()> {
         Commands::Transaction { file } => {
             let content = fs::read_to_string(&file)?;
             #[derive(Deserialize)]
-            struct TxRequest {
-                operations: Vec<TxOp>,
+            struct TxWrapper {
+                operations: Vec<TransactionRequest>,
             }
-            let ops: Vec<TxOp> = if let Ok(req) = serde_json::from_str::<TxRequest>(&content) {
-                req.operations
+            let reqs = if let Ok(w) = serde_json::from_str::<TxWrapper>(&content) {
+                w.operations
             } else {
-                serde_json::from_str::<Vec<TxOp>>(&content)?
+                serde_json::from_str::<Vec<TransactionRequest>>(&content)?
             };
+
             let tm = TransactionManager::new(&config, &cli.space, &cli.db);
-            tm.execute(|tx| {
-                for op in ops {
-                    match op {
-                        TxOp::Insert {
-                            collection,
-                            id,
-                            document,
-                        } => {
-                            tx.operations.push(Operation::Insert {
-                                collection,
-                                id,
-                                document,
-                            });
-                        }
-                        TxOp::Update {
-                            collection,
-                            id,
-                            document,
-                        } => {
-                            tx.operations.push(Operation::Update {
-                                collection,
-                                id,
-                                document,
-                            });
-                        }
-                        TxOp::Delete { collection, id } => {
-                            tx.operations.push(Operation::Delete { collection, id });
-                        }
-                        TxOp::InsertFrom { collection, path } => {
-                            let dataset_root = std::env::var("PATH_GENAPTITUDE_DATASET")
-                                .unwrap_or_else(|_| ".".to_string());
-                            let resolved_path =
-                                path.replace("$PATH_GENAPTITUDE_DATASET", &dataset_root);
-                            let content = fs::read_to_string(&resolved_path)?;
-                            let doc: Value = serde_json::from_str(&content)?;
-                            let id = doc
-                                .get("id")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                            tx.operations.push(Operation::Insert {
-                                collection,
-                                id,
-                                document: doc,
-                            });
-                        }
-                    }
-                }
-                Ok(())
-            })?;
-            println!("🔄 Transaction exécutée.");
+            println!("🔄 Lancement de la transaction intelligente...");
+            tm.execute_smart(reqs).await?;
+            println!("✅ Transaction exécutée avec succès.");
         }
     }
 
     Ok(())
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum TxOp {
-    Insert {
-        collection: String,
-        id: String,
-        document: Value,
-    },
-    Update {
-        collection: String,
-        id: String,
-        document: Value,
-    },
-    Delete {
-        collection: String,
-        id: String,
-    },
-    InsertFrom {
-        collection: String,
-        path: String,
-    },
 }

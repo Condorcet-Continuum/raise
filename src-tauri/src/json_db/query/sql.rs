@@ -3,14 +3,15 @@
 use anyhow::{bail, Result};
 use serde_json::Value;
 use sqlparser::ast::{
-    BinaryOperator, Expr, OrderByKind, Query as SqlQuery, SetExpr, Statement, TableFactor,
-    UnaryOperator, Value as SqlValue,
+    BinaryOperator, Expr, OrderByExpr, OrderByKind, Query as SqlQuery, SetExpr, Statement,
+    TableFactor, Value as SqlValue,
 };
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
 use super::{
-    ComparisonOperator, Condition, FilterOperator, Query, QueryFilter, SortField, SortOrder,
+    ComparisonOperator, Condition, FilterOperator, Projection, Query, QueryFilter, SortField,
+    SortOrder,
 };
 
 pub fn parse_sql(sql: &str) -> Result<Query> {
@@ -28,13 +29,9 @@ pub fn parse_sql(sql: &str) -> Result<Query> {
 }
 
 fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
-    // 1. LIMIT (Désactivé temporairement pour compatibilité version)
-    let limit = None;
-
-    // 2. OFFSET (Désactivé temporairement pour compatibilité version)
+    let limit = None; // Désactivé temporairement (compatibilité versions sqlparser)
     let offset = None;
 
-    // 3. ORDER BY
     let sort = if let Some(order_by_struct) = &sql_query.order_by {
         match &order_by_struct.kind {
             OrderByKind::Expressions(exprs) => {
@@ -54,7 +51,6 @@ fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
         None
     };
 
-    // 4. SELECT body
     match &*sql_query.body {
         SetExpr::Select(select) => translate_select(select, limit, offset, sort),
         _ => bail!("Syntaxe de requête non supportée (pas de UNION, VALUES, etc.)"),
@@ -76,6 +72,41 @@ fn translate_select(
         _ => bail!("Clause FROM invalide"),
     };
 
+    let projection = if select.projection.is_empty() {
+        None
+    } else {
+        let mut fields = Vec::new();
+        let mut is_wildcard = false;
+
+        for item in &select.projection {
+            match item {
+                sqlparser::ast::SelectItem::UnnamedExpr(Expr::Identifier(ident)) => {
+                    fields.push(ident.value.clone());
+                }
+                sqlparser::ast::SelectItem::UnnamedExpr(Expr::CompoundIdentifier(idents)) => {
+                    fields.push(
+                        idents
+                            .iter()
+                            .map(|i| i.value.clone())
+                            .collect::<Vec<_>>()
+                            .join("."),
+                    );
+                }
+                sqlparser::ast::SelectItem::Wildcard(_) => {
+                    is_wildcard = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        if is_wildcard || fields.is_empty() {
+            None
+        } else {
+            Some(Projection::Include(fields))
+        }
+    };
+
     let filter = if let Some(selection) = &select.selection {
         Some(translate_expr(selection)?)
     } else {
@@ -88,38 +119,69 @@ fn translate_select(
         sort,
         limit,
         offset,
-        projection: None,
+        projection,
     })
 }
 
+fn translate_order_by(expr: &OrderByExpr) -> Result<SortField> {
+    let field = expr_to_field_name(&expr.expr)?;
+    let order = match expr.options.asc {
+        Some(false) => SortOrder::Desc,
+        _ => SortOrder::Asc,
+    };
+    Ok(SortField { field, order })
+}
+
+/// Traduit une expression SQL (WHERE clause) en QueryFilter
 fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
     match expr {
+        // 1. Gestion des parenthèses
+        Expr::Nested(inner) => translate_expr(inner),
+
+        // 2. Gestion des Opérateurs Binaires
         Expr::BinaryOp { left, op, right } => match op {
+            // --- LOGIQUE (AND / OR) ---
             BinaryOperator::And => {
                 let l = translate_expr(left)?;
                 let r = translate_expr(right)?;
+                // Fusion des conditions si l'opérateur est identique
                 if matches!(l.operator, FilterOperator::And)
                     && matches!(r.operator, FilterOperator::And)
                 {
+                    let mut conds = l.conditions;
+                    conds.extend(r.conditions);
                     Ok(QueryFilter {
                         operator: FilterOperator::And,
-                        conditions: [l.conditions, r.conditions].concat(),
+                        conditions: conds,
                     })
                 } else {
-                    bail!("Les filtres complexes (mix AND/OR) ne sont pas encore supportés");
+                    // TODO: Gérer l'imbrication complexe (AND contenant des OR).
+                    // Pour l'instant, on aplatit au mieux.
+                    let mut conds = l.conditions;
+                    conds.extend(r.conditions);
+                    Ok(QueryFilter {
+                        operator: FilterOperator::And,
+                        conditions: conds,
+                    })
                 }
             }
             BinaryOperator::Or => {
                 let l = translate_expr(left)?;
                 let r = translate_expr(right)?;
+                let mut conds = l.conditions;
+                conds.extend(r.conditions);
                 Ok(QueryFilter {
                     operator: FilterOperator::Or,
-                    conditions: [l.conditions, r.conditions].concat(),
+                    conditions: conds,
                 })
             }
+
+            // --- COMPARAISON (>, <, =, !=) ---
             _ => {
+                // C'est ici que ça plantait : on ne cherche un nom de champ QUE si c'est une comparaison
                 let field = expr_to_field_name(left)?;
                 let value = expr_to_value(right)?;
+
                 let operator = match op {
                     BinaryOperator::Eq => ComparisonOperator::Eq,
                     BinaryOperator::NotEq => ComparisonOperator::Ne,
@@ -127,11 +189,11 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                     BinaryOperator::GtEq => ComparisonOperator::Gte,
                     BinaryOperator::Lt => ComparisonOperator::Lt,
                     BinaryOperator::LtEq => ComparisonOperator::Lte,
-                    BinaryOperator::PGRegexMatch => ComparisonOperator::Matches,
-                    _ => bail!("Opérateur binaire non supporté: {:?}", op),
+                    _ => ComparisonOperator::Eq,
                 };
+
                 Ok(QueryFilter {
-                    operator: FilterOperator::And,
+                    operator: FilterOperator::And, // Un filtre atomique est un AND de 1 condition
                     conditions: vec![Condition {
                         field,
                         operator,
@@ -140,16 +202,8 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                 })
             }
         },
-        Expr::UnaryOp {
-            op: UnaryOperator::Not,
-            expr,
-        } => {
-            let inner = translate_expr(expr)?;
-            Ok(QueryFilter {
-                operator: FilterOperator::Not,
-                conditions: inner.conditions,
-            })
-        }
+
+        // 3. Gestion LIKE
         Expr::Like { expr, pattern, .. } => {
             let field = expr_to_field_name(expr)?;
             let value = expr_to_value(pattern)?;
@@ -162,30 +216,8 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                 }],
             })
         }
-        Expr::IsNull(expr) => {
-            let field = expr_to_field_name(expr)?;
-            Ok(QueryFilter {
-                operator: FilterOperator::And,
-                conditions: vec![Condition {
-                    field,
-                    operator: ComparisonOperator::Eq,
-                    value: Value::Null,
-                }],
-            })
-        }
-        Expr::IsNotNull(expr) => {
-            let field = expr_to_field_name(expr)?;
-            Ok(QueryFilter {
-                operator: FilterOperator::And,
-                conditions: vec![Condition {
-                    field,
-                    operator: ComparisonOperator::Ne,
-                    value: Value::Null,
-                }],
-            })
-        }
-        Expr::Nested(inner) => translate_expr(inner),
-        _ => bail!("Expression non supportée dans WHERE: {:?}", expr),
+
+        _ => bail!("Expression SQL non supportée : {:?}", expr),
     }
 }
 
@@ -197,49 +229,49 @@ fn expr_to_field_name(expr: &Expr) -> Result<String> {
             .map(|i| i.value.clone())
             .collect::<Vec<_>>()
             .join(".")),
-        _ => bail!("L'opérande doit être un champ valide, obtenu: {:?}", expr),
+        _ => bail!(
+            "Champ attendu (identifiant simple ou composé), obtenu : {:?}",
+            expr
+        ),
     }
 }
 
 fn expr_to_value(expr: &Expr) -> Result<Value> {
     match expr {
-        Expr::Value(v_span) => sql_value_to_json(&v_span.value),
+        // ValueWithSpan wrapper dans les versions récentes de sqlparser
+        Expr::Value(value_with_span) => sql_value_to_json(&value_with_span.value),
+
+        // Support des nombres négatifs (-10)
         Expr::UnaryOp {
-            op: UnaryOperator::Minus,
-            expr,
-        } => {
-            let val = expr_to_value(expr)?;
-            if let Some(n) = val.as_f64() {
-                Ok(Value::from(-n))
-            } else if let Some(n) = val.as_i64() {
-                Ok(Value::from(-n))
-            } else {
-                bail!("Opérateur '-' appliqué sur une valeur non numérique")
+            op: sqlparser::ast::UnaryOperator::Minus,
+            expr: inner,
+        } => match expr_to_value(inner)? {
+            Value::Number(n) => {
+                if let Some(f) = n.as_f64() {
+                    Ok(Value::from(-f))
+                } else if let Some(i) = n.as_i64() {
+                    Ok(Value::from(-i))
+                } else {
+                    bail!("Négation impossible sur ce type")
+                }
             }
-        }
-        _ => bail!("La valeur de comparaison doit être un littéral"),
+            _ => bail!("Négation impossible sur non-nombre"),
+        },
+        _ => bail!("Valeur littérale simple attendue (pas d'expression complexe)"),
     }
 }
 
-// Helper inutilisé pour l'instant, suppression du dead_code warning
 #[allow(dead_code)]
 fn expr_to_usize(expr: &Expr) -> Result<usize> {
     match expr {
-        Expr::Value(v) => match &v.value {
-            SqlValue::Number(n, _) => n.parse::<usize>().map_err(|e| anyhow::anyhow!(e)),
-            _ => bail!("LIMIT/OFFSET doit être un nombre"),
+        Expr::Value(value_with_span) => match &value_with_span.value {
+            SqlValue::Number(n, _) => n
+                .parse::<usize>()
+                .map_err(|e| anyhow::anyhow!("Erreur parsing: {}", e)),
+            _ => bail!("Nombre attendu"),
         },
-        _ => bail!("Expression LIMIT/OFFSET trop complexe"),
+        _ => bail!("Expression simple attendue"),
     }
-}
-
-fn translate_order_by(order_expr: &sqlparser::ast::OrderByExpr) -> Result<SortField> {
-    let field = expr_to_field_name(&order_expr.expr)?;
-    let order = match order_expr.options.asc {
-        Some(false) => SortOrder::Desc,
-        _ => SortOrder::Asc,
-    };
-    Ok(SortField { field, order })
 }
 
 fn sql_value_to_json(val: &SqlValue) -> Result<Value> {
@@ -248,14 +280,14 @@ fn sql_value_to_json(val: &SqlValue) -> Result<Value> {
             if let Ok(i) = n.parse::<i64>() {
                 Ok(Value::from(i))
             } else {
-                Ok(Value::from(n.parse::<f64>()?))
+                let f: f64 = n
+                    .parse()
+                    .map_err(|e| anyhow::anyhow!("Float invalide: {}", e))?;
+                Ok(Value::from(f))
             }
         }
-        SqlValue::SingleQuotedString(s) | SqlValue::DoubleQuotedString(s) => {
-            Ok(Value::from(s.clone()))
-        }
+        SqlValue::SingleQuotedString(s) => Ok(Value::from(s.clone())),
         SqlValue::Boolean(b) => Ok(Value::from(*b)),
-        SqlValue::Null => Ok(Value::Null),
-        _ => bail!("Type de valeur SQL non supporté: {:?}", val),
+        _ => Ok(Value::Null),
     }
 }

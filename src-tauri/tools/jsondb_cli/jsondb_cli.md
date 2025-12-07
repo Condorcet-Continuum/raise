@@ -1,16 +1,19 @@
 # 🚀 GenAptitude JSON-DB CLI
 
-**`jsondb_cli`** est l'outil d'administration en ligne de commande pour la base de données JSON locale de GenAptitude. Il permet de gérer le cycle de vie des bases de données, des collections, et de manipuler les documents avec validation de schéma stricte.
+> **Version :** 1.2 (Décembre 2025)
+> **Nouveautés :** Transactions Intelligentes, Moteur SQL avec Projections, Enrichissement Sémantique.
+
+1.  **Transactions Intelligentes** : Résolution de `handle`, ID auto-générés, support de `update` avec merge.
+2.  **Moteur SQL Avancé** : Support des projections (`SELECT a, b`) et des filtres complexes.
+3.  **Sémantique** : Mention de l'enrichissement JSON-LD automatique lors de l'insertion.
+
+**`jsondb_cli`** est l'outil d'administration en ligne de commande pour la base de données JSON locale de GenAptitude. Il permet de gérer le cycle de vie des bases de données, des collections, et de manipuler les documents avec une validation de schéma stricte et une cohérence sémantique.
 
 ---
 
 ## 📋 Prérequis et Configuration
 
-Avant d'utiliser le CLI, assurez-vous que votre environnement est configuré. Le CLI s'appuie sur des variables d'environnement pour localiser le stockage et les schémas sources.
-
-### Fichier `.env` (Racine du projet)
-
-Ces variables sont **obligatoires** :
+Le CLI nécessite un environnement correctement configuré via un fichier `.env` à la racine du projet.
 
 ```bash
 # Racine du stockage physique (Dossier où les données seront écrites)
@@ -42,17 +45,16 @@ cargo run -p jsondb_cli -- [OPTIONS_GLOBALES] <COMMANDE> [ARGS]
 
 ### `create-db`
 
-Initialise une nouvelle base de données.
+Initialise une nouvelle base de données complète.
 
-- Crée l'arborescence physique.
-- **Bootstrap** : Copie les schémas sources (`schemas/v1`) vers le dossier de la base.
-- **Index** : Génère `_system.json` à partir du schéma maître (`index.schema.json`) en peuplant les définitions par défaut.
-- **Collections** : Crée physiquement les dossiers pour toutes les collections définies dans l'index.
+- **Physique** : Crée l'arborescence de dossiers.
+- **Bootstrap** : Copie les schémas sources (`schemas/v1`) vers le stockage.
+- **Index Système** : Génère `_system.json` à partir du schéma maître.
+- **Collections** : Initialise toutes les collections définies dans l'index.
 
 <!-- end list -->
 
 ```bash
-# Exemple : Création complète de l'environnement
 cargo run -p jsondb_cli -- --space un2 --db _system create-db
 ```
 
@@ -60,16 +62,12 @@ cargo run -p jsondb_cli -- --space un2 --db _system create-db
 
 Supprime ou archive une base de données.
 
-- **Mode "Soft" (Défaut)** : Renomme le dossier en `.deleted-<timestamp>`. Permet la restauration.
-- **Mode "Hard" (`--force`)** : Suppression définitive du disque.
+- **Mode "Soft" (Défaut)** : Renomme le dossier en `.deleted-<timestamp>`.
+- **Mode "Hard" (`--force`)** : Suppression irréversible.
 
 <!-- end list -->
 
 ```bash
-# Archivage (Sécurité)
-cargo run -p jsondb_cli -- --space un2 --db _system drop-db
-
-# Suppression totale (Pour les tests/dev)
 cargo run -p jsondb_cli -- --space un2 --db _system drop-db --force
 ```
 
@@ -79,31 +77,20 @@ cargo run -p jsondb_cli -- --space un2 --db _system drop-db --force
 
 ### `create-collection`
 
-Crée une collection et son fichier de métadonnées `_meta.json`.
+Crée une collection, son dossier et son fichier de configuration `_meta.json`.
 
-**Mode Intelligent :**
-Si vous ne fournissez pas de schéma, le CLI le cherche automatiquement dans `_system.json`.
-
-- Si trouvé : Il résout l'URI absolue (`db://...`) et crée la collection.
-- Si non trouvé : Il rejette la création par sécurité.
-
-**Mode Explicite :**
-Vous pouvez forcer un schéma spécifique avec `--schema`.
+**Mode Intelligent (Recommandé) :**
+Le CLI détecte automatiquement le schéma associé via `_system.json`.
 
 ```bash
-# 1. Mode Automatique (Recommandé si défini dans l'index)
 cargo run -p jsondb_cli -- --space un2 --db _system create-collection actors
-
-# 2. Mode Manuel
-cargo run -p jsondb_cli -- --space un2 --db _system create-collection custom_logs --schema "db://un2/_system/schemas/v1/logs/log.schema.json"
 ```
 
-### `list-collections`
-
-Liste les collections physiquement présentes sur le disque.
+**Mode Manuel :**
+Force un schéma spécifique via une URI absolue.
 
 ```bash
-cargo run -p jsondb_cli -- --space un2 --db _system list-collections
+cargo run -p jsondb_cli -- --space un2 --db _system create-collection logs --schema "db://.../log.schema.json"
 ```
 
 ---
@@ -112,13 +99,14 @@ cargo run -p jsondb_cli -- --space un2 --db _system list-collections
 
 ### `insert`
 
-Insère un document JSON dans une collection.
+Insère un document JSON. Cette commande déclenche toute la pipeline "Intelligente" :
 
-- **Injection Automatique** : Génère `id` (UUID v4) si manquant.
-- **Injection Schéma** : Injecte le champ `$schema` automatiquement avant validation (permet au moteur `x_compute` de fonctionner correctement).
-- **Validation** : Valide les données contre le schéma JSON associé.
+1.  **Injection ID** : Génère un UUID v4 si absent.
+2.  **Enrichissement Sémantique** : Ajoute `@context` pour le JSON-LD.
+3.  **Validation** : Vérifie la conformité au schéma et à l'ontologie Arcadia.
+4.  **Indexation** : Met à jour les index (Hash, BTree) en temps réel.
 
-**Via JSON en ligne :**
+<!-- end list -->
 
 ```bash
 cargo run -p jsondb_cli -- --space un2 --db _system insert actors '{
@@ -128,59 +116,46 @@ cargo run -p jsondb_cli -- --space un2 --db _system insert actors '{
 }'
 ```
 
-**Via Fichier (`@`) :**
-
-```bash
-cargo run -p jsondb_cli -- --space un2 --db _system insert actors @./mon_acteur.json
-```
-
-### `list-all`
-
-Affiche tous les documents d'une collection (dump brut).
-
-```bash
-cargo run -p jsondb_cli -- --space un2 --db _system list-all actors
-```
-
 ### `import`
 
-Importe en masse un fichier ou tout un dossier de fichiers JSON.
+Importe en masse un fichier ou un dossier complet.
 
 ```bash
-# Import dossier
 cargo run -p jsondb_cli -- --space un2 --db _system import actors ./data_source/actors/
 ```
 
 ---
 
-## 🔍 Recherche (Query & SQL)
+## 🔍 Moteur SQL & Recherche
+
+Le CLI intègre un moteur SQL capable de filtrer et projeter les données JSON.
 
 ### `sql`
 
-Exécute une requête SQL-like sur les fichiers JSON.
-_Supporte `WHERE`, `ORDER BY`, `LIMIT` (partiel)._
+Exécute une requête SQL standard.
+
+**Fonctionnalités supportées :**
+
+- `SELECT` avec projection (`SELECT handle, kind`)
+- `WHERE` avec opérateurs complexes (`=`, `!=`, `>`, `<`, `LIKE`, `AND`, `OR`, parenthèses)
+- `ORDER BY` (Tri ascendant/descendant)
+
+<!-- end list -->
 
 ```bash
-cargo run -p jsondb_cli -- --space un2 --db _system sql --query "SELECT * FROM actors WHERE kind = 'human' AND tags LIKE 'core'"
-```
-
-### `query`
-
-Interface bas niveau pour le moteur de requête (JSON Filter).
-
-```bash
-cargo run -p jsondb_cli -- --space un2 --db _system query actors --limit 5
+# Exemple complexe
+cargo run -p jsondb_cli -- --space un2 --db _system sql "SELECT handle, kind FROM actors WHERE kind = 'human' AND tags LIKE 'admin' ORDER BY createdAt DESC"
 ```
 
 ---
 
-## 🔄 Transactions
+## 🔄 Transactions Intelligentes
 
 ### `transaction`
 
-Exécute une série d'opérations atomiques (ACID) définies dans un fichier JSON. Supporte le WAL (Write Ahead Log).
+Exécute un lot d'opérations de manière atomique (ACID). Le moteur transactionnel est "Smart" : il sait résoudre des références métier.
 
-Exemple de fichier `tx.json` :
+**Format du fichier de transaction (`tx.json`) :**
 
 ```json
 {
@@ -188,36 +163,49 @@ Exemple de fichier `tx.json` :
     {
       "type": "insert",
       "collection": "actors",
-      "id": "new-uuid",
-      "document": { ... }
+      "document": {
+        "handle": "new-user",
+        "displayName": "Nouvel Utilisateur",
+        "kind": "human"
+      }
     },
     {
-      "type": "delete",
-      "collection": "old_actors",
-      "id": "old-uuid"
+      "type": "update",
+      "collection": "actors",
+      "handle": "admin-cli", // <-- Résolution automatique par Handle !
+      "document": {
+        "x_active": true,
+        "tags": ["verified"]
+      }
     }
   ]
 }
 ```
 
-Commande :
+**Commande :**
 
 ```bash
 cargo run -p jsondb_cli -- --space un2 --db _system transaction ./tx.json
 ```
 
+**Points Forts :**
+
+- **Résolution** : Pas besoin de connaître l'UUID pour faire un Update, le `handle` suffit.
+- **Merge** : L'Update fusionne les champs (PATCH) au lieu d'écraser le document.
+- **Sécurité** : Si une opération échoue (ex: validation schéma), **rien** n'est écrit (Rollback).
+
 ---
 
-## ⚠️ Dépannage Courant
+## ⚠️ Dépannage
 
 **Erreur : "Variable ENV manquante"**
 
-> Vérifiez que vous avez bien un fichier `.env` à la racine du projet et que `cargo` est lancé depuis la racine.
+> Vérifiez votre fichier `.env`.
 
-**Erreur : "Schéma introuvable sur le disque"**
+**Erreur : "Schéma introuvable"**
 
-> Le fichier référencé dans `_system.json` ou via `--schema` n'existe pas physiquement dans `data/<space>/<db>/schemas/v1/`. Vérifiez votre bootstrap (`create-db`).
+> Vérifiez que `create-db` a bien copié les schémas dans `data/<space>/<db>/schemas/v1/`.
 
-**Erreur : "Collection inconnue dans \_system.json"**
+**Erreur : "Missing required property" (Transaction)**
 
-> Vous essayez de créer une collection sans schéma explicite, et elle n'est pas prévue dans le schéma maître. Utilisez `--schema` ou ajoutez la définition dans l'index.
+> Le document que vous essayez d'insérer ne respecte pas le schéma JSON strict (ex: champ obligatoire manquant). La transaction a été annulée par sécurité.

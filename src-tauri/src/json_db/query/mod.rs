@@ -1,19 +1,16 @@
+// FICHIER : src-tauri/src/json_db/query/mod.rs
+
 pub mod executor;
+pub mod optimizer;
+pub mod parser;
 pub mod sql;
-
-// Modules désactivés temporairement (Broken/Obsolètes)
-// pub mod optimizer;
-// pub mod parser;
-
-// #[cfg(test)]
-// mod tests;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use executor::QueryEngine;
 
-// --- Structures de Données du Moteur de Requête ---
+// --- Structures de Données ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Query {
@@ -22,7 +19,8 @@ pub struct Query {
     pub sort: Option<Vec<SortField>>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
-    pub projection: Option<Vec<String>>,
+    /// Liste des champs à inclure. Si None ou vide -> SELECT *
+    pub projection: Option<Projection>,
 }
 
 impl Query {
@@ -36,6 +34,13 @@ impl Query {
             projection: None,
         }
     }
+}
+
+// Nouvelle Enum pour gérer proprement les projections (SELECT a, b)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Projection {
+    Include(Vec<String>),
+    Exclude(Vec<String>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +63,17 @@ pub struct Condition {
     pub value: Value,
 }
 
+impl Condition {
+    // Helper indispensable pour le parser et les tests
+    pub fn eq(field: impl Into<String>, value: Value) -> Self {
+        Self {
+            field: field.into(),
+            operator: ComparisonOperator::Eq,
+            value,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ComparisonOperator {
     Eq,
@@ -71,6 +87,7 @@ pub enum ComparisonOperator {
     StartsWith,
     EndsWith,
     Matches,
+    Like,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

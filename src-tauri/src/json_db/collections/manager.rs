@@ -1,6 +1,7 @@
 // FICHIER : src-tauri/src/json_db/collections/manager.rs
 
 use crate::json_db::indexes::IndexManager;
+use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
 use crate::json_db::storage::{file_storage, StorageEngine};
 use anyhow::{anyhow, Context, Result};
@@ -25,34 +26,84 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub fn create_collection(&self, name: &str, schema_uri: Option<String>) -> Result<()> {
-        // 1. Init DB parente
+        // 1. Init DB structure
         file_storage::create_db(&self.storage.config, &self.space, &self.db)
             .context("Impossible d'initialiser la structure DB parente")?;
+
+        // 2. Résolution du schéma
+        let final_schema_uri = if let Some(uri) = schema_uri {
+            uri
+        } else {
+            self.resolve_schema_from_index(name)?
+        };
 
         let col_path = self
             .storage
             .config
             .db_collection_path(&self.space, &self.db, name);
 
-        // 2. Création Dossier
+        // 3. Création Dossier
         if !col_path.exists() {
             fs::create_dir_all(&col_path)
                 .with_context(|| format!("Échec création dossier collection : {:?}", col_path))?;
         }
 
-        // 3. Écriture _meta.json
-        let uri_str = schema_uri.clone().unwrap_or_default();
-        let meta = json!({ "schema": uri_str });
+        // 4. Écriture _meta.json (Initialise la liste des index vide)
+        let meta = json!({
+            "schema": final_schema_uri,
+            "indexes": []
+        });
         let meta_path = col_path.join("_meta.json");
 
         fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)
             .with_context(|| format!("Échec écriture métadonnées : {:?}", meta_path))?;
 
-        // 4. Mise à jour Index Système
-        self.update_system_index_collection(name, &uri_str)
+        // 5. Mise à jour Index Système
+        self.update_system_index_collection(name, &final_schema_uri)
             .context("Échec mise à jour de l'index _system.json")?;
 
         Ok(())
+    }
+
+    fn resolve_schema_from_index(&self, col_name: &str) -> Result<String> {
+        let sys_path = self
+            .storage
+            .config
+            .db_root(&self.space, &self.db)
+            .join("_system.json");
+        if !sys_path.exists() {
+            return Err(anyhow!("Index _system.json introuvable"));
+        }
+
+        let content = fs::read_to_string(&sys_path)?;
+        let sys_json: Value = serde_json::from_str(&content)?;
+        let ptr = format!("/collections/{}/schema", col_name);
+
+        let raw_path = sys_json
+            .pointer(&ptr)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Collection '{}' inconnue dans _system.json", col_name))?;
+
+        let relative_path = if let Some(idx) = raw_path.find("/schemas/v1/") {
+            &raw_path[idx + "/schemas/v1/".len()..]
+        } else {
+            raw_path
+        };
+
+        let schema_path = self
+            .storage
+            .config
+            .db_schemas_root(&self.space, &self.db)
+            .join("v1")
+            .join(relative_path);
+        if !schema_path.exists() {
+            return Err(anyhow!("Schéma introuvable : {:?}", schema_path));
+        }
+
+        Ok(format!(
+            "db://{}/{}/schemas/v1/{}",
+            self.space, self.db, relative_path
+        ))
     }
 
     fn update_system_index_collection(&self, col_name: &str, schema_uri: &str) -> Result<()> {
@@ -61,49 +112,26 @@ impl<'a> CollectionsManager<'a> {
             .config
             .db_root(&self.space, &self.db)
             .join("_system.json");
-
-        // Chargement robuste
         let mut system_doc = if sys_path.exists() {
-            let content = fs::read_to_string(&sys_path)
-                .with_context(|| format!("Lecture impossible de _system.json à {:?}", sys_path))?;
-            serde_json::from_str(&content).with_context(|| "Parsing JSON de _system.json échoué")?
+            serde_json::from_str(&fs::read_to_string(&sys_path)?)?
         } else {
-            // Si pas d'index, on part d'un vide
-            eprintln!(
-                "⚠️  Attention: _system.json introuvable à {:?}, création d'un nouvel index.",
-                sys_path
-            );
             json!({ "collections": {} })
         };
 
-        // Modification
         if let Some(cols) = system_doc["collections"].as_object_mut() {
             let existing_items = cols
                 .get(col_name)
                 .and_then(|c| c.get("items"))
                 .cloned()
                 .unwrap_or(json!([]));
-
             cols.insert(
                 col_name.to_string(),
-                json!({
-                    "schema": schema_uri,
-                    "items": existing_items
-                }),
+                json!({ "schema": schema_uri, "items": existing_items }),
             );
         } else {
-            // Réparation structurelle si nécessaire
-            system_doc["collections"] = json!({
-                col_name: {
-                    "schema": schema_uri,
-                    "items": []
-                }
-            });
+            system_doc["collections"] = json!({ col_name: { "schema": schema_uri, "items": [] } });
         }
-
-        fs::write(&sys_path, serde_json::to_string_pretty(&system_doc)?)
-            .with_context(|| format!("Écriture impossible de _system.json à {:?}", sys_path))?;
-
+        fs::write(&sys_path, serde_json::to_string_pretty(&system_doc)?)?;
         Ok(())
     }
 
@@ -113,95 +141,84 @@ impl<'a> CollectionsManager<'a> {
             .config
             .db_root(&self.space, &self.db)
             .join("_system.json");
+        let mut system_doc = if sys_path.exists() {
+            serde_json::from_str(&fs::read_to_string(&sys_path)?)?
+        } else {
+            json!({ "collections": {} })
+        };
 
-        let mut system_doc = self.load_system_index(&sys_path);
         let filename = format!("{}.json", id);
-
         if let Some(cols) = system_doc["collections"].as_object_mut() {
             if let Some(col_entry) = cols.get_mut(col_name) {
                 if col_entry.get("items").is_none() {
                     col_entry["items"] = json!([]);
                 }
                 if let Some(items) = col_entry["items"].as_array_mut() {
-                    let exists = items
+                    if !items
                         .iter()
-                        .any(|item| item.get("file").and_then(|f| f.as_str()) == Some(&filename));
-                    if !exists {
+                        .any(|i| i.get("file").and_then(|f| f.as_str()) == Some(&filename))
+                    {
                         items.push(json!({ "file": filename }));
                     }
                 }
             }
         }
-        fs::write(&sys_path, serde_json::to_string_pretty(&system_doc)?)
-            .with_context(|| format!("Mise à jour index item échouée : {:?}", sys_path))?;
+        fs::write(&sys_path, serde_json::to_string_pretty(&system_doc)?)?;
         Ok(())
     }
 
-    fn load_system_index(&self, path: &std::path::Path) -> Value {
-        if path.exists() {
-            let content = fs::read_to_string(path).unwrap_or_default();
-            serde_json::from_str(&content).unwrap_or(json!({ "collections": {} }))
-        } else {
-            json!({ "collections": {} })
-        }
-    }
-
     pub fn list_collections(&self) -> Result<Vec<String>> {
-        let collections_root = self
+        let root = self
             .storage
             .config
             .db_root(&self.space, &self.db)
             .join("collections");
-
-        let mut collections = Vec::new();
-        if collections_root.exists() {
-            for entry in fs::read_dir(&collections_root)
-                .with_context(|| format!("Lecture dossier collections : {:?}", collections_root))?
-            {
+        let mut cols = Vec::new();
+        if root.exists() {
+            for entry in fs::read_dir(root)? {
                 let entry = entry?;
                 if entry.path().is_dir() {
                     if let Some(name) = entry.file_name().to_str() {
                         if !name.starts_with('_') {
-                            collections.push(name.to_string());
+                            cols.push(name.to_string());
                         }
                     }
                 }
             }
         }
-        Ok(collections)
-    }
-
-    pub fn list_collection_names(&self) -> Result<Vec<String>> {
-        self.list_collections()
+        Ok(cols)
     }
 
     pub fn insert_raw(&self, collection: &str, doc: &Value) -> Result<()> {
         let id = doc
             .get("id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("insert_raw: Document sans ID"))?;
+            .ok_or_else(|| anyhow!("ID manquant"))?;
 
+        // 1. Écriture disque
         self.storage
-            .write_document(&self.space, &self.db, collection, id, doc)
-            .context("Erreur écriture physique document")?;
+            .write_document(&self.space, &self.db, collection, id, doc)?;
 
-        self.add_item_to_index(collection, id)
-            .context("Erreur mise à jour index système")?;
+        // 2. Index Système
+        self.add_item_to_index(collection, id)?;
 
-        let mut _idx = IndexManager::new(self.storage, &self.space, &self.db);
+        // 3. INDEXATION SECONDAIRE
+        let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
+        if let Err(e) = idx_mgr.index_document(collection, doc) {
+            #[cfg(debug_assertions)]
+            eprintln!("Indexation error for {}: {}", id, e);
+        }
+
         Ok(())
     }
 
     pub fn insert_with_schema(&self, collection: &str, mut doc: Value) -> Result<Value> {
-        self.prepare_document(collection, &mut doc)
-            .context(format!("Validation schéma échouée pour '{}'", collection))?;
-
+        self.prepare_document(collection, &mut doc)?;
         if doc.get("id").is_none() {
             if let Some(obj) = doc.as_object_mut() {
                 obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
             }
         }
-
         self.insert_raw(collection, &doc)?;
         Ok(doc)
     }
@@ -216,26 +233,40 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub fn update_document(&self, collection: &str, id: &str, mut doc: Value) -> Result<Value> {
-        if self.get_document(collection, id)?.is_none() {
-            return Err(anyhow!("Document introuvable : {}/{}", collection, id));
+        let old_doc = self.get_document(collection, id)?;
+        if old_doc.is_none() {
+            return Err(anyhow!("Document introuvable"));
         }
+
         if let Some(obj) = doc.as_object_mut() {
             obj.insert("id".to_string(), Value::String(id.to_string()));
         }
 
-        if let Err(e) = self.prepare_document(collection, &mut doc) {
-            #[cfg(debug_assertions)]
-            eprintln!("Schema warning update {}: {}", collection, e);
-        }
-
+        self.prepare_document(collection, &mut doc)?;
         self.storage
             .write_document(&self.space, &self.db, collection, id, &doc)?;
+
+        // INDEXATION (Clean old -> Add new)
+        let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
+        if let Some(old) = old_doc {
+            let _ = idx_mgr.remove_document(collection, &old);
+        }
+        let _ = idx_mgr.index_document(collection, &doc);
+
         Ok(doc)
     }
 
     pub fn delete_document(&self, collection: &str, id: &str) -> Result<bool> {
+        let old_doc = self.get_document(collection, id)?;
         self.storage
             .delete_document(&self.space, &self.db, collection, id)?;
+
+        // INDEXATION (Clean)
+        if let Some(doc) = old_doc {
+            let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
+            let _ = idx_mgr.remove_document(collection, &doc);
+        }
+
         Ok(true)
     }
 
@@ -244,12 +275,9 @@ impl<'a> CollectionsManager<'a> {
             .storage
             .config
             .db_collection_path(&self.space, &self.db, collection);
-
         let mut docs = Vec::new();
         if col_path.exists() {
-            for entry in fs::read_dir(&col_path)
-                .with_context(|| format!("Lecture dossier collection : {:?}", col_path))?
-            {
+            for entry in fs::read_dir(&col_path)? {
                 let entry = entry?;
                 let path = entry.path();
                 if path.extension().map_or(false, |e| e == "json") {
@@ -272,13 +300,9 @@ impl<'a> CollectionsManager<'a> {
             .config
             .db_collection_path(&self.space, &self.db, collection)
             .join("_meta.json");
-
         let schema_uri = if meta_path.exists() {
-            let content = fs::read_to_string(&meta_path)
-                .with_context(|| format!("Lecture _meta.json impossible : {:?}", meta_path))?;
-            let meta: Value = serde_json::from_str(&content)
-                .with_context(|| format!("JSON _meta.json invalide : {:?}", meta_path))?;
-
+            let content = fs::read_to_string(&meta_path)?;
+            let meta: Value = serde_json::from_str(&content)?;
             meta.get("schema")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
@@ -286,38 +310,61 @@ impl<'a> CollectionsManager<'a> {
             None
         };
 
+        // 1. Validation JSON Schema (Structurelle)
         if let Some(uri) = schema_uri {
-            if uri.is_empty() {
-                return Ok(());
-            }
-
-            // --- CORRECTION ICI ---
-            // On injecte l'URI du schéma dans le document AVANT le calcul
-            // Cela permet de satisfaire la règle update: "if_missing" du type "instanceSchemaUri"
-            if let Some(obj) = doc.as_object_mut() {
-                // Si le champ $schema n'existe pas ou est vide, on le remplit
-                if !obj.contains_key("$schema")
-                    || obj
-                        .get("$schema")
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("")
-                        .is_empty()
-                {
-                    obj.insert("$schema".to_string(), Value::String(uri.clone()));
+            if !uri.is_empty() {
+                if let Some(obj) = doc.as_object_mut() {
+                    if !obj.contains_key("$schema") {
+                        obj.insert("$schema".to_string(), Value::String(uri.clone()));
+                    }
                 }
+                let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)?;
+                let validator = SchemaValidator::compile_with_registry(&uri, &reg)?;
+                validator.compute_then_validate(doc)?;
             }
-            // -----------------------
-
-            let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)
-                .context("Chargement du registre de schémas échoué")?;
-
-            let validator = SchemaValidator::compile_with_registry(&uri, &reg)
-                .with_context(|| format!("Schéma introuvable ou invalide : {}", uri))?;
-
-            validator
-                .compute_then_validate(doc)
-                .context("Validation/Calcul du document échoué")?;
         }
+
+        // 2. Validation Sémantique (JSON-LD)
+        // CORRECTION : Appel effectif de la fonction pour enrichir le document
+        self.apply_semantic_logic(doc)
+            .context("Validation sémantique")?;
+
+        Ok(())
+    }
+
+    /// Nouvelle fonction : Enrichit et valide sémantiquement le document
+    fn apply_semantic_logic(&self, doc: &mut Value) -> Result<()> {
+        // A. Injection automatique du contexte Arcadia si absent
+        if let Some(obj) = doc.as_object_mut() {
+            if !obj.contains_key("@context") {
+                obj.insert(
+                    "@context".to_string(),
+                    json!({
+                        "oa": "https://genaptitude.io/ontology/arcadia/oa#",
+                        "sa": "https://genaptitude.io/ontology/arcadia/sa#",
+                        "la": "https://genaptitude.io/ontology/arcadia/la#",
+                        "pa": "https://genaptitude.io/ontology/arcadia/pa#"
+                    }),
+                );
+            }
+        }
+
+        // B. Validation des Types (@type) contre l'ontologie
+        let processor = JsonLdProcessor::new();
+
+        if let Some(type_uri) = processor.get_type(doc) {
+            let registry = VocabularyRegistry::new();
+            let expanded_type = processor.context_manager().expand_term(&type_uri);
+
+            if !registry.has_class(&expanded_type) {
+                #[cfg(debug_assertions)]
+                println!(
+                    "⚠️  [Semantic Warning] Type inconnu de l'ontologie : {}",
+                    expanded_type
+                );
+            }
+        }
+
         Ok(())
     }
 }

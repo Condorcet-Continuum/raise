@@ -1,12 +1,16 @@
-use crate::common::init_env;
+// FICHIER : src-tauri/tests/code_gen_suite/rust_tests.rs
+
+use crate::common::init_ai_test_env;
 use genaptitude::code_generator::{CodeGeneratorService, TargetLanguage};
 use serde_json::json;
 use std::fs;
 
 #[test]
 fn test_rust_skeleton_generation() {
-    let env = init_env();
-    let service = CodeGeneratorService::new(env.output_path.clone());
+    let env = init_ai_test_env();
+
+    // CORRECTION : On utilise le dossier temporaire de l'environnement comme sortie
+    let service = CodeGeneratorService::new(env._tmp_dir.path().to_path_buf());
 
     // 1. Donnée Mock (Acteur)
     let actor = json!({
@@ -25,7 +29,7 @@ fn test_rust_skeleton_generation() {
     assert_eq!(paths.len(), 1);
     let file_path = &paths[0];
 
-    assert!(file_path.exists());
+    assert!(file_path.exists(), "Le fichier généré doit exister");
     assert!(file_path.to_str().unwrap().ends_with("MoteurPhysique.rs"));
 
     let content = fs::read_to_string(file_path).unwrap();

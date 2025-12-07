@@ -1,71 +1,94 @@
-// CORRECTION : On importe "init_env" qui est défini dans le mod.rs local de cette suite
-use crate::common::init_env;
-use genaptitude::ai::agents::software_agent::SoftwareAgent;
-use genaptitude::ai::agents::{Agent, EngineeringIntent};
-use genaptitude::json_db::collections::manager::CollectionsManager;
-use serde_json::json;
-use std::fs;
+// FICHIER : src-tauri/tests/code_gen_suite/agent_tests.rs
+
+use crate::common::init_ai_test_env;
+use genaptitude::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
+use genaptitude::ai::agents::{system_agent::SystemAgent, Agent};
 
 #[tokio::test]
-#[ignore] // Lent (IA + FileSystem)
-async fn test_full_hybrid_generation_flow() {
-    // Utilisation de la bonne fonction d'init
-    let env = init_env();
+#[ignore]
+async fn test_system_agent_creates_actor_end_to_end() {
+    let env = init_ai_test_env();
 
-    // Pré-requis : Docker
     if !env.client.ping_local().await {
-        println!("⚠️ SKIPPED: Docker requis.");
+        println!("⚠️ SKIPPED: Docker requis pour le test end-to-end agent.");
         return;
     }
 
-    // 1. Préparation : On insère manuellement un acteur en base
-    let mgr = CollectionsManager::new(&env.storage, "un2", "_system");
-    mgr.create_collection("actors", None).unwrap();
+    // L'agent va utiliser CollectionsManager qui a besoin de _system.json (maintenant fourni par init_ai_test_env)
+    let agent = SystemAgent::new(env.client.clone(), env.storage.clone());
 
-    let actor_doc = json!({
-        "id": "uuid-hybrid-test",
-        "name": "Controleur De Vol",
-        "description": "Calcule la trajectoire et ajuste les ailerons.",
-        "@type": "oa:OperationalActor"
-    });
-    mgr.insert_raw("actors", &actor_doc).unwrap();
-
-    // 2. L'Agent entre en scène
-    // On lui passe la racine de l'environnement temporaire
-    let agent = SoftwareAgent::new(
-        env.client.clone(),
-        env.storage.clone(),
-        env.root_dir.path().to_path_buf(),
-    );
-
-    let intent = EngineeringIntent::GenerateCode {
-        language: "Rust".to_string(),
-        filename: "ControleurDeVol.rs".to_string(),
-        context: "Il doit calculer la trajectoire parabolique.".to_string(),
+    let intent = EngineeringIntent::CreateElement {
+        layer: "OA".to_string(),
+        element_type: "Actor".to_string(), // Correspondra à "actors" via le mapping de l'agent
+        name: "TestUnitBot".to_string(),
     };
 
-    // 3. Exécution
     let result = agent.process(&intent).await;
-    assert!(result.is_ok(), "L'agent a échoué : {:?}", result.err());
-    println!("{}", result.unwrap().unwrap());
 
-    // 4. Vérification Physique
-    let target_file = env.output_path.join("ControleurDeVol.rs");
+    if let Err(e) = &result {
+        println!("❌ Erreur Agent : {:?}", e);
+    }
+    assert!(result.is_ok(), "L'agent a planté");
 
-    assert!(target_file.exists(), "Le fichier généré est introuvable");
+    let msg = result.unwrap();
+    println!("Résultat Agent : {:?}", msg);
 
-    let content = fs::read_to_string(target_file).unwrap();
+    // Vérification physique
+    let db_root = env.storage.config.db_root(&env._space, &env._db);
+    let actors_dir = db_root.join("collections").join("actors");
 
-    // A. La structure (Symbolique) doit être là
-    assert!(content.contains("pub struct ControleurDeVol"));
-
-    // B. La logique (IA) doit avoir remplacé le marqueur
+    // Le dossier doit exister car create_collection l'a créé (grâce au bootstrap)
     assert!(
-        !content.contains("// AI_INJECTION_POINT"),
-        "Le marqueur aurait dû être remplacé"
+        actors_dir.exists(),
+        "Le dossier 'actors' doit avoir été créé"
     );
+
+    let mut found = false;
+    if let Ok(entries) = std::fs::read_dir(actors_dir) {
+        for entry in entries {
+            if let Ok(e) = entry {
+                let content = std::fs::read_to_string(e.path()).unwrap_or_default();
+                if content.contains("TestUnitBot") {
+                    found = true;
+                    // On vérifie que l'agent a bien généré une description via le LLM
+                    assert!(content.contains("description"), "La description IA manque");
+                    break;
+                }
+            }
+        }
+    }
+
     assert!(
-        content.contains("trajectoire") || content.contains("calcul"),
-        "L'IA aurait dû ajouter de la logique"
+        found,
+        "Le fichier JSON de l'acteur n'a pas été trouvé sur le disque !"
     );
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_intent_classification_integration() {
+    let env = init_ai_test_env();
+
+    if !env.client.ping_local().await {
+        return;
+    }
+
+    let classifier = IntentClassifier::new(env.client.clone());
+
+    let input = "Crée une fonction système nommée 'Démarrer Moteur'";
+
+    let intent = classifier.classify(input).await;
+
+    match intent {
+        EngineeringIntent::CreateElement {
+            layer,
+            element_type,
+            name,
+        } => {
+            assert_eq!(layer, "SA");
+            assert_eq!(element_type, "Function");
+            assert!(name.contains("Démarrer"));
+        }
+        _ => panic!("Classification échouée. Reçu: {:?}", intent),
+    }
 }
