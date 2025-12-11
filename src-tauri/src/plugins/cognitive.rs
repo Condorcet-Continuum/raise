@@ -8,6 +8,12 @@ pub struct CognitiveManager {
     engine: Engine,
 }
 
+impl Default for CognitiveManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CognitiveManager {
     pub fn new() -> Self {
         let engine = Engine::default();

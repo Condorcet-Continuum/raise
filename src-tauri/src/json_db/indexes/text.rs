@@ -19,6 +19,7 @@ fn tokenize(text: &str) -> HashSet<String> {
 /// Met à jour l'index Textuel (Index Inversé).
 ///
 /// Structure : Token -> [DocId1, DocId2, ...]
+#[allow(clippy::too_many_arguments)]
 pub fn update_text_index(
     cfg: &JsonDbConfig,
     space: &str,

@@ -215,8 +215,8 @@ fn resolve_path_uri(base: &str, target_path: &str) -> String {
         return base.to_string();
     }
 
-    let (prefix, base_path_str) = if base.starts_with("db://") {
-        ("db://", &base[5..])
+    let (prefix, base_path_str) = if let Some(stripped) = base.strip_prefix("db://") {
+        ("db://", stripped)
     } else {
         ("", base)
     };

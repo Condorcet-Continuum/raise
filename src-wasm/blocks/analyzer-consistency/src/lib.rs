@@ -68,6 +68,12 @@ pub extern "C" fn alloc(size: usize) -> *mut u8 {
 
 /// Fonction principale appelée par Tauri
 /// Reçoit un pointeur vers le JSON d'entrée, retourne un pointeur vers le JSON de sortie
+///
+/// # Safety
+/// Cette fonction est `unsafe` car elle manipule des pointeurs bruts (`*mut u8`).
+/// L'appelant (l'hôte Tauri) doit garantir que :
+/// 1. `ptr` pointe vers une zone mémoire valide allouée par `alloc`.
+/// 2. `len` correspond exactement à la taille des données écrites.
 #[no_mangle]
 pub unsafe extern "C" fn run_analysis(ptr: *mut u8, len: usize) -> u64 {
     // A. Récupération des données envoyées par Tauri

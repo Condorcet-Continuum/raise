@@ -123,7 +123,7 @@ impl<'a> IndexManager<'a> {
         for entry in fs::read_dir(&col_path)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "json") {
+            if path.extension().is_some_and(|e| e == "json") {
                 let filename = path.file_name().unwrap().to_str().unwrap();
                 if filename.starts_with('_') {
                     continue;
