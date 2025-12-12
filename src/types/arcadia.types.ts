@@ -31,10 +31,9 @@ export const ArcadiaTypes = {
   // DATA
   DATA_CLASS: `${Namespaces.DATA}Class`,
   DATA_TYPE: `${Namespaces.DATA}DataType`,
-  EXCHANGE_ITEM: `${Namespaces.DATA}ExchangeItem`,
 } as const;
 
-// Helper pour vérifier le type d'un élément de manière sûre
-export function isArcadiaType(elementKind: string, targetType: string): boolean {
+// Helper Type Guard
+export function isArcadiaType(elementKind: string | undefined, targetType: string): boolean {
   return elementKind === targetType;
 }

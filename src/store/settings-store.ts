@@ -5,6 +5,8 @@ export type AiBackend = 'mock' | 'tauri-local' | 'remote-api';
 export interface SettingsState {
   language: 'fr' | 'en';
   aiBackend: AiBackend;
+
+  // Configuration pour la base de données JSON
   jsonDbSpace: string;
   jsonDbDatabase: string;
 
@@ -13,7 +15,7 @@ export interface SettingsState {
 
 export const useSettingsStore = create<SettingsState>((set) => ({
   language: 'fr',
-  aiBackend: 'tauri-local',
+  aiBackend: 'mock', // Par défaut sur mock pour le dév UI sans backend
   jsonDbSpace: 'un2',
   jsonDbDatabase: '_system',
 

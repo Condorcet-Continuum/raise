@@ -1,8 +1,6 @@
-/**
- * Types synchronisés avec le backend Rust (genaptitude::json_db)
- */
+// FICHIER : src/types/json-db.types.ts
 
-// --- Query Engine Types ---
+// --- Query Engine ---
 
 export type SortOrder = 'Asc' | 'Desc';
 
@@ -51,7 +49,7 @@ export interface QueryResponse {
   total: number;
 }
 
-// --- Transaction Types ---
+// --- Transactions ---
 
 export type OperationRequest =
   | { type: 'Insert'; collection: string; id: string; document: any }
@@ -62,7 +60,7 @@ export interface TransactionRequest {
   operations: OperationRequest[];
 }
 
-// --- General Types ---
+// --- Document Générique ---
 
 export interface Document<T = any> {
   id: string;

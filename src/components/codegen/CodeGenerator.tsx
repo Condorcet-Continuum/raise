@@ -22,8 +22,6 @@ export default function CodeGenerator() {
     setCopied(false);
 
     try {
-      // On passe une version simplifiée du modèle ou le modèle brut
-      // Ici, on envoie le modèle brut, l'adaptateur sera côté Rust si besoin
       const result = await codegenService.generateCode(language, currentProject);
       setCode(result);
     } catch (err) {
@@ -39,80 +37,104 @@ export default function CodeGenerator() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Styles "IDE Dark Mode"
+  // --- STYLES AVEC VARIABLES CSS ---
   const styles = {
     container: {
       height: '100%',
       display: 'flex',
       flexDirection: 'column' as const,
-      gap: '10px',
-      padding: '20px',
-      fontFamily: 'Inter, sans-serif',
+      gap: 'var(--spacing-4)',
+      padding: 'var(--spacing-4)',
+      fontFamily: 'var(--font-family)',
+      backgroundColor: 'var(--bg-panel)',
+      color: 'var(--text-main)',
+      borderRadius: 'var(--radius-lg)',
+      border: '1px solid var(--border-color)',
+    },
+    header: {
+      borderBottom: '1px solid var(--border-color)',
+      paddingBottom: 'var(--spacing-4)',
+      marginBottom: 'var(--spacing-2)',
     },
     toolbar: {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
-      padding: '10px 15px',
-      background: '#1e1e1e',
-      borderRadius: '8px 8px 0 0',
-      borderBottom: '1px solid #333',
+      padding: 'var(--spacing-2) var(--spacing-4)',
+      backgroundColor: 'var(--color-gray-50)', // Légère différence avec le fond
+      borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
+      border: '1px solid var(--border-color)',
+      borderBottom: 'none',
     },
-    controls: { display: 'flex', gap: '10px', alignItems: 'center' },
+    controls: { display: 'flex', gap: 'var(--spacing-2)', alignItems: 'center' },
     select: {
-      background: '#2d2d2d',
-      color: '#ccc',
-      border: '1px solid #444',
+      backgroundColor: 'var(--bg-panel)',
+      color: 'var(--text-main)',
+      border: '1px solid var(--border-color)',
       padding: '6px 12px',
-      borderRadius: '4px',
+      borderRadius: 'var(--radius-sm)',
       cursor: 'pointer',
       outline: 'none',
-      fontWeight: 'bold' as const,
+      fontWeight: 'var(--font-weight-medium)',
+      fontSize: 'var(--font-size-sm)',
+      fontFamily: 'var(--font-family)',
     },
     btnGen: {
-      background: 'var(--color-primary, #4f46e5)',
-      color: 'white',
+      backgroundColor: 'var(--color-primary)',
+      color: '#ffffff',
       border: 'none',
       padding: '6px 16px',
-      borderRadius: '4px',
+      borderRadius: 'var(--radius-sm)',
       cursor: 'pointer',
-      fontWeight: 'bold' as const,
+      fontWeight: 'var(--font-weight-semibold)',
       display: 'flex',
       alignItems: 'center',
       gap: '6px',
+      fontSize: 'var(--font-size-sm)',
+      transition: 'var(--transition-fast)',
     },
     btnCopy: {
-      background: copied ? '#10b981' : '#374151',
-      color: 'white',
-      border: 'none',
+      backgroundColor: copied ? 'var(--color-success)' : 'var(--bg-panel)',
+      color: copied ? '#ffffff' : 'var(--text-main)',
+      border: '1px solid var(--border-color)',
       padding: '6px 12px',
-      borderRadius: '4px',
+      borderRadius: 'var(--radius-sm)',
       cursor: 'pointer',
-      transition: 'background 0.2s',
-      fontSize: '0.9em',
+      transition: 'var(--transition-fast)',
+      fontSize: 'var(--font-size-sm)',
+      fontWeight: 'var(--font-weight-medium)',
     },
     editor: {
       flex: 1,
-      background: '#1e1e1e',
-      color: '#d4d4d4',
-      padding: '20px',
-      borderRadius: '0 0 8px 8px',
+      // En mode light: fond gris clair (gray-50). En dark mode : fond gris foncé (gray-900)
+      // On utilise var(--bg-app) qui gère cette inversion naturellement
+      backgroundColor: 'var(--bg-app)',
+      color: 'var(--text-main)',
+      padding: 'var(--spacing-4)',
+      borderRadius: '0 0 var(--radius-md) var(--radius-md)',
       overflow: 'auto',
-      fontFamily: "'Fira Code', 'Consolas', monospace",
-      fontSize: '14px',
-      lineHeight: '1.5',
-      border: '1px solid #333',
-      borderTop: 'none',
+      fontFamily: 'var(--font-family-mono)',
+      fontSize: 'var(--font-size-sm)',
+      lineHeight: '1.6',
+      border: '1px solid var(--border-color)',
       whiteSpace: 'pre' as const,
     },
-    status: { fontSize: '0.85em', color: '#6b7280', marginTop: '5px' },
+    status: {
+      fontSize: 'var(--font-size-xs)',
+      color: 'var(--text-muted)',
+      marginTop: 'var(--spacing-2)',
+    },
   };
 
   return (
     <div style={styles.container}>
-      <header>
-        <h2 style={{ margin: 0, color: 'var(--color-primary)' }}>Usine Logicielle</h2>
-        <p style={{ margin: '5px 0 0', color: '#666', fontSize: '0.9em' }}>
+      <header style={styles.header}>
+        <h2 style={{ margin: 0, color: 'var(--color-primary)', fontSize: 'var(--font-size-xl)' }}>
+          Usine Logicielle
+        </h2>
+        <p
+          style={{ margin: '5px 0 0', color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)' }}
+        >
           Générez du code infrastructurel à partir de votre modèle d'architecture.
         </p>
       </header>
@@ -121,7 +143,15 @@ export default function CodeGenerator() {
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         <div style={styles.toolbar}>
           <div style={styles.controls}>
-            <span style={{ color: '#888', fontSize: '0.9em', fontWeight: 600 }}>Cible :</span>
+            <span
+              style={{
+                color: 'var(--text-muted)',
+                fontSize: 'var(--font-size-sm)',
+                fontWeight: 600,
+              }}
+            >
+              Cible :
+            </span>
             <select
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
@@ -132,7 +162,15 @@ export default function CodeGenerator() {
               <option value="cpp">⚙️ C++ (Embedded)</option>
             </select>
 
-            <button onClick={handleGenerate} disabled={loading} style={styles.btnGen}>
+            <button
+              onClick={handleGenerate}
+              disabled={loading}
+              style={{
+                ...styles.btnGen,
+                opacity: loading ? 0.7 : 1,
+                cursor: loading ? 'not-allowed' : 'pointer',
+              }}
+            >
               {loading ? 'Construction...' : '⚡ Générer'}
             </button>
           </div>
@@ -145,7 +183,7 @@ export default function CodeGenerator() {
         {/* --- ZONE ÉDITEUR --- */}
         <div style={styles.editor}>
           {error ? (
-            <div style={{ color: '#ef4444' }}>❌ Erreur : {error}</div>
+            <div style={{ color: 'var(--color-error)' }}>❌ Erreur : {error}</div>
           ) : (
             <code>{code}</code>
           )}

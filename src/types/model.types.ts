@@ -7,12 +7,13 @@ export interface I18nString {
 export interface ArcadiaElement {
   id: string;
   name: string | I18nString;
-  type: string; // URI complète (ex: https://...#OperationalActor)
+  type?: string; // URI complète (ex: https://...#OperationalActor)
+  description?: string;
   // Propriétés dynamiques (PVMT, attributs métier)
   [key: string]: any;
 }
 
-// --- Couches ---
+// --- Couches (Layers) ---
 
 export interface OperationalAnalysisLayer {
   actors: ArcadiaElement[];
@@ -50,31 +51,38 @@ export interface EPBSLayer {
   configurationItems: ArcadiaElement[];
 }
 
-// --- NOUVEAU : Couche DATA ---
 export interface DataLayer {
   classes: ArcadiaElement[];
   dataTypes: ArcadiaElement[];
   exchangeItems: ArcadiaElement[];
 }
-// -----------------------------
+
+// --- Méta-données ---
 
 export interface ProjectMeta {
-  name: string;
-  loadedAt: string;
-  elementCount: number;
+  name?: string;
+  version?: string;
+  loadedAt?: string;
+  elementCount?: number;
+  description?: string;
 }
 
-// --- Racine ---
+// --- Racine du Projet ---
 
 export interface ProjectModel {
-  oa: OperationalAnalysisLayer;
-  sa: SystemAnalysisLayer;
-  la: LogicalArchitectureLayer;
-  pa: PhysicalArchitectureLayer;
-  epbs: EPBSLayer;
+  id: string;
+  name?: string; // Nom à la racine (souvent redondant avec meta.name)
 
-  // Ajout de la couche Data
-  data: DataLayer;
+  // Les couches sont optionnelles car un projet peut être partiel
+  oa?: OperationalAnalysisLayer;
+  sa?: SystemAnalysisLayer;
+  la?: LogicalArchitectureLayer;
+  pa?: PhysicalArchitectureLayer;
+  epbs?: EPBSLayer;
+  data?: DataLayer;
 
-  meta: ProjectMeta;
+  meta?: ProjectMeta;
+
+  // Flexibilité pour extensions futures
+  [key: string]: any;
 }

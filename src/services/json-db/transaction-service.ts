@@ -1,18 +1,21 @@
 import { invoke } from '@tauri-apps/api/core';
+import { useSettingsStore } from '@/store/settings-store';
 import type { OperationRequest } from '@/types/json-db.types';
-// On utilise uuid pour générer un ID temporaire si besoin
 import { v4 as uuidv4 } from 'uuid';
-
-const DEFAULT_SPACE = 'un2';
-const DEFAULT_DB = '_system';
 
 export class TransactionService {
   private operations: OperationRequest[] = [];
+  private space: string;
+  private db: string;
 
-  constructor(private space: string = DEFAULT_SPACE, private db: string = DEFAULT_DB) {}
+  constructor(space?: string, db?: string) {
+    // Si non fourni, on prend la config globale actuelle
+    const config = useSettingsStore.getState();
+    this.space = space || config.jsonDbSpace;
+    this.db = db || config.jsonDbDatabase;
+  }
 
   add(collection: string, doc: Record<string, any>): this {
-    // Si le doc n'a pas d'ID, on en génère un pour le frontend
     const id = doc.id || uuidv4();
     const docWithId = { ...doc, id };
 
@@ -25,7 +28,6 @@ export class TransactionService {
     return this;
   }
 
-  // CORRECTION ICI : Signature à 3 arguments pour correspondre à JsonDbTester
   update(collection: string, id: string, doc: Record<string, any>): this {
     this.operations.push({
       type: 'Update',
@@ -56,30 +58,37 @@ export class TransactionService {
   async commit(): Promise<void> {
     if (this.operations.length === 0) return;
 
-    // Exécution séquentielle des opérations (simulation de transaction)
+    // Simulation de transaction séquentielle
+    // (Dans une vraie DB, ce serait un appel batch atomique)
     for (const op of this.operations) {
-      if (op.type === 'Insert') {
-        await invoke('jsondb_insert_document', {
-          space: this.space,
-          db: this.db,
-          collection: op.collection,
-          document: op.document,
-        });
-      } else if (op.type === 'Update') {
-        await invoke('jsondb_update_document', {
-          space: this.space,
-          db: this.db,
-          collection: op.collection,
-          id: op.id,
-          document: op.document,
-        });
-      } else if (op.type === 'Delete') {
-        await invoke('jsondb_delete_document', {
-          space: this.space,
-          db: this.db,
-          collection: op.collection,
-          id: op.id,
-        });
+      try {
+        if (op.type === 'Insert') {
+          await invoke('jsondb_insert_document', {
+            space: this.space,
+            db: this.db,
+            collection: op.collection,
+            document: op.document,
+          });
+        } else if (op.type === 'Update') {
+          await invoke('jsondb_update_document', {
+            space: this.space,
+            db: this.db,
+            collection: op.collection,
+            id: op.id,
+            document: op.document,
+          });
+        } else if (op.type === 'Delete') {
+          await invoke('jsondb_delete_document', {
+            space: this.space,
+            db: this.db,
+            collection: op.collection,
+            id: op.id,
+          });
+        }
+      } catch (error) {
+        console.error(`[Transaction] Error on ${op.type}:`, error);
+        // On pourrait throw ici pour arrêter la séquence
+        throw error;
       }
     }
 

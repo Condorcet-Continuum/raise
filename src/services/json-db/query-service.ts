@@ -1,8 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
+import { useSettingsStore } from '@/store/settings-store';
 import type { Query, Condition, ComparisonOperator, QueryResponse } from '@/types/json-db.types';
-
-const DEFAULT_SPACE = 'un2';
-const DEFAULT_DB = '_system';
 
 export class QueryBuilder {
   private query: Query;
@@ -54,9 +52,16 @@ export class QueryBuilder {
 }
 
 export class JsonDbQueryService {
-  // Correction: Accepte explicitement 'options' comme 2ème argument
+  private getConfig() {
+    const { jsonDbSpace, jsonDbDatabase } = useSettingsStore.getState();
+    return { space: jsonDbSpace, db: jsonDbDatabase };
+  }
+
   async execute(query: Query, options?: { latest?: boolean }): Promise<any[]> {
     try {
+      const { space, db } = this.getConfig();
+
+      // Application des options rapides (ex: récupérer le dernier élément)
       if (options?.latest) {
         if (!query.sort) query.sort = [];
         query.sort.unshift({ field: 'createdAt', order: 'Desc' });
@@ -64,27 +69,28 @@ export class JsonDbQueryService {
       }
 
       const res = await invoke<QueryResponse>('jsondb_execute_query', {
-        space: DEFAULT_SPACE,
-        db: DEFAULT_DB,
-        query: query,
+        space,
+        db,
+        query,
       });
       return res.documents;
     } catch (e) {
-      console.error('Query Failed:', e);
+      console.error('[QueryService] Execute Failed:', e);
       throw e;
     }
   }
 
   async executeSql(sql: string): Promise<any[]> {
     try {
+      const { space, db } = this.getConfig();
       const res = await invoke<QueryResponse>('jsondb_execute_sql', {
-        space: DEFAULT_SPACE,
-        db: DEFAULT_DB,
-        sql: sql,
+        space,
+        db,
+        sql,
       });
       return res.documents;
     } catch (e) {
-      console.error('SQL Failed:', e);
+      console.error('[QueryService] SQL Failed:', e);
       throw e;
     }
   }

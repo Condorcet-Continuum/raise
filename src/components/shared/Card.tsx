@@ -1,32 +1,36 @@
-import type { ReactNode } from 'react'
+import type { ReactNode } from 'react';
 
 interface CardProps {
-  title?: string
-  children: ReactNode
+  title?: string;
+  children: ReactNode;
 }
 
 export function Card({ title, children }: CardProps) {
   return (
     <section
       style={{
-        borderRadius: 12,
-        border: '1px solid #1f2937',
-        backgroundColor: '#020617',
-        padding: 12,
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--color-gray-200)',
+        backgroundColor: 'var(--color-white)',
+        padding: 'var(--spacing-4)',
+        color: 'var(--color-gray-900)',
+        boxShadow: 'var(--shadow-sm)',
       }}
     >
       {title && (
         <h3
           style={{
-            fontSize: 14,
+            fontSize: 'var(--font-size-sm)',
+            fontWeight: 'var(--font-weight-semibold)',
             margin: 0,
-            marginBottom: 8,
+            marginBottom: 'var(--spacing-2)',
+            color: 'var(--color-gray-900)',
           }}
         >
           {title}
         </h3>
       )}
-      {children}
+      <div style={{ color: 'var(--color-gray-500)' }}>{children}</div>
     </section>
-  )
+  );
 }

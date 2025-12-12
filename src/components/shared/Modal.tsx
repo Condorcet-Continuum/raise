@@ -1,25 +1,26 @@
-import type { ReactNode } from 'react'
+import type { ReactNode } from 'react';
 
 interface ModalProps {
-  open: boolean
-  title?: string
-  onClose: () => void
-  children: ReactNode
+  open: boolean;
+  title?: string;
+  onClose: () => void;
+  children: ReactNode;
 }
 
 export function Modal({ open, title, onClose, children }: ModalProps) {
-  if (!open) return null
+  if (!open) return null;
 
   return (
     <div
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(0,0,0,0.5)',
+        backgroundColor: 'rgba(0, 0, 0, 0.5)', // Backdrop semi-transparent
+        backdropFilter: 'blur(2px)', // Petit effet moderne
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 50,
+        zIndex: 'var(--z-index-modal)',
       }}
       onClick={onClose}
     >
@@ -27,10 +28,13 @@ export function Modal({ open, title, onClose, children }: ModalProps) {
         style={{
           minWidth: 320,
           maxWidth: 640,
-          backgroundColor: '#020617',
-          borderRadius: 12,
-          border: '1px solid #1f2937',
-          padding: 16,
+          width: '100%',
+          backgroundColor: 'var(--color-white)',
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--color-gray-200)',
+          padding: 'var(--spacing-4)',
+          boxShadow: 'var(--shadow-xl)',
+          color: 'var(--color-gray-900)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -40,18 +44,21 @@ export function Modal({ open, title, onClose, children }: ModalProps) {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              marginBottom: 8,
+              marginBottom: 'var(--spacing-4)',
+              borderBottom: '1px solid var(--color-gray-100)',
+              paddingBottom: 'var(--spacing-2)',
             }}
           >
-            <h3 style={{ margin: 0 }}>{title}</h3>
+            <h3 style={{ margin: 0, fontSize: 'var(--font-size-lg)' }}>{title}</h3>
             <button
               type="button"
               onClick={onClose}
               style={{
                 border: 'none',
                 background: 'transparent',
-                color: '#9ca3af',
+                color: 'var(--color-gray-400)',
                 cursor: 'pointer',
+                fontSize: '1.2rem',
               }}
             >
               ✕
@@ -61,5 +68,5 @@ export function Modal({ open, title, onClose, children }: ModalProps) {
         {children}
       </div>
     </div>
-  )
+  );
 }

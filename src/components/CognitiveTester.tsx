@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { cognitiveService } from '@/services/cognitiveService';
-import { AnalysisReport, CognitiveModel } from '@/types/cognitive';
+import { AnalysisReport, CognitiveModel } from '@/types/cognitive.types';
 import { useModelStore } from '@/store/model-store';
 
 export default function CognitiveTester() {

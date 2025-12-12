@@ -1,47 +1,44 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost'
+type ButtonVariant = 'primary' | 'secondary' | 'ghost';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: ButtonVariant
-  children: ReactNode
+  variant?: ButtonVariant;
+  children: ReactNode;
 }
 
-export function Button({
-  variant = 'primary',
-  children,
-  style,
-  ...rest
-}: ButtonProps) {
+export function Button({ variant = 'primary', children, style, ...rest }: ButtonProps) {
   const base: React.CSSProperties = {
-    borderRadius: 999,
+    borderRadius: 'var(--radius-full)', // Utilisation de la variable radius
     padding: '6px 12px',
-    fontSize: 14,
+    fontSize: 'var(--font-size-sm)',
     border: '1px solid transparent',
     cursor: 'pointer',
-  }
+    transition: 'var(--transition-base)', // Ajout de transition
+    fontFamily: 'var(--font-family)',
+  };
 
   const palette: Record<ButtonVariant, React.CSSProperties> = {
     primary: {
-      backgroundColor: '#4f46e5',
-      color: '#f9fafb',
-      borderColor: '#4338ca',
+      backgroundColor: 'var(--color-primary)',
+      color: '#ffffff', // On garde blanc pur pour le contraste sur le bleu
+      borderColor: 'var(--color-primary-dark)',
     },
     secondary: {
-      backgroundColor: '#020617',
-      color: '#e5e7eb',
-      borderColor: '#374151',
+      backgroundColor: 'var(--color-white)', // S'inversera en mode sombre
+      color: 'var(--color-gray-900)', // S'inversera en mode sombre
+      borderColor: 'var(--color-gray-200)',
     },
     ghost: {
       backgroundColor: 'transparent',
-      color: '#9ca3af',
+      color: 'var(--color-gray-500)',
       borderColor: 'transparent',
     },
-  }
+  };
 
   return (
     <button style={{ ...base, ...palette[variant], ...style }} {...rest}>
       {children}
     </button>
-  )
+  );
 }

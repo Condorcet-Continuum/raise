@@ -15,7 +15,7 @@ fn mgr<'a>(
     Ok(CollectionsManager::new(storage, space, db))
 }
 
-// --- GESTION DATABASE (NOUVEAU) ---
+// --- GESTION DATABASE ---
 
 #[command]
 pub async fn jsondb_create_db(

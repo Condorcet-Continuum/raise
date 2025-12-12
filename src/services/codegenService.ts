@@ -8,14 +8,16 @@ export interface GeneratedFile {
 
 class CodegenService {
   /**
-   * Demande au backend de générer le code source pour le modèle donné
+   * Demande au backend de générer le code source pour le modèle donné.
+   * @param language Langage cible
+   * @param model Le modèle JSON complet
    */
   async generateCode(language: string, model: any): Promise<string> {
     try {
-      // Appel à la commande Rust définie à l'étape 1
+      // Appel à la commande Rust
       const result = await invoke<string>('generate_source_code', {
-        language: language,
-        model: model,
+        language,
+        model,
       });
       return result;
     } catch (error) {

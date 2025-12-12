@@ -16,11 +16,10 @@ export interface OptimizationResult {
 class GeneticsService {
   async runOptimization(params: GeneticsParams, model: any): Promise<OptimizationResult> {
     try {
-      // Les clés de params doivent correspondre au snake_case du Rust si on n'utilise pas rename_all
-      // Ici, j'ai utilisé les mêmes noms (snake_case) dans l'interface TS pour simplifier.
+      // Les clés de params sont transmises telles quelles au backend Rust
       return await invoke<OptimizationResult>('run_genetic_optimization', {
-        params: params,
-        model: model,
+        params,
+        model,
       });
     } catch (error) {
       console.error('❌ Erreur génétique:', error);

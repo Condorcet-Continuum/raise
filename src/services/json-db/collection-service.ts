@@ -1,63 +1,66 @@
-// FICHIER : src/services/json-db/collection-service.ts
-
 import { invoke } from '@tauri-apps/api/core';
 import { queryService } from './query-service';
+import { useSettingsStore } from '@/store/settings-store';
 import type { Query, Document } from '@/types/json-db.types';
 
-const DEFAULT_SPACE = 'un2';
-const DEFAULT_DB = '_system';
-
 export class CollectionService {
-  // --- DATABASE MANAGEMENT (NOUVEAU) ---
+  /**
+   * Récupère la configuration actuelle (Espace et DB) depuis le store global.
+   */
+  private getConfig() {
+    const { jsonDbSpace, jsonDbDatabase } = useSettingsStore.getState();
+    return { space: jsonDbSpace, db: jsonDbDatabase };
+  }
+
+  // --- DATABASE MANAGEMENT ---
+
   async createDb(): Promise<void> {
-    await invoke('jsondb_create_db', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
-    });
+    const { space, db } = this.getConfig();
+    await invoke('jsondb_create_db', { space, db });
   }
 
   async dropDb(): Promise<void> {
-    await invoke('jsondb_drop_db', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
-    });
+    const { space, db } = this.getConfig();
+    await invoke('jsondb_drop_db', { space, db });
   }
 
   // --- COLLECTION MANAGEMENT ---
+
   async createCollection(name: string, schemaUri?: string): Promise<void> {
+    const { space, db } = this.getConfig();
     await invoke('jsondb_create_collection', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection: name,
       schemaUri: schemaUri || null,
     });
   }
 
-  // AJOUTÉ : Permet de supprimer une collection
   async dropCollection(name: string): Promise<void> {
+    const { space, db } = this.getConfig();
     await invoke('jsondb_drop_collection', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection: name,
     });
   }
 
   async listAllCollections(): Promise<string[]> {
-    return await invoke<string[]>('jsondb_list_collections', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
-    });
+    const { space, db } = this.getConfig();
+    return await invoke<string[]>('jsondb_list_collections', { space, db });
   }
 
-  // --- INDEX MANAGEMENT (NOUVEAU) ---
+  // --- INDEX MANAGEMENT ---
+
   async createIndex(
     collection: string,
     field: string,
     kind: 'hash' | 'btree' | 'text' = 'hash',
   ): Promise<void> {
+    const { space, db } = this.getConfig();
     await invoke('jsondb_create_index', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection,
       field,
       kind,
@@ -65,45 +68,51 @@ export class CollectionService {
   }
 
   async dropIndex(collection: string, field: string): Promise<void> {
+    const { space, db } = this.getConfig();
     await invoke('jsondb_drop_index', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection,
       field,
     });
   }
 
-  // --- CRUD OPERATIONS (EXISTANT) ---
+  // --- CRUD OPERATIONS ---
+
   async listAll(collection: string): Promise<Document[]> {
+    const { space, db } = this.getConfig();
     return await invoke<Document[]>('jsondb_list_all', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection,
     });
   }
 
   async insertDocument(collection: string, doc: any): Promise<any> {
+    const { space, db } = this.getConfig();
     return await invoke('jsondb_insert_document', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection,
       document: doc,
     });
   }
 
   async getDocument(collection: string, id: string): Promise<any | null> {
+    const { space, db } = this.getConfig();
     return await invoke('jsondb_get_document', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection,
       id,
     });
   }
 
   async updateDocument(collection: string, id: string, doc: any): Promise<any> {
+    const { space, db } = this.getConfig();
     return await invoke('jsondb_update_document', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection,
       id,
       document: doc,
@@ -111,9 +120,10 @@ export class CollectionService {
   }
 
   async deleteDocument(collection: string, id: string): Promise<boolean> {
+    const { space, db } = this.getConfig();
     return await invoke('jsondb_delete_document', {
-      space: DEFAULT_SPACE,
-      db: DEFAULT_DB,
+      space,
+      db,
       collection,
       id,
     });

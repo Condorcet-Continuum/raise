@@ -1,10 +1,5 @@
 // src/services/json-db/jsonld-service.ts
 
-/**
- * Service de gestion JSON-LD pour données liées (Client Side).
- * Utile pour pré-traiter les données avant de les envoyer au backend ou pour l'affichage.
- */
-
 export interface JsonLdContext {
   '@context': ContextDefinition;
 }
@@ -22,10 +17,6 @@ export type ContextValue =
 export class JsonLdService {
   private readonly contexts = new Map<string, JsonLdContext>();
 
-  /**
-   * Enregistre un contexte nommé en mémoire client.
-   * ex: registerContext("arcadia", { "@context": { "oa": "http://...", ... } })
-   */
   registerContext(name: string, context: JsonLdContext): void {
     this.contexts.set(name, context);
   }
@@ -34,13 +25,10 @@ export class JsonLdService {
     return this.contexts.get(name);
   }
 
-  /**
-   * "Expand" léger : ajoute @context au document.
-   */
   expandDocument<T = any>(document: T, contextName: string): T & { '@context': any } {
     const context = this.getContext(contextName);
     if (!context) {
-      console.warn(`JSON-LD context not found client-side: ${contextName}`);
+      console.warn(`[JsonLdService] Context not found: ${contextName}`);
       return { '@context': {}, ...document };
     }
     return {
@@ -49,9 +37,6 @@ export class JsonLdService {
     };
   }
 
-  /**
-   * "Compact" léger : retire la clé @context pour un affichage propre.
-   */
   compactDocument<T = any>(document: any): T {
     if (!document) return document;
     // eslint-disable-next-line @typescript-eslint/no-unused-vars

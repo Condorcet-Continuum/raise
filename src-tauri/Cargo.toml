@@ -12,7 +12,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # --- Cœur Tauri ---
 tauri = { version = "2", features = [] }
-tauri-plugin-fs = "2.0.0"
+tauri-plugin-fs = "2"
 
 # --- Sérialisation & Données ---
 serde = { version = "1.0", features = ["derive"] }
@@ -72,6 +72,7 @@ rayon = "1.10"
 wasmtime = "39.0.1"
 
 tempfile = "3.10"
+tauri-plugin-dialog = "2"
 
 # ==========================================
 # DÉPENDANCES DE DÉVELOPPEMENT (Tests)

@@ -1,25 +1,19 @@
-import { FormEvent } from 'react'
+import { FormEvent } from 'react';
 
 interface InputBarProps {
-  value: string
-  onChange: (value: string) => void
-  onSend: (value: string) => void
-  disabled?: boolean
-  placeholder?: string
+  value: string;
+  onChange: (value: string) => void;
+  onSend: (value: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
 }
 
-export function InputBar({
-  value,
-  onChange,
-  onSend,
-  disabled,
-  placeholder,
-}: InputBarProps) {
+export function InputBar({ value, onChange, onSend, disabled, placeholder }: InputBarProps) {
   function handleSubmit(e: FormEvent) {
-    e.preventDefault()
-    const trimmed = value.trim()
-    if (!trimmed) return
-    onSend(trimmed)
+    e.preventDefault();
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    onSend(trimmed);
   }
 
   return (
@@ -27,9 +21,9 @@ export function InputBar({
       onSubmit={handleSubmit}
       style={{
         display: 'flex',
-        gap: 8,
-        paddingTop: 8,
-        borderTop: '1px solid #1f2937',
+        gap: 'var(--spacing-2)',
+        paddingTop: 'var(--spacing-4)',
+        borderTop: '1px solid var(--border-color)',
       }}
     >
       <textarea
@@ -37,33 +31,40 @@ export function InputBar({
         placeholder={placeholder ?? 'Posez une question à GenAptitude…'}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        rows={2}
+        rows={1}
         style={{
           flex: 1,
           resize: 'none',
-          borderRadius: 8,
-          border: '1px solid #374151',
-          padding: 8,
-          fontSize: 14,
-          backgroundColor: '#020617',
-          color: '#f9fafb',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border-color)',
+          padding: 'var(--spacing-2)',
+          fontSize: 'var(--font-size-sm)',
+          fontFamily: 'var(--font-family)',
+          // Fond légèrement différent du panel pour le contraste
+          backgroundColor: 'var(--color-gray-50)',
+          color: 'var(--text-main)',
+          outline: 'none',
         }}
+        // Petit trick pour le focus visible via CSS global ou style inline
+        onFocus={(e) => (e.target.style.borderColor = 'var(--color-primary)')}
+        onBlur={(e) => (e.target.style.borderColor = 'var(--border-color)')}
       />
       <button
         type="submit"
         disabled={disabled || !value.trim()}
         style={{
-          borderRadius: 999,
-          padding: '8px 16px',
+          borderRadius: 'var(--radius-full)',
+          padding: '8px 20px',
           border: 'none',
-          backgroundColor: disabled ? '#4b5563' : '#4f46e5',
-          color: '#f9fafb',
-          fontWeight: 500,
+          backgroundColor: disabled ? 'var(--color-gray-400)' : 'var(--color-primary)',
+          color: '#ffffff',
+          fontWeight: 'var(--font-weight-medium)',
           cursor: disabled ? 'not-allowed' : 'pointer',
+          transition: 'var(--transition-fast)',
         }}
       >
         Envoyer
       </button>
     </form>
-  )
+  );
 }

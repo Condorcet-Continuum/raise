@@ -1,7 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 
-// --- DÉFINITION DES TYPES ---
-
 export interface AiStatus {
   llm_connected: boolean;
   llm_model: string;
@@ -14,28 +12,47 @@ export interface NlpResult {
   tokens: string[];
 }
 
-// --- SERVICE ---
-
 class AiService {
   /**
-   * Envoie un message au Chatbot (commande existante)
+   * Envoie un message au Chatbot (LLM) via le backend Rust.
+   * @param userInput Le message de l'utilisateur
+   * @param systemPrompt (Optionnel) Instructions système pour guider l'IA
    */
-  async chat(message: string, context?: any): Promise<string> {
-    return await invoke('ai_chat', { userMessage: message, context });
+  async chat(userInput: string, systemPrompt?: string): Promise<string> {
+    try {
+      return await invoke<string>('ai_chat', {
+        userInput,
+        systemPrompt,
+      });
+    } catch (error) {
+      console.error('[AiService] Chat error:', error);
+      throw error;
+    }
   }
 
   /**
-   * Récupère l'état global du système IA
+   * Récupère l'état global du système IA (connexion, modèle chargé...).
    */
   async getSystemStatus(): Promise<AiStatus> {
-    return await invoke('ai_get_system_status');
+    try {
+      return await invoke<AiStatus>('ai_get_system_status');
+    } catch (error) {
+      console.error('[AiService] Status error:', error);
+      // Retour d'un état par défaut en cas d'erreur (mode dégradé)
+      return {
+        llm_connected: false,
+        llm_model: 'Unknown',
+        context_documents: 0,
+        active_agents: [],
+      };
+    }
   }
 
   /**
-   * Teste le moteur de tokenization NLP
+   * Teste le moteur de tokenization NLP (utile pour le debugging).
    */
   async testNlp(text: string): Promise<NlpResult> {
-    return await invoke('ai_test_nlp', { text });
+    return await invoke<NlpResult>('ai_test_nlp', { text });
   }
 }
 

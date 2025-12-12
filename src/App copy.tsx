@@ -2,133 +2,87 @@ import { useState, useEffect } from 'react';
 import './styles/variables.css';
 import './styles/globals.css';
 
-// --- Composants Existants ---
-import { ChatInterface } from '@/components/ai-chat/ChatInterface';
+// --- Composants ---
+import { ChatInterface } from '@/components/ai-chat/ChatInterface'; // <--- LE RETOUR DU CHAT !
+import AiDashboard from '@/components/ai-chat/AiDashboard'; // <--- LE STUDIO TECHNIQUE
 import { JsonDbTester } from '@/components/JsonDbTester';
 import { DataDictionary } from '@/components/model-viewer/DataDictionary';
-import { BlockchainToast } from '@/components/demo/BlockchainToast';
+import { BlockchainToast } from '@/components/blockchain/BlockchainToast';
 import CognitiveTester from '@/components/CognitiveTester';
+import CodeGenerator from '@/components/codegen/CodeGenerator';
+import GeneticsDashboard from '@/components/genetics/GeneticsDashboard';
 
 // --- Services & Store ---
 import { modelService } from '@/services/model-service';
 import { useModelStore } from '@/store/model-store';
 
 // --- Types ---
-// Mise à jour de la liste complète des vues
 type ViewId =
-  | 'assistant'
+  | 'assistant' // Le Chat utilisateur
+  | 'ai-studio' // La console technique (LLM, NLP...)
   | 'dictionary'
   | 'cognitive'
-  | 'blockchain' // Nouveau
-  | 'codegen' // Nouveau
-  | 'genetics' // Nouveau
+  | 'blockchain'
+  | 'codegen'
+  | 'genetics'
   | 'admin-db'
   | 'settings';
 
 export default function App() {
   const [activeView, setActiveView] = useState<ViewId>('assistant');
   const [triggerBlockchain, setTriggerBlockchain] = useState(false);
-
   const setProject = useModelStore((state) => state.setProject);
 
-  // --- 1. Chargement Automatique ---
   useEffect(() => {
     const initApp = async () => {
       try {
-        console.log('🚀 Démarrage : Chargement automatique du modèle...');
+        console.log('🚀 Démarrage...');
         const model = await modelService.loadProjectModel('un2', '_system');
+        console.log('🔍 Données reçues:', model);
         setProject(model);
-        console.log('✅ Modèle chargé.');
       } catch (error) {
-        console.error('❌ Échec du chargement automatique :', error);
+        console.error(error);
       }
     };
     initApp();
   }, [setProject]);
 
-  // --- 2. Raccourci Clavier Blockchain (Touche 'b') ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === 'b' && !e.ctrlKey && !e.metaKey) {
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-        setTriggerBlockchain(true);
-        setTimeout(() => setTriggerBlockchain(false), 3000);
+      if (e.key.toLowerCase() === 'b' && !e.ctrlKey) {
+        if ((e.target as HTMLElement).tagName !== 'INPUT') setTriggerBlockchain(true);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // --- Rendu du Contenu Central ---
   const renderContent = () => {
     switch (activeView) {
-      // 1. Module AI
       case 'assistant':
-        return <ChatInterface />;
-
-      // 2. Module Model Engine
+        return <ChatInterface />; // <--- VOTRE CHAT EST LÀ
+      case 'ai-studio':
+        return <AiDashboard />; // <--- LES INTERNES SONT LÀ
       case 'dictionary':
         return <DataDictionary />;
-
-      // 3. Module Plugins (WASM)
       case 'cognitive':
         return <CognitiveTester />;
-
-      // 4. Module JsonDB
+      case 'codegen':
+        return <CodeGenerator />;
+      case 'genetics':
+        return <GeneticsDashboard />;
       case 'admin-db':
         return <JsonDbTester />;
 
-      // --- NOUVEAUX MODULES (Placeholders) ---
-
-      // 5. Module Blockchain
       case 'blockchain':
         return (
           <div className="placeholder-container">
             <div className="placeholder-icon">🔗</div>
             <h2>Blockchain & Réseau</h2>
-            <p>
-              Module : <code>src-tauri/src/blockchain</code>
-            </p>
-            <p className="description">
-              Visualisation des pairs VPN, état du registre Hyperledger Fabric et traçabilité des
-              transactions.
-            </p>
+            <p className="description">Visualisation Hyperledger Fabric & VPN.</p>
             <button className="action-btn" onClick={() => setTriggerBlockchain(true)}>
-              Tester la notification Toast
+              Test Toast
             </button>
-          </div>
-        );
-
-      // 6. Module Code Generator
-      case 'codegen':
-        return (
-          <div className="placeholder-container">
-            <div className="placeholder-icon">⚡</div>
-            <h2>Générateur de Code</h2>
-            <p>
-              Module : <code>src-tauri/src/code_generator</code>
-            </p>
-            <p className="description">
-              Moteur de templates Tera pour la génération de code source (Rust, Python, C++) à
-              partir du modèle d'architecture.
-            </p>
-          </div>
-        );
-
-      // 7. Module Genetics
-      case 'genetics':
-        return (
-          <div className="placeholder-container">
-            <div className="placeholder-icon">🧬</div>
-            <h2>Optimisation Génétique</h2>
-            <p>
-              Module : <code>src-tauri/src/genetics</code>
-            </p>
-            <p className="description">
-              Algorithmes évolutionnaires pour l'exploration de l'espace de conception et
-              l'optimisation multi-critères.
-            </p>
           </div>
         );
 
@@ -136,7 +90,6 @@ export default function App() {
         return (
           <div className="placeholder-container">
             <h2>Paramètres</h2>
-            <p>Configuration globale de GenAptitude.</p>
           </div>
         );
 
@@ -149,7 +102,6 @@ export default function App() {
     <div className="app-shell">
       <BlockchainToast trigger={triggerBlockchain} />
 
-      {/* --- BARRE LATÉRALE --- */}
       <nav className="sidebar">
         <div className="logo-area">
           <img src="/assets/icons/genaptitude-icon.svg" alt="G" width="32" height="32" />
@@ -157,13 +109,24 @@ export default function App() {
 
         <div className="nav-items">
           <div className="nav-group-label">Intelligence</div>
+          {/* MENU 1 : Le Chat pour l'utilisateur */}
           <NavItem
             id="assistant"
             label="Assistant IA"
-            icon="🤖"
+            icon="💬"
             isActive={activeView === 'assistant'}
             onClick={setActiveView}
           />
+
+          {/* MENU 2 : La Technique pour l'ingénieur */}
+          <NavItem
+            id="ai-studio"
+            label="AI Studio"
+            icon="🔌"
+            isActive={activeView === 'ai-studio'}
+            onClick={setActiveView}
+          />
+
           <NavItem
             id="cognitive"
             label="Blocs Cognitifs"
@@ -223,12 +186,12 @@ export default function App() {
         </div>
       </nav>
 
-      {/* --- ZONE PRINCIPALE --- */}
       <main className="main-content">
         <header className="view-header">
           <h1 className="text-primary">GenAptitude</h1>
           <span className="view-title">
             {activeView === 'assistant' && ' / Assistant Ingénieur'}
+            {activeView === 'ai-studio' && ' / AI Kernel Studio'}
             {activeView === 'dictionary' && ' / Dictionnaire de Données'}
             {activeView === 'cognitive' && ' / Moteur Cognitif (WASM)'}
             {activeView === 'blockchain' && ' / Réseau & Traçabilité'}
@@ -238,134 +201,31 @@ export default function App() {
             {activeView === 'settings' && ' / Paramètres'}
           </span>
         </header>
-
         <div className="view-body">{renderContent()}</div>
       </main>
 
-      {/* --- STYLES GLOBAUX DU LAYOUT --- */}
       <style>{`
-        .app-shell {
-          display: flex;
-          height: 100vh;
-          width: 100vw;
-          background-color: var(--color-gray-50);
-          color: var(--color-gray-900);
-          overflow: hidden;
-        }
-
-        /* Sidebar Styling */
-        .sidebar {
-          width: 70px; /* Un peu plus large pour les icônes */
-          background-color: var(--surface-secondary);
-          border-right: 1px solid var(--color-gray-200);
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          padding: 16px 0;
-          z-index: 10;
-          transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        
-        .sidebar:hover {
-           width: 240px; /* Assez large pour lire les titres */
-           align-items: stretch;
-           padding: 16px;
-        }
-
-        .logo-area {
-          margin-bottom: 24px;
-          display: flex;
-          justify-content: center;
-          height: 40px;
-          align-items: center;
-        }
-
-        .nav-items {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-          flex: 1;
-          width: 100%;
-          overflow-y: auto;
-        }
-
-        .nav-group-label {
-          font-size: 0.75rem;
-          text-transform: uppercase;
-          color: var(--color-gray-400);
-          margin: 16px 0 8px 12px;
-          font-weight: 600;
-          display: none; /* Caché quand replié */
-          white-space: nowrap;
-        }
-
-        .sidebar:hover .nav-group-label {
-          display: block;
-        }
-
-        .nav-footer {
-            width: 100%;
-            border-top: 1px solid var(--color-gray-200);
-            padding-top: 8px;
-            margin-top: 8px;
-        }
-
-        /* Main Content Styling */
-        .main-content {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          min-width: 0;
-        }
-
-        .view-header {
-          height: 60px;
-          border-bottom: 1px solid var(--color-gray-200);
-          background-color: var(--surface-primary);
-          display: flex;
-          align-items: center;
-          padding: 0 24px;
-          gap: 12px;
-        }
-        
+        .app-shell { display: flex; height: 100vh; width: 100vw; background-color: var(--color-gray-50); color: var(--color-gray-900); overflow: hidden; }
+        .sidebar { width: 70px; background-color: var(--surface-secondary); border-right: 1px solid var(--color-gray-200); display: flex; flex-direction: column; align-items: center; padding: 16px 0; z-index: 10; transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .sidebar:hover { width: 240px; align-items: stretch; padding: 16px; }
+        .logo-area { margin-bottom: 24px; display: flex; justify-content: center; height: 40px; align-items: center; }
+        .nav-items { display: flex; flex-direction: column; gap: 4px; flex: 1; width: 100%; overflow-y: auto; }
+        .nav-group-label { font-size: 0.75rem; text-transform: uppercase; color: var(--color-gray-400); margin: 16px 0 8px 12px; font-weight: 600; display: none; white-space: nowrap; }
+        .sidebar:hover .nav-group-label { display: block; }
+        .nav-footer { width: 100%; border-top: 1px solid var(--color-gray-200); padding-top: 8px; margin-top: 8px; }
+        .main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+        .view-header { height: 60px; border-bottom: 1px solid var(--color-gray-200); background-color: var(--surface-primary); display: flex; align-items: center; padding: 0 24px; gap: 12px; }
         .view-header h1 { font-size: 1.2rem; margin: 0; font-weight: 700; }
         .view-title { color: var(--color-gray-500); font-size: 1rem; }
-
-        .view-body {
-          flex: 1;
-          overflow: auto;
-          padding: 0;
-          position: relative;
-        }
-
-        /* Placeholder Views Styling */
-        .placeholder-container {
-          padding: 40px;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          height: 100%;
-          color: var(--color-gray-500);
-          text-align: center;
-        }
-        .placeholder-icon { font-size: 4rem; margin-bottom: 20px; opacity: 0.5; }
+        .view-body { flex: 1; overflow: auto; padding: 0; position: relative; }
+        .placeholder-container { padding: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--color-gray-500); text-align: center; }
         .description { max-width: 500px; margin-top: 10px; line-height: 1.5; }
-        .action-btn {
-          margin-top: 20px;
-          padding: 10px 20px;
-          background: var(--color-primary);
-          color: white;
-          border: none;
-          border-radius: 6px;
-          cursor: pointer;
-        }
+        .action-btn { margin-top: 20px; padding: 10px 20px; background: var(--color-primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
       `}</style>
     </div>
   );
 }
 
-// --- Sous-composant NavItem ---
 interface NavItemProps {
   id: ViewId;
   label: string;
@@ -373,7 +233,6 @@ interface NavItemProps {
   isActive: boolean;
   onClick: (id: ViewId) => void;
 }
-
 function NavItem({ id, label, icon, isActive, onClick }: NavItemProps) {
   return (
     <button
@@ -383,52 +242,14 @@ function NavItem({ id, label, icon, isActive, onClick }: NavItemProps) {
     >
       <span className="icon">{icon}</span>
       <span className="label">{label}</span>
-
       <style>{`
-        .nav-btn {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 10px 12px;
-          border: none;
-          background: transparent;
-          color: var(--color-gray-500);
-          border-radius: 8px;
-          cursor: pointer;
-          transition: all 0.2s ease;
-          width: 100%;
-          justify-content: center; /* Centré quand replié */
-          height: 44px;
-        }
-        
-        .sidebar:hover .nav-btn {
-            justify-content: flex-start; /* Aligné gauche quand déplié */
-        }
-
-        .nav-btn:hover {
-          background-color: var(--color-gray-200);
-          color: var(--color-gray-900);
-        }
-
-        .nav-btn.active {
-          background-color: var(--color-primary-light);
-          color: var(--color-white);
-          background: var(--gradient-primary);
-        }
-
+        .nav-btn { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: none; background: transparent; color: var(--color-gray-500); border-radius: 8px; cursor: pointer; transition: all 0.2s ease; width: 100%; justify-content: center; height: 44px; }
+        .sidebar:hover .nav-btn { justify-content: flex-start; }
+        .nav-btn:hover { background-color: var(--color-gray-200); color: var(--color-gray-900); }
+        .nav-btn.active { background-color: var(--color-primary-light); color: var(--color-white); background: var(--gradient-primary); }
         .icon { font-size: 1.2rem; line-height: 1; min-width: 24px; text-align: center; }
-        
-        .label {
-          font-size: 0.9rem;
-          font-weight: 500;
-          white-space: nowrap;
-          display: none; /* Caché quand replié */
-          opacity: 0;
-          animation: fadeIn 0.3s forwards;
-        }
-
+        .label { font-size: 0.9rem; font-weight: 500; white-space: nowrap; display: none; opacity: 0; animation: fadeIn 0.3s forwards; }
         .sidebar:hover .label { display: block; }
-        
         @keyframes fadeIn { to { opacity: 1; } }
       `}</style>
     </button>

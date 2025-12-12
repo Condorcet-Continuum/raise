@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod assurance;
 pub mod context;
 pub mod llm;
 pub mod nlp;

@@ -1,257 +1,231 @@
 import { useState, useEffect } from 'react';
-import './styles/variables.css';
 import './styles/globals.css';
 
-// --- Composants ---
-import { ChatInterface } from '@/components/ai-chat/ChatInterface'; // <--- LE RETOUR DU CHAT !
-import AiDashboard from '@/components/ai-chat/AiDashboard'; // <--- LE STUDIO TECHNIQUE
-import { JsonDbTester } from '@/components/JsonDbTester';
-import { DataDictionary } from '@/components/model-viewer/DataDictionary';
-import { BlockchainToast } from '@/components/demo/BlockchainToast';
-import CognitiveTester from '@/components/CognitiveTester';
-import CodeGenerator from '@/components/codegen/CodeGenerator';
-import GeneticsDashboard from '@/components/genetics/GeneticsDashboard';
+// --- TYPES & UTILS ---
+import { MOCK_PROJECT } from '@/utils/mock-data';
 
-// --- Services & Store ---
-import { modelService } from '@/services/model-service';
+// --- STORES ---
 import { useModelStore } from '@/store/model-store';
+// On supprime useUiStore car 'theme' n'était pas utilisé
 
-// --- Types ---
-type ViewId =
-  | 'assistant' // Le Chat utilisateur
-  | 'ai-studio' // La console technique (LLM, NLP...)
-  | 'dictionary'
-  | 'cognitive'
-  | 'blockchain'
-  | 'codegen'
-  | 'genetics'
-  | 'admin-db'
-  | 'settings';
+// --- LAYOUT ---
+import { MainLayout } from '@/components/layout/MainLayout';
+
+// --- MODULES ---
+import CapellaViewer from '@/components/model-viewer/CapellaViewer';
+import GeneticsDashboard from '@/components/genetics/GeneticsDashboard';
+import CodeGenerator from '@/components/codegen/CodeGenerator';
+import DiagramCanvas from '@/components/diagram-editor/DiagramCanvas';
+import WorkflowCanvas from '@/components/workflow-designer/WorkflowCanvas';
+import { BlockchainToast } from '@/components/blockchain/BlockchainToast';
+import CognitiveAnalysis from '@/components/cognitive/CognitiveAnalysis';
+import AssuranceDashboard from '@/components/assurance/AssuranceDashboard';
+import MBAIEView from '@/components/ai-chat/MBAIEView';
+// CORRECTION 1 : Import par défaut (sans les accolades)
+import SettingsPage from '@/components/settings/SettingsPage';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewId>('assistant');
-  const [triggerBlockchain, setTriggerBlockchain] = useState(false);
-  const setProject = useModelStore((state) => state.setProject);
+  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [showBlockchainToast, setShowBlockchainToast] = useState(false);
 
+  const { project, setProject } = useModelStore();
+
+  // CORRECTION 2 : Suppression de la ligne inutilisée 'const theme = ...'
+
+  // --- BOOTSTRAP ---
   useEffect(() => {
-    const initApp = async () => {
-      try {
-        console.log('🚀 Démarrage...');
-        const model = await modelService.loadProjectModel('un2', '_system');
-        console.log('🔍 Données reçues:', model);
-        setProject(model);
-      } catch (error) {
-        console.error(error);
-      }
-    };
-    initApp();
+    console.log('🚀 Démarrage de GenAptitude (Frontend + Tauri)...');
+    const timer = setTimeout(() => {
+      console.log('📦 Chargement du projet Mock (Démo)...');
+      setProject(MOCK_PROJECT);
+    }, 500);
+    return () => clearTimeout(timer);
   }, [setProject]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === 'b' && !e.ctrlKey) {
-        if ((e.target as HTMLElement).tagName !== 'INPUT') setTriggerBlockchain(true);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
+  // --- ROUTING ---
   const renderContent = () => {
-    switch (activeView) {
-      case 'assistant':
-        return <ChatInterface />; // <--- VOTRE CHAT EST LÀ
-      case 'ai-studio':
-        return <AiDashboard />; // <--- LES INTERNES SONT LÀ
-      case 'dictionary':
-        return <DataDictionary />;
-      case 'cognitive':
-        return <CognitiveTester />;
-      case 'codegen':
-        return <CodeGenerator />;
+    switch (currentPage) {
+      case 'model':
+        return <CapellaViewer />;
       case 'genetics':
         return <GeneticsDashboard />;
-      case 'admin-db':
-        return <JsonDbTester />;
+      case 'codegen':
+        return <CodeGenerator />;
+      case 'diagram':
+        return <DiagramCanvas />;
+      case 'workflow':
+        return <WorkflowCanvas />;
+      case 'settings':
+        return <SettingsPage />; // Utilisation du composant importé
+
+      case 'ai':
+        return <MBAIEView />;
 
       case 'blockchain':
         return (
-          <div className="placeholder-container">
-            <div className="placeholder-icon">🔗</div>
-            <h2>Blockchain & Réseau</h2>
-            <p className="description">Visualisation Hyperledger Fabric & VPN.</p>
-            <button className="action-btn" onClick={() => setTriggerBlockchain(true)}>
-              Test Toast
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              height: '100%',
+              textAlign: 'center',
+              color: 'var(--text-main)',
+              gap: 'var(--spacing-4)',
+            }}
+          >
+            <div style={{ fontSize: '4rem', marginBottom: 'var(--spacing-2)' }}>🔗</div>
+            <h2 style={{ fontSize: 'var(--font-size-2xl)' }}>Blockchain Ledger Demo</h2>
+            <p style={{ maxWidth: 500, color: 'var(--text-muted)', lineHeight: '1.6' }}>
+              Cette interface simule l'interaction avec le backend Rust connecté à{' '}
+              <strong>Hyperledger Fabric</strong>.
+            </p>
+            <button
+              onClick={() => {
+                setShowBlockchainToast(true);
+                setTimeout(() => setShowBlockchainToast(false), 3000);
+              }}
+              style={{
+                padding: '12px 24px',
+                backgroundColor: 'var(--color-primary)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                fontSize: '1rem',
+                fontWeight: 'bold',
+                boxShadow: 'var(--shadow-md)',
+              }}
+            >
+              Ancrer une Preuve
             </button>
           </div>
         );
-
-      case 'settings':
+      case 'cognitive':
+        return <CognitiveAnalysis />;
+      case 'assurance':
+        return <AssuranceDashboard />;
+      case 'dashboard':
+      default:
         return (
-          <div className="placeholder-container">
-            <h2>Paramètres</h2>
+          <div style={{ padding: 'var(--spacing-8)', color: 'var(--text-main)' }}>
+            <h1 style={{ fontSize: 'var(--font-size-3xl)', marginBottom: 'var(--spacing-6)' }}>
+              Tableau de Bord
+            </h1>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                gap: 'var(--spacing-4)',
+              }}
+            >
+              <DashboardCard
+                title="Projet Actif"
+                value={project?.meta?.name || 'Aucun'}
+                icon="💠"
+                desc={project?.meta?.description || 'Chargement...'}
+              />
+              <DashboardCard
+                title="Éléments"
+                value={project ? String(project.meta?.elementCount || 42) : '-'}
+                icon="📊"
+                desc="Objets indexés en mémoire"
+              />
+              <DashboardCard
+                title="Moteur IA"
+                value="Connecté"
+                icon="⚡"
+                desc="Backend Rust opérationnel"
+              />
+            </div>
+            <div style={{ marginTop: 'var(--spacing-8)' }}>
+              <button
+                onClick={() => setCurrentPage('settings')}
+                style={{
+                  color: 'var(--color-primary)',
+                  background: 'transparent',
+                  border: '1px solid var(--color-primary)',
+                  padding: '8px 16px',
+                  borderRadius: 'var(--radius-sm)',
+                  cursor: 'pointer',
+                }}
+              >
+                ⚙️ Ouvrir les Paramètres
+              </button>
+            </div>
           </div>
         );
+    }
+  };
 
+  const getTitle = () => {
+    switch (currentPage) {
+      case 'model':
+        return 'Modélisation Arcadia';
+      case 'genetics':
+        return 'Optimisation Génétique';
+      case 'codegen':
+        return 'Génération de Code';
+      case 'ai':
+        return 'Assistant IA';
+      case 'diagram':
+        return 'Éditeur de Diagrammes';
+      case 'workflow':
+        return 'Workflow Designer';
+      case 'blockchain':
+        return 'Blockchain Ledger';
+      case 'cognitive':
+        return 'Blocs Cognitifs';
+      case 'assurance':
+        return 'Product Assurance & XAI';
+      case 'settings':
+        return 'Paramètres Système';
       default:
-        return <div>Vue inconnue</div>;
+        return 'GenAptitude';
     }
   };
 
   return (
-    <div className="app-shell">
-      <BlockchainToast trigger={triggerBlockchain} />
-
-      <nav className="sidebar">
-        <div className="logo-area">
-          <img src="/assets/icons/genaptitude-icon.svg" alt="G" width="32" height="32" />
-        </div>
-
-        <div className="nav-items">
-          <div className="nav-group-label">Intelligence</div>
-          {/* MENU 1 : Le Chat pour l'utilisateur */}
-          <NavItem
-            id="assistant"
-            label="Assistant IA"
-            icon="💬"
-            isActive={activeView === 'assistant'}
-            onClick={setActiveView}
-          />
-
-          {/* MENU 2 : La Technique pour l'ingénieur */}
-          <NavItem
-            id="ai-studio"
-            label="AI Studio"
-            icon="🔌"
-            isActive={activeView === 'ai-studio'}
-            onClick={setActiveView}
-          />
-
-          <NavItem
-            id="cognitive"
-            label="Blocs Cognitifs"
-            icon="🧠"
-            isActive={activeView === 'cognitive'}
-            onClick={setActiveView}
-          />
-
-          <div className="nav-group-label">Ingénierie</div>
-          <NavItem
-            id="dictionary"
-            label="Modèle & Data"
-            icon="📚"
-            isActive={activeView === 'dictionary'}
-            onClick={setActiveView}
-          />
-          <NavItem
-            id="codegen"
-            label="Générateur Code"
-            icon="⚡"
-            isActive={activeView === 'codegen'}
-            onClick={setActiveView}
-          />
-          <NavItem
-            id="genetics"
-            label="Génétique"
-            icon="🧬"
-            isActive={activeView === 'genetics'}
-            onClick={setActiveView}
-          />
-
-          <div className="nav-group-label">Infrastructure</div>
-          <NavItem
-            id="blockchain"
-            label="Blockchain"
-            icon="🔗"
-            isActive={activeView === 'blockchain'}
-            onClick={setActiveView}
-          />
-          <NavItem
-            id="admin-db"
-            label="Base de Données"
-            icon="🗄️"
-            isActive={activeView === 'admin-db'}
-            onClick={setActiveView}
-          />
-        </div>
-
-        <div className="nav-footer">
-          <NavItem
-            id="settings"
-            label="Réglages"
-            icon="⚙️"
-            isActive={activeView === 'settings'}
-            onClick={setActiveView}
-          />
-        </div>
-      </nav>
-
-      <main className="main-content">
-        <header className="view-header">
-          <h1 className="text-primary">GenAptitude</h1>
-          <span className="view-title">
-            {activeView === 'assistant' && ' / Assistant Ingénieur'}
-            {activeView === 'ai-studio' && ' / AI Kernel Studio'}
-            {activeView === 'dictionary' && ' / Dictionnaire de Données'}
-            {activeView === 'cognitive' && ' / Moteur Cognitif (WASM)'}
-            {activeView === 'blockchain' && ' / Réseau & Traçabilité'}
-            {activeView === 'codegen' && ' / Usine Logicielle'}
-            {activeView === 'genetics' && ' / Optimisation Système'}
-            {activeView === 'admin-db' && ' / Administration BDD'}
-            {activeView === 'settings' && ' / Paramètres'}
-          </span>
-        </header>
-        <div className="view-body">{renderContent()}</div>
-      </main>
-
-      <style>{`
-        .app-shell { display: flex; height: 100vh; width: 100vw; background-color: var(--color-gray-50); color: var(--color-gray-900); overflow: hidden; }
-        .sidebar { width: 70px; background-color: var(--surface-secondary); border-right: 1px solid var(--color-gray-200); display: flex; flex-direction: column; align-items: center; padding: 16px 0; z-index: 10; transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-        .sidebar:hover { width: 240px; align-items: stretch; padding: 16px; }
-        .logo-area { margin-bottom: 24px; display: flex; justify-content: center; height: 40px; align-items: center; }
-        .nav-items { display: flex; flex-direction: column; gap: 4px; flex: 1; width: 100%; overflow-y: auto; }
-        .nav-group-label { font-size: 0.75rem; text-transform: uppercase; color: var(--color-gray-400); margin: 16px 0 8px 12px; font-weight: 600; display: none; white-space: nowrap; }
-        .sidebar:hover .nav-group-label { display: block; }
-        .nav-footer { width: 100%; border-top: 1px solid var(--color-gray-200); padding-top: 8px; margin-top: 8px; }
-        .main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-        .view-header { height: 60px; border-bottom: 1px solid var(--color-gray-200); background-color: var(--surface-primary); display: flex; align-items: center; padding: 0 24px; gap: 12px; }
-        .view-header h1 { font-size: 1.2rem; margin: 0; font-weight: 700; }
-        .view-title { color: var(--color-gray-500); font-size: 1rem; }
-        .view-body { flex: 1; overflow: auto; padding: 0; position: relative; }
-        .placeholder-container { padding: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--color-gray-500); text-align: center; }
-        .description { max-width: 500px; margin-top: 10px; line-height: 1.5; }
-        .action-btn { margin-top: 20px; padding: 10px 20px; background: var(--color-primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
-      `}</style>
-    </div>
+    <MainLayout currentPage={currentPage} onNavigate={setCurrentPage} pageTitle={getTitle()}>
+      {renderContent()}
+      <BlockchainToast trigger={showBlockchainToast} />
+    </MainLayout>
   );
 }
 
-interface NavItemProps {
-  id: ViewId;
-  label: string;
-  icon: string;
-  isActive: boolean;
-  onClick: (id: ViewId) => void;
-}
-function NavItem({ id, label, icon, isActive, onClick }: NavItemProps) {
+function DashboardCard({ title, value, icon, desc }: any) {
   return (
-    <button
-      onClick={() => onClick(id)}
-      className={`nav-btn ${isActive ? 'active' : ''}`}
-      title={label}
+    <div
+      style={{
+        backgroundColor: 'var(--bg-panel)',
+        border: '1px solid var(--border-color)',
+        borderRadius: 'var(--radius-lg)',
+        padding: 'var(--spacing-6)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 'var(--spacing-2)',
+        boxShadow: 'var(--shadow-sm)',
+        transition: 'transform 0.2s',
+      }}
     >
-      <span className="icon">{icon}</span>
-      <span className="label">{label}</span>
-      <style>{`
-        .nav-btn { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: none; background: transparent; color: var(--color-gray-500); border-radius: 8px; cursor: pointer; transition: all 0.2s ease; width: 100%; justify-content: center; height: 44px; }
-        .sidebar:hover .nav-btn { justify-content: flex-start; }
-        .nav-btn:hover { background-color: var(--color-gray-200); color: var(--color-gray-900); }
-        .nav-btn.active { background-color: var(--color-primary-light); color: var(--color-white); background: var(--gradient-primary); }
-        .icon { font-size: 1.2rem; line-height: 1; min-width: 24px; text-align: center; }
-        .label { font-size: 0.9rem; font-weight: 500; white-space: nowrap; display: none; opacity: 0; animation: fadeIn 0.3s forwards; }
-        .sidebar:hover .label { display: block; }
-        @keyframes fadeIn { to { opacity: 1; } }
-      `}</style>
-    </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3
+          style={{
+            margin: 0,
+            color: 'var(--text-muted)',
+            fontSize: 'var(--font-size-sm)',
+            textTransform: 'uppercase',
+          }}
+        >
+          {title}
+        </h3>
+        <span style={{ fontSize: '1.5rem' }}>{icon}</span>
+      </div>
+      <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--text-main)' }}>
+        {value}
+      </div>
+      <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-muted)' }}>{desc}</div>
+    </div>
   );
 }

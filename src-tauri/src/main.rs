@@ -7,13 +7,14 @@ use tauri::Manager;
 
 use genaptitude::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
-    json_db_commands, model_commands,
+    json_db_commands, model_commands, traceability_commands,
 };
 use genaptitude::json_db::storage::{JsonDbConfig, StorageEngine};
 
 fn main() {
     dotenvy::dotenv().ok();
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             let db_root = if let Ok(env_path) = env::var("PATH_GENAPTITUDE_DOMAIN") {
@@ -74,7 +75,12 @@ fn main() {
             // --- GÉNÉRATEUR DE CODE ---
             codegen_commands::generate_source_code,
             // BLOCS COGNITIFS (WASM) ---
-            cognitive_commands::run_consistency_analysis
+            cognitive_commands::run_consistency_analysis,
+            // --- TRAÇABILITÉ & AUDIT (NOUVEAU) ---
+            traceability_commands::analyze_impact,
+            traceability_commands::run_compliance_audit,
+            traceability_commands::get_traceability_matrix,
+            traceability_commands::get_element_neighbors
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

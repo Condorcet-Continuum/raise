@@ -12,7 +12,6 @@ interface NamedElement {
 export function DataDictionary() {
   const { project } = useModelStore();
 
-  // 1. Ajout de l'état 'epbs'
   const [openLayers, setOpenLayers] = useState<Record<string, boolean>>({
     oa: true,
     sa: true,
@@ -23,47 +22,57 @@ export function DataDictionary() {
   });
 
   if (!project) {
-    return <div style={{ color: '#9ca3af', padding: 20 }}>Aucun modèle chargé.</div>;
+    return (
+      <div style={{ padding: 'var(--spacing-4)', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+        Aucun modèle chargé.
+      </div>
+    );
   }
 
   const toggleLayer = (layer: string) => {
     setOpenLayers((prev) => ({ ...prev, [layer]: !prev[layer] }));
   };
 
+  // Helper pour afficher une liste d'éléments
   const renderElementList = (title: string, elements: NamedElement[] | undefined, icon: string) => {
     if (!elements || elements.length === 0) return null;
     return (
-      <div style={{ marginLeft: 20, marginBottom: 10 }}>
+      <div style={{ marginLeft: 'var(--spacing-4)', marginBottom: 'var(--spacing-2)' }}>
         <h4
           style={{
-            fontSize: '0.9em',
-            color: '#9ca3af',
-            marginBottom: 5,
+            fontSize: 'var(--font-size-xs)',
+            color: 'var(--text-muted)',
+            marginBottom: 'var(--spacing-2)',
             textTransform: 'uppercase',
+            letterSpacing: '0.05em',
           }}
         >
-          {title} <span style={{ opacity: 0.5 }}>({elements.length})</span>
+          {title} <span style={{ opacity: 0.7 }}>({elements.length})</span>
         </h4>
-        <div style={{ display: 'grid', gap: 6 }}>
+        <div style={{ display: 'grid', gap: 'var(--spacing-2)' }}>
           {elements.map((el, idx) => (
             <div
               key={el.id || el.uuid || idx}
               style={{
-                background: 'var(--surface-secondary, #1f2937)',
+                backgroundColor: 'var(--bg-app)', // Fond contrasté par rapport au panel
                 padding: '8px 12px',
-                borderRadius: 4,
-                borderLeft: '3px solid var(--color-primary, #4f46e5)',
+                borderRadius: 'var(--radius-sm)',
+                borderLeft: '3px solid var(--color-primary)',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 10,
-                fontSize: '0.9em',
+                gap: 'var(--spacing-2)',
+                fontSize: 'var(--font-size-sm)',
+                color: 'var(--text-main)',
+                boxShadow: 'var(--shadow-sm)',
               }}
             >
               <span>{icon}</span>
-              <strong>{el.name || 'Sans Nom'}</strong>
+              <strong style={{ fontWeight: 'var(--font-weight-medium)' }}>
+                {el.name || 'Sans Nom'}
+              </strong>
               {el.description && (
-                <span style={{ color: '#6b7280', fontSize: '0.85em' }}>
-                  — {el.description.substring(0, 50)}...
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.9em', marginLeft: 'auto' }}>
+                  — {el.description.substring(0, 40)}...
                 </span>
               )}
             </div>
@@ -75,165 +84,180 @@ export function DataDictionary() {
 
   const p = project as any;
 
-  // Détection des couches
-  const hasOA =
-    p.oa && Object.values(p.oa).some((arr: any) => Array.isArray(arr) && arr.length > 0);
-  const hasSA =
-    p.sa && Object.values(p.sa).some((arr: any) => Array.isArray(arr) && arr.length > 0);
-  const hasLA =
-    p.la && Object.values(p.la).some((arr: any) => Array.isArray(arr) && arr.length > 0);
-  const hasPA =
-    p.pa && Object.values(p.pa).some((arr: any) => Array.isArray(arr) && arr.length > 0);
-  // 2. Détection de la couche EPBS
-  const hasEPBS =
-    p.epbs && Object.values(p.epbs).some((arr: any) => Array.isArray(arr) && arr.length > 0);
-  const hasData =
-    p.data && Object.values(p.data).some((arr: any) => Array.isArray(arr) && arr.length > 0);
+  // Helpers de détection (simplifiés)
+  const checkLayer = (layer: any) =>
+    layer && Object.values(layer).some((arr: any) => Array.isArray(arr) && arr.length > 0);
+  const hasOA = checkLayer(p.oa);
+  const hasSA = checkLayer(p.sa);
+  const hasLA = checkLayer(p.la);
+  const hasPA = checkLayer(p.pa);
+  const hasEPBS = checkLayer(p.epbs);
+  const hasData = checkLayer(p.data);
 
   return (
     <div
-      style={{ padding: '20px 40px', overflowY: 'auto', height: '100%', fontFamily: 'sans-serif' }}
+      style={{
+        padding: 'var(--spacing-4)',
+        overflowY: 'auto',
+        height: '100%',
+        fontFamily: 'var(--font-family)',
+      }}
     >
-      <header style={{ marginBottom: 30, borderBottom: '1px solid #e5e7eb', paddingBottom: 20 }}>
-        <h2 className="text-primary" style={{ margin: 0 }}>
+      <header
+        style={{
+          marginBottom: 'var(--spacing-6)',
+          borderBottom: '1px solid var(--border-color)',
+          paddingBottom: 'var(--spacing-4)',
+        }}
+      >
+        <h2 style={{ margin: 0, color: 'var(--color-primary)', fontSize: 'var(--font-size-xl)' }}>
           Explorateur de Modèle
         </h2>
-        <div style={{ color: '#6b7280', marginTop: 5 }}>
-          Projet : <strong>{p.meta?.name || p.name || 'Inconnu'}</strong>
+        <div
+          style={{
+            color: 'var(--text-muted)',
+            marginTop: 'var(--spacing-2)',
+            fontSize: 'var(--font-size-sm)',
+          }}
+        >
+          Projet :{' '}
+          <strong style={{ color: 'var(--text-main)' }}>
+            {p.meta?.name || p.name || 'Inconnu'}
+          </strong>
           <span style={{ margin: '0 10px' }}>•</span>
-          ID: <code style={{ fontSize: '0.85em' }}>{p.id || 'N/A'}</code>
+          ID:{' '}
+          <code
+            style={{
+              backgroundColor: 'var(--bg-app)',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              fontFamily: 'var(--font-family-mono)',
+            }}
+          >
+            {p.id || 'N/A'}
+          </code>
         </div>
       </header>
 
-      {/* OA */}
+      {/* Sections dynamiques */}
       {hasOA && (
-        <div style={{ marginBottom: 30 }}>
-          <div onClick={() => toggleLayer('oa')} style={styles.layerHeader('#f59e0b')}>
-            <span>🌍 Analyse Opérationnelle (OA)</span>
-            <span>{openLayers.oa ? '▼' : '▶'}</span>
-          </div>
-          {openLayers.oa && (
-            <div style={styles.layerContent}>
-              {renderElementList('Acteurs Opérationnels', p.oa.actors, '👤')}
-              {renderElementList('Activités Opérationnelles', p.oa.activities, '⚙️')}
-              {renderElementList('Entités', p.oa.entities, '🏢')}
-            </div>
-          )}
-        </div>
+        <LayerSection
+          title="🌍 Analyse Opérationnelle (OA)"
+          color="#f59e0b"
+          isOpen={openLayers.oa}
+          onToggle={() => toggleLayer('oa')}
+        >
+          {renderElementList('Acteurs', p.oa.actors, '👤')}
+          {renderElementList('Activités', p.oa.activities, '⚙️')}
+        </LayerSection>
       )}
 
-      {/* SA */}
       {hasSA && (
-        <div style={{ marginBottom: 30 }}>
-          <div onClick={() => toggleLayer('sa')} style={styles.layerHeader('#10b981')}>
-            <span>🔭 Analyse Système (SA)</span>
-            <span>{openLayers.sa ? '▼' : '▶'}</span>
-          </div>
-          {openLayers.sa && (
-            <div style={styles.layerContent}>
-              {renderElementList('Acteurs Système', p.sa.actors, '👤')}
-              {renderElementList('Capacités Système', p.sa.capabilities, '🎯')}
-              {renderElementList('Fonctions Système', p.sa.functions, 'ƒ(x)')}
-            </div>
-          )}
-        </div>
+        <LayerSection
+          title="🔭 Analyse Système (SA)"
+          color="#10b981"
+          isOpen={openLayers.sa}
+          onToggle={() => toggleLayer('sa')}
+        >
+          {renderElementList('Acteurs', p.sa.actors, '👤')}
+          {renderElementList('Fonctions', p.sa.functions, 'ƒ')}
+        </LayerSection>
       )}
 
-      {/* LA */}
       {hasLA && (
-        <div style={{ marginBottom: 30 }}>
-          <div onClick={() => toggleLayer('la')} style={styles.layerHeader('#3b82f6')}>
-            <span>🧠 Architecture Logique (LA)</span>
-            <span>{openLayers.la ? '▼' : '▶'}</span>
-          </div>
-          {openLayers.la && (
-            <div style={styles.layerContent}>
-              {renderElementList('Composants Logiques', p.la.components, '📦')}
-              {renderElementList('Fonctions Logiques', p.la.functions, 'ƒ(x)')}
-              {renderElementList('Acteurs Logiques', p.la.actors, '👤')}
-            </div>
-          )}
-        </div>
+        <LayerSection
+          title="🧠 Architecture Logique (LA)"
+          color="#3b82f6"
+          isOpen={openLayers.la}
+          onToggle={() => toggleLayer('la')}
+        >
+          {renderElementList('Composants', p.la.components, '📦')}
+          {renderElementList('Fonctions', p.la.functions, 'ƒ')}
+        </LayerSection>
       )}
 
-      {/* PA */}
       {hasPA && (
-        <div style={{ marginBottom: 30 }}>
-          <div onClick={() => toggleLayer('pa')} style={styles.layerHeader('#8b5cf6')}>
-            <span>⚙️ Architecture Physique (PA)</span>
-            <span>{openLayers.pa ? '▼' : '▶'}</span>
-          </div>
-          {openLayers.pa && (
-            <div style={styles.layerContent}>
-              {renderElementList('Composants Physiques (Node)', p.pa.components, '🖥️')}
-              {renderElementList('Acteurs Physiques', p.pa.actors, '👤')}
-            </div>
-          )}
-        </div>
+        <LayerSection
+          title="⚙️ Architecture Physique (PA)"
+          color="#8b5cf6"
+          isOpen={openLayers.pa}
+          onToggle={() => toggleLayer('pa')}
+        >
+          {renderElementList('Composants (Node)', p.pa.components, '🖥️')}
+        </LayerSection>
       )}
 
-      {/* 3. COUCHE EPBS (Nouveau) */}
       {hasEPBS && (
-        <div style={{ marginBottom: 30 }}>
-          <div onClick={() => toggleLayer('epbs')} style={styles.layerHeader('#db2777')}>
-            <span>📦 End Product Breakdown (EPBS)</span>
-            <span>{openLayers.epbs ? '▼' : '▶'}</span>
-          </div>
-          {openLayers.epbs && (
-            <div style={styles.layerContent}>
-              {renderElementList('Articles de Configuration (CI)', p.epbs.configurationItems, '🍱')}
-            </div>
-          )}
-        </div>
+        <LayerSection
+          title="📦 End Product Breakdown (EPBS)"
+          color="#db2777"
+          isOpen={openLayers.epbs}
+          onToggle={() => toggleLayer('epbs')}
+        >
+          {renderElementList('Configuration Items (CI)', p.epbs.configurationItems, '🍱')}
+        </LayerSection>
       )}
 
-      {/* DATA */}
-      <div style={{ marginBottom: 30 }}>
-        <div onClick={() => toggleLayer('data')} style={styles.layerHeader('#6b7280')}>
-          <span>📚 Dictionnaire de Données (Commun)</span>
-          <span>{openLayers.data ? '▼' : '▶'}</span>
-        </div>
-        {openLayers.data && (
-          <div style={styles.layerContent}>
-            {!hasData ? (
-              <div style={{ padding: 10, fontStyle: 'italic', color: '#9ca3af' }}>
-                Aucune définition de donnée partagée.
-              </div>
-            ) : (
-              <>
-                {renderElementList('Classes', p.data?.classes, '🏷️')}
-                {renderElementList('Types de Données', p.data?.dataTypes, '🔢')}
-                {renderElementList("Items d'Échange", p.data?.exchangeItems, '🔄')}
-              </>
-            )}
+      <LayerSection
+        title="📚 Dictionnaire de Données"
+        color="var(--color-gray-500)"
+        isOpen={openLayers.data}
+        onToggle={() => toggleLayer('data')}
+      >
+        {hasData ? (
+          <>
+            {renderElementList('Classes', p.data?.classes, '🏷️')}
+            {renderElementList('Types', p.data?.dataTypes, '🔢')}
+          </>
+        ) : (
+          <div style={{ padding: '10px', fontStyle: 'italic', color: 'var(--text-muted)' }}>
+            Vide
           </div>
         )}
-      </div>
+      </LayerSection>
     </div>
   );
 }
 
-// Styles inchangés
-const styles = {
-  layerHeader: (color: string) => ({
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '12px 16px',
-    backgroundColor: 'white',
-    borderLeft: `5px solid ${color}`,
-    borderRadius: '6px',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-    fontSize: '1.1em',
-    color: '#1f2937',
-    marginBottom: 10,
-    userSelect: 'none' as const,
-  }),
-  layerContent: {
-    paddingLeft: 10,
-    borderLeft: '1px dashed #e5e7eb',
-    marginLeft: 20,
-  },
-};
+// Composant interne pour l'en-tête de section
+function LayerSection({ title, color, isOpen, onToggle, children }: any) {
+  return (
+    <div style={{ marginBottom: 'var(--spacing-6)' }}>
+      <div
+        onClick={onToggle}
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: 'var(--spacing-3)',
+          backgroundColor: 'var(--bg-panel)', // Adaptatif
+          borderLeft: `5px solid ${color}`,
+          border: '1px solid var(--border-color)',
+          borderLeftWidth: '5px', // Priorité sur le border global
+          borderLeftColor: color,
+          borderRadius: 'var(--radius-md)',
+          cursor: 'pointer',
+          fontWeight: 'var(--font-weight-bold)',
+          color: 'var(--text-main)',
+          marginBottom: 'var(--spacing-2)',
+          boxShadow: 'var(--shadow-sm)',
+          transition: 'var(--transition-fast)',
+        }}
+      >
+        <span>{title}</span>
+        <span style={{ fontSize: '0.8em', color: 'var(--text-muted)' }}>{isOpen ? '▼' : '▶'}</span>
+      </div>
+      {isOpen && (
+        <div
+          style={{
+            paddingLeft: 'var(--spacing-4)',
+            borderLeft: '1px dashed var(--border-color)',
+            marginLeft: 'var(--spacing-4)',
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}

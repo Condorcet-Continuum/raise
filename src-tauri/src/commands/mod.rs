@@ -5,3 +5,4 @@ pub mod cognitive_commands;
 pub mod genetics_commands;
 pub mod json_db_commands;
 pub mod model_commands;
+pub mod traceability_commands;

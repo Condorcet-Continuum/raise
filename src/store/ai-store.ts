@@ -1,24 +1,24 @@
-import { create } from 'zustand'
+import { create } from 'zustand';
 
-export type AiRole = 'user' | 'assistant' | 'system'
+export type AiRole = 'user' | 'assistant' | 'system';
 
 export interface ChatMessage {
-  id: string
-  role: AiRole
-  content: string
-  createdAt: string
-  meta?: Record<string, unknown>
+  id: string;
+  role: AiRole;
+  content: string;
+  createdAt: string;
+  meta?: Record<string, unknown>;
 }
 
 export interface AiStoreState {
-  messages: ChatMessage[]
-  isThinking: boolean
-  error?: string
+  messages: ChatMessage[];
+  isThinking: boolean;
+  error?: string;
 
-  addMessage: (msg: ChatMessage) => void
-  clear: () => void
-  setThinking: (value: boolean) => void
-  setError: (error?: string) => void
+  addMessage: (msg: ChatMessage) => void;
+  clear: () => void;
+  setThinking: (value: boolean) => void;
+  setError: (error?: string) => void;
 }
 
 export const useAiStore = create<AiStoreState>((set) => ({
@@ -36,4 +36,4 @@ export const useAiStore = create<AiStoreState>((set) => ({
   setThinking: (value) => set({ isThinking: value }),
 
   setError: (error) => set({ error }),
-}))
+}));
