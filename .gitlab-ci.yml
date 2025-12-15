@@ -13,9 +13,8 @@ default:
   
   # Cette étape s'exécute avant chaque job pour s'assurer que les outils sont trouvés
   before_script:
-    - export PATH=$HOME/.cargo/bin:$PATH
-    # Tentative d'ajouter Node au path si NVM est utilisé (ajustez le chemin v20 si nécessaire)
-    - export PATH=$HOME/.nvm/versions/node/v20*/bin:$PATH:/usr/local/bin:/usr/bin
+    - export PATH=/home/zair/.cargo/bin:$PATH
+    - export PATH=/home/zair/.nvm/versions/node/v21.7.1/bin:$PATH:/usr/local/bin:/usr/bin
     - echo "🔍 Debug Environment Check:"
     - node -v || echo "⚠️ Node introuvable"
     - cargo --version || echo "⚠️ Cargo introuvable"
