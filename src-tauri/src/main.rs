@@ -8,13 +8,13 @@ use tauri::Manager;
 // 1. On donne un alias explicite au Mutex Async
 use tokio::sync::Mutex as AsyncMutex;
 
+use genaptitude::ai::training;
 use genaptitude::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
     json_db_commands, model_commands, traceability_commands, utils_commands, workflow_commands,
 };
 // Import du State IA
 use genaptitude::commands::ai_commands::AiState;
-
 use genaptitude::json_db::storage::{JsonDbConfig, StorageEngine};
 
 // Import des structures d'état
@@ -144,7 +144,8 @@ fn main() {
             model_commands::load_project_model,
             // --- IA & AGENTS ---
             ai_commands::ai_chat,
-            ai_commands::ai_reset, // <--- AJOUT COMMANDE RESET
+            ai_commands::ai_reset,
+            training::dataset::ai_export_dataset,
             // --- BLOCKCHAIN ---
             blockchain_commands::fabric_ping,
             blockchain_commands::fabric_submit_transaction,
