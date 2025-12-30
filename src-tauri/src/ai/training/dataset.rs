@@ -88,7 +88,7 @@ pub fn export_logic(
                     doc_name, doc_id, col_name, space)
             });
 
-            if let Err(e) = writeln!(file, "{}", training_entry.to_string()) {
+            if let Err(e) = writeln!(file, "{}", training_entry) {
                 eprintln!("❌ Erreur écriture ligne : {}", e);
             }
             count += 1;

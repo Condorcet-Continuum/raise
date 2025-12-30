@@ -17,11 +17,33 @@ pub struct Migration {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MigrationStep {
-    CreateCollection { name: String, schema: serde_json::Value },
-    DropCollection { name: String },
-    AddField { collection: String, field: String, default: Option<serde_json::Value> },
-    RemoveField { collection: String, field: String },
-    RenameField { collection: String, old_name: String, new_name: String },
-    CreateIndex { collection: String, fields: Vec<String> },
-    DropIndex { collection: String, name: String },
+    CreateCollection {
+        name: String,
+        schema: serde_json::Value,
+    },
+    DropCollection {
+        name: String,
+    },
+    AddField {
+        collection: String,
+        field: String,
+        default: Option<serde_json::Value>,
+    },
+    RemoveField {
+        collection: String,
+        field: String,
+    },
+    RenameField {
+        collection: String,
+        old_name: String,
+        new_name: String,
+    },
+    CreateIndex {
+        collection: String,
+        fields: Vec<String>,
+    },
+    DropIndex {
+        collection: String,
+        name: String,
+    },
 }

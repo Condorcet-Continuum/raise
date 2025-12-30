@@ -47,11 +47,7 @@ impl CognitivePlugin {
         // On cherche la fonction exportée "run" ou "_start"
         let run_func = self
             .instance
-            .get_typed_func::<(), i32>(&mut self.store, "run")
-            .or_else(|_| {
-                // Fallback si la signature est différente, ou utiliser _start pour WASI
-                Err(anyhow!("Fonction 'run' introuvable dans le module WASM"))
-            })?;
+            .get_typed_func::<(), i32>(&mut self.store, "run").map_err(|_| anyhow!("Fonction 'run' introuvable dans le module WASM"))?;
 
         let result = run_func.call(&mut self.store, ())?;
         Ok(result)
