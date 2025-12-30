@@ -1,139 +1,90 @@
-use anyhow::{Context, Result};
-use serde::Serialize;
-use std::fs;
-use std::path::Path;
-use wasmtime::*;
+use super::runtime::PluginContext;
+use crate::json_db::collections::manager::CollectionsManager;
+use anyhow::Result;
+use serde_json::Value;
+use wasmtime::{Caller, Extern, Linker};
 
-pub struct CognitiveManager {
-    engine: Engine,
+/// Enregistre les fonctions DB dans le linker WASM
+pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> Result<()> {
+    // FONCTION : host_db_read(ptr, len) -> 1 (succès) / 0 (échec)
+    // Le plugin envoie une requête JSON, l'hôte l'exécute et affiche le résultat (pour l'instant)
+    linker.func_wrap(
+        "env",
+        "host_db_read",
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> i32 {
+            // 1. Lire la mémoire du WASM pour récupérer la requête
+            let mem = match caller.get_export("memory") {
+                Some(Extern::Memory(m)) => m,
+                _ => return 0,
+            };
+
+            let request_str = match read_string_from_wasm(&mut caller, &mem, ptr, len) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("🔥 [WASM Error] Memory access: {}", e);
+                    return 0;
+                }
+            };
+
+            // 2. Interpréter la requête (ex: { "collection": "users", "id": "admin" })
+            println!("🧠 [Cognitive Bridge] Requête reçue : {}", request_str);
+
+            let response = match serde_json::from_str::<Value>(&request_str) {
+                Ok(req) => {
+                    // Accès sécurisé au contexte (Storage)
+                    let ctx = caller.data();
+                    let mgr = CollectionsManager::new(&ctx.storage, &ctx.space, &ctx.db);
+
+                    let col = req["collection"].as_str().unwrap_or("");
+                    let id = req["id"].as_str().unwrap_or("");
+
+                    match mgr.get(col, id) {
+                        Ok(Some(doc)) => doc.to_string(),
+                        Ok(None) => String::from("null"),
+                        Err(e) => format!("{{ \"error\": \"{}\" }}", e),
+                    }
+                }
+                Err(_) => String::from("{ \"error\": \"Invalid JSON\" }"),
+            };
+
+            println!("🧠 [Cognitive Bridge] Réponse générée : {}", response);
+
+            // TODO: Pour un système complet, il faudrait écrire 'response' dans la mémoire du WASM
+            // via une fonction d'allocation exportée par le plugin (ex: 'malloc').
+            // Pour l'instant, on considère que l'action est faite côté Host.
+
+            1 // Succès
+        },
+    )?;
+
+    // FONCTION : host_log(ptr, len)
+    linker.func_wrap(
+        "env",
+        "host_log",
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| {
+            let mem = match caller.get_export("memory") {
+                Some(Extern::Memory(m)) => m,
+                _ => return,
+            };
+            if let Ok(msg) = read_string_from_wasm(&mut caller, &mem, ptr, len) {
+                println!("🤖 [PLUGIN LOG]: {}", msg);
+            }
+        },
+    )?;
+
+    Ok(())
 }
 
-impl Default for CognitiveManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CognitiveManager {
-    pub fn new() -> Self {
-        let engine = Engine::default();
-        Self { engine }
-    }
-
-    pub fn run_block<T: Serialize>(&self, plugin_path: &Path, input_data: &T) -> Result<String> {
-        // 1. Lecture fichier
-        let wasm_bytes = fs::read(plugin_path)
-            .with_context(|| format!("Plugin introuvable : {:?}", plugin_path))?;
-
-        // 2. Setup Wasmtime
-        let module = Module::new(&self.engine, &wasm_bytes)?;
-        let mut store = Store::new(&self.engine, ());
-        let instance = Instance::new(&mut store, &module, &[])?;
-
-        // 3. Bindings (alloc/run)
-        let alloc_fn = instance.get_typed_func::<i32, i32>(&mut store, "alloc")?;
-        let run_fn = instance.get_typed_func::<(i32, i32), i64>(&mut store, "run_analysis")?;
-        let memory = instance
-            .get_memory(&mut store, "memory")
-            .context("Mémoire WASM non exportée")?;
-
-        // 4. Input -> WASM
-        let input_json = serde_json::to_string(input_data)?;
-        let input_bytes = input_json.as_bytes();
-        let input_len = input_bytes.len() as i32;
-        let input_ptr = alloc_fn.call(&mut store, input_len)?;
-        memory.write(&mut store, input_ptr as usize, input_bytes)?;
-
-        // 5. Exécution
-        let packed_result = run_fn.call(&mut store, (input_ptr, input_len))?;
-
-        // 6. Output -> Host
-        let result_ptr = (packed_result >> 32) as usize;
-        let result_len = (packed_result & 0xFFFFFFFF) as usize;
-        let mut buffer = vec![0u8; result_len];
-        memory.read(&mut store, result_ptr, &mut buffer)?;
-
-        Ok(String::from_utf8(buffer)?)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
-    // Structure locale minimaliste pour simuler CognitiveModel
-    // (On pourrait importer genaptitude-core-api si on l'ajoutait aux dev-dependencies,
-    // mais ici on utilise serde_json::Value pour rester souple)
-    #[derive(Serialize)]
-    struct MockModel {
-        id: String,
-        elements: HashMap<String, MockElement>,
-        metadata: HashMap<String, String>,
-    }
-
-    #[derive(Serialize)]
-    struct MockElement {
-        name: String,
-        kind: String,
-        properties: HashMap<String, String>,
-    }
-
-    #[test]
-    fn test_integration_load_and_run_wasm() {
-        // 1. Localiser le fichier WASM compilé
-        // On remonte de src-tauri/src/plugins/ vers la racine du projet
-        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let wasm_path = project_root.join("wasm-modules/analyzers/consistency_basic.wasm");
-
-        // Si le fichier n'existe pas, on ignore le test (pour éviter de casser le CI si pas buildé)
-        if !wasm_path.exists() {
-            println!("⚠️ Test ignoré : Le fichier WASM n'est pas présent à {:?}. Lancez ./scripts/build_plugins.sh d'abord.", wasm_path);
-            return;
-        }
-
-        // 2. Préparer les données
-        let mut elements = HashMap::new();
-        elements.insert(
-            "elt-1".to_string(),
-            MockElement {
-                name: "Test Integration".to_string(),
-                kind: "Unit".to_string(),
-                properties: HashMap::new(),
-            },
-        );
-
-        let input_data = MockModel {
-            id: "integration-test".to_string(),
-            elements,
-            metadata: HashMap::new(),
-        };
-
-        // 3. Lancer le manager
-        let manager = CognitiveManager::new();
-        let result = manager.run_block(&wasm_path, &input_data);
-
-        // 4. Vérification
-        assert!(
-            result.is_ok(),
-            "L'exécution du WASM a échoué : {:?}",
-            result.err()
-        );
-
-        let output_json = result.unwrap();
-        println!("Sortie du WASM : {}", output_json);
-
-        assert!(
-            output_json.contains("fr.genaptitude.blocks.consistency"),
-            "L'ID du bloc est incorrect"
-        );
-        assert!(
-            output_json.contains("Success"),
-            "Le statut devrait être Success"
-        );
-    }
+/// Helper pour extraire une String de la mémoire linéaire du WASM
+fn read_string_from_wasm(
+    caller: &mut Caller<'_, PluginContext>,
+    memory: &wasmtime::Memory,
+    ptr: i32,
+    len: i32,
+) -> Result<String> {
+    let data = memory
+        .data(&caller)
+        .get(ptr as usize..(ptr + len) as usize)
+        .ok_or(anyhow::anyhow!("Out of bounds"))?;
+    Ok(String::from_utf8(data.to_vec())?)
 }

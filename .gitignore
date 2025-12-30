@@ -43,5 +43,12 @@ Thumbs.db
 src-tauri/target
 src-tauri/Cargo.lock
 
-
+# Cache IA (Modèles FastEmbed)
 src-tauri/.fastembed_cache/
+
+# --- PYTHON TRAINING & TOOLS ---
+src-tauri/tools/trainer/venv/
+src-tauri/tools/trainer/__pycache__/
+src-tauri/tools/trainer/*.pyc
+src-tauri/tools/trainer/results/
+src-tauri/tools/trainer/dataset.jsonl

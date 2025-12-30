@@ -1,2 +1,7 @@
 pub mod cognitive;
-pub mod filesystem_extended; // C'était déjà là (ou vide) // <-- Ajoutez ceci
+pub mod filesystem_extended;
+pub mod manager;
+pub mod runtime;
+
+#[cfg(test)]
+mod tests;

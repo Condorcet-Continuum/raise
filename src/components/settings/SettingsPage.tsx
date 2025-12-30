@@ -5,6 +5,9 @@ import { modelService } from '@/services/model-service';
 import { Button } from '@/components/shared/Button';
 import { parseError } from '@/utils/parsers';
 
+// ✅ IMPORT DU BOUTON D'EXPORT
+import AiExportButton from '@/components/ai-chat/AiExportButton';
+
 export default function SettingsPage() {
   const settings = useSettingsStore();
   const setProject = useModelStore((state) => state.setProject);
@@ -71,7 +74,7 @@ export default function SettingsPage() {
         Paramètres du Système
       </h2>
 
-      {/* SECTION IA */}
+      {/* SECTION IA : CONFIGURATION */}
       <div style={sectionStyle}>
         <h3 style={{ marginTop: 0, color: 'var(--color-primary)' }}>
           🤖 Intelligence Artificielle
@@ -100,6 +103,28 @@ export default function SettingsPage() {
         <div style={{ fontSize: '0.85em', color: 'var(--color-info)' }}>
           Mode actuel : <strong>{settings.aiBackend}</strong>
         </div>
+      </div>
+
+      {/* ✅ SECTION IA : ENTRAÎNEMENT (NOUVEAU) */}
+      <div style={sectionStyle}>
+        <h3 style={{ marginTop: 0, color: '#8b5cf6' }}>
+          {' '}
+          {/* Une couleur violette pour distinguer l'IA générative */}
+          🧠 Entraînement (Fine-Tuning)
+        </h3>
+        <p
+          style={{
+            color: 'var(--text-muted)',
+            fontSize: '0.9em',
+            marginBottom: 'var(--spacing-4)',
+          }}
+        >
+          Générez un dataset d'entraînement à partir de vos données actuelles pour spécialiser le
+          modèle.
+        </p>
+
+        {/* Le composant Bouton gère lui-même son état de chargement */}
+        <AiExportButton />
       </div>
 
       {/* SECTION BASE DE DONNÉES */}

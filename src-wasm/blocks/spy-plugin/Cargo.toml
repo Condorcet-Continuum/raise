@@ -1,13 +1,13 @@
 [package]
-name = "analyzer-consistency"
+name = "spy-plugin"
 version = "0.1.0"
 edition = "2021"
 
-# 👇 C'EST CETTE SECTION QUI MANQUAIT POUR AVOIR LE FICHIER .WASM
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
+# ✅ Liaison relative vers votre core-api existante
 genaptitude-core-api = { path = "../../core-api" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

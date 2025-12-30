@@ -1,48 +1,42 @@
-use crate::plugins::cognitive::CognitiveManager;
-use std::path::PathBuf;
-use tauri::{AppHandle, Manager}; // Manager est nécessaire pour .path()
+use crate::plugins::manager::PluginManager;
+use tauri::State;
 
 #[tauri::command]
-pub async fn run_consistency_analysis(
-    app_handle: AppHandle,
-    model_json: serde_json::Value,
-) -> Result<String, String> {
-    // 1. Instanciation du moteur
-    let manager = CognitiveManager::new();
+pub async fn cognitive_load_plugin(
+    manager: State<'_, PluginManager>,
+    plugin_id: String,
+    wasm_path: String,
+    space: Option<String>,
+    db: Option<String>,
+) -> Result<(), String> {
+    // Valeurs par défaut si non fournies
+    let space = space.unwrap_or_else(|| "un2".to_string());
+    let db = db.unwrap_or_else(|| "default".to_string());
 
-    // 2. Résolution du chemin (Logique Hybride Dev/Prod)
-    // L'utilisation de 'if cfg!' au lieu de '#[cfg]' permet au compilateur de valider
-    // les deux branches, ce qui supprime les warnings "unused variable".
-    let plugin_path = if cfg!(debug_assertions) {
-        // --- MODE DÉVELOPPEMENT ---
-        // On utilise la variable d'environnement de compilation pour localiser la source
-        // 'env!' est résolu à la compilation, c'est sûr et performant.
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent() // Remonte de 'src-tauri' vers la racine du projet
-            .unwrap()
-            .join("wasm-modules/analyzers/consistency_basic.wasm")
-    } else {
-        // --- MODE PRODUCTION ---
-        // Ici 'app_handle' est utilisé, donc le warning disparaît.
-        app_handle
-            .path()
-            .resource_dir()
-            .unwrap_or(PathBuf::from("."))
-            .join("wasm-modules/analyzers/consistency_basic.wasm")
-    };
-
-    println!("🤖 Exécution du bloc cognitif : {:?}", plugin_path);
-
-    // Sécurité : Vérification avant exécution
-    if !plugin_path.exists() {
-        return Err(format!(
-            "ERREUR CRITIQUE: Le fichier WASM est introuvable à ce chemin : {:?}",
-            plugin_path
-        ));
-    }
-
-    // 3. Exécution via le CognitiveManager
     manager
-        .run_block(&plugin_path, &model_json)
-        .map_err(|e| e.to_string())
+        .load_plugin(&plugin_id, &wasm_path, &space, &db)
+        .map_err(|e| format!("Erreur chargement plugin : {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cognitive_run_plugin(
+    manager: State<'_, PluginManager>,
+    plugin_id: String,
+) -> Result<i32, String> {
+    println!("🦀 Commande : Exécution du plugin '{}'", plugin_id);
+
+    let result = manager
+        .run_plugin(&plugin_id)
+        .map_err(|e| format!("Erreur exécution plugin : {}", e))?;
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn cognitive_list_plugins(
+    manager: State<'_, PluginManager>,
+) -> Result<Vec<String>, String> {
+    Ok(manager.list_active_plugins())
 }

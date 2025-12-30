@@ -15,7 +15,8 @@ import GeneticsDashboard from '@/components/genetics/GeneticsDashboard';
 import CodeGenerator from '@/components/codegen/CodeGenerator';
 import DiagramCanvas from '@/components/diagram-editor/DiagramCanvas';
 import WorkflowCanvas from '@/components/workflow-designer/WorkflowCanvas';
-import CognitiveAnalysis from '@/components/cognitive/CognitiveAnalysis';
+//import CognitiveAnalysis from '@/components/cognitive/CognitiveAnalysis';
+import UseCaseManager from '@/components/cognitive/UseCaseManager';
 import AssuranceDashboard from '@/components/assurance/AssuranceDashboard';
 import MBAIEView from '@/components/ai-chat/MBAIEView';
 import SettingsPage from '@/components/settings/SettingsPage';
@@ -70,7 +71,7 @@ export default function App() {
       case 'workflow':
         return <WorkflowCanvas />;
       case 'cognitive':
-        return <CognitiveAnalysis />;
+        return <UseCaseManager />;
       case 'assurance':
         return <AssuranceDashboard />;
       case 'ai':

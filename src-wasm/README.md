@@ -1,120 +1,151 @@
-### Fichier : `src-wasm/README.md`
+# 🏭 GenAptitude Factory - Source WASM
 
-````markdown
-# 🧠 GenAptitude - Cognitive Blocks (WASM)
+> **L'Usine de fabrication des Blocs Cognitifs**
 
-Ce répertoire contient la logique "intelligente" de GenAptitude, découpée en **Blocs Cognitifs**.
-Contrairement à une approche monolithique, chaque sous-module ici est compilé en un fichier `.wasm` indépendant, chargé dynamiquement par le backend Tauri (via Wasmtime).
+Ce répertoire (`src-wasm`) est un **Workspace Rust autonome**. C'est ici que sont développés, testés et compilés les modules d'intelligence ("Plugins") avant d'être livrés à l'application principale.
 
-## 🏗 Architecture
+Contrairement au dossier `src-tauri` (qui est le Cerveau/Hôte), ce dossier contient les "Pensées" (Invités) qui seront exécutées dans une sandbox sécurisée via Wasmtime.
 
-L'architecture repose sur un système de plugins strict :
+---
 
-1.  **`core-api` (Le Contrat)** : Une librairie Rust standard qui définit les types de données partagés (`CognitiveModel`, `AnalysisReport`) et les traits. Tous les blocs dépendent de ceci.
-2.  **`blocks/*` (Les Plugins)** : Chaque dossier est une crate indépendante qui implémente une logique spécifique (Analyse, Parsing, Optimisation).
-3.  **Hébergement** : Ces blocs ne tournent PAS dans le navigateur. Ils tournent dans une sandbox WASM gérée par le processus Rust principal (Tauri).
+## 🏗 Architecture de l'Usine
+
+Le workspace est organisé pour séparer l'outillage commun de la logique métier :
+
+1.  **`core-api` (Le Kit de Survie)** :
+
+    - Une librairie Rust partagée.
+    - Elle contient les définitions de types (`CognitiveModel`) et surtout les **fonctions systèmes** (`log`, `db_read`).
+    - Elle masque la complexité des appels FFI (`unsafe`, pointeurs) pour les développeurs de plugins.
+
+2.  **`blocks/*` (Les Produits)** :
+
+    - Chaque sous-dossier est un plugin indépendant (ex: `spy-plugin`, `analyzer-consistency`).
+    - Ils ne connaissent rien de Tauri, ils ne connaissent que `core-api`.
+
+3.  **`build.sh` (La Chaîne de Montage)** :
+    - Script d'automatisation qui gère le cycle de vie : **Test ➡️ Compile ➡️ Deploy**.
+
+---
 
 ## 📂 Structure du Dossier
 
 ```text
 src-wasm/
-├── Cargo.toml          # Workspace virtuel (pas de [workspace], gestion via racine)
-├── core-api/           # Types partagés et Trait 'CognitiveBlock'
-│   ├── src/lib.rs
+├── Cargo.toml          # Workspace Root (Définit les dépendances partagées : serde, thiserror...)
+├── build.sh            # ⚙️ Le script magique de compilation et déploiement
+├── target/             # (Ignoré par git) Dossier temporaire de compilation
+│
+├── core-api/           # 🧠 La librairie standard interne
+│   ├── src/lib.rs      # Expose log(), db_read(), etc.
 │   └── Cargo.toml
-└── blocks/             # Les implémentations concrètes
-    ├── analyzer-consistency/  # Exemple : Vérification de règles
-    │   ├── src/lib.rs         # Contient la logique + l'interface FFI
-    │   └── Cargo.toml         # Configuré en 'cdylib'
-    ├── parser-capella/        # (Futur)
-    └── ...
+│
+└── blocks/             # 🧱 Les Blocs Cognitifs (Plugins)
+    ├── spy-plugin/     # Exemple : Plugin d'espionnage / Audit
+    │   ├── src/lib.rs
+    │   └── Cargo.toml  # Type 'cdylib' obligatoire
+    │
+    └── analyzer-consistency/
+        └── ...
+
 ```
-````
 
-## 🔌 Le Protocole d'Échange (Memory Model)
+---
 
-Puisque nous utilisons **Wasmtime** (et non un navigateur web), nous ne pouvons pas utiliser les bindings JS automatiques de `wasm-bindgen`.
-La communication se fait via la **Mémoire Partagée** et **JSON**.
+## 🚀 Workflow de Développement
 
-### Cycle de vie d'un appel :
+### 1. Créer un nouveau bloc
 
-1.  **Tauri** sérialise les données en JSON (`String`).
-2.  **Tauri** appelle `alloc(size)` dans le WASM pour réserver de la mémoire.
-3.  **Tauri** écrit les octets du JSON dans cette mémoire.
-4.  **Tauri** appelle `run_analysis(ptr, len)`.
-5.  **WASM** lit la mémoire, désérialise le JSON, exécute la logique, et sérialise la réponse.
-6.  **WASM** retourne un pointeur "packé" vers la réponse.
-7.  **Tauri** lit la réponse et la désérialise.
-
-## 🚀 Comment créer un nouveau Bloc Cognitif
-
-### 1\. Créer la crate
-
-Dans `src-wasm/blocks/` :
+Créez une nouvelle librairie dans le dossier `blocks/` :
 
 ```bash
-cargo new --lib mon-nouveau-bloc
+cd src-wasm/blocks
+cargo new --lib mon-algo
+
 ```
 
-### 2\. Configurer `Cargo.toml`
+### 2. Configurer `Cargo.toml`
 
-Le bloc doit être une librairie dynamique (`cdylib`) pour générer du WASM.
+Modifiez `src-wasm/blocks/mon-algo/Cargo.toml` pour qu'il hérite du workspace et génère du WASM :
 
 ```toml
 [package]
-name = "genaptitude-block-nouveau"
+name = "mon-algo"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"] # INDISPENSABLE
+crate-type = ["cdylib"] # ⚠️ INDISPENSABLE pour faire un .wasm
 
 [dependencies]
 genaptitude-core-api = { path = "../../core-api" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
 ```
 
-### 3\. Implémenter le Boilerplate FFI
+### 3. Coder la logique (`lib.rs`)
 
-Dans `lib.rs`, en plus de votre logique, vous devez exposer ces fonctions pour l'hôte :
+Grâce à la `core-api`, le code est simple et lisible. Plus besoin de gérer les allocations mémoire manuellement.
 
 ```rust
-use std::mem;
-
-// Logique interne
-struct MonBloc;
-impl CognitiveBlock for MonBloc { ... }
-
-// Interface Système (Boilerplate obligatoire)
-#[no_mangle]
-pub extern "C" fn alloc(size: usize) -> *mut u8 { ... }
+use genaptitude_core_api as core;
 
 #[no_mangle]
-pub unsafe extern "C" fn run_analysis(ptr: *mut u8, len: usize) -> u64 { ... }
+pub extern "C" fn run() -> i32 {
+    // 1. Loguer quelque chose dans la console de GenAptitude
+    core::log("🤖 Mon Algo : Démarrage de l'analyse...");
+
+    // 2. Lire des données depuis la base de données de l'hôte
+    // (Cette fonction appelle 'host_db_read' via le pont cognitif)
+    let success = core::db_read("users", "admin");
+
+    if success {
+        core::log("✅ Donnée trouvée !");
+        1 // Code retour succès
+    } else {
+        core::log("❌ Donnée introuvable.");
+        0 // Code retour échec
+    }
+}
+
 ```
 
-_(Voir `blocks/analyzer-consistency/src/lib.rs` pour l'implémentation de référence)_
+### 4. Compiler et Déployer
 
-## 🛠 Compilation et Déploiement
+Ne lancez pas `cargo build` manuellement. Utilisez le script qui place automatiquement le résultat dans le "Magasin" (`wasm-modules/`) à la racine du projet.
 
-Ne compilez pas manuellement avec `cargo build` si vous voulez tester l'intégration. Utilisez le script de déploiement qui place les fichiers au bon endroit (`wasm-modules`).
+Depuis la racine du projet (`~/genaptitude`) :
 
 ```bash
-# Depuis la racine du projet
-./scripts/build_plugins.sh
+./src-wasm/build.sh
+
 ```
 
-Cela génère : `target/wasm32-unknown-unknown/release/xxx.wasm`
-Et le copie vers : `wasm-modules/analyzers/xxx.wasm`
+**Ce que fait le script :**
 
-## ⚠️ Notes Importantes
+1. Il lance les tests unitaires (`cargo test`) pour chaque bloc.
+2. Il compile en mode Release pour la cible `wasm32-unknown-unknown`.
+3. Il copie le fichier `.wasm` final dans `wasm-modules/<nom-du-bloc>/`.
 
-- **Pas de `wasm-bindgen`** : Ne l'utilisez pas pour générer du JS. Nous sommes en Rust-to-Wasm pur.
-- **Sandboxing** : Le code WASM n'a pas accès au disque, au réseau ou à l'heure système, sauf si nous lui passons des fonctions importées (Host Functions).
-- **Panic** : Si le code WASM panic, l'hôte reçoit une erreur `Trapped`, mais l'application GenAptitude ne crashe pas.
+---
 
-<!-- end list -->
+## 🔌 Capacités Disponibles (Core API)
+
+Le plugin est isolé (sandbox), il ne peut rien faire d'autre que calculer, sauf s'il passe par ces fonctions offertes par `core-api` :
+
+| Fonction                             | Description                                                                                                          |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| **`core::log(msg: &str)`**           | Envoie un message texte qui s'affichera dans les logs terminaux de GenAptitude.                                      |
+| **`core::db_read(col, id) -> bool`** | Demande à GenAptitude de lire un document JSON dans la base locale. (Retourne `true` si l'appel technique a réussi). |
+
+---
+
+## ⚠️ Notes Techniques
+
+- **Pas de `wasm-bindgen` JS** : Nous n'utilisons pas d'interface JavaScript. Le lien se fait directement entre Rust (Tauri) et Rust (Wasm).
+- **Workspace** : Si vous ajoutez une dépendance commune (ex: `regex`), ajoutez-la dans le `Cargo.toml` racine (`[workspace.dependencies]`) pour éviter de la dupliquer.
+- **Target** : Assurez-vous d'avoir la cible WASM installée : `rustup target add wasm32-unknown-unknown`.
 
 ```
 
