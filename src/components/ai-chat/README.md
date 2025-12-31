@@ -1,6 +1,6 @@
 # Module AI Chat 🤖
 
-Ce module implémente l'interface conversationnelle centrale de l'assistant **GenAptitude**.
+Ce module implémente l'interface conversationnelle centrale de l'assistant **RAISE**.
 Il ne s'agit pas d'un simple chat textuel : c'est une console **MBAIE (Model-Based AI Engineering)** capable de générer des artefacts structurés, de les visualiser et de déclencher des actions d'ingénierie (génération de code) via des interactions UI.
 
 ---

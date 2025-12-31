@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/la/functional-exchange.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/la/functional-exchange.schema.json",
   "title": "Functional Exchange (LA)",
   "description": "Flux d'échange entre deux Fonctions Logiques.",
   "type": "object",

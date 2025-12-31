@@ -24,21 +24,21 @@ impl AppConfig {
         let config = AppConfig {
             env_mode: env::var("APP_ENV").unwrap_or_else(|_| "development".to_string()),
 
-            // Chemin critique : Stockage des données (~/genaptitude_domain par défaut)
-            database_root: env::var("PATH_GENAPTITUDE_DOMAIN")
+            // Chemin critique : Stockage des données (~/raise_domain par défaut)
+            database_root: env::var("PATH_RAISE_DOMAIN")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     dirs::home_dir()
                         .unwrap_or(PathBuf::from("."))
-                        .join("genaptitude_domain")
+                        .join("raise_domain")
                 }),
 
             // URL par défaut pour le LLM local (Docker/Ollama)
-            llm_api_url: env::var("GENAPTITUDE_LOCAL_URL")
+            llm_api_url: env::var("RAISE_LOCAL_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".to_string()),
 
             // Clé API optionnelle (pour le Cloud Gemini/OpenAI)
-            llm_api_key: env::var("GENAPTITUDE_GEMINI_KEY").ok(),
+            llm_api_key: env::var("RAISE_GEMINI_KEY").ok(),
         };
 
         // On initialise le singleton. Si déjà fait, on renvoie une erreur.
@@ -74,8 +74,8 @@ mod tests {
         // 1. Préparer l'environnement simulé
         // On force des valeurs spécifiques pour être sûr que le test soit indépendant du fichier .env réel
         env::set_var("APP_ENV", "test_mode");
-        env::set_var("GENAPTITUDE_LOCAL_URL", "http://127.0.0.1:9090");
-        env::set_var("GENAPTITUDE_GEMINI_KEY", "test_key_forced"); // On force une clé bidon
+        env::set_var("RAISE_LOCAL_URL", "http://127.0.0.1:9090");
+        env::set_var("RAISE_GEMINI_KEY", "test_key_forced"); // On force une clé bidon
 
         // 2. Initialiser
         let init_result = AppConfig::init();
@@ -94,7 +94,7 @@ mod tests {
             assert!(config
                 .database_root
                 .to_string_lossy()
-                .contains("genaptitude_domain"));
+                .contains("raise_domain"));
         } else {
             // Si la config était déjà chargée (par un autre test en parallèle),
             // on ne peut pas garantir les valeurs, donc on ignore ou on vérifie juste que ça existe.

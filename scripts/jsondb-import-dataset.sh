@@ -72,11 +72,11 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
   echo "🔎 Loading env from: $REPO_ROOT/.env"
   set -a; source "$REPO_ROOT/.env"; set +a
 fi
-if [[ -z "${PATH_GENAPTITUDE_DATASET:-}" ]]; then
-  echo "❌ PATH_GENAPTITUDE_DATASET non défini (.env)."; exit 1
+if [[ -z "${PATH_RAISE_DATASET:-}" ]]; then
+  echo "❌ PATH_RAISE_DATASET non défini (.env)."; exit 1
 fi
 
-DATASET_DIR="$PATH_GENAPTITUDE_DATASET/$THEME/$VER"
+DATASET_DIR="$PATH_RAISE_DATASET/$THEME/$VER"
 MANIFEST="$DATASET_DIR/manifest.json"
 if [[ ! -f "$MANIFEST" ]]; then
   echo "❌ manifest.json introuvable: $MANIFEST"; exit 1

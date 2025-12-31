@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/property-value.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/property-value.schema.json",
   "title": "Property Value (PVMT)",
   "description": "Instance de valeurs pour un groupe de propriétés donné, attachée à un élément du modèle.",
   "type": "object",

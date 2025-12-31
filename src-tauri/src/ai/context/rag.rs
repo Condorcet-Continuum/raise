@@ -21,7 +21,7 @@ impl RagRetriever {
         // Initialisation du moteur NLP (FastEmbed ou Candle selon config)
         let embedder = EmbeddingEngine::new().context("Échec init Embedder")?;
 
-        let collection_name = "genaptitude_knowledge_base".to_string();
+        let collection_name = "raise_knowledge_base".to_string();
 
         // On s'assure que la collection existe (taille 384 = BGE-Small standard)
         memory.init_collection(&collection_name, 384).await?;

@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_integration.rs
 
 use crate::{ensure_db_exists, init_test_env};
-use genaptitude::json_db::collections::manager::CollectionsManager;
-use genaptitude::json_db::storage::StorageEngine;
+use raise::json_db::collections::manager::CollectionsManager;
+use raise::json_db::storage::StorageEngine;
 use serde_json::json;
 
 #[test]

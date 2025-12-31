@@ -46,19 +46,19 @@ enum Commands {
 async fn main() -> Result<()> {
     dotenv().ok();
 
-    let gemini_key = env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
-    let model_name = env::var("GENAPTITUDE_MODEL_NAME").ok();
+    let gemini_key = env::var("RAISE_GEMINI_KEY").unwrap_or_default();
+    let model_name = env::var("RAISE_MODEL_NAME").ok();
 
     // --- CORRECTION CRITIQUE ICI ---
-    // On cherche GENAPTITUDE_LOCAL_URL (comme dans le .env) et non GENAPTITUDE_LLM_LOCAL_URL
+    // On cherche RAISE_LOCAL_URL (comme dans le .env) et non GENAPTITUDE_LLM_LOCAL_URL
     let local_url =
-        env::var("GENAPTITUDE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+        env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
 
-    let domain_path = env::var("PATH_GENAPTITUDE_DOMAIN")
+    let domain_path = env::var("PATH_RAISE_DOMAIN")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap().join("genaptitude_storage"));
 
-    let dataset_path = env::var("PATH_GENAPTITUDE_DATASET")
+    let dataset_path = env::var("PATH_RAISE_DATASET")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap().join("dataset"));
 

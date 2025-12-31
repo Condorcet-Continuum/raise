@@ -1,7 +1,7 @@
 use crate::common::init_ai_test_env;
-use genaptitude::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
-use genaptitude::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
-use genaptitude::ai::llm::client::LlmClient;
+use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
+use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
+use raise::ai::llm::client::LlmClient;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -11,7 +11,7 @@ async fn test_software_agent_creates_component_end_to_end() {
     let env = init_ai_test_env();
 
     // --- CONFIGURATION ROBUSTE (Comme ai_suite) ---
-    let api_key = std::env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
+    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
 
     // Skip si pas de backend
     if !env.client.ping_local().await && api_key.is_empty() {
@@ -19,9 +19,9 @@ async fn test_software_agent_creates_component_end_to_end() {
         return;
     }
 
-    let local_url = std::env::var("GENAPTITUDE_LOCAL_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let model_name = std::env::var("GENAPTITUDE_MODEL_NAME")
+    let local_url =
+        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let model_name = std::env::var("RAISE_MODEL_NAME")
         .map(|s| s.trim().replace("\"", "").to_string())
         .ok();
 
@@ -84,14 +84,14 @@ async fn test_intent_classification_integration() {
     dotenvy::dotenv().ok();
     let env = init_ai_test_env();
 
-    let api_key = std::env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
+    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     if !env.client.ping_local().await && api_key.is_empty() {
         return;
     }
 
-    let local_url = std::env::var("GENAPTITUDE_LOCAL_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let model_name = std::env::var("GENAPTITUDE_MODEL_NAME")
+    let local_url =
+        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let model_name = std::env::var("RAISE_MODEL_NAME")
         .map(|s| s.trim().replace("\"", "").to_string())
         .ok();
 

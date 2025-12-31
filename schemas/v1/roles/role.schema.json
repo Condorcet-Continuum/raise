@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/roles/role.schema.json",
+  "$id": "https://raise.local/schemas/v1/roles/role.schema.json",
   "title": "Role",
-  "description": "Rôle applicatif (droits, périmètre, composition) dans GenAptitude.",
+  "description": "Rôle applicatif (droits, périmètre, composition) dans RAISE.",
   "x_schemaVersion": "1.0.0",
   "x_label": {
     "fr": "Rôle",

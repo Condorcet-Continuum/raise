@@ -116,9 +116,9 @@ impl<'a> TransactionManager<'a> {
                 }
 
                 TransactionRequest::InsertFrom { collection, path } => {
-                    let dataset_root = std::env::var("PATH_GENAPTITUDE_DATASET")
-                        .unwrap_or_else(|_| ".".to_string());
-                    let resolved_path = path.replace("$PATH_GENAPTITUDE_DATASET", &dataset_root);
+                    let dataset_root =
+                        std::env::var("PATH_RAISE_DATASET").unwrap_or_else(|_| ".".to_string());
+                    let resolved_path = path.replace("$PATH_RAISE_DATASET", &dataset_root);
 
                     let content = fs::read_to_string(&resolved_path).with_context(|| {
                         format!("Impossible de lire le fichier : {}", resolved_path)

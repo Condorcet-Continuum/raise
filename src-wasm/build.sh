@@ -9,7 +9,7 @@ WASM_MODULES_DIR="$ROOT_DIR/wasm-modules"
 # ✅ NOUVEAU : Le dossier de sortie commun à tout le workspace
 WORKSPACE_TARGET_DIR="$SCRIPT_DIR/target/wasm32-unknown-unknown/release"
 
-echo "🏭 GenAptitude Factory : Démarrage de la compilation..."
+echo "🏭 RAISE Factory : Démarrage de la compilation..."
 echo "======================================================"
 
 # On cherche tous les sous-dossiers dans src-wasm/blocks/

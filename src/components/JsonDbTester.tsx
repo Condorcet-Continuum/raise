@@ -19,7 +19,7 @@ export function JsonDbTester() {
   const [jsonInput, setJsonInput] = useState<string>(
     JSON.stringify(
       {
-        '@context': { oa: 'https://genaptitude.io/ontology/arcadia/oa#' },
+        '@context': { oa: 'https://raise.io/ontology/arcadia/oa#' },
         '@type': 'oa:OperationalActor',
         name: 'Opérateur de Drone',
         description: 'Personne chargée du pilotage.',

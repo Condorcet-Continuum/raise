@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/la/logical-actor.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/la/logical-actor.schema.json",
   "title": "Logical Actor",
   "description": "Entité externe interagissant avec l'architecture logique.",
   "type": "object",

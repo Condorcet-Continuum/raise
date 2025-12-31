@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/quality-assessment.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/quality-assessment.schema.json",
   "title": "Quality Assessment",
   "description": "Résultat d'une analyse qualité, d'une revue de pairs ou d'un audit.",
   "type": "object",

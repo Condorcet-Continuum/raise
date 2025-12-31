@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/articles/article.schema.json",
+  "$id": "https://raise.local/schemas/v1/articles/article.schema.json",
   "title": "Article",
   "description": "Contenu éditorial (page, billet, note).",
   "x_schemaVersion": "1.0.0",

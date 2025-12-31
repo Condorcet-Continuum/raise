@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/agent-composite.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/agent-composite.schema.json",
   "title": "Agent IA – Composite",
   "description": "Assemblage complet de l’agent (Base + Planner + HITL + Consent/Policy + Workflow + Mémoire + MCPs).",
   "type": "object",

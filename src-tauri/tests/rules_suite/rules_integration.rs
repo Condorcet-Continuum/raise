@@ -1,5 +1,5 @@
-use genaptitude::json_db::collections;
-use genaptitude::json_db::storage::{JsonDbConfig, StorageEngine};
+use raise::json_db::collections;
+use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use serde_json::json;
 use std::fs;
 use tempfile::tempdir;

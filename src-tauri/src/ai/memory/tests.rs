@@ -11,6 +11,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_qdrant_lifecycle() {
         // 1. CHARGEMENT CONFIG (.env)
         dotenvy::dotenv().expect("❌ Impossible de charger le fichier .env !");

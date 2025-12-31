@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/oa/activity.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/oa/activity.schema.json",
   "title": "Operational Activity",
   "description": "Une tâche ou action effectuée par un Acteur ou une Entité.",
   "type": "object",

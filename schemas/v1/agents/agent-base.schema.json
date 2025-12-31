@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/agent-base.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/agent-base.schema.json",
   "title": "Agent Base",
   "description": "Socle commun d’un agent IA (identité, version, persona, objectifs).",
   "type": "object",

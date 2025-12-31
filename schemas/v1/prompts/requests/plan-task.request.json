@@ -1,11 +1,11 @@
 {
-  "$schema": "https://genaptitude.local/schemas/v1/prompts/prompt-request.schema.json",
+  "$schema": "https://raise.local/schemas/v1/prompts/prompt-request.schema.json",
   "template": { "handle": "plan-task" },
   "bindings": {
     "data": {
       "mode": "provided",
       "data": {
-        "$schema": "https://genaptitude.local/schemas/v1/agents/agent.schema.json",
+        "$schema": "https://raise.local/schemas/v1/agents/agent.schema.json",
         "name": "planner",
         "capabilities": ["plan", "split", "schedule"]
       }
@@ -13,7 +13,7 @@
     "meta": {
       "mode": "provided",
       "data": {
-        "$schema": "https://genaptitude.local/schemas/v1/common/types/primitive-types.schema.json",
+        "$schema": "https://raise.local/schemas/v1/common/types/primitive-types.schema.json",
         "task": "Planifier la migration des jobs Jenkins vers GitLab CI",
         "expected": "Un plan E2E en 7 étapes avec risques et dépendances"
       }

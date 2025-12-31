@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/compilers/compiler.schema.json",
+  "$id": "https://raise.local/schemas/v1/compilers/compiler.schema.json",
   "title": "Compiler",
   "description": "Chaîne de compilation/génération de code.",
   "x_schemaVersion": "1.0.0",

@@ -30,7 +30,7 @@
 
 - **Ne jamais** commiter de secrets (`.env`, tokens, clés) ; ajouter aux `.gitignore`.
 - Utiliser le **keyring OS** côté desktop pour les clés sensibles (ex: identité Fabric).
-- **Configuration** : Les chemins critiques (`PATH_GENAPTITUDE_DOMAIN`) sont configurés par variables d'environnement ou defaults sécurisés.
+- **Configuration** : Les chemins critiques (`PATH_RAISE_DOMAIN`) sont configurés par variables d'environnement ou defaults sécurisés.
 - Rotation trimestrielle recommandée (SSH, tokens CI, clés de signature).
 
 ---

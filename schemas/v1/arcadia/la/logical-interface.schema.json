@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/la/logical-interface.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/la/logical-interface.schema.json",
   "title": "Logical Interface",
   "description": "Définition d'un contrat d'interface (ensemble d'Exchange Items ou Opérations).",
   "type": "object",

@@ -14,16 +14,16 @@
     ],
     "authors": [
       {
-        "name": "GenAptitude Team"
+        "name": "raise Team"
       }
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///home/zair/genaptitude/src-wasm#ga_wasm@0.1.0",
-      "author": "GenAptitude Team",
+      "bom-ref": "path+file:///~/raise/src-wasm#ga_wasm@0.1.0",
+      "author": "raise Team",
       "name": "ga_wasm",
       "version": "0.1.0",
-      "description": "GenAptitude — module WASM (placeholder)",
+      "description": "raise — module WASM (placeholder)",
       "scope": "required",
       "licenses": [
         {
@@ -34,7 +34,7 @@
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///home/zair/genaptitude/src-wasm#ga_wasm@0.1.0 bin-target-0",
+          "bom-ref": "path+file:///~/raise/src-wasm#ga_wasm@0.1.0 bin-target-0",
           "name": "ga_wasm",
           "version": "0.1.0",
           "purl": "pkg:cargo/ga_wasm@0.1.0?download_url=file://.#src/lib.rs"
@@ -51,7 +51,7 @@
   "components": [],
   "dependencies": [
     {
-      "ref": "path+file:///home/zair/genaptitude/src-wasm#ga_wasm@0.1.0",
+      "ref": "path+file:///~/raise/src-wasm#ga_wasm@0.1.0",
       "dependsOn": []
     }
   ]

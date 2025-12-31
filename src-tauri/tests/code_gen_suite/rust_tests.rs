@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tests/code_gen_suite/rust_tests.rs
 
 use crate::common::init_ai_test_env;
-use genaptitude::code_generator::{CodeGeneratorService, TargetLanguage};
+use raise::code_generator::{CodeGeneratorService, TargetLanguage};
 use serde_json::json;
 use std::fs;
 

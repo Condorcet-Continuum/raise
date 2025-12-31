@@ -12,8 +12,8 @@ fi
 # 1. RÉSOLUTION ET CRÉATION DU DOSSIER DATASET
 # ==============================================================================
 
-if [ -n "$PATH_GENAPTITUDE_DATASET" ]; then
-    DATASET_ROOT="$PATH_GENAPTITUDE_DATASET"
+if [ -n "$PATH_RAISE_DATASET" ]; then
+    DATASET_ROOT="$PATH_RAISE_DATASET"
     echo "🎯 Cible définie par ENV : $DATASET_ROOT"
 elif [ -d "../genaptitude_dataset" ]; then
     DATASET_ROOT="$(cd ../genaptitude_dataset && pwd)"

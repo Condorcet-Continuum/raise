@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/mcp/ledger.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/mcp/ledger.schema.json",
   "title": "MCP Ledger",
   "description": "Spécifique Ledger (réseau, contrats).",
   "type": "object",

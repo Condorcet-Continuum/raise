@@ -1,6 +1,6 @@
-# Modèle de Données Arcadia (GenAptitude)
+# Modèle de Données Arcadia (RAISE)
 
-Ce répertoire contient la définition formelle du méta-modèle **Arcadia** (Architecture Analysis & Design Integrated Approach) adapté pour la plateforme **GenAptitude**.
+Ce répertoire contient la définition formelle du méta-modèle **Arcadia** (Architecture Analysis & Design Integrated Approach) adapté pour la plateforme **RAISE**.
 
 Il repose sur une architecture **MBAIE** (Model-Based AI Engineering) combinant :
 
@@ -62,58 +62,58 @@ L'architecture respecte les 5 niveaux d'abstraction de la méthode Arcadia.
 
 Définition du problème et du besoin utilisateur (Quoi et Pourquoi).
 
-| Schéma | Description |
-|--------|-------------|
-| **OperationalActor** | Entité (humaine ou non) interagissant avec l'organisation. |
-| **OperationalEntity** | Organisation, service ou groupe d'acteurs. |
-| **OperationalActivity** | Tâche ou action métier effectuée par un acteur/entité. |
+| Schéma                    | Description                                                               |
+| ------------------------- | ------------------------------------------------------------------------- |
+| **OperationalActor**      | Entité (humaine ou non) interagissant avec l'organisation.                |
+| **OperationalEntity**     | Organisation, service ou groupe d'acteurs.                                |
+| **OperationalActivity**   | Tâche ou action métier effectuée par un acteur/entité.                    |
 | **OperationalCapability** | Aptitude de l'organisation à fournir un service (regroupe des activités). |
-| **OperationalExchange** | Flux d'information ou matière entre activités/acteurs. |
-| **OperationalRole** | Ensemble de responsabilités endossé par un acteur. |
+| **OperationalExchange**   | Flux d'information ou matière entre activités/acteurs.                    |
+| **OperationalRole**       | Ensemble de responsabilités endossé par un acteur.                        |
 
 ### 🟡 SA - System Analysis (Analyse Système)
 
 Définition du système comme une boîte noire (Ce que le système doit faire).
 
-| Schéma | Description |
-|--------|-------------|
-| **SystemComponent** | Le système lui-même (Frontière). |
-| **SystemActor** | Acteur externe interagissant avec le système. |
-| **SystemFunction** | Fonctionnalité attendue du système. |
-| **SystemCapability** | Capacité du système traçant vers un besoin opérationnel. |
-| **FunctionalExchange** | Flux de données entre fonctions système. |
+| Schéma                 | Description                                              |
+| ---------------------- | -------------------------------------------------------- |
+| **SystemComponent**    | Le système lui-même (Frontière).                         |
+| **SystemActor**        | Acteur externe interagissant avec le système.            |
+| **SystemFunction**     | Fonctionnalité attendue du système.                      |
+| **SystemCapability**   | Capacité du système traçant vers un besoin opérationnel. |
+| **FunctionalExchange** | Flux de données entre fonctions système.                 |
 
 ### 🔵 LA - Logical Architecture (Architecture Logique)
 
 Définition de la solution (Comment le système fonctionne, boîte blanche).
 
-| Schéma | Description |
-|--------|-------------|
-| **LogicalComponent** | Brique structurelle du système (non-physique). |
-| **LogicalFunction** | Raffinement d'une fonction système. |
-| **LogicalActor** | Acteur logique interagissant avec le système. |
-| **LogicalInterface** | Contrat d'échange (API, Protocole). |
-| **ComponentExchange** | Connexion logique entre deux composants. |
+| Schéma                 | Description                                       |
+| ---------------------- | ------------------------------------------------- |
+| **LogicalComponent**   | Brique structurelle du système (non-physique).    |
+| **LogicalFunction**    | Raffinement d'une fonction système.               |
+| **LogicalActor**       | Acteur logique interagissant avec le système.     |
+| **LogicalInterface**   | Contrat d'échange (API, Protocole).               |
+| **ComponentExchange**  | Connexion logique entre deux composants.          |
 | **FunctionalExchange** | Flux de données raffiné entre fonctions logiques. |
 
 ### 🔴 PA - Physical Architecture (Architecture Physique)
 
 Implémentation concrète (Matériel, Logiciel, Déploiement).
 
-| Schéma | Description |
-|--------|-------------|
-| **PhysicalComponent** | Node (Matériel) ou Behavior (Logiciel). Gère le déploiement. |
-| **PhysicalLink** | Liaison physique (Câble, Bus, Réseau, Ondes). |
-| **PhysicalFunction** | Fonction terminale ("Feuille") exécutée par un composant. |
-| **PhysicalActor** | Acteur physique. |
+| Schéma                | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| **PhysicalComponent** | Node (Matériel) ou Behavior (Logiciel). Gère le déploiement.    |
+| **PhysicalLink**      | Liaison physique (Câble, Bus, Réseau, Ondes).                   |
+| **PhysicalFunction**  | Fonction terminale ("Feuille") exécutée par un composant.       |
+| **PhysicalActor**     | Acteur physique.                                                |
 | **ComponentExchange** | Connexion logicielle/physique transportée par un lien physique. |
 
 ### 🟣 EPBS - End Product Breakdown Structure
 
 Décomposition industrielle et configuration.
 
-| Schéma | Description |
-|--------|-------------|
+| Schéma                | Description                                                                    |
+| --------------------- | ------------------------------------------------------------------------------ |
 | **ConfigurationItem** | Élément livrable (HWCI, CSCI, SystemPart) regroupant des composants physiques. |
 
 ---
@@ -183,19 +183,19 @@ Voici à quoi ressemble un objet **System Function** complet dans la base :
 ```json
 {
   "$schema": "../../schemas/v1/arcadia/sa/system-function.schema.json",
-  "@context": "https://genaptitude.io/ontology/arcadia/arcadia.jsonld",
+  "@context": "https://raise.io/ontology/arcadia/arcadia.jsonld",
   "id": "urn:uuid:c5e8f9a0-58cc-4372-a567-0e02b2c3d479",
   "xmi_id": "_18_0_2_4a901be_163549382_446954_4713",
   "name": {
     "fr": "Analyser Flux Vidéo",
     "en": "Analyze Video Stream"
   },
-  "description": { 
-    "en": "Detects obstacles in real-time." 
+  "description": {
+    "en": "Detects obstacles in real-time."
   },
-  "inputs": [ "urn:uuid:exchange-video-raw" ],
-  "outputs": [ "urn:uuid:exchange-obstacle-data" ],
-  "realizedActivities": [ "urn:uuid:act-surveiller-zone" ],
+  "inputs": ["urn:uuid:exchange-video-raw"],
+  "outputs": ["urn:uuid:exchange-obstacle-data"],
+  "realizedActivities": ["urn:uuid:act-surveiller-zone"],
   "propertyValues": [
     {
       "definitionId": "prop-performance",
@@ -211,7 +211,7 @@ Voici à quoi ressemble un objet **System Function** complet dans la base :
 
 ## Résumé
 
-Ce méta-modèle Arcadia pour GenAptitude offre :
+Ce méta-modèle Arcadia pour RAISE offre :
 
 - ✅ **Validation stricte** via JSON Schema
 - ✅ **Sémantique enrichie** via JSON-LD et ontologies
@@ -219,4 +219,4 @@ Ce méta-modèle Arcadia pour GenAptitude offre :
 - ✅ **Extensibilité** via PVMT
 - ✅ **IVVQ intégré** pour la qualité et la vérification
 
-Il constitue la fondation du système d'ingénierie dirigé par les modèles et augmenté par l'IA de GenAptitude.
+Il constitue la fondation du système d'ingénierie dirigé par les modèles et augmenté par l'IA de RAISE.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/sandbox/scaffold.schema.json",
+  "$id": "https://raise.local/schemas/v1/sandbox/scaffold.schema.json",
   "title": "Scaffold Recipe",
   "description": "Grammaire définissant une recette de génération de structure de fichiers.",
   "x_schemaVersion": "1.0.0",

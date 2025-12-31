@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/actors/actor.schema.json",
+  "$id": "https://raise.local/schemas/v1/actors/actor.schema.json",
   "title": "Actor",
-  "description": "Représente un acteur (personne, service, organisation, bot, appareil) dans GenAptitude.",
+  "description": "Représente un acteur (personne, service, organisation, bot, appareil) dans RAISE.",
   "x_schemaVersion": "1.0.0",
   "x_label": {
     "fr": "Acteur",

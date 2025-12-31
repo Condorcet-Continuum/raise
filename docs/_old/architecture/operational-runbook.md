@@ -49,8 +49,8 @@ corepack enable || true
 git clone <ssh-or-https-url> genaptitude && cd genaptitude
 
 # 1. Configuration de l'environnement DB (Requis pour le Backend)
-export PATH_GENAPTITUDE_DOMAIN="$HOME/genaptitude_domain"
-mkdir -p "$PATH_GENAPTITUDE_DOMAIN"
+export PATH_RAISE_DOMAIN="$HOME/genaptitude_domain"
+mkdir -p "$PATH_RAISE_DOMAIN"
 
 # 2. Installation Front
 npm install
@@ -70,7 +70,7 @@ mkdir -p public/wasm && cp target/wasm32-wasip1/release/*.wasm public/wasm/ 2>/d
 npm run dev    # http://localhost:1420
 
 # Dev desktop (Tauri lance Vite via beforeDevCommand)
-# Assurez-vous que PATH_GENAPTITUDE_DOMAIN est set
+# Assurez-vous que PATH_RAISE_DOMAIN est set
 cargo tauri dev
 
 # Build production
@@ -82,7 +82,7 @@ cargo tauri build                  # → target/release/bundle/**
 
 - `dist/index.html` existe et s’ouvre dans un navigateur.
 - L’app Tauri démarre, affiche la fenêtre.
-- **DB Check** : L'app peut écrire dans `$PATH_GENAPTITUDE_DOMAIN/un2/_system`.
+- **DB Check** : L'app peut écrire dans `$PATH_RAISE_DOMAIN/un2/_system`.
 - **Model Engine** : La commande `load_project_model` ne retourne pas d'erreur (vérifier logs console).
 - `public/wasm/ga_wasm.wasm` résolu depuis l’UI (test fetch + instantiate).
 
@@ -132,10 +132,10 @@ git push origin v0.1.0
 
 | Symptôme                         | Cause probable              | Correctif                                                      |
 | -------------------------------- | --------------------------- | -------------------------------------------------------------- |
-| Boucle `cargo tauri dev` rebuild | Écritures dans `src-tauri/` | Écrire dans `{{app_data_dir}}` ou `$PATH_GENAPTITUDE_DOMAIN`   |
+| Boucle `cargo tauri dev` rebuild | Écritures dans `src-tauri/` | Écrire dans `{{app_data_dir}}` ou `$PATH_RAISE_DOMAIN`         |
 | Page blanche en build desktop    | `dist/` manquant            | `npm run build` puis `cargo tauri build`                       |
 | 404 sur WASM                     | Fichier absent              | Placer sous `public/wasm/…` avant build                        |
-| Erreur DB "Path not found"       | Variable d'env manquante    | Exporter `PATH_GENAPTITUDE_DOMAIN` avant de lancer l'app       |
+| Erreur DB "Path not found"       | Variable d'env manquante    | Exporter `PATH_RAISE_DOMAIN` avant de lancer l'app             |
 | Erreur "Schema not found"        | Registre DB corrompu/vide   | Vérifier `schemas/v1` dans le domaine ou réinsérer les schémas |
 
 ### 7.2 Problèmes courants (CI)
@@ -161,7 +161,7 @@ cargo tauri --version
 dpkg -l | egrep -i 'webkit2gtk|javascriptcoregtk|libsoup3|gtk-3'
 
 # Vérification DB Locale
-ls -R $PATH_GENAPTITUDE_DOMAIN
+ls -R $PATH_RAISE_DOMAIN
 
 # Nettoyages rapides
 git clean -xfd -e node_modules -e target
@@ -184,8 +184,8 @@ Variables d’environnement (exemples) :
 
 ```bash
 # Persistance
-export PATH_GENAPTITUDE_DOMAIN="$HOME/genaptitude_domain"
-export PATH_GENAPTITUDE_DATASET="$HOME/genaptitude_dataset"
+export PATH_RAISE_DOMAIN="$HOME/genaptitude_domain"
+export PATH_RAISE_DATASET="$HOME/genaptitude_dataset"
 
 # Services externes (Optionnels pour MVP local)
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
@@ -224,7 +224,7 @@ cargo run -- transaction --file ./maintenance_ops.json
 
 - **Rollback code** : `git revert <sha>` ou checkout vers **tag** stable → push → pipeline.
 - **Rollback artefacts** : réinstaller le bundle **n-1**.
-- **Recovery DB** : En cas de corruption, supprimer le fichier `_wal.jsonl` (perte des dernières transactions non-committées) ou restaurer le dossier `$PATH_GENAPTITUDE_DOMAIN` depuis une sauvegarde.
+- **Recovery DB** : En cas de corruption, supprimer le fichier `_wal.jsonl` (perte des dernières transactions non-committées) ou restaurer le dossier `$PATH_RAISE_DOMAIN` depuis une sauvegarde.
 
 ---
 

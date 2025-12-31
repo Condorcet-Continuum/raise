@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/pa/physical-link.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/pa/physical-link.schema.json",
   "title": "Physical Link",
   "description": "Liaison matérielle (Câble, Bus, Réseau, Ondes) connectant deux composants Node.",
   "type": "object",

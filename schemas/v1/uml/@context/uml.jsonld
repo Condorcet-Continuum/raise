@@ -1,8 +1,8 @@
 {
   "@context": {
     "@version": 1.1,
-    "@vocab": "https://genaptitude.io/ontology/uml#",
-    "genaptitude": "https://genaptitude.io/ontology/core#",
+    "@vocab": "https://raise.io/ontology/uml#",
+    "raise": "https://raise.io/ontology/core#",
     "uml": "http://www.omg.org/spec/UML/20180901/uml.xmi#",
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "skos": "http://www.w3.org/2004/02/skos/core#",

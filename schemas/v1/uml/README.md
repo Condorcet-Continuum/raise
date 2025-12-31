@@ -1,6 +1,6 @@
 # 🗺️ Schémas UML (Unified Modeling Language)
 
-Ce répertoire contient l'ensemble des schémas de données **JSON-LD** utilisés par GenAptitude pour modéliser les systèmes en utilisant la notation **UML (Unified Modeling Language)**.
+Ce répertoire contient l'ensemble des schémas de données **JSON-LD** utilisés par RAISE pour modéliser les systèmes en utilisant la notation **UML (Unified Modeling Language)**.
 
 L'objectif est d'étendre la capacité de la plateforme à l'ingénierie logicielle traditionnelle, en offrant la rigueur du **Model-Based AI Engineering (MBAIE)** à la communauté des architectes UML.
 
@@ -12,7 +12,7 @@ L'objectif est d'étendre la capacité de la plateforme à l'ingénierie logicie
 
 ## 🌳 Structure de l'Arborescence (`schemas/v1/`)
 
-Afin de situer le contexte UML au sein de la plateforme GenAptitude, voici l'organisation globale de la version v1 des schémas :
+Afin de situer le contexte UML au sein de la plateforme RAISE, voici l'organisation globale de la version v1 des schémas :
 
 ```
 

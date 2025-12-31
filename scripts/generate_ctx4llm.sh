@@ -7,11 +7,11 @@
 # dans un seul fichier texte, optimisé pour être copié-collé dans un prompt IA.
 
 # --- CONFIGURATION ---
-OUTPUT_DIR="$HOME/genaptitude_zip"
-OUTPUT_FILE="$OUTPUT_DIR/genaptitude_context.txt"
+OUTPUT_DIR="$HOME/raise_zip"
+OUTPUT_FILE="$OUTPUT_DIR/raise_context.txt"
 
 # Dossiers à ignorer (Regex pour la commande tree)
-IGNORE_PATTERN="target|node_modules|.git|dist|wasm-modules|build|venv|.fastembed_cache|genaptitude_dataset"
+IGNORE_PATTERN="target|node_modules|.git|dist|wasm-modules|build|venv|.fastembed_cache|raise_dataset"
 
 # --- DÉMARRAGE ---
 echo "🚀 Démarrage de la génération du contexte pour LLM..."
@@ -21,7 +21,7 @@ mkdir -p "$OUTPUT_DIR"
 
 # En-tête du fichier
 echo "==============================================================================" > "$OUTPUT_FILE"
-echo " PROJECT: GenAptitude" >> "$OUTPUT_FILE"
+echo " PROJECT: RAISE" >> "$OUTPUT_FILE"
 echo " GENERATED ON: $(date)" >> "$OUTPUT_FILE"
 echo " CONTENT: Tree + Configs + Docs + Source Code (Rust/React)" >> "$OUTPUT_FILE"
 echo "==============================================================================" >> "$OUTPUT_FILE"

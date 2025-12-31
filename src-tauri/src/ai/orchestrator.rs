@@ -28,8 +28,8 @@ impl AiOrchestrator {
 
         // 2. Init de la Persistance (Basée sur le .env)
         // On cherche le chemin de stockage défini dans le .env, ou on utilise un défaut
-        let domain_path = env::var("PATH_GENAPTITUDE_DOMAIN")
-            .unwrap_or_else(|_| ".genaptitude_storage".to_string());
+        let domain_path =
+            env::var("PATH_RAISE_DOMAIN").unwrap_or_else(|_| ".raise_storage".to_string());
 
         let chats_path = PathBuf::from(domain_path).join("chats");
         let memory_store = MemoryStore::new(&chats_path)
@@ -60,7 +60,7 @@ impl AiOrchestrator {
 
         // 3. Construction du Prompt Système Unique
         let mut prompt = String::from(
-            "Tu es l'assistant intelligent de GenAptitude (Expert Système Arcadia).\n\
+            "Tu es l'assistant intelligent de RAISE (Expert Système Arcadia).\n\
              Réponds à la question de l'ingénieur en utilisant le contexte ci-dessous.\n\
              Si l'utilisateur fait référence à 'ça', 'il' ou 'le', regarde l'HISTORIQUE.\n\n",
         );
@@ -138,7 +138,7 @@ mod tests {
         let drone = ArcadiaElement {
             id: "uuid-drone-123".to_string(),
             name: NameType::String("Drone de Livraison".to_string()),
-            kind: "http://genaptitude.io/ontology/oa#OperationalActor".to_string(),
+            kind: "http://raise.io/ontology/oa#OperationalActor".to_string(),
             properties: HashMap::from([(
                 "description".to_string(),
                 json!("Acteur principal du système"),
@@ -149,10 +149,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_conversation_memory() {
         // 1. CONFIGURATION VIA .ENV
         dotenvy::dotenv().expect("❌ .env manquant");
-        let llm_url = env::var("GENAPTITUDE_LOCAL_URL").expect("GENAPTITUDE_LOCAL_URL manquant");
+        let llm_url = env::var("RAISE_LOCAL_URL").expect("RAISE_LOCAL_URL manquant");
         let qdrant_port = env::var("PORT_QDRANT_GRPC").expect("PORT_QDRANT_GRPC manquant");
 
         // On force 127.0.0.1 pour Qdrant URL

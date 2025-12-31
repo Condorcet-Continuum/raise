@@ -4,21 +4,21 @@ services:
   # 🧠 QDRANT (Mémoire Vectorielle)
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: genaptitude_qdrant
+    container_name: raise_qdrant
     restart: unless-stopped
     ports:
       - "${PORT_QDRANT_HTTP:-6333}:6333" # HTTP
       - "${PORT_QDRANT_GRPC:-6334}:6334" # gRPC
     volumes:
       # On stocke les données Qdrant dans ton dossier de domaine
-      - ${PATH_GENAPTITUDE_DOMAIN}/qdrant_storage:/qdrant/storage
+      - ${PATH_RAISE_DOMAIN}/qdrant_storage:/qdrant/storage
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
 
   # 🤖 LLM LOCAL (Llama.cpp Server)
   llm:
     image: ghcr.io/ggerganov/llama.cpp:server-cuda
-    container_name: genaptitude_llm
+    container_name: raise_llm
     restart: unless-stopped
     ports:
       # Mappe le port hôte défini dans .env vers le port 8080 du conteneur

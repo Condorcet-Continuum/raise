@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::fs;
 
 use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::{
+use raise::json_db::{
     collections::manager::CollectionsManager,
     query::{
         ComparisonOperator, Condition, FilterOperator, Query, QueryEngine, QueryFilter, SortField,

@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/tests/json_db_suite/schema_consistency.rs
 
 use crate::{init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
-use genaptitude::json_db::schema::{SchemaRegistry, SchemaValidator};
+use raise::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
+use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use serde_json::{json, Value};
 use std::fs;
 use walkdir::WalkDir;
@@ -85,10 +85,10 @@ fn test_semantic_consistency_json_ld() {
     for (schema_rel, short_type) in critical_mappings {
         let doc = json!({
             "@context": {
-                "oa": "https://genaptitude.io/ontology/arcadia/oa#",
-                "sa": "https://genaptitude.io/ontology/arcadia/sa#",
-                "la": "https://genaptitude.io/ontology/arcadia/la#",
-                "pa": "https://genaptitude.io/ontology/arcadia/pa#"
+                "oa": "https://raise.io/ontology/arcadia/oa#",
+                "sa": "https://raise.io/ontology/arcadia/sa#",
+                "la": "https://raise.io/ontology/arcadia/la#",
+                "pa": "https://raise.io/ontology/arcadia/pa#"
             },
             "@type": short_type,
             "name": "Test Semantic"

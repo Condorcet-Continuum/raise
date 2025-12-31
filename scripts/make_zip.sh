@@ -1,8 +1,8 @@
 # 0) Variables
-APP_DIR=~/genaptitude
-OUT_DIR=~/genaptitude_zip
+APP_DIR=~/raise
+OUT_DIR=~/raise_zip
 TS=$(date +%Y%m%d_%H%M)
-ZIP="$OUT_DIR/genaptitude-$TS.zip"
+ZIP="$OUT_DIR/raise-$TS.zip"
 
 # 1) Préparer
 mkdir -p "$OUT_DIR"

@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/tests/json_db_suite/schema_minimal.rs
 
 use crate::{ensure_db_exists, init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::schema::{SchemaRegistry, SchemaValidator};
-// use genaptitude::json_db::storage::file_storage; // Plus nécessaire
+use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
+// use raise::json_db::storage::file_storage; // Plus nécessaire
 use serde_json::json;
 
 #[test]

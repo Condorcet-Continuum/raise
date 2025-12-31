@@ -7,6 +7,7 @@ mod tests {
     use uuid::Uuid;
 
     #[tokio::test]
+    #[ignore]
     async fn test_full_rag_pipeline() {
         println!("🚀 Démarrage du test RAG complet...");
 

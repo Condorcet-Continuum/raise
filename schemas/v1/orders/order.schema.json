@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/orders/order.schema.json",
+  "$id": "https://raise.local/schemas/v1/orders/order.schema.json",
   "title": "Order",
   "description": "Commande d’UO/services.",
   "x_schemaVersion": "1.0.0",

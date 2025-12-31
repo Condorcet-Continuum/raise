@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/pa/component-exchange.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/pa/component-exchange.schema.json",
   "title": "Component Exchange (Physical)",
   "description": "Connexion (souvent logicielle) entre deux composants physiques.",
   "type": "object",

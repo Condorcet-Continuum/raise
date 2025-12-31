@@ -1,10 +1,10 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_sql.rs
 
 use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::collections::manager::CollectionsManager;
-use genaptitude::json_db::query::sql::parse_sql;
-use genaptitude::json_db::query::QueryEngine;
-use genaptitude::json_db::storage::JsonDbConfig;
+use raise::json_db::collections::manager::CollectionsManager;
+use raise::json_db::query::sql::parse_sql;
+use raise::json_db::query::QueryEngine;
+use raise::json_db::storage::JsonDbConfig;
 use serde_json::{json, Value};
 use std::fs;
 

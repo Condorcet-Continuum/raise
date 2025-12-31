@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/dapps/dapp.schema.json",
+  "$id": "https://raise.local/schemas/v1/dapps/dapp.schema.json",
   "title": "dApp",
   "description": "Définition d'une Application Décentralisée (Tauri/Rust/WASM).",
   "x_schemaVersion": "1.3.0",

@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/tests/code_gen_suite/mod.rs
 
-use genaptitude::ai::llm::client::LlmClient;
-use genaptitude::json_db::collections::manager::CollectionsManager; // Ajout
-use genaptitude::json_db::storage::{JsonDbConfig, StorageEngine};
+use raise::ai::llm::client::LlmClient;
+use raise::json_db::collections::manager::CollectionsManager; // Ajout
+use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -72,10 +72,10 @@ pub fn init_ai_test_env() -> AiTestEnv {
     mgr.init_db().expect("❌ init_db failed in code_gen_suite");
 
     // --- CLIENT IA ---
-    let gemini_key = env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
-    let model_name = env::var("GENAPTITUDE_MODEL_NAME").ok();
+    let gemini_key = env::var("RAISE_GEMINI_KEY").unwrap_or_default();
+    let model_name = env::var("RAISE_MODEL_NAME").ok();
     let local_url =
-        env::var("GENAPTITUDE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+        env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
     let client = LlmClient::new(&local_url, &gemini_key, model_name);
 

@@ -65,7 +65,7 @@ export function MessageBubble({ message, onGenerateCode }: MessageBubbleProps) {
           alignSelf: isUser ? 'flex-end' : 'flex-start',
         }}
       >
-        {isUser ? 'Vous' : 'GenAptitude'} ·{' '}
+        {isUser ? 'Vous' : 'RAISE'} ·{' '}
         {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
       </div>
     </div>

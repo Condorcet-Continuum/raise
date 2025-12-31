@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/tests/json_db_suite/dataset_integration.rs
 
 use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::collections::manager::CollectionsManager;
-use genaptitude::json_db::storage::StorageEngine;
+use raise::json_db::collections::manager::CollectionsManager;
+use raise::json_db::storage::StorageEngine;
 use std::fs;
 
 #[test]

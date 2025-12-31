@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/agent-planner.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/agent-planner.schema.json",
   "title": "Planner IA",
   "description": "Paramétrage du planificateur (stratégie, contraintes, actions autorisées).",
   "type": "object",

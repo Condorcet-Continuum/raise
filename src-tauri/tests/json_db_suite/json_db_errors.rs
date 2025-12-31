@@ -1,7 +1,7 @@
 // src-tauri/tests/json_db_suite/json_db_errors.rs
 
 use crate::{init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::storage::file_storage::{create_db, open_db};
+use raise::json_db::storage::file_storage::{create_db, open_db};
 
 #[test]
 fn open_missing_db_fails() {

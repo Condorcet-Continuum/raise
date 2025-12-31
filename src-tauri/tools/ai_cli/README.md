@@ -60,15 +60,15 @@ L'outil charge automatiquement le fichier `.env` situé à la racine du monorepo
 
 ```bash
 # Choix du mode (Hybrid)
-GENAPTITUDE_MODE_DUAL="true"
+RAISE_MODE_DUAL="true"
 
 # URLs & Clés
-GENAPTITUDE_LOCAL_URL="http://localhost:8080"
-GENAPTITUDE_GEMINI_KEY="AIza..."
+RAISE_LOCAL_URL="http://localhost:8080"
+RAISE_GEMINI_KEY="AIza..."
 
 # Cibles de données (Absolues de préférence)
-PATH_GENAPTITUDE_DOMAIN="/home/user/genaptitude/data"
-PATH_GENAPTITUDE_DATASET="/home/user/genaptitude/dataset"
+PATH_RAISE_DOMAIN="/home/user/genaptitude/data"
+PATH_RAISE_DATASET="/home/user/genaptitude/dataset"
 
 ```
 

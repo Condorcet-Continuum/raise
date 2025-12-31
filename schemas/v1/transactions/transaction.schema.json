@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/transactions/transaction.schema.json",
+  "$id": "https://raise.local/schemas/v1/transactions/transaction.schema.json",
   "title": "Transaction",
   "description": "Trace d’une action/unité de travail (audit, exécution, paiement…).",
   "x_schemaVersion": "1.0.0",

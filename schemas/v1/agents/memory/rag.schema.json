@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/memory/rag.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/memory/rag.schema.json",
   "title": "Mémoire / RAG",
   "description": "Configuration de la mémoire (historique, index, retrieval).",
   "type": "object",

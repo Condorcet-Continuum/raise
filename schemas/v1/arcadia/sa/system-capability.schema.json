@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/sa/system-capability.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/sa/system-capability.schema.json",
   "title": "System Capability",
   "description": "Aptitude du système à rendre un service attendu par les utilisateurs.",
   "type": "object",

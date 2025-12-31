@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/sandbox/generation-log.schema.json",
+  "$id": "https://raise.local/schemas/v1/sandbox/generation-log.schema.json",
   "title": "Generation Log",
   "description": "Rapport d'exécution produit après une opération de scaffolding.",
   "x_schemaVersion": "1.0.0",

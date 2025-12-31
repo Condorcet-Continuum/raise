@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tests/json_db_suite.rs
 
-use genaptitude::json_db::collections::manager::CollectionsManager;
-use genaptitude::json_db::storage::{JsonDbConfig, StorageEngine};
+use raise::json_db::collections::manager::CollectionsManager;
+use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};

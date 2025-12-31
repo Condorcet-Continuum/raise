@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/events/event.schema.json",
+  "$id": "https://raise.local/schemas/v1/events/event.schema.json",
   "title": "Event",
   "x_schemaVersion": "1.1.2",
   "x_label": {

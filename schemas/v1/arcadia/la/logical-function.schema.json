@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/la/logical-function.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json",
   "title": "Logical Function",
   "description": "Comportement ou transformation allouée à un composant logique.",
   "type": "object",

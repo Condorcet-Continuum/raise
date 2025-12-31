@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/test-execution.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/test-execution.schema.json",
   "title": "Test Execution",
   "description": "Résultat de l'exécution d'une procédure de test.",
   "type": "object",

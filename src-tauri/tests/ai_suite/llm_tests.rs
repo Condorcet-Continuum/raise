@@ -1,5 +1,5 @@
 use crate::common::init_ai_test_env;
-use genaptitude::ai::llm::client::LlmBackend;
+use raise::ai::llm::client::LlmBackend;
 
 #[tokio::test]
 #[ignore] // Ignoré par défaut (nécessite Docker)
@@ -30,7 +30,7 @@ async fn test_local_llm_connectivity() {
 async fn test_cloud_llm_config() {
     let _env = init_ai_test_env();
 
-    let key = std::env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
+    let key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
 
     if key.is_empty() || key.contains("votre_cle") {
         println!("ℹ️ Pas de clé Gemini configurée, vérification ignorée.");

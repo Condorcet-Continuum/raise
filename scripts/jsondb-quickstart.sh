@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/jsondb-quickstart.sh
 # Quick bootstrap for GenAptitude JSON-DB + OA collections.
-# - Loads .env from the repo root (to get PATH_GENAPTITUDE_DOMAIN)
+# - Loads .env from the repo root (to get PATH_RAISE_DOMAIN)
 # - Uses `jsondb` if installed, otherwise falls back to `cargo run -p jsondb_cli`.
 
 set -euo pipefail
@@ -23,9 +23,9 @@ Options:
   --with-process     Also create collection for OA mini-processes
 
 Environment:
-  PATH_GENAPTITUDE_DOMAIN (preferably set in the repo's .env at root)
+  PATH_RAISE_DOMAIN (preferably set in the repo's .env at root)
     Example .env:
-      PATH_GENAPTITUDE_DOMAIN="$HOME/genaptitude_domain"
+      PATH_RAISE_DOMAIN="$HOME/genaptitude_domain"
 
 Examples:
   scripts/jsondb-quickstart.sh un2 _system
@@ -92,10 +92,10 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
 fi
 
 # ----------- Preconditions -----------
-if [[ -z "${PATH_GENAPTITUDE_DOMAIN:-}" ]]; then
-  echo "❌ ENV PATH_GENAPTITUDE_DOMAIN manquant." >&2
+if [[ -z "${PATH_RAISE_DOMAIN:-}" ]]; then
+  echo "❌ ENV PATH_RAISE_DOMAIN manquant." >&2
   echo "   Ajoute-le dans $REPO_ROOT/.env, par ex.:" >&2
-  echo '     PATH_GENAPTITUDE_DOMAIN="$HOME/genaptitude_domain"' >&2
+  echo '     PATH_RAISE_DOMAIN="$HOME/genaptitude_domain"' >&2
   exit 1
 fi
 
@@ -103,7 +103,7 @@ SCHEMAS_ROOT="$REPO_ROOT/$SCHEMAS_REL"
 
 echo "➡  Repo root          : $REPO_ROOT"
 echo "➡  Schemas root       : $SCHEMAS_ROOT"
-echo "➡  Domain root (ENV)  : $PATH_GENAPTITUDE_DOMAIN"
+echo "➡  Domain root (ENV)  : $PATH_RAISE_DOMAIN"
 echo "➡  Target space/db    : $SPACE / $DB"
 
 # ----------- CLI runner -----------

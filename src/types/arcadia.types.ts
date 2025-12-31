@@ -1,13 +1,13 @@
 // FICHIER : src/types/arcadia.types.ts
 
 export const Namespaces = {
-  ARCADIA: 'https://genaptitude.io/ontology/arcadia#',
-  OA: 'https://genaptitude.io/ontology/arcadia/oa#',
-  SA: 'https://genaptitude.io/ontology/arcadia/sa#',
-  LA: 'https://genaptitude.io/ontology/arcadia/la#',
-  PA: 'https://genaptitude.io/ontology/arcadia/pa#',
-  EPBS: 'https://genaptitude.io/ontology/arcadia/epbs#',
-  DATA: 'https://genaptitude.io/ontology/arcadia/data#',
+  ARCADIA: 'https://raise.io/ontology/arcadia#',
+  OA: 'https://raise.io/ontology/arcadia/oa#',
+  SA: 'https://raise.io/ontology/arcadia/sa#',
+  LA: 'https://raise.io/ontology/arcadia/la#',
+  PA: 'https://raise.io/ontology/arcadia/pa#',
+  EPBS: 'https://raise.io/ontology/arcadia/epbs#',
+  DATA: 'https://raise.io/ontology/arcadia/data#',
 } as const;
 
 export const ArcadiaTypes = {

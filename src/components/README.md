@@ -1,6 +1,6 @@
 # UI Components Library 🧩
 
-Ce répertoire contient l'intégralité des interfaces utilisateur de GenAptitude.
+Ce répertoire contient l'intégralité des interfaces utilisateur de RAISE.
 L'architecture suit une approche **modulaire** : chaque dossier représente un domaine fonctionnel distinct, à l'exception de `shared` (générique) et `layout` (structurel).
 
 Certains composants racines (comme les Testeurs) sont situés directement à la racine de `components/` pour un accès rapide aux outils de diagnostic.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/requirement.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/requirement.schema.json",
   "title": "Requirement",
   "description": "Exigence formelle (fonctionnelle ou non-fonctionnelle) à laquelle le système doit satisfaire.",
   "type": "object",

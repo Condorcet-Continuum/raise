@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/hitl.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/hitl.schema.json",
   "title": "HITL (Human-in-the-Loop)",
   "description": "Passerelles de validation humaine et niveaux de revue.",
   "type": "object",

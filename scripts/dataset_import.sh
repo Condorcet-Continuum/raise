@@ -11,8 +11,8 @@ fi
 # 1. LOCALISATION DU DATASET
 # ==============================================================================
 
-if [ -n "$PATH_GENAPTITUDE_DATASET" ] && [ -d "$PATH_GENAPTITUDE_DATASET" ]; then
-    DATASET_ROOT="$PATH_GENAPTITUDE_DATASET"
+if [ -n "$PATH_RAISE_DATASET" ] && [ -d "$PATH_RAISE_DATASET" ]; then
+    DATASET_ROOT="$PATH_RAISE_DATASET"
 elif [ -d "../genaptitude_dataset" ]; then
     DATASET_ROOT="$(cd ../genaptitude_dataset && pwd)"
 elif [ -d "./genaptitude_dataset" ]; then

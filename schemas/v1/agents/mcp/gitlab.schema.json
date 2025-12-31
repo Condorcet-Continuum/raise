@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/mcp/gitlab.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/mcp/gitlab.schema.json",
   "title": "MCP GitLab",
   "description": "Spécifique GitLab (API, projet, scopes).",
   "type": "object",

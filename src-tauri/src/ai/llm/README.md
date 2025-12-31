@@ -130,7 +130,7 @@ Variables d'environnement (fichier `.env` ou contexte d'exécution) :
 | Variable                    | Description                                                 |
 | --------------------------- | ----------------------------------------------------------- |
 | `GENAPTITUDE_LLM_LOCAL_URL` | URL du serveur local (défaut : `http://localhost:11434/v1`) |
-| `GENAPTITUDE_GEMINI_KEY`    | Clé API de secours (Google AI Studio)                       |
+| `RAISE_GEMINI_KEY`          | Clé API de secours (Google AI Studio)                       |
 
 ---
 

@@ -36,11 +36,11 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // 2. CONFIGURATION DES CHEMINS VIA ENV
-    let domain_path_str = env::var("PATH_GENAPTITUDE_DOMAIN")
-        .context("❌ Variable 'PATH_GENAPTITUDE_DOMAIN' manquante dans le .env")?;
+    let domain_path_str = env::var("PATH_RAISE_DOMAIN")
+        .context("❌ Variable 'PATH_RAISE_DOMAIN' manquante dans le .env")?;
 
-    let dataset_path_str = env::var("PATH_GENAPTITUDE_DATASET")
-        .context("❌ Variable 'PATH_GENAPTITUDE_DATASET' manquante dans le .env")?;
+    let dataset_path_str = env::var("PATH_RAISE_DATASET")
+        .context("❌ Variable 'PATH_RAISE_DATASET' manquante dans le .env")?;
 
     let dataset_root = PathBuf::from(&dataset_path_str);
     let domain_root = PathBuf::from(&domain_path_str);

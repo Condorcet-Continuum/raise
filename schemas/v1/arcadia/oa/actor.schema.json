@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/oa/actor.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/oa/actor.schema.json",
   "title": "Operational Actor",
   "description": "Logical entity that can emit/receive events and hold roles.",
   "x_schemaVersion": "1.0.0",

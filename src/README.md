@@ -1,6 +1,6 @@
-# ⚛️ Frontend Architecture (GenAptitude)
+# ⚛️ Frontend Architecture (RAISE)
 
-Ce dossier contient le code source de l'interface utilisateur de **GenAptitude**.
+Ce dossier contient le code source de l'interface utilisateur de **RAISE**.
 L'application est une Single Page Application (SPA) robuste construite avec **React 18**, **TypeScript** et **Vite**, conçue pour piloter un backend Rust performant via l'API **Tauri v2**.
 
 ## 🛠️ Stack Technique

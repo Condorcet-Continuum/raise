@@ -1,6 +1,6 @@
 use crate::{ensure_db_exists, init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::collections::manager; // On a besoin du manager pour le nouveau moteur
-use genaptitude::json_db::schema::{SchemaRegistry, SchemaValidator};
+use raise::json_db::collections::manager; // On a besoin du manager pour le nouveau moteur
+use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use serde_json::json;
 use uuid::Uuid;
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/jsondb-import-examples.sh
 # Importe des exemples OA (actors, activities, exchanges, capabilities, entities) dans la DB JSON
-# via le CLI 'jsondb document upsert'. Utilise PATH_GENAPTITUDE_DATASET si présent, sinon <repo>/examples/oa_miniproc/data.
+# via le CLI 'jsondb document upsert'. Utilise PATH_RAISE_DATASET si présent, sinon <repo>/examples/oa_miniproc/data.
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ Args:
 Options:
   --repo-root=PATH   Racine du repo (détection automatique par git sinon)
   --schemas=REL      Chemin relatif des schémas (def: schemas/v1)
-  --dataset=PATH     Dossier des exemples (def: $PATH_GENAPTITUDE_DATASET ou <repo>/examples/oa_miniproc/data)
+  --dataset=PATH     Dossier des exemples (def: $PATH_RAISE_DATASET ou <repo>/examples/oa_miniproc/data)
 
 Exemples:
   scripts/jsondb-import-examples.sh un2 _system
@@ -32,7 +32,7 @@ DB="$1"; shift
 
 REPO_ROOT=""
 SCHEMAS_REL="schemas/v1"
-DATASET_PATH="${PATH_GENAPTITUDE_DATASET:-}"
+DATASET_PATH="${PATH_RAISE_DATASET:-}"
 
 for arg in "$@"; do
   case "$arg" in

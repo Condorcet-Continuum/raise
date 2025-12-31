@@ -43,7 +43,7 @@ export default function App() {
   const { setProject } = useModelStore();
 
   useEffect(() => {
-    console.log('🚀 Démarrage de GenAptitude...');
+    console.log('🚀 Démarrage de RAISE...');
 
     // On type le retour de l'invoke
     invoke<SystemInfo>('get_app_info')
@@ -121,7 +121,7 @@ export default function App() {
       case 'rules-engine':
         return 'Moteur de Règles (GenRules)';
       default:
-        return 'GenAptitude';
+        return 'RAISE';
     }
   };
 

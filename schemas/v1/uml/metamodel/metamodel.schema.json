@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/uml/metamodel/metamodel.schema.json",
+  "$id": "https://raise.local/schemas/v1/uml/metamodel/metamodel.schema.json",
   "title": "UML Metamodel",
   "description": "Définitions des propriétés logiques et sémantiques fondamentales et spécifiques aux entités de modélisation UML.",
 

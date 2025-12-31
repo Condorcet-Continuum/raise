@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/workflow.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/workflow.schema.json",
   "title": "Workflow Métier (Orchestration)",
   "description": "Graph/DAG des étapes métier: gates HITL/policy, appels MCP, mémoire, etc.",
   "type": "object",

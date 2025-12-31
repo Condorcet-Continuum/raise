@@ -1,7 +1,7 @@
 use crate::common::init_ai_test_env;
-use genaptitude::ai::agents::intent_classifier::EngineeringIntent;
-use genaptitude::ai::agents::{epbs_agent::EpbsAgent, Agent, AgentContext};
-use genaptitude::ai::llm::client::LlmClient;
+use raise::ai::agents::intent_classifier::EngineeringIntent;
+use raise::ai::agents::{epbs_agent::EpbsAgent, Agent, AgentContext};
+use raise::ai::llm::client::LlmClient;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -10,10 +10,10 @@ async fn test_epbs_agent_creates_configuration_item() {
     dotenvy::dotenv().ok();
     let env = init_ai_test_env();
 
-    let api_key = std::env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
-    let local_url = std::env::var("GENAPTITUDE_LOCAL_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let model_name = std::env::var("GENAPTITUDE_MODEL_NAME").ok();
+    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
+    let local_url =
+        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let model_name = std::env::var("RAISE_MODEL_NAME").ok();
 
     if !env.client.ping_local().await && api_key.is_empty() {
         return;

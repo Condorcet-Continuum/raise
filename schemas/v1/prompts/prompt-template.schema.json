@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/prompts/prompt-template.schema.json",
-  "title": "Prompt Template (GenAptitude)",
+  "$id": "https://raise.local/schemas/v1/prompts/prompt-template.schema.json",
+  "title": "Prompt Template (RAISE)",
   "x_schemaVersion": "1.0.0",
   "x_label": { "fr": "Modèle de prompt", "en": "Prompt Template" },
   "x_description": {
@@ -156,13 +156,13 @@
       "inputs": [
         {
           "id": "data",
-          "schema": "https://genaptitude.local/schemas/v1/agents/agent.schema.json",
+          "schema": "https://raise.local/schemas/v1/agents/agent.schema.json",
           "source": "provided",
           "required": true
         },
         {
           "id": "meta",
-          "schema": "https://genaptitude.local/schemas/v1/common/types/primitive-types.schema.json",
+          "schema": "https://raise.local/schemas/v1/common/types/primitive-types.schema.json",
           "source": "instantiate",
           "required": false
         }

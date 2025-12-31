@@ -1,7 +1,7 @@
 use crate::common::init_ai_test_env;
-use genaptitude::ai::agents::intent_classifier::EngineeringIntent;
-use genaptitude::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
-use genaptitude::ai::llm::client::LlmClient;
+use raise::ai::agents::intent_classifier::EngineeringIntent;
+use raise::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
+use raise::ai::llm::client::LlmClient;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -11,12 +11,12 @@ async fn test_system_agent_creates_function_end_to_end() {
     let env = init_ai_test_env();
 
     // 1. Config Robuste (Identique aux autres agents)
-    let api_key = std::env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
-    let local_url = std::env::var("GENAPTITUDE_LOCAL_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
+    let local_url =
+        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
     // Fallback propre pour le modèle
-    let model_name = std::env::var("GENAPTITUDE_MODEL_NAME")
+    let model_name = std::env::var("RAISE_MODEL_NAME")
         .map(|s| s.trim().replace("\"", "").to_string())
         .ok();
 

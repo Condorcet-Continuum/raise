@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/oa/entity.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/oa/entity.schema.json",
   "title": "Operational Entity",
   "description": "Une organisation, un service ou un groupe contenant des acteurs ou d'autres entités.",
   "type": "object",

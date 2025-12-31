@@ -99,9 +99,9 @@ async fn integration_test_local_availability() {
 #[tokio::test]
 #[ignore]
 async fn integration_test_smart_fallback() {
-    let key = std::env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
+    let key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     if key.is_empty() || key.contains("YOUR_KEY") {
-        println!("⚠️ Test Fallback ignoré : Variable GENAPTITUDE_GEMINI_KEY manquante.");
+        println!("⚠️ Test Fallback ignoré : Variable RAISE_GEMINI_KEY manquante.");
         return;
     }
 

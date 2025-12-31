@@ -147,7 +147,7 @@ mkdir -p ~/genaptitude-llm/ai-assets/lora
 3. Configurez votre fichier `.env` (si supporté par la version actuelle) :
 
 ```ini
-GENAPTITUDE_LORA_PATH=~/genaptitude-llm/ai-assets/lora/genaptitude-qwen-adapter
+RAISE_LORA_PATH=~/genaptitude-llm/ai-assets/lora/genaptitude-qwen-adapter
 
 ```
 

@@ -1,4 +1,4 @@
-use genaptitude::rules_engine::{Evaluator, Expr, NoOpDataProvider}; // <-- Import NoOp
+use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider}; // <-- Import NoOp
 use serde_json::json;
 
 #[test]

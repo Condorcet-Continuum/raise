@@ -16,4 +16,4 @@ anyhow = "1.0"
 wasm-bindgen = "0.2"
 
 # Notre API interne
-genaptitude-core-api = { path = "core-api" }
+raise-core-api = { path = "core-api" }

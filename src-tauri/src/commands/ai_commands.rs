@@ -36,20 +36,19 @@ pub async fn ai_chat(
     user_input: String,
 ) -> Result<AgentResult, String> {
     // 1. Configuration
-    let _mode_dual =
-        env::var("GENAPTITUDE_MODE_DUAL").unwrap_or_else(|_| "false".to_string()) == "true";
-    let gemini_key = env::var("GENAPTITUDE_GEMINI_KEY").unwrap_or_default();
-    let model_name = env::var("GENAPTITUDE_MODEL_NAME").ok();
+    let _mode_dual = env::var("RAISE_MODE_DUAL").unwrap_or_else(|_| "false".to_string()) == "true";
+    let gemini_key = env::var("RAISE_GEMINI_KEY").unwrap_or_default();
+    let model_name = env::var("RAISE_MODEL_NAME").ok();
 
     // Correction URL
     let local_url_raw =
-        env::var("GENAPTITUDE_LOCAL_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
+        env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
     let local_url = local_url_raw.replace("localhost", "127.0.0.1");
 
-    let domain_path = env::var("PATH_GENAPTITUDE_DOMAIN")
+    let domain_path = env::var("PATH_RAISE_DOMAIN")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap().join("data"));
-    let dataset_path = env::var("PATH_GENAPTITUDE_DATASET")
+    let dataset_path = env::var("PATH_RAISE_DATASET")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap().join("dataset"));
 

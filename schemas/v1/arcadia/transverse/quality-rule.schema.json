@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/quality-rule.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/quality-rule.schema.json",
   "title": "Quality Rule",
   "description": "Règle de vérification de la qualité du modèle ou du système (Model Validation Rule).",
   "type": "object",

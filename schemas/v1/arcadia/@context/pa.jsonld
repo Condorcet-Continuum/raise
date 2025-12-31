@@ -1,12 +1,12 @@
 {
   "@context": {
     "@version": 1.1,
-    "@vocab": "https://genaptitude.io/ontology/arcadia/pa#",
-    "arcadia": "https://genaptitude.io/ontology/arcadia#",
-    "oa": "https://genaptitude.io/ontology/arcadia/oa#",
-    "sa": "https://genaptitude.io/ontology/arcadia/sa#",
-    "la": "https://genaptitude.io/ontology/arcadia/la#",
-    "pa": "https://genaptitude.io/ontology/arcadia/pa#",
+    "@vocab": "https://raise.io/ontology/arcadia/pa#",
+    "arcadia": "https://raise.io/ontology/arcadia#",
+    "oa": "https://raise.io/ontology/arcadia/oa#",
+    "sa": "https://raise.io/ontology/arcadia/sa#",
+    "la": "https://raise.io/ontology/arcadia/la#",
+    "pa": "https://raise.io/ontology/arcadia/pa#",
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
     "owl": "http://www.w3.org/2002/07/owl#",

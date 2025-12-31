@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/constraint.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/constraint.schema.json",
   "title": "Constraint",
   "description": "Restriction limitant la liberté de conception (ex: Poids max, Norme électrique).",
   "type": "object",

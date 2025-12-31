@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/data/data-type.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/data/data-type.schema.json",
   "title": "Data Type",
   "description": "Type de données élémentaire (Primitif, Énumération).",
   "type": "object",

@@ -1,5 +1,8 @@
 // FICHIER : src-tauri/src/main.rs
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 use std::env;
 use std::fs;
@@ -8,35 +11,36 @@ use std::sync::Mutex; // Mutex Standard pour AppState
 use tauri::Manager;
 use tokio::sync::Mutex as AsyncMutex; // Mutex Async pour l'IA et Workflow
 
-// --- IMPORTS GENAPTITUDE ---
-use genaptitude::ai::training; // Pour dataset import/export
-use genaptitude::commands::{
+// --- IMPORTS RAISE ---
+use raise::ai::training; // Pour dataset import/export
+use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
     json_db_commands, model_commands, traceability_commands, utils_commands, workflow_commands,
 };
 
 // Architecture JSON-DB & Plugins
-use genaptitude::json_db::migrations::migrator::Migrator;
-use genaptitude::json_db::migrations::{Migration, MigrationStep};
-use genaptitude::json_db::storage::{JsonDbConfig, StorageEngine};
+use raise::json_db::migrations::migrator::Migrator;
+use raise::json_db::migrations::{Migration, MigrationStep};
+use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use serde_json::Value; // Pour Value::Null
 
-use genaptitude::plugins::manager::PluginManager;
+use raise::plugins::manager::PluginManager;
 
 // Structures d'état
-use genaptitude::commands::ai_commands::AiState;
-use genaptitude::commands::workflow_commands::WorkflowStore;
-use genaptitude::model_engine::types::ProjectModel;
-use genaptitude::AppState;
+use raise::commands::ai_commands::AiState;
+use raise::commands::workflow_commands::WorkflowStore;
+use raise::model_engine::types::ProjectModel;
+use raise::AppState;
 
 // Imports pour l'initialisation Background de l'IA
-use genaptitude::ai::orchestrator::AiOrchestrator;
-use genaptitude::model_engine::loader::ModelLoader;
+use raise::ai::orchestrator::AiOrchestrator;
+use raise::model_engine::loader::ModelLoader;
 
 fn main() {
     // 1. Initialisation des logs & de la configuration globale
-    genaptitude::utils::init_logging();
-    let _ = genaptitude::utils::AppConfig::init();
+    println!("🚀 Démarrage de RAISE...");
+    raise::utils::init_logging();
+    let _ = raise::utils::AppConfig::init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -46,7 +50,7 @@ fn main() {
             // 2. CONFIGURATION DU STOCKAGE (DB)
             // =================================================================
 
-            let db_root = if let Ok(env_path) = env::var("PATH_GENAPTITUDE_DOMAIN") {
+            let db_root = if let Ok(env_path) = env::var("PATH_RAISE_DOMAIN") {
                 if env_path.starts_with("~/") {
                     let home = env::var("HOME").expect("Impossible de trouver la variable $HOME");
                     let expanded = env_path.replace("~", &home);
@@ -60,7 +64,7 @@ fn main() {
                     PathBuf::from(env_path)
                 }
             } else {
-                let default_path = app.path().app_data_dir().unwrap().join("genaptitude_db");
+                let default_path = app.path().app_data_dir().unwrap().join("raise_db");
                 println!("📂 Configuration DB Par défaut : {:?}", default_path);
                 default_path
             };
@@ -124,7 +128,7 @@ fn main() {
             app.manage(AiState::new(None));
 
             let app_handle = app.handle();
-            genaptitude::blockchain::ensure_innernet_state(app_handle, "default");
+            raise::blockchain::ensure_innernet_state(app_handle, "default");
 
             // =================================================================
             // 6. INITIALISATION IA (BACKGROUND)
@@ -132,7 +136,7 @@ fn main() {
             let app_handle_clone = app.handle().clone();
 
             tauri::async_runtime::spawn(async move {
-                let llm_url = env::var("GENAPTITUDE_LOCAL_URL")
+                let llm_url = env::var("RAISE_LOCAL_URL")
                     .unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
                 let qdrant_port =
                     env::var("PORT_QDRANT_GRPC").unwrap_or_else(|_| "6334".to_string());
@@ -157,7 +161,7 @@ fn main() {
                                 let ai_state = app_handle_clone.state::<AiState>();
                                 let mut guard = ai_state.lock().await;
                                 *guard = Some(orchestrator);
-                                println!("✅ [IA] GenAptitude est PRÊTE.");
+                                println!("✅ [IA] Raise est PRÊTE.");
                             }
                             Err(e) => eprintln!("❌ [IA] Erreur Connexion Orchestrator : {}", e),
                         }

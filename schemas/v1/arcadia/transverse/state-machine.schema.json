@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/state-machine.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/state-machine.schema.json",
   "title": "State Machine",
   "description": "Automate décrivant les Modes ou les États d'un élément.",
   "type": "object",

@@ -28,7 +28,7 @@ export function InputBar({ value, onChange, onSend, disabled, placeholder }: Inp
     >
       <textarea
         value={value}
-        placeholder={placeholder ?? 'Posez une question à GenAptitude…'}
+        placeholder={placeholder ?? 'Posez une question à RAISE'}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         rows={1}

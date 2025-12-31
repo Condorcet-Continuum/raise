@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/scenario.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/scenario.schema.json",
   "title": "Exchange Scenario",
   "description": "Description temporelle des interactions (Diagramme de Séquence).",
   "type": "object",

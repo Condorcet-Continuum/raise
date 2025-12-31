@@ -22,12 +22,12 @@ La configuration est chargée une seule fois au démarrage (dans `main.rs`) via 
 
 Le système priorise les variables définies dans le fichier `.env` ou l'environnement système.
 
-| Variable                  | Description                                 | Valeur par défaut       |
-| :------------------------ | :------------------------------------------ | :---------------------- |
-| `APP_ENV`                 | Environnement d'exécution (`dev`, `prod`)   | `"development"`         |
-| `PATH_GENAPTITUDE_DOMAIN` | Dossier racine pour la base de données JSON | `~/genaptitude_domain`  |
-| `GENAPTITUDE_LOCAL_URL`   | URL du LLM local (Ollama/Llama.cpp)         | `http://localhost:8080` |
-| `GENAPTITUDE_GEMINI_KEY`  | Clé API pour le mode Cloud (Optionnel)      | `None`                  |
+| Variable            | Description                                 | Valeur par défaut       |
+| :------------------ | :------------------------------------------ | :---------------------- |
+| `APP_ENV`           | Environnement d'exécution (`dev`, `prod`)   | `"development"`         |
+| `PATH_RAISE_DOMAIN` | Dossier racine pour la base de données JSON | `~/genaptitude_domain`  |
+| `RAISE_LOCAL_URL`   | URL du LLM local (Ollama/Llama.cpp)         | `http://localhost:8080` |
+| `RAISE_GEMINI_KEY`  | Clé API pour le mode Cloud (Optionnel)      | `None`                  |
 
 ### Utilisation dans le code
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/agents/mcp/core.schema.json",
+  "$id": "https://raise.local/schemas/v1/agents/mcp/core.schema.json",
   "title": "MCP Core",
   "description": "Schéma de base d’un serveur MCP (transport stdio/http/sse, ressources, outils, prompts).",
   "type": "object",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/metamodel/metamodel.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/metamodel/metamodel.schema.json",
   "title": "Arcadia Metamodel (Shared Definitions)",
   "type": "object",
   "$defs": {

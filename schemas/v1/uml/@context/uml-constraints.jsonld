@@ -1,7 +1,7 @@
 {
   "@context": {
     "@version": 1.1,
-    "@vocab": "https://genaptitude.io/ontology/uml/constraints#",
+    "@vocab": "https://raise.io/ontology/uml/constraints#",
     "uml": "http://www.omg.org/spec/UML/20180901/uml.xmi#",
     "xsd": "http://www.w3.org/2001/XMLSchema#",
     "Constraint": "uml:Constraint",

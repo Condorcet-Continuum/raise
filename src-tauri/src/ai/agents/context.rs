@@ -7,9 +7,9 @@ use std::sync::Arc;
 /// Chemins structurels du projet GenAptitude
 #[derive(Clone)]
 pub struct AgentPaths {
-    /// Le dossier contenant la DB du projet courant (PATH_GENAPTITUDE_DOMAIN)
+    /// Le dossier contenant la DB du projet courant (PATH_RAISE_DOMAIN)
     pub domain_root: PathBuf,
-    /// Le dossier contenant les schémas et templates (PATH_GENAPTITUDE_DATASET)
+    /// Le dossier contenant les schémas et templates (PATH_RAISE_DATASET)
     pub dataset_root: PathBuf,
 }
 

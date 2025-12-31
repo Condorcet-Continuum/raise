@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/oa/activity-exchange.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/oa/activity-exchange.schema.json",
   "title": "Operational Exchange",
   "description": "Un flux d'information, de matière ou d'énergie entre Activités ou Acteurs.",
   "type": "object",

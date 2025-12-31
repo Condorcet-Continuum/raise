@@ -23,7 +23,8 @@ pub enum EngineeringIntent {
         target_name: String,
         relation_type: String,
     },
-    #[serde(rename = "generate_code")]
+    // CORRECTION 1 : On accepte explicitement "generate_code" ET l'alias "create_code"
+    #[serde(rename = "generate_code", alias = "create_code")]
     GenerateCode {
         language: String,
         #[serde(alias = "content", alias = "code", default)]
@@ -49,8 +50,15 @@ impl IntentClassifier {
         let lower_input = user_input.to_lowercase();
 
         // --- 1. COURT-CIRCUIT (Optimisation CPU & Déterminisme) ---
-        // On intercepte les demandes évidentes AVANT d'appeler le LLM.
-        // Cela garantit que les tests passent vite et sans erreur de classification.
+
+        // Code Generation (Si explicite)
+        if (lower_input.contains("génère") || lower_input.contains("generate"))
+            && lower_input.contains("code")
+        {
+            // On laisse le LLM faire le parsing fin (langage, filename),
+            // mais on pourrait court-circuiter ici si on voulait être agressif.
+            // Pour l'instant, on laisse passer au LLM ou Fallback.
+        }
 
         // TRANSVERSE (Exigences, Tests)
         if lower_input.contains("exigence") || lower_input.contains("requirement") {
@@ -103,15 +111,15 @@ impl IntentClassifier {
         }
 
         // --- 2. APPEL LLM (Fallback Intelligent) ---
-        // Si ce n'est pas un mot-clé évident, on laisse le LLM travailler.
 
         let system_prompt = "Tu es le Dispatcher IA de GenAptitude.
         Ton rôle est de classifier l'intention de l'utilisateur en JSON STRICT.
         
-        FORMAT ATTENDU :
-        { \"intent\": \"create_element\", \"layer\": \"OA|SA|LA|PA|DATA|TRANSVERSE\", \"element_type\": \"Type\", \"name\": \"Nom\" }
+        FORMATS ATTENDUS :
+        1. Création : { \"intent\": \"create_element\", \"layer\": \"OA|SA|LA|PA|DATA|TRANSVERSE\", \"element_type\": \"Type\", \"name\": \"Nom\" }
+        2. Code : { \"intent\": \"generate_code\", \"language\": \"rust|python\", \"filename\": \"main.rs\", \"context\": \"description\" }
 
-        Exemple: 'Crée l'exigence de performance' -> { \"intent\": \"create_element\", \"layer\": \"TRANSVERSE\", \"element_type\": \"Requirement\", \"name\": \"Performance\" }";
+        Exemple: 'Génère le code Rust pour Auth' -> { \"intent\": \"generate_code\", \"language\": \"rust\", \"filename\": \"auth.rs\", \"context\": \"Auth\" }";
 
         let response = self
             .llm
@@ -123,13 +131,13 @@ impl IntentClassifier {
         let mut json_value: Value = serde_json::from_str(&clean_json).unwrap_or(json!({}));
 
         // --- MODE SECOURS (HEURISTIQUE) ---
+        // Si le LLM échoue à produire un JSON valide avec un "intent"
         if json_value.get("intent").is_none() {
             println!("⚠️  LLM confus, activation du mode heuristique.");
             json_value = heuristic_fallback(user_input);
         }
 
         // --- CORRECTIONS IMPÉRATIVES (OVERRIDES POST-LLM) ---
-        // On garde votre logique existante au cas où le LLM soit utilisé
         if let Some(intent) = json_value["intent"].as_str() {
             if intent == "create_element" || intent == "create_system" {
                 if lower_input.contains("exigence") || lower_input.contains("requirement") {
@@ -151,7 +159,7 @@ impl IntentClassifier {
             }
         }
 
-        // Fix "create_system" legacy
+        // Fix legacy intents
         if json_value["intent"] == "create_system" {
             json_value["intent"] = json!("create_element");
             if json_value.get("layer").is_none() {
@@ -182,9 +190,7 @@ impl IntentClassifier {
 fn extract_name(input: &str, keyword: &str) -> String {
     let lower = input.to_lowercase();
     if let Some(idx) = lower.find(keyword) {
-        // On récupère la fin de la phrase après le mot clé
         let raw = &input[idx + keyword.len()..].trim();
-        // On nettoie les déterminants
         let clean = raw
             .trim_start_matches("de ")
             .trim_start_matches("du ")
@@ -201,6 +207,17 @@ fn extract_name(input: &str, keyword: &str) -> String {
 
 fn heuristic_fallback(input: &str) -> Value {
     let lower = input.to_lowercase();
+
+    // CORRECTION 2 : Gestion du cas "Générer Code" dans le fallback
+    if lower.contains("code") || lower.contains("génère") || lower.contains("generate") {
+        return json!({
+            "intent": "generate_code",
+            "language": "rust", // Valeur par défaut sensée
+            "filename": "generated_component.rs",
+            "context": input
+        });
+    }
+
     let (layer, etype) = if lower.contains("système") {
         ("SA", "System")
     } else if lower.contains("exigence") {

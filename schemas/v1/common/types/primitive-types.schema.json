@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/common/types/primitive-types.schema.json",
-  "title": "Primitive Types (GenAptitude)",
+  "$id": "https://raise.local/schemas/v1/common/types/primitive-types.schema.json",
+  "title": "Primitive Types (RAISE)",
   "type": "object",
   "$defs": {
     "instanceSchemaUri": {

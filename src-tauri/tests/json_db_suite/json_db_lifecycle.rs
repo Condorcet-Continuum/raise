@@ -1,12 +1,12 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_lifecycle.rs
 
 use crate::{init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
+use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
 use std::fs;
 
 // --- AJOUTS CORRECTS ---
-use genaptitude::json_db::collections::manager::CollectionsManager; // <--- Ici genaptitude:: au lieu de crate::
-use genaptitude::json_db::schema::{SchemaRegistry, SchemaValidator};
+use raise::json_db::collections::manager::CollectionsManager; // <--- Ici raise:: au lieu de crate::
+use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use serde_json::json;
 use serde_json::Value;
 // -----------------------
@@ -102,7 +102,7 @@ fn test_collection_drop_cleans_system_index() {
     let space = TEST_SPACE;
     let db = TEST_DB;
 
-    // On utilise le manager importé correctement depuis 'genaptitude'
+    // On utilise le manager importé correctement depuis 'raise'
     let mgr = CollectionsManager::new(&env.storage, space, db);
     let collection = "temp_collection_to_drop";
 

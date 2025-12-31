@@ -54,7 +54,7 @@ export function ChatInterface() {
       >
         <div>
           <h2 style={{ fontSize: 'var(--font-size-lg)', margin: 0, color: 'var(--text-main)' }}>
-            Assistant GenAptitude
+            Assistant RAISE
           </h2>
           <ContextDisplay messagesCount={messages.length} />
         </div>

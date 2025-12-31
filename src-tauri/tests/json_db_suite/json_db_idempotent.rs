@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_idempotent.rs
 
 use crate::{init_test_env, TEST_DB, TEST_SPACE};
-use genaptitude::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
+use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
 
 #[test]
 fn drop_is_idempotent_and_recreate_works() {

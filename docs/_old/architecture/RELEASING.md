@@ -103,7 +103,7 @@ cosign attest --predicate target/sbom-rust.cdx.json --type cyclonedx target/rele
 ## 7\) Smoke tests post-release
 
 - **Installation** : `dpkg -i` (Linux) ou exécution AppImage.
-- **Persistance** : Vérifier que le dossier `$PATH_GENAPTITUDE_DOMAIN` (ou défaut) est créé et accessible en écriture.
+- **Persistance** : Vérifier que le dossier `$PATH_RAISE_DOMAIN` (ou défaut) est créé et accessible en écriture.
 - **Model Loading** : Lancer l'app et vérifier que le modèle par défaut se charge sans erreur (voir logs console).
 - **WASM** : Vérifier que le module `ga_wasm` est bien chargé par le frontend.
 

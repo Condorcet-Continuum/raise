@@ -120,7 +120,7 @@ Le fichier `mod.rs` contient la logic de **Setup/Teardown**.
 
 **Erreur : `SKIPPED: Pas d'IA disponible**`
 
-> Le test a détecté qu'aucune clé API n'est présente et que `http://localhost:8080/health` ne répond pas. Lancez votre serveur Ollama ou configurez `GENAPTITUDE_GEMINI_KEY`.
+> Le test a détecté qu'aucune clé API n'est présente et que `http://localhost:8080/health` ne répond pas. Lancez votre serveur Ollama ou configurez `RAISE_GEMINI_KEY`.
 
 **Erreur : `panicked at ... byte index ... is out of bounds**`
 

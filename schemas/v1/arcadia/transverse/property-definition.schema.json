@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/property-definition.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/property-definition.schema.json",
   "title": "Property Definition (PVMT)",
   "description": "Définition d'un groupe de propriétés personnalisées (ex: 'Bilan de Masse', 'Sécurité').",
   "type": "object",

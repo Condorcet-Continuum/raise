@@ -1,7 +1,7 @@
 {
-  "name": "genaptitude",
+  "name": "raise",
   "version": "0.1.0",
-  "description": "Plateforme d'Ingénierie Multi-Domaines à Interface IA Native",
+  "description": "Rationalized Advanced Intelligence System Engine",
   "private": true,
   "type": "module",
   "scripts": {

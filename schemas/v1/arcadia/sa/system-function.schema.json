@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/sa/system-function.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/sa/system-function.schema.json",
   "title": "System Function",
   "description": "Action ou transformation effectuée par le système.",
   "type": "object",

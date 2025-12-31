@@ -17,10 +17,10 @@ Le CLI nécessite un environnement correctement configuré via un fichier `.env`
 
 ```bash
 # Racine du stockage physique (Dossier où les données seront écrites)
-PATH_GENAPTITUDE_DOMAIN="/home/votre_user/genaptitude_domain"
+PATH_RAISE_DOMAIN="/home/votre_user/genaptitude_domain"
 
 # Chemin relatif vers le schéma maître (utilisé lors du bootstrap create-db)
-GENAPTITUDE_DB_SCHEMA="schemas/v1/db/index.schema.json"
+RAISE_DB_SCHEMA="schemas/v1/db/index.schema.json"
 ```
 
 ---
@@ -33,11 +33,11 @@ cargo run -p jsondb_cli -- [OPTIONS_GLOBALES] <COMMANDE> [ARGS]
 
 ### Options Globales
 
-| Option    | Alias | Défaut          | Description                                           |
-| :-------- | :---- | :-------------- | :---------------------------------------------------- |
-| `--space` | `-s`  | `default_space` | L'espace de noms logique (Tenant). Ex: `un2`.         |
-| `--db`    | `-d`  | `default_db`    | Le nom de la base de données. Ex: `_system`.          |
-| `--root`  |       | _via ENV_       | Surcharge le chemin racine `PATH_GENAPTITUDE_DOMAIN`. |
+| Option    | Alias | Défaut          | Description                                     |
+| :-------- | :---- | :-------------- | :---------------------------------------------- |
+| `--space` | `-s`  | `default_space` | L'espace de noms logique (Tenant). Ex: `un2`.   |
+| `--db`    | `-d`  | `default_db`    | Le nom de la base de données. Ex: `_system`.    |
+| `--root`  |       | _via ENV_       | Surcharge le chemin racine `PATH_RAISE_DOMAIN`. |
 
 ---
 

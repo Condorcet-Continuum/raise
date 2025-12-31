@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/configs/config.schema.json",
+  "$id": "https://raise.local/schemas/v1/configs/config.schema.json",
   "title": "Config",
   "description": "Paramètre de configuration typé.",
   "x_schemaVersion": "1.0.0",

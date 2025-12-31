@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://genaptitude.local/schemas/v1/arcadia/transverse/functional-chain.schema.json",
+  "$id": "https://raise.local/schemas/v1/arcadia/transverse/functional-chain.schema.json",
   "title": "Functional Chain",
   "description": "Séquence ordonnée de fonctions et d'échanges décrivant un chemin critique ou un cas d'usage.",
   "type": "object",

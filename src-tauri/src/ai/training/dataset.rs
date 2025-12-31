@@ -36,8 +36,8 @@ pub fn export_logic(
     let manager = CollectionsManager::new(storage, &space, &db_name);
 
     // Récupération de la variable d'env (Mockable via std::env::set_var dans les tests)
-    let env_path_str = env::var("PATH_GENAPTITUDE_DATASET")
-        .unwrap_or_else(|_| "~/genaptitude_dataset".to_string());
+    let env_path_str =
+        env::var("PATH_RAISE_DATASET").unwrap_or_else(|_| "~/raise_dataset".to_string());
 
     let base_path = if env_path_str.starts_with("~/") {
         let home = env::var("HOME").map_err(|_| "Impossible de trouver $HOME".to_string())?;
@@ -140,10 +140,10 @@ mod tests {
         });
         manager.insert_raw(col, &doc1).expect("Insert failed");
 
-        // B. SETUP : Dossier de sortie temporaire (pour simuler ~/genaptitude_dataset)
+        // B. SETUP : Dossier de sortie temporaire (pour simuler ~/raise_dataset)
         let dataset_dir = tempdir().expect("Impossible de créer dossier dataset");
         // On force la variable d'env pour le test
-        env::set_var("PATH_GENAPTITUDE_DATASET", dataset_dir.path());
+        env::set_var("PATH_RAISE_DATASET", dataset_dir.path());
 
         // C. EXECUTION : Lancement de l'export
         let output_filename = "test_dataset.jsonl";
@@ -190,7 +190,7 @@ mod tests {
         // A. Setup Vide
         let (storage, _db_dir) = create_test_storage();
         let dataset_dir = tempdir().expect("dataset temp dir");
-        env::set_var("PATH_GENAPTITUDE_DATASET", dataset_dir.path());
+        env::set_var("PATH_RAISE_DATASET", dataset_dir.path());
 
         // B. Execution
         let result = export_logic(

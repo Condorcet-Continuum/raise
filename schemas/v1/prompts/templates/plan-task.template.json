@@ -1,5 +1,5 @@
 {
-  "$schema": "https://genaptitude.local/schemas/v1/prompts/prompt-template.schema.json",
+  "$schema": "https://raise.local/schemas/v1/prompts/prompt-template.schema.json",
   "id": "plan-task",
   "handle": "plan-task",
   "displayName": "Planificateur de tâches",
@@ -10,13 +10,13 @@
   "inputs": [
     {
       "id": "data",
-      "schema": "https://genaptitude.local/schemas/v1/agents/agent.schema.json",
+      "schema": "https://raise.local/schemas/v1/agents/agent.schema.json",
       "source": "provided",
       "required": true
     },
     {
       "id": "meta",
-      "schema": "https://genaptitude.local/schemas/v1/common/types/primitive-types.schema.json",
+      "schema": "https://raise.local/schemas/v1/common/types/primitive-types.schema.json",
       "source": "provided",
       "required": false
     }
