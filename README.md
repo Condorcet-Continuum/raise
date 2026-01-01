@@ -1,6 +1,6 @@
 # RAISE
 
-[![CI/CD RAISE](https://github.com/zairBezghiche/raise/actions/workflows/ci.yml/badge.svg)](https://github.com/zairBezghiche/raise/actions/workflows/ci.yml)
+[![CI/CD RAISE](https://github.com/Condorcet-Continuum/raise/actions/workflows/ci.yml/badge.svg)](https://github.com/Condorcet-Continuum/raise/actions/workflows/ci.yml)
 
 **R.A.I.S.E. — Rationalized Advanced Intelligence System Engine.**
 _(Moteur de Système d'Intelligence Avancée Rationalisé)._
