@@ -2,7 +2,7 @@
 
 ## Vue d'Ensemble
 
-La suite de tests de GenAptitude est un ensemble complet de tests d'intégration validant le comportement du module `json_db` (stockage, requêtes, ACID) et du `model_engine` (sémantique, chargement).
+La suite de tests de RAISE est un ensemble complet de tests d'intégration validant le comportement du module `json_db` (stockage, requêtes, ACID) et du `model_engine` (sémantique, chargement).
 
 ### Caractéristiques de la Suite
 
@@ -129,7 +129,7 @@ Ces tests sont situés dans la librairie principale (`src/lib.rs`).
 
 ```bash
 # Lancer les tests du Model Engine
-cargo test --package genaptitude --lib model_engine::tests -- --nocapture
+cargo test --package raise --lib model_engine::tests -- --nocapture
 ```
 
 ---

@@ -1,10 +1,10 @@
-# GenAptitude · Usine de Cas d'Usage IA Orientée Poste de Travail
+# RAISE · Usine de Cas d'Usage IA Orientée Poste de Travail
 
 <p align="center">
-  <img src="../../src/assets/images/logo-white.svg" alt="GenAptitude Logo" width="200">
+  <img src="../../src/assets/images/logo-white.svg" alt="RAISE Logo" width="200">
 </p>
 
-**GenAptitude** est une plateforme d'ingénierie système (MBSE) souveraine et locale. Elle permet de transformer des tâches d'ingénierie complexes en assistants **locaux, auditables et explicables** en combinant IA générative et modélisation formelle.
+**RAISE** est une plateforme d'ingénierie système (MBSE) souveraine et locale. Elle permet de transformer des tâches d'ingénierie complexes en assistants **locaux, auditables et explicables** en combinant IA générative et modélisation formelle.
 
 Ce projet est un monorepo contenant une **application de bureau (Tauri v2 + Rust)**, une **interface réactive (React + Vite)**, un noyau de calcul en **WebAssembly**, et un moteur de **base de données JSON transactionnelle**.
 
@@ -14,7 +14,7 @@ Ce projet est un monorepo contenant une **application de bureau (Tauri v2 + Rust
 
 ### 🧠 MBAIE (Model-Based AI Neuro-Symbolic Engineering)
 
-GenAptitude implémente une approche hybride :
+RAISE implémente une approche hybride :
 
 - [cite_start]**Orchestration Multi-Agents** : Agents spécialisés (`Software`, `System`, `Hardware`) pilotés par des modèles formels Arcadia/Capella[cite: 12].
 - [cite_start]**Contexte Sémantique** : Support natif de **JSON-LD** (`json_db/jsonld`) pour lier les données aux ontologies métiers (OA, SA, LA, PA, EPBS)[cite: 5].
@@ -32,7 +32,7 @@ Un moteur de base de données NoSQL sur-mesure développé en Rust (`src-tauri/s
 ### 🛡️ Souveraineté & Réseau Mesh
 
 - [cite_start]**Blockchain Fabric** : Client gRPC intégré (`blockchain/fabric`) pour l'enregistrement immuable des décisions d'architecture sur Hyperledger Fabric.
-- [cite_start]**VPN Mesh (Innernet)** : Client WireGuard embarqué (`blockchain/vpn`) pour créer des réseaux privés sécurisés (Interface `genaptitude0`) entre postes ingénieurs.
+- [cite_start]**VPN Mesh (Innernet)** : Client WireGuard embarqué (`blockchain/vpn`) pour créer des réseaux privés sécurisés (Interface `raise0`) entre postes ingénieurs.
 - **Traçabilité** : Audit trail complet pour la conformité aux standards critiques (DO-178C, ISO-26262)[cite: 16].
 
 ---
@@ -88,5 +88,5 @@ Un moteur de base de données NoSQL sur-mesure développé en Rust (`src-tauri/s
 
 ## Contact
 
-**GenAptitude — Workstation-First AI Use-Case Factory**
+**RAISE — Workstation-First AI Use-Case Factory**
 Contact : **zair@bezghiche.com**

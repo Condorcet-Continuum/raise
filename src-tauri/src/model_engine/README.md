@@ -2,7 +2,7 @@
 
 Le **Model Engine** est la couche d'abstraction qui transforme les données brutes stockées dans la base de données (`json_db`) en structures Rust fortement typées et interconnectées.
 
-Il agit comme un **ORM (Object-Relational Mapping)** spécialisé pour la méthode **Arcadia** et l'architecture **GenAptitude**, en s'appuyant sur une résolution sémantique stricte (JSON-LD).
+Il agit comme un **ORM (Object-Relational Mapping)** spécialisé pour la méthode **Arcadia** et l'architecture **RAISE**, en s'appuyant sur une résolution sémantique stricte (JSON-LD).
 
 ---
 
@@ -94,7 +94,7 @@ Le `ModelLoader` est responsable de l'**hydratation** du modèle en mémoire à 
 ### Responsabilités
 
 1.  **Connexion** : Se connecter au `StorageEngine` (via `CollectionsManager`).
-2.  **Expansion JSON-LD** : Utiliser le `JsonLdProcessor` pour résoudre les types (ex: `"oa:Actor"` devient `"https://genaptitude.io/ontology/arcadia/oa#OperationalActor"`).
+2.  **Expansion JSON-LD** : Utiliser le `JsonLdProcessor` pour résoudre les types (ex: `"oa:Actor"` devient `"https://raise.io/ontology/arcadia/oa#OperationalActor"`).
 3.  **Dispatch** : Trier les éléments dans les bonnes couches (`OA`, `SA`, `LA`...) en se basant sur leur URI de type canonique, et non sur des noms de fichiers ou de collections arbitraires.
 
 ### Utilisation
@@ -142,4 +142,4 @@ Cela permet de stocker les noms, descriptions et labels dans plusieurs langues s
 
 ---
 
-Ce **Model Engine** fournit ainsi une base unique, cohérente et sémantiquement rigoureuse pour toutes les fonctionnalités d’analyse, de génération de code et d’IA de GenAptitude.
+Ce **Model Engine** fournit ainsi une base unique, cohérente et sémantiquement rigoureuse pour toutes les fonctionnalités d’analyse, de génération de code et d’IA de RAISE.

@@ -8,6 +8,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # ✅ Liaison relative vers votre core-api existante
-genaptitude-core-api = { path = "../../core-api" }
+raise-core-api = { path = "../../core-api" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

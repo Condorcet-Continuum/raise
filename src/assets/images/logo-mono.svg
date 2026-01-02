@@ -1,74 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 140" width="500" height="140">
-  <!-- Version monochrome - pour impressions, fonds colorés, etc. -->
-  
-  <!-- Icône -->
-  <g transform="translate(25, 25)">
-    <!-- G stylisé -->
-    <path d="M 45 10 
-             C 62 10, 75 23, 75 40
-             C 75 57, 62 70, 45 70
-             C 28 70, 15 57, 15 40
-             C 15 23, 28 10, 45 10
-             M 45 18
-             C 32 18, 23 27, 23 40
-             C 23 53, 32 62, 45 62
-             C 54 62, 62 56, 65 47
-             L 45 47
-             L 45 39
-             L 73 39
-             C 73 39, 73 40, 73 41
-             C 73 56, 61 68, 45 68
-             C 29 68, 17 56, 17 40
-             C 17 24, 29 12, 45 12
-             C 54 12, 62 16, 67 22
-             L 61 28
-             C 57 23, 51 20, 45 20
-             C 33 20, 25 29, 25 40
-             C 25 51, 33 60, 45 60
-             C 53 60, 60 55, 63 47
-             L 45 47
-             Z" 
-          fill="#1F2937"/>
-    
-    <!-- Points décoratifs -->
-    <circle cx="70" cy="25" r="3" fill="#1F2937" opacity="0.6"/>
-    <circle cx="75" cy="35" r="2.5" fill="#1F2937" opacity="0.5"/>
-    <circle cx="68" cy="45" r="2" fill="#1F2937" opacity="0.4"/>
-    
-    <!-- Flèche -->
-    <path d="M 45 8 L 48 13 L 45 11.5 L 42 13 Z" fill="#1F2937" opacity="0.7"/>
-  </g>
-  
-  <!-- Texte -->
-  <g transform="translate(120, 0)">
-    <text x="0" y="58" 
-          font-family="'Segoe UI', system-ui, -apple-system, sans-serif" 
-          font-size="42" 
-          font-weight="700" 
-          fill="#1F2937"
-          letter-spacing="-1">Gen</text>
-    
-    <text x="78" y="58" 
-          font-family="'Segoe UI', system-ui, -apple-system, sans-serif" 
-          font-size="42" 
-          font-weight="700" 
-          fill="#1F2937"
-          letter-spacing="-1">Aptitude</text>
-    
-    <line x1="0" y1="70" x2="245" y2="70" 
-          stroke="#1F2937" 
-          stroke-width="2" 
-          opacity="0.2"/>
-    
-    <text x="0" y="92" 
-          font-family="'Segoe UI', system-ui, -apple-system, sans-serif" 
-          font-size="14" 
-          font-weight="600" 
-          fill="#6B7280"
-          letter-spacing="2">USE-CASE FACTORY</text>
-    
-    <circle cx="180" cy="88" r="2" fill="#6B7280" opacity="0.5"/>
-    <circle cx="190" cy="88" r="2" fill="#6B7280" opacity="0.5"/>
-    <circle cx="200" cy="88" r="2" fill="#6B7280" opacity="0.5"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 100">
+  <g fill="#000000">
+    <path d="M30,50 L45,24 L75,24 L90,50 L75,76 L45,76 Z" fill="none" stroke="#000000" stroke-width="4"/>
+    <path d="M60,50 L90,50 M60,50 L30,50 M60,50 L45,24" stroke="#000000" stroke-width="3"/>
+    <circle cx="60" cy="50" r="6" fill="#000000"/>
+
+    <text x="110" y="62" font-family="Helvetica, Arial, sans-serif" font-weight="bold" font-size="48" letter-spacing="-1">
+      R.A.I.S.E.
+    </text>
+
+    <text x="112" y="82" font-family="Helvetica, Arial, sans-serif" font-weight="normal" font-size="9.5" letter-spacing="0.5">
+      RATIONALIZED ADVANCED INTELLIGENCE SYSTEM ENGINE
+    </text>
   </g>
 </svg>

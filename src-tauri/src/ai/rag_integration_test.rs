@@ -34,7 +34,7 @@ mod tests {
         let mut embedder = EmbeddingEngine::new()
             .expect("❌ Impossible de charger le modèle d'embedding (FastEmbed)");
 
-        let collection = "genaptitude_integration_test";
+        let collection = "raise_integration_test";
 
         memory
             .init_collection(collection, 384)

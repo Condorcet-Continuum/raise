@@ -1,6 +1,6 @@
-# GenAptitude Technical Architecture
+# RAISE Technical Architecture
 
-This document outlines the high-level architecture of **GenAptitude**, a Model-Based AI Engineering (MBAIE) platform designed with a **Local-First** approach.
+This document outlines the high-level architecture of **RAISE**, a Model-Based AI Engineering (MBAIE) platform designed with a **Local-First** approach.
 
 The system relies on a hybrid **Rust/WASM** architecture (Performance & Safety) orchestrated by a **React/TypeScript** interface (User Experience).
 
@@ -102,7 +102,7 @@ The application's brain, divided into three main pillars:
 
 ## 🔄 Data Flow: The Neuro-Symbolic Loop
 
-The key concept of GenAptitude is to never blindly trust the AI. Here is the lifecycle of a request:
+The key concept of RAISE is to never blindly trust the AI. Here is the lifecycle of a request:
 
 1. **Intention**: The user expresses a need ("Add a battery to the system").
 2. **Classification**: The `ai/agents/intent_classifier` determines which Agent acts (e.g., Hardware Agent).

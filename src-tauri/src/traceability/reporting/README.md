@@ -52,7 +52,7 @@ Orchestre la génération d'un rapport complet sur la santé du projet. Il agit 
 
 ```json
 {
-  "project_name": "GenAptitude Project",
+  "project_name": "RAISE Project",
   "date": "2025-12-10T14:30:00Z",
   "model_stats": {
     "total_elements": 150,

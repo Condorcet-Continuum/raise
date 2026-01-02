@@ -1,6 +1,6 @@
 # Module Workflow Designer 🔀
 
-Ce module propose une interface graphique pour la conception et le pilotage de l'orchestration **Neuro-Symbolique** de GenAptitude.
+Ce module propose une interface graphique pour la conception et le pilotage de l'orchestration **Neuro-Symbolique** de RAISE.
 Il ne s'agit plus d'une simple simulation : le designer est connecté en temps réel au **Workflow Engine Rust** via Tauri.
 
 Il permet de visualiser l'avancement des tâches (Agents IA, Compilations) et d'interagir avec les processus (Validation Humaine).
@@ -104,7 +104,7 @@ export default function WorkflowPage() {
 
 Avec cette documentation mise à jour, votre module Workflow est **complet** (Backend + Frontend + Doc).
 
-L'intégration complète de GenAptitude est maintenant finalisée. Avez-vous besoin d'aide pour :
+L'intégration complète de RAISE est maintenant finalisée. Avez-vous besoin d'aide pour :
 1.  Générer le binaire final (`cargo tauri build`) ?
 2.  Tester un scénario complet ("End-to-End") ?
 3.  Ou passer à la revue d'un autre module (ex: IA ou Blockchain) ?

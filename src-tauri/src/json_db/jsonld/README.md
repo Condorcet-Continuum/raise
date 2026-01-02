@@ -1,6 +1,6 @@
 # Module JSON-LD (Semantic Engine)
 
-Ce module implémente une couche d'abstraction **Sémantique** pour GenAptitude. Il permet de traiter les documents JSON non seulement comme des objets structurés, mais comme des graphes de connaissances liés (Linked Data), conformes à l'ontologie Arcadia (OA, SA, LA, PA, EPBS).
+Ce module implémente une couche d'abstraction **Sémantique** pour RAISE. Il permet de traiter les documents JSON non seulement comme des objets structurés, mais comme des graphes de connaissances liés (Linked Data), conformes à l'ontologie Arcadia (OA, SA, LA, PA, EPBS).
 
 ## 🏗️ Architecture
 
@@ -12,7 +12,7 @@ Le module est articulé autour de trois composants majeurs :
 
 ## 🧠 Ontologie Arcadia
 
-GenAptitude définit ses propres espaces de noms (Namespaces) pour mapper les concepts de la méthode Arcadia. Ces définitions se trouvent dans `vocabulary.rs`.
+RAISE définit ses propres espaces de noms (Namespaces) pour mapper les concepts de la méthode Arcadia. Ces définitions se trouvent dans `vocabulary.rs`.
 
 | Couche           | Préfixe | URI de Base         | Description                                    |
 | :--------------- | :------ | :------------------ | :--------------------------------------------- |
@@ -31,7 +31,7 @@ C'est le cœur du JSON-LD. Cela permet de normaliser les données avant traiteme
 
 - **Expansion** : Transforme les clés courtes en IRIs complets. Utile pour vérifier les types de manière absolue.
   - Entrée : `{"@type": "oa:OperationalActivity"}`
-  - Sortie : `{"@type": "https://genaptitude.io/ontology/arcadia/oa#OperationalActivity"}`
+  - Sortie : `{"@type": "https://raise.io/ontology/arcadia/oa#OperationalActivity"}`
 - **Compaction** : L'inverse. Transforme les IRIs complets en clés courtes pour le stockage ou l'affichage, en utilisant le contexte actif.
 
 ### 2\. Validation Sémantique
@@ -56,7 +56,7 @@ let processor = JsonLdProcessor::new();
 
 // 2. Document JSON avec contexte
 let doc = json!({
-    "@context": { "oa": "https://genaptitude.io/ontology/arcadia/oa#" },
+    "@context": { "oa": "https://raise.io/ontology/arcadia/oa#" },
     "@type": "oa:OperationalActivity",
     "oa:name": "Analyser le besoin"
 });

@@ -9,7 +9,7 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-    /// Initialise le store dans un dossier donné (ex: .genaptitude/chats/)
+    /// Initialise le store dans un dossier donné (ex: .raise/chats/)
     pub fn new(base_path: &Path) -> Result<Self> {
         if !base_path.exists() {
             fs::create_dir_all(base_path)

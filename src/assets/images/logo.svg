@@ -1,142 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 140" width="500" height="140">
-  <defs>
-    <!-- Dégradés de la charte -->
-    <linearGradient id="primaryGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#4F46E5;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#7C3AED;stop-opacity:1" />
-    </linearGradient>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 100">
+  <g>
+    <path d="M30,50 L45,24 L75,24 L90,50 L75,76 L45,76 Z" fill="none" stroke="#003399" stroke-width="4"/>
     
-    <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#06B6D4;stop-opacity:1" />
-      <stop offset="50%" style="stop-color:#3B82F6;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#4F46E5;stop-opacity:1" />
-    </linearGradient>
+    <path d="M60,50 L90,50 M60,50 L30,50 M60,50 L45,24" stroke="#003399" stroke-width="3"/>
+    
+    <circle cx="60" cy="50" r="6" fill="#FFCC00"/>
 
-    <linearGradient id="lightGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#4F46E5;stop-opacity:0.2" />
-      <stop offset="100%" style="stop-color:#7C3AED;stop-opacity:0.05" />
-    </linearGradient>
+    <text x="110" y="62" font-family="Helvetica, Arial, sans-serif" font-weight="bold" font-size="48" letter-spacing="-1" fill="#003399">
+      R.A.I.S.E.
+    </text>
 
-    <!-- Filtre pour l'ombre douce -->
-    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
-      <feOffset dx="0" dy="2" result="offsetblur"/>
-      <feComponentTransfer>
-        <feFuncA type="linear" slope="0.3"/>
-      </feComponentTransfer>
-      <feMerge>
-        <feMergeNode/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-  </defs>
-  
-  <!-- Icône principale - Design abstrait représentant la génération et l'aptitude -->
-  <g transform="translate(25, 25)">
-    <!-- Cercle de fond avec dégradé subtil -->
-    <circle cx="45" cy="45" r="43" fill="url(#lightGradient)" opacity="0.5"/>
-    
-    <!-- Forme principale - G stylisé avec des éléments géométriques -->
-    <g filter="url(#softGlow)">
-      <!-- Base du G -->
-      <path d="M 45 10 
-               C 62 10, 75 23, 75 40
-               C 75 57, 62 70, 45 70
-               C 28 70, 15 57, 15 40
-               C 15 23, 28 10, 45 10
-               M 45 18
-               C 32 18, 23 27, 23 40
-               C 23 53, 32 62, 45 62
-               C 54 62, 62 56, 65 47
-               L 45 47
-               L 45 39
-               L 73 39
-               C 73 39, 73 40, 73 41
-               C 73 56, 61 68, 45 68
-               C 29 68, 17 56, 17 40
-               C 17 24, 29 12, 45 12
-               C 54 12, 62 16, 67 22
-               L 61 28
-               C 57 23, 51 20, 45 20
-               C 33 20, 25 29, 25 40
-               C 25 51, 33 60, 45 60
-               C 53 60, 60 55, 63 47
-               L 45 47
-               Z" 
-            fill="url(#primaryGradient)"/>
-      
-      <!-- Éléments décoratifs - représentant la "factory" -->
-      <circle cx="70" cy="25" r="3" fill="#06B6D4">
-        <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
-      </circle>
-      <circle cx="75" cy="35" r="2.5" fill="#3B82F6">
-        <animate attributeName="opacity" values="0.3;0.9;0.3" dur="2.5s" repeatCount="indefinite"/>
-      </circle>
-      <circle cx="68" cy="45" r="2" fill="#7C3AED">
-        <animate attributeName="opacity" values="0.4;1;0.4" dur="3s" repeatCount="indefinite"/>
-      </circle>
-      
-      <!-- Lignes de connexion subtiles -->
-      <path d="M 70 25 L 75 35 L 68 45" 
-            stroke="url(#accentGradient)" 
-            stroke-width="1" 
-            fill="none" 
-            opacity="0.4"
-            stroke-dasharray="2,2">
-        <animate attributeName="stroke-dashoffset" from="0" to="8" dur="1s" repeatCount="indefinite"/>
-      </path>
-    </g>
-    
-    <!-- Accent en haut du G - flèche subtile -->
-    <path d="M 45 8 L 48 13 L 45 11.5 L 42 13 Z" fill="#06B6D4" opacity="0.8"/>
+    <text x="112" y="82" font-family="Helvetica, Arial, sans-serif" font-weight="normal" font-size="9.5" letter-spacing="0.5" fill="#444444">
+      RATIONALIZED ADVANCED INTELLIGENCE SYSTEM ENGINE
+    </text>
   </g>
-  
-  <!-- Texte GenAptitude -->
-  <g transform="translate(120, 0)">
-    <!-- Gen -->
-    <text x="0" y="58" 
-          font-family="'Segoe UI', system-ui, -apple-system, sans-serif" 
-          font-size="42" 
-          font-weight="700" 
-          fill="#1F2937"
-          letter-spacing="-1">Gen</text>
-    
-    <!-- Aptitude avec dégradé -->
-    <text x="78" y="58" 
-          font-family="'Segoe UI', system-ui, -apple-system, sans-serif" 
-          font-size="42" 
-          font-weight="700" 
-          fill="url(#primaryGradient)"
-          letter-spacing="-1">Aptitude</text>
-    
-    <!-- Séparateur subtil -->
-    <line x1="0" y1="70" x2="253" y2="70" 
-          stroke="url(#accentGradient)" 
-          stroke-width="2" 
-          opacity="0.3"/>
-    
-    <!-- Tagline "Use-case Factory" -->
-    <text x="0" y="92" 
-          font-family="'Segoe UI', system-ui, -apple-system, sans-serif" 
-          font-size="14" 
-          font-weight="600" 
-          fill="#6B7280"
-          letter-spacing="2">USE-CASE FACTORY</text>
-    
-    <!-- Petits indicateurs décoratifs -->
-    <circle cx="188" cy="88" r="2" fill="#06B6D4" opacity="0.6"/>
-    <circle cx="198" cy="88" r="2" fill="#3B82F6" opacity="0.6"/>
-    <circle cx="208" cy="88" r="2" fill="#7C3AED" opacity="0.6"/>
-  </g>
-  
-  <!-- Version sans animation pour exports statiques (commentée par défaut) -->
-  <!--
-  <style>
-    @media (prefers-reduced-motion: reduce) {
-      * {
-        animation: none !important;
-      }
-    }
-  </style>
-  -->
 </svg>

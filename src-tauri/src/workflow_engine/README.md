@@ -1,6 +1,6 @@
 # 🔀 Module Workflow Engine
 
-Ce module implémente le moteur d'orchestration **symbolique** de GenAptitude.
+Ce module implémente le moteur d'orchestration **symbolique** de RAISE.
 Il est responsable de l'exécution déterministe des plans d'actions, qu'ils soient définis manuellement par un ingénieur ou générés dynamiquement par un Agent IA.
 
 Contrairement aux agents (qui sont "créatifs" et probabilistes), le Workflow Engine est **rigide et auditable**.

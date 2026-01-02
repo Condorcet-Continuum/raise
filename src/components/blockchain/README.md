@@ -1,6 +1,6 @@
 # Module Blockchain 🔗
 
-Ce module contient les composants d'interface liés aux fonctionnalités **Blockchain / Ledger** de GenAptitude (ex: notarisation, ancrage de preuves).
+Ce module contient les composants d'interface liés aux fonctionnalités **Blockchain / Ledger** de RAISE (ex: notarisation, ancrage de preuves).
 Actuellement, il fournit principalement des retours visuels (Toasts) stylisés pour signaler des événements de consensus.
 
 ---

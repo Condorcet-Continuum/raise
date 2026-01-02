@@ -1,5 +1,5 @@
 // src-tauri/src/fabric/client.rs
-//! Client Hyperledger Fabric pour GenAptitude
+//! Client Hyperledger Fabric pour RAISE
 //!
 //! Ce module implémente un client léger pour interagir avec un réseau
 //! Hyperledger Fabric via gRPC, optimisé pour l'intégration Tauri.
@@ -21,8 +21,8 @@ impl Default for FabricConfig {
     fn default() -> Self {
         Self {
             endpoint: "grpc://localhost:7051".to_string(),
-            msp_id: "GenAptitudeMSP".to_string(),
-            channel_name: "genaptitude-channel".to_string(),
+            msp_id: "RAISEMSP".to_string(),
+            channel_name: "raise-channel".to_string(),
             chaincode_name: "arcadia-chaincode".to_string(),
             tls_enabled: false,
         }

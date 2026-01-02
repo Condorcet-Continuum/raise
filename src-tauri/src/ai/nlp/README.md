@@ -84,4 +84,4 @@ Le module est passif. Le découpage est fait sommairement dans `ai/context/retri
 
 ---
 
-> **Note :** Ce module est pour l'instant une coquille architecturale destinée à accueillir la complexité croissante du traitement de texte au fur et à mesure que GenAptitude montera en puissance.
+> **Note :** Ce module est pour l'instant une coquille architecturale destinée à accueillir la complexité croissante du traitement de texte au fur et à mesure que RAISE montera en puissance.

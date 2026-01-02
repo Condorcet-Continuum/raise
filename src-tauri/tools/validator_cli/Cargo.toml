@@ -10,4 +10,4 @@ serde_json = "1.0"
 dotenvy = "0.15"
 
 # Lien vers l'application principale (votre lib interne)
-genaptitude = { path = "../../" }
+raise = { path = "../../" }

@@ -485,11 +485,11 @@ impl<'a> CollectionsManager<'a> {
                 obj.insert(
                     "@context".to_string(),
                     json!({
-                            "oa": "https://genaptitude.io/ontology/arcadia/oa#",
-                            "sa": "https://genaptitude.io/ontology/arcadia/sa#",
-                            "la": "https://genaptitude.io/ontology/arcadia/la#",
-                            "pa": "https://genaptitude.io/ontology/arcadia/pa#",
-                            "data": "https://genaptitude.io/ontology/arcadia/data#"
+                            "oa": "https://raise.io/ontology/arcadia/oa#",
+                            "sa": "https://raise.io/ontology/arcadia/sa#",
+                            "la": "https://raise.io/ontology/arcadia/la#",
+                            "pa": "https://raise.io/ontology/arcadia/pa#",
+                            "data": "https://raise.io/ontology/arcadia/data#"
                     }),
                 );
             }

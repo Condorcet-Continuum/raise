@@ -4,7 +4,7 @@ use crate::json_db::storage::StorageEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Chemins structurels du projet GenAptitude
+/// Chemins structurels du projet RAISE
 #[derive(Clone)]
 pub struct AgentPaths {
     /// Le dossier contenant la DB du projet courant (PATH_RAISE_DOMAIN)

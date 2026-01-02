@@ -1,4 +1,4 @@
-# 🚀 GenAptitude JSON-DB CLI
+# 🚀 RAISE JSON-DB CLI
 
 > **Version :** 1.2 (Décembre 2025)
 > **Nouveautés :** Transactions Intelligentes, Moteur SQL avec Projections, Enrichissement Sémantique.
@@ -7,7 +7,7 @@
 2.  **Moteur SQL Avancé** : Support des projections (`SELECT a, b`) et des filtres complexes.
 3.  **Sémantique** : Mention de l'enrichissement JSON-LD automatique lors de l'insertion.
 
-**`jsondb_cli`** est l'outil d'administration en ligne de commande pour la base de données JSON locale de GenAptitude. Il permet de gérer le cycle de vie des bases de données, des collections, et de manipuler les documents avec une validation de schéma stricte et une cohérence sémantique.
+**`jsondb_cli`** est l'outil d'administration en ligne de commande pour la base de données JSON locale de RAISE. Il permet de gérer le cycle de vie des bases de données, des collections, et de manipuler les documents avec une validation de schéma stricte et une cohérence sémantique.
 
 ---
 
@@ -17,7 +17,7 @@ Le CLI nécessite un environnement correctement configuré via un fichier `.env`
 
 ```bash
 # Racine du stockage physique (Dossier où les données seront écrites)
-PATH_RAISE_DOMAIN="/home/votre_user/genaptitude_domain"
+PATH_RAISE_DOMAIN="/home/votre_user/raise_domain"
 
 # Chemin relatif vers le schéma maître (utilisé lors du bootstrap create-db)
 RAISE_DB_SCHEMA="schemas/v1/db/index.schema.json"

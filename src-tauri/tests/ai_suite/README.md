@@ -1,6 +1,6 @@
 # 🤖 Suite de Tests d'Intégration IA (`ai_suite`)
 
-Ce dossier contient les tests "End-to-End" (E2E) validant la chaîne complète de l'Intelligence Artificielle de GenAptitude. Ces tests ne simulent pas seulement la logique, ils vérifient que les **Agents** produisent réellement des fichiers JSON valides sur le disque, conformes au métamodèle Arcadia et résistants aux aléas des LLMs.
+Ce dossier contient les tests "End-to-End" (E2E) validant la chaîne complète de l'Intelligence Artificielle de RAISE. Ces tests ne simulent pas seulement la logique, ils vérifient que les **Agents** produisent réellement des fichiers JSON valides sur le disque, conformes au métamodèle Arcadia et résistants aux aléas des LLMs.
 
 ## 🏗️ Architecture du Test E2E
 

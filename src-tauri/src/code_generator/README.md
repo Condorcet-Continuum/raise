@@ -2,13 +2,13 @@
 
 ## 🎯 Vue d'ensemble
 
-Le module `code_generator` est le moteur de production de code source multi-langage de GenAptitude. Il permet de transformer automatiquement les modèles d'architecture (Arcadia/Capella) stockés dans la `json_db` en implémentations concrètes.
+Le module `code_generator` est le moteur de production de code source multi-langage de RAISE. Il permet de transformer automatiquement les modèles d'architecture (Arcadia/Capella) stockés dans la `json_db` en implémentations concrètes.
 
 Il constitue le pont critique entre la **modélisation formelle MBSE** et l'**implémentation technique réelle**.
 
 ### Philosophie : Le "Sandwich Neuro-Symbolique"
 
-Contrairement aux générateurs classiques (trop rigides) ou aux LLMs purs (trop hallucinatoires), GenAptitude utilise une approche hybride en deux passes :
+Contrairement aux générateurs classiques (trop rigides) ou aux LLMs purs (trop hallucinatoires), RAISE utilise une approche hybride en deux passes :
 
 1.  **Passe Symbolique (Squelette)** : Un moteur de templates déterministe (`Tera`) génère une structure de code garantie sans erreur de compilation (Imports, Classes, Types, Signatures).
 2.  **Passe Neuronale (Chair)** : L'IA (via `SoftwareAgent`) repasse sur le fichier pour injecter la logique métier intelligente aux points d'extension prévus.
@@ -108,7 +108,7 @@ let files = service.generate_for_element(&actor_json, TargetLanguage::Rust)?;
 
 ## 📏 Références et Standards
 
-GenAptitude vise la conformité avec les standards industriels pour le code généré, afin d'assurer son intégration dans des chaînes critiques.
+RAISE vise la conformité avec les standards industriels pour le code généré, afin d'assurer son intégration dans des chaînes critiques.
 
 ### Standards de code visés
 

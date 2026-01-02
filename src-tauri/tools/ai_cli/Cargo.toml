@@ -11,5 +11,5 @@ dotenvy = "0.15"
 serde_json = "1"
 
 # On dépend de la librairie principale pour réutiliser toute la logique AI
-[dependencies.genaptitude]
+[dependencies.raise]
 path = "../.."

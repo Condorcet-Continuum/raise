@@ -7,20 +7,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 // Imports Métier
-use genaptitude::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
-use genaptitude::ai::agents::{
+use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
+use raise::ai::agents::{
     business_agent::BusinessAgent, data_agent::DataAgent, epbs_agent::EpbsAgent,
     hardware_agent::HardwareAgent, software_agent::SoftwareAgent, system_agent::SystemAgent,
     transverse_agent::TransverseAgent, Agent, AgentContext,
 };
 
-use genaptitude::ai::llm::client::LlmClient;
-use genaptitude::json_db::storage::{JsonDbConfig, StorageEngine};
+use raise::ai::llm::client::LlmClient;
+use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 
 #[derive(Parser)]
 #[command(
     name = "ai_cli",
-    author = "GenAptitude Team",
+    author = "RAISE Team",
     version,
     about = "Interface CLI pour le cerveau Neuro-Symbolique"
 )]
@@ -50,13 +50,13 @@ async fn main() -> Result<()> {
     let model_name = env::var("RAISE_MODEL_NAME").ok();
 
     // --- CORRECTION CRITIQUE ICI ---
-    // On cherche RAISE_LOCAL_URL (comme dans le .env) et non GENAPTITUDE_LLM_LOCAL_URL
+    // On cherche RAISE_LOCAL_URL (comme dans le .env) et non RAISE_LLM_LOCAL_URL
     let local_url =
         env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
 
     let domain_path = env::var("PATH_RAISE_DOMAIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap().join("genaptitude_storage"));
+        .unwrap_or_else(|_| std::env::current_dir().unwrap().join("raise_storage"));
 
     let dataset_path = env::var("PATH_RAISE_DATASET")
         .map(PathBuf::from)
@@ -98,17 +98,16 @@ async fn run_interactive_mode(
     client: LlmClient,
     url_display: &str,
 ) -> Result<()> {
-    println!("🤖 GenAptitude CLI (Mode Interactif)");
+    println!("🤖 RAISE CLI (Mode Interactif)");
     println!("------------------------------------");
     println!("Analyseur NLP activé : Oui");
-    // Si cela affiche http://localhost:8080, c'est GAGNÉ.
     println!("LLM Connecté : {}", url_display);
     println!("Stockage : {:?}", ctx.paths.domain_root);
     println!("\nExemple : 'Crée le Système de Pilotage'");
     println!("(Tapez 'exit' pour quitter)\n");
 
     loop {
-        print!("GenAptitude> ");
+        print!("RAISE> ");
         io::stdout().flush()?;
 
         let mut input = String::new();

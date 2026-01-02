@@ -1,6 +1,6 @@
-# Architecture JSON-DB (GenAptitude)
+# Architecture JSON-DB (RAISE)
 
-**JSON-DB** est le moteur de base de données embarqué, orienté document et sémantique, développé spécifiquement pour GenAptitude. Il combine la simplicité du stockage de fichiers JSON plats avec la robustesse d'une base de données transactionnelle (ACID) et la puissance du Web Sémantique (JSON-LD).
+**JSON-DB** est le moteur de base de données embarqué, orienté document et sémantique, développé spécifiquement pour RAISE. Il combine la simplicité du stockage de fichiers JSON plats avec la robustesse d'une base de données transactionnelle (ACID) et la puissance du Web Sémantique (JSON-LD).
 
 ## 🌍 Vue d'Ensemble
 
@@ -181,7 +181,7 @@ use crate::json_db::storage::StorageEngine;
 use serde_json::json;
 
 async fn demo() -> anyhow::Result<()> {
-    let config = JsonDbConfig::new("/tmp/genaptitude_data");
+    let config = JsonDbConfig::new("/tmp/raise_data");
     let space = "demo_space";
     let db = "demo_db";
 

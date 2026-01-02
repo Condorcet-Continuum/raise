@@ -1,6 +1,6 @@
-# Architecture Technique GenAptitude
+# Architecture Technique RAISE
 
-Ce document décrit l'architecture de haut niveau de **GenAptitude**, une plateforme d'Ingénierie IA Neuro-Symbolique (MBAIE) conçue selon l'approche **Local-First**.
+Ce document décrit l'architecture de haut niveau de **RAISE**, une plateforme d'Ingénierie IA Neuro-Symbolique (MBAIE) conçue selon l'approche **Local-First**.
 
 Le système repose sur une architecture hybride **Rust/WASM** (Performance & Sécurité) orchestrée par une interface **React/TypeScript** (Expérience Utilisateur).
 
@@ -102,7 +102,7 @@ Le cerveau de l'application. Il est divisé en trois piliers :
 
 ## 🔄 Flux de Données : La Boucle Neuro-Symbolique
 
-Le concept clé de GenAptitude est de ne jamais faire confiance aveuglément à l'IA. Voici le cycle de vie d'une requête :
+Le concept clé de RAISE est de ne jamais faire confiance aveuglément à l'IA. Voici le cycle de vie d'une requête :
 
 1. **Intention** : L'utilisateur exprime un besoin ("Ajoute une batterie au système").
 2. **Classification** : L'`ai/agents/intent_classifier` détermine quel Agent doit agir (ex: Hardware Agent).
@@ -134,4 +134,4 @@ Le concept clé de GenAptitude est de ne jamais faire confiance aveuglément à 
 
 ---
 
-_Document généré automatiquement le 27/12/2025 pour le projet GenAptitude._
+_Document généré automatiquement le 27/12/2025 pour le projet RAISE._

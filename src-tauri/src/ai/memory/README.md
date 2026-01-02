@@ -1,6 +1,6 @@
 # Module Memory — Mémoire Long-Terme & Vectorielle
 
-Ce module gère la **persistance sémantique** de l'IA. Il agit comme l'hippocampe du système GenAptitude : il stocke les informations (documents, notes, fragments de modèle) sous forme vectorielle pour permettre une recherche par le sens (Sémantique) plutôt que par mot-clé exact.
+Ce module gère la **persistance sémantique** de l'IA. Il agit comme l'hippocampe du système RAISE : il stocke les informations (documents, notes, fragments de modèle) sous forme vectorielle pour permettre une recherche par le sens (Sémantique) plutôt que par mot-clé exact.
 
 ---
 
@@ -27,7 +27,7 @@ L'implémentation actuelle utilise **Qdrant**, une base de données vectorielle 
 
 ## 🛠️ Prérequis Infrastructure
 
-Ce module nécessite une instance Qdrant active. Dans l'environnement de développement GenAptitude, cela est géré par Docker.
+Ce module nécessite une instance Qdrant active. Dans l'environnement de développement RAISE, cela est géré par Docker.
 
 ```bash
 # Lancer l'infrastructure (à la racine du projet)
@@ -86,7 +86,7 @@ Le module contient un test d'intégration (`tests.rs`) qui vérifie le cycle de 
 
 ```bash
 # Lancer uniquement les tests de ce module
-cargo test --package genaptitude --lib -- ai::memory::tests
+cargo test --package raise --lib -- ai::memory::tests
 
 ```
 

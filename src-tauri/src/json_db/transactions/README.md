@@ -1,6 +1,6 @@
 # Module Transactions (JSON-DB)
 
-Ce module implémente le gestionnaire de transactions ACID (Atomicité, Cohérence, Isolation, Durabilité) de GenAptitude. Il garantit que toutes les écritures dans la base de données sont sûres, même en cas de crash ou d'accès concurrent.
+Ce module implémente le gestionnaire de transactions ACID (Atomicité, Cohérence, Isolation, Durabilité) de RAISE. Il garantit que toutes les écritures dans la base de données sont sûres, même en cas de crash ou d'accès concurrent.
 
 ## 🏗️ Architecture
 

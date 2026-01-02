@@ -1,6 +1,6 @@
 # Module Code Editor 💻
 
-Ce module fournit un environnement d'édition de code léger, performant et entièrement intégré au design system de GenAptitude.
+Ce module fournit un environnement d'édition de code léger, performant et entièrement intégré au design system de RAISE.
 Il est conçu pour l'édition de configurations (JSON), de scripts (JS/TS) ou la visualisation de code généré, sans la lourdeur d'une librairie externe comme Monaco Editor.
 
 ---
@@ -45,7 +45,7 @@ import { CodeEditor } from '@/components/code-editor/CodeEditor';
 import { LivePreview } from '@/components/code-editor/LivePreview';
 
 export function ConfigPage() {
-  const [code, setCode] = useState('{\n  "projet": "GenAptitude",\n  "version": 1.0\n}');
+  const [code, setCode] = useState('{\n  "projet": "RAISE",\n  "version": 1.0\n}');
 
   return (
     <div style={{ display: 'flex', height: '500px', gap: '20px' }}>

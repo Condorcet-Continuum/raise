@@ -1,6 +1,6 @@
 # Module Diagram Editor ✏️
 
-Ce module fournit un environnement de modélisation visuelle complet (canvas infini) pour GenAptitude.
+Ce module fournit un environnement de modélisation visuelle complet (canvas infini) pour RAISE.
 Plus qu'un simple outil de dessin, il est **connecté en temps réel au "Cerveau" de l'IA** : les éléments définis textuellement dans le chat (ex: "Classe Client") apparaissent automatiquement ici sous forme graphique.
 
 Il permet aux architectes systèmes de manipuler des diagrammes (SysML, Arcadia) via une interface fluide combinant Drag & Drop et outils vectoriels (SVG).

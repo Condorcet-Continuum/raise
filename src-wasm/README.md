@@ -1,4 +1,4 @@
-# 🏭 GenAptitude Factory - Source WASM
+# 🏭 RAISE Factory - Source WASM
 
 > **L'Usine de fabrication des Blocs Cognitifs**
 
@@ -78,7 +78,7 @@ edition = "2021"
 crate-type = ["cdylib"] # ⚠️ INDISPENSABLE pour faire un .wasm
 
 [dependencies]
-genaptitude-core-api = { path = "../../core-api" }
+raise-core-api = { path = "../../core-api" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -89,11 +89,11 @@ serde_json = { workspace = true }
 Grâce à la `core-api`, le code est simple et lisible. Plus besoin de gérer les allocations mémoire manuellement.
 
 ```rust
-use genaptitude_core_api as core;
+use raise_core_api as core;
 
 #[no_mangle]
 pub extern "C" fn run() -> i32 {
-    // 1. Loguer quelque chose dans la console de GenAptitude
+    // 1. Loguer quelque chose dans la console de RAISE
     core::log("🤖 Mon Algo : Démarrage de l'analyse...");
 
     // 2. Lire des données depuis la base de données de l'hôte
@@ -115,7 +115,7 @@ pub extern "C" fn run() -> i32 {
 
 Ne lancez pas `cargo build` manuellement. Utilisez le script qui place automatiquement le résultat dans le "Magasin" (`wasm-modules/`) à la racine du projet.
 
-Depuis la racine du projet (`~/genaptitude`) :
+Depuis la racine du projet (`~/raise`) :
 
 ```bash
 ./src-wasm/build.sh
@@ -134,10 +134,10 @@ Depuis la racine du projet (`~/genaptitude`) :
 
 Le plugin est isolé (sandbox), il ne peut rien faire d'autre que calculer, sauf s'il passe par ces fonctions offertes par `core-api` :
 
-| Fonction                             | Description                                                                                                          |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| **`core::log(msg: &str)`**           | Envoie un message texte qui s'affichera dans les logs terminaux de GenAptitude.                                      |
-| **`core::db_read(col, id) -> bool`** | Demande à GenAptitude de lire un document JSON dans la base locale. (Retourne `true` si l'appel technique a réussi). |
+| Fonction                             | Description                                                                                                    |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| **`core::log(msg: &str)`**           | Envoie un message texte qui s'affichera dans les logs terminaux de RAISE.                                      |
+| **`core::db_read(col, id) -> bool`** | Demande à RAISE de lire un document JSON dans la base locale. (Retourne `true` si l'appel technique a réussi). |
 
 ---
 

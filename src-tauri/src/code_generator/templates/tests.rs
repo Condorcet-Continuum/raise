@@ -9,12 +9,12 @@ fn test_tera_engine_basic_rendering() {
     tera.add_raw_template("hello", "Hello {{ name }}!").unwrap();
 
     let mut context = Context::new();
-    context.insert("name", "GenAptitude");
+    context.insert("name", "RAISE");
 
     let result = tera.render("hello", &context);
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "Hello GenAptitude!");
+    assert_eq!(result.unwrap(), "Hello RAISE!");
 }
 
 #[test]

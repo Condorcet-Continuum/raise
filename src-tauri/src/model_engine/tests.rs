@@ -71,7 +71,7 @@ mod integration_tests {
         mgr.insert_with_schema(
             "actors",
             json!({
-                "@context": { "oa": "https://genaptitude.io/ontology/arcadia/oa#" },
+                "@context": { "oa": "https://raise.io/ontology/arcadia/oa#" },
                 "@type": "oa:OperationalActor",
                 "name": "Opérateur Humain"
             }),
@@ -82,7 +82,7 @@ mod integration_tests {
         mgr.insert_with_schema(
             "functions",
             json!({
-                "@context": { "sa": "https://genaptitude.io/ontology/arcadia/sa#" },
+                "@context": { "sa": "https://raise.io/ontology/arcadia/sa#" },
                 "@type": "sa:SystemFunction",
                 "name": "Calculer Trajectoire"
             }),
@@ -113,7 +113,7 @@ mod integration_tests {
         mgr.insert_with_schema(
             "exchange-items",
             json!({
-                "@context": { "data": "https://genaptitude.io/ontology/arcadia/data#" },
+                "@context": { "data": "https://raise.io/ontology/arcadia/data#" },
                 "@type": "data:ExchangeItem",
                 "name": "Position GPS",
                 "mechanism": "Flow"

@@ -1,8 +1,8 @@
-# 🧠 GenAptitude Cognitive Plugins Module
+# 🧠 RAISE Cognitive Plugins Module
 
 > **Architecture "Use-Case Factory" & Moteur WASM**
 
-Ce module implémente le cœur de l'extensibilité de GenAptitude. Il permet de charger, sécuriser et exécuter des **"Blocs Cognitifs"** : des binaires WebAssembly (.wasm) capables d'interagir intelligemment avec les données de l'application via une API standardisée.
+Ce module implémente le cœur de l'extensibilité de RAISE. Il permet de charger, sécuriser et exécuter des **"Blocs Cognitifs"** : des binaires WebAssembly (.wasm) capables d'interagir intelligemment avec les données de l'application via une API standardisée.
 
 ---
 
@@ -25,7 +25,7 @@ Le système ne se contente pas d'exécuter du WASM, il gère toute la chaîne de
 
 3.  **Le Magasin (`wasm-modules/`)** :
     - Dossier de destination où sont stockés les fichiers `.wasm` compilés.
-    - C'est ici que GenAptitude (le Host) vient piocher les plugins à charger.
+    - C'est ici que RAISE (le Host) vient piocher les plugins à charger.
 
 ---
 
@@ -33,8 +33,8 @@ Le système ne se contente pas d'exécuter du WASM, il gère toute la chaîne de
 
 Une fois chargé dans l'application, le système repose sur une architecture isolée :
 
-- **Host (GenAptitude / Tauri)** : Fournit le contexte, l'accès à la base de données (`JsonDb`), et injecte les capacités via le `Linker`.
-- **Guest (Plugin / WASM)** : Contient la logique métier. Il ne peut interagir avec le monde extérieur que via la **GenAptitude Core API**.
+- **Host (RAISE / Tauri)** : Fournit le contexte, l'accès à la base de données (`JsonDb`), et injecte les capacités via le `Linker`.
+- **Guest (Plugin / WASM)** : Contient la logique métier. Il ne peut interagir avec le monde extérieur que via la **RAISE Core API**.
 - **Cognitive Bridge** : Le canal de communication mémoire partagée.
 
 ### Flux d'Exécution
@@ -80,7 +80,7 @@ edition = "2021"
 crate-type = ["cdylib"] # Indispensable pour générer du .wasm
 
 [dependencies]
-genaptitude-core-api = { path = "../../core-api" }
+raise-core-api = { path = "../../core-api" }
 serde = { workspace = true }
 ```
 
@@ -89,7 +89,7 @@ serde = { workspace = true }
 Utilisez l'API haut niveau (plus besoin de `unsafe`) :
 
 ```rust
-use genaptitude_core_api as core;
+use raise_core_api as core;
 
 #[no_mangle]
 pub extern "C" fn run() -> i32 {
@@ -127,7 +127,7 @@ Sous le capot, `core-api` communique avec `cognitive.rs` via ces fonctions expor
 
 | Fonction Host      | Signature (WASM)              | Description                                                                                                                  |
 | ------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **`host_log`**     | `(ptr: i32, len: i32)`        | Affiche un message dans la console de logs de GenAptitude (`stdout`).                                                        |
+| **`host_log`**     | `(ptr: i32, len: i32)`        | Affiche un message dans la console de logs de RAISE (`stdout`).                                                              |
 | **`host_db_read`** | `(ptr: i32, len: i32) -> i32` | Reçoit une requête JSON `{col, id}`, interroge la DB, et logue le résultat (V1). Retourne `1` si l'appel technique a réussi. |
 
 ---

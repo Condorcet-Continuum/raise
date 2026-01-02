@@ -1,6 +1,6 @@
 # Module Cognitive Analysis 🧠
 
-Ce module est l'interface de contrôle du **Moteur Cognitif** de GenAptitude.
+Ce module est l'interface de contrôle du **Moteur Cognitif** de RAISE.
 Sa fonction est de soumettre le modèle d'architecture actif à des algorithmes d'analyse avancés (vérification de cohérence, détection de conflits sémantiques) exécutés par le backend Rust via des plugins **WebAssembly (WASM)**.
 
 ---

@@ -5,14 +5,14 @@ use std::collections::HashMap;
 
 // --- NAMESPACES ---
 pub mod namespaces {
-    pub const ARCADIA: &str = "https://genaptitude.io/ontology/arcadia#";
-    pub const OA: &str = "https://genaptitude.io/ontology/arcadia/oa#";
-    pub const SA: &str = "https://genaptitude.io/ontology/arcadia/sa#";
-    pub const LA: &str = "https://genaptitude.io/ontology/arcadia/la#";
-    pub const PA: &str = "https://genaptitude.io/ontology/arcadia/pa#";
-    pub const EPBS: &str = "https://genaptitude.io/ontology/arcadia/epbs#";
+    pub const ARCADIA: &str = "https://raise.io/ontology/arcadia#";
+    pub const OA: &str = "https://raise.io/ontology/arcadia/oa#";
+    pub const SA: &str = "https://raise.io/ontology/arcadia/sa#";
+    pub const LA: &str = "https://raise.io/ontology/arcadia/la#";
+    pub const PA: &str = "https://raise.io/ontology/arcadia/pa#";
+    pub const EPBS: &str = "https://raise.io/ontology/arcadia/epbs#";
     // Ajout du namespace DATA
-    pub const DATA: &str = "https://genaptitude.io/ontology/arcadia/data#";
+    pub const DATA: &str = "https://raise.io/ontology/arcadia/data#";
 
     // Standards
     pub const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";

@@ -6,7 +6,7 @@ Ce répertoire regroupe les hooks React personnalisés qui encapsulent la logiqu
 
 ## 📂 Catégorie : Intelligence Artificielle & Modélisation
 
-Ces hooks pilotent le cœur "métier" de GenAptitude (MBAIE, Chat, Génération).
+Ces hooks pilotent le cœur "métier" de RAISE (MBAIE, Chat, Génération).
 
 ### `useAIChat` (`useAIChat.ts`)
 

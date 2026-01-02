@@ -1,4 +1,4 @@
-Ce document structure la vision, l'architecture technique et l'intégration des algorithmes génétiques dans l'écosystème GenAptitude, en mettant l'accent sur l'approche **Neuro-Symbolique** et la **Traçabilité**.
+Ce document structure la vision, l'architecture technique et l'intégration des algorithmes génétiques dans l'écosystème RAISE, en mettant l'accent sur l'approche **Neuro-Symbolique** et la **Traçabilité**.
 
 ---
 
@@ -12,11 +12,11 @@ Ce document structure la vision, l'architecture technique et l'intégration des 
 
 ## 1\. Vision Neuro-Symbolique
 
-Le module `genetics` n'est pas une simple bibliothèque d'algorithmes. C'est le **"Designer Automatisé"** de GenAptitude. Il comble le fossé entre l'IA générative (LLM) et l'ingénierie formelle (Arcadia) :
+Le module `genetics` n'est pas une simple bibliothèque d'algorithmes. C'est le **"Designer Automatisé"** de RAISE. Il comble le fossé entre l'IA générative (LLM) et l'ingénierie formelle (Arcadia) :
 
 1.  **Exploration Structurelle (Symbolique)** : Il manipule des structures de graphes explicites (Architectures Arcadia, Arbres de décision) pour trouver des solutions valides respectant des contraintes strictes.
 2.  **Optimisation Globale (Numérique)** : Il permet d'optimiser des hyper-paramètres ou des topologies de réseaux de neurones (Neuro-Évolution) là où la descente de gradient est impossible.
-3.  **Auditabilité (GenAptitude Core)** : Chaque étape de l'évolution est sérialisable. On ne garde pas juste le résultat, mais la généalogie de la solution, stockée dans la `json_db`.
+3.  **Auditabilité (RAISE Core)** : Chaque étape de l'évolution est sérialisable. On ne garde pas juste le résultat, mais la généalogie de la solution, stockée dans la `json_db`.
 
 ---
 
@@ -105,7 +105,7 @@ graph TD
 
 ## 5\. Cas d'Usage : Optimisation d'Architecture (SA)
 
-Un cas concret pour GenAptitude est l'**allocation optimale de fonctions sur des composants** pour minimiser la latence tout en respectant un budget énergétique.
+Un cas concret pour RAISE est l'**allocation optimale de fonctions sur des composants** pour minimiser la latence tout en respectant un budget énergétique.
 
 ### Le Génome (`genomes/arcadia_arch.rs`)
 
@@ -163,7 +163,7 @@ Pour garantir la traçabilité (Audit Trail), chaque run d'optimisation est enre
 
 ## 8\. Intégration Sémantique & Graphe de Connaissance (JSON-LD)
 
-L'un des différentiateurs majeurs de GenAptitude est que l'optimisation n'est pas une "boîte noire". Chaque étape de l'évolution enrichit le graphe de connaissance du projet.
+L'un des différentiateurs majeurs de RAISE est que l'optimisation n'est pas une "boîte noire". Chaque étape de l'évolution enrichit le graphe de connaissance du projet.
 
 Nous utilisons l'ontologie **PROV-O** (Provenance Ontology) standard couplée à un vocabulaire dédié `genetics`.
 
@@ -172,7 +172,7 @@ Nous utilisons l'ontologie **PROV-O** (Provenance Ontology) standard couplée à
 Le module `genetics` introduit un nouveau namespace dans le `SchemaRegistry` :
 
 - **Prefix** : `gen`
-- **URI** : `https://genaptitude.io/ontology/genetics#`
+- **URI** : `https://raise.io/ontology/genetics#`
 
 | Concept              | Type JSON-LD          | Description                                                     |
 | :------------------- | :-------------------- | :-------------------------------------------------------------- |
@@ -188,9 +188,9 @@ Lorsqu'un run d'optimisation est sauvegardé dans `json_db/collections/optimizat
 ```json
 {
   "@context": [
-    "https://genaptitude.io/ontology/arcadia/core.jsonld",
+    "https://raise.io/ontology/arcadia/core.jsonld",
     {
-      "gen": "https://genaptitude.io/ontology/genetics#",
+      "gen": "https://raise.io/ontology/genetics#",
       "prov": "http://www.w3.org/ns/prov#",
       "fitness": "gen:fitnessScore",
       "parameters": "gen:hyperParameters"

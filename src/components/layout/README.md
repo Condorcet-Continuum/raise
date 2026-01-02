@@ -17,7 +17,7 @@ Leur rôle n'est pas de gérer la logique métier, mais de définir le squelette
 
 ## 🎨 Design & Thèmes
 
-Ces composants définissent la structure visuelle globale de GenAptitude.
+Ces composants définissent la structure visuelle globale de RAISE.
 
 ### Dimensions Clés (Variables CSS)
 

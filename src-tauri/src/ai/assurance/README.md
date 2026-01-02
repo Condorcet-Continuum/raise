@@ -1,6 +1,6 @@
 # Module d'Assurance IA (AI Assurance)
 
-Ce module fournit les structures de données standardisées pour capturer, stocker et transporter les **preuves de confiance** des modèles d'Intelligence Artificielle de GenAptitude.
+Ce module fournit les structures de données standardisées pour capturer, stocker et transporter les **preuves de confiance** des modèles d'Intelligence Artificielle de RAISE.
 
 Il ne réalise pas l'inférence (gérée par `../inference.rs`), mais il est responsable de la **documentation technique** nécessaire à la conformité réglementaire (notamment l'EU AI Act).
 

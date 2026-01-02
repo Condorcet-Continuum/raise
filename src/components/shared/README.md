@@ -1,6 +1,6 @@
 # Shared Components Library 🧱
 
-Ce dossier contient la bibliothèque de composants UI génériques de GenAptitude.
+Ce dossier contient la bibliothèque de composants UI génériques de RAISE.
 Ces composants sont **atomiques**, **sans état métier** (stateless) et entièrement agnostiques du contexte d'utilisation (qu'ils soient dans le module Chat ou le module Modélisation).
 
 Ils constituent la base du **Design System** de l'application.

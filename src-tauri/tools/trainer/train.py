@@ -16,7 +16,7 @@ from trl import SFTTrainer, SFTConfig
 
 # --- CONFIGURATION ---
 MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
-NEW_MODEL_NAME = "genaptitude-qwen-adapter"
+NEW_MODEL_NAME = "raise-qwen-adapter"
 DATASET_FILE = "dataset.jsonl" 
 
 def train():

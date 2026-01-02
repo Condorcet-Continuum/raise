@@ -1,6 +1,6 @@
 # Module `ai/agents` — Système Multi-Agents Neuro-Symbolique
 
-Ce module implémente la logique **exécutive** de l'IA de GenAptitude. Il transforme des requêtes en langage naturel (floues) en artefacts d'ingénierie formels (strictes, validés et persistés) selon la méthodologie **Arcadia**.
+Ce module implémente la logique **exécutive** de l'IA de RAISE. Il transforme des requêtes en langage naturel (floues) en artefacts d'ingénierie formels (strictes, validés et persistés) selon la méthodologie **Arcadia**.
 
 ## 🧠 Architecture Globale
 
@@ -42,7 +42,7 @@ Le système repose sur un pipeline **Comprendre → Décider → Agir** orchestr
 
 ## 👥 La "Squad" d'Agents (Spécialisation)
 
-Contrairement à une approche monolithique, GenAptitude utilise une **équipe d'agents spécialisés**, chacun expert dans sa couche d'abstraction Arcadia.
+Contrairement à une approche monolithique, RAISE utilise une **équipe d'agents spécialisés**, chacun expert dans sa couche d'abstraction Arcadia.
 
 | Agent               | Rôle & Responsabilités | Couche         | Schémas gérés                                              |
 | ------------------- | ---------------------- | -------------- | ---------------------------------------------------------- |

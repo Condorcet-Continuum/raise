@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::io;
 
-/// Type de résultat standard pour l'application GenAptitude
+/// Type de résultat standard pour l'application RAISE
 pub type Result<T> = std::result::Result<T, AppError>;
 
 /// Enumération centrale des erreurs de l'application.

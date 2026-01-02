@@ -7,8 +7,8 @@ use std::fs;
 use std::path::PathBuf;
 
 // Imports internes
-use genaptitude::json_db::schema::{SchemaRegistry, SchemaValidator};
-use genaptitude::json_db::storage::JsonDbConfig;
+use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
+use raise::json_db::storage::JsonDbConfig;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]

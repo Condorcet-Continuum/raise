@@ -112,7 +112,7 @@ impl IntentClassifier {
 
         // --- 2. APPEL LLM (Fallback Intelligent) ---
 
-        let system_prompt = "Tu es le Dispatcher IA de GenAptitude.
+        let system_prompt = "Tu es le Dispatcher IA de RAISE.
         Ton rôle est de classifier l'intention de l'utilisateur en JSON STRICT.
         
         FORMATS ATTENDUS :

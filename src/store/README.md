@@ -1,6 +1,6 @@
 # Global State Management 📦
 
-Ce dossier contient la logique de gestion d'état global de GenAptitude.
+Ce dossier contient la logique de gestion d'état global de RAISE.
 Nous utilisons **Zustand** pour sa simplicité, sa performance (pas de re-rendus inutiles) et son API basée sur les Hooks.
 
 ---

@@ -8,22 +8,22 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
-// Imports GenAptitude
-use genaptitude::json_db::collections::manager::CollectionsManager;
-use genaptitude::json_db::query::{Query, QueryEngine};
-use genaptitude::json_db::storage::{
+// Imports RAISE
+use raise::json_db::collections::manager::CollectionsManager;
+use raise::json_db::query::{Query, QueryEngine};
+use raise::json_db::storage::{
     file_storage::{self},
     JsonDbConfig, StorageEngine,
 };
-use genaptitude::json_db::transactions::manager::TransactionManager;
-use genaptitude::json_db::transactions::TransactionRequest;
+use raise::json_db::transactions::manager::TransactionManager;
+use raise::json_db::transactions::TransactionRequest;
 
 #[derive(Parser)]
 #[command(
     name = "jsondb_cli",
-    author = "GenAptitude Team",
+    author = "RAISE Team",
     version,
-    about = "Outil d'administration pour GenAptitude JSON-DB"
+    about = "Outil d'administration pour RAISE JSON-DB"
 )]
 struct Cli {
     #[arg(short, long, default_value = "default_space")]
@@ -32,7 +32,7 @@ struct Cli {
     #[arg(short, long, default_value = "default_db")]
     db: String,
 
-    #[arg(long, env = "GENAPTITUDE_DATA_DIR")]
+    #[arg(long, env = "RAISE_DATA_DIR")]
     root: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
         r
     } else {
         let home = dirs::home_dir().unwrap_or(PathBuf::from("."));
-        home.join("genaptitude_domain")
+        home.join("raise_domain")
     };
 
     let config = JsonDbConfig {
@@ -278,7 +278,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::Sql { query } => {
-            let q = genaptitude::json_db::query::sql::parse_sql(&query)?;
+            let q = raise::json_db::query::sql::parse_sql(&query)?;
             let result = QueryEngine::new(&mgr).execute_query(q).await?;
             println!("⚡ SQL Result : {} documents", result.documents.len());
             for doc in result.documents {

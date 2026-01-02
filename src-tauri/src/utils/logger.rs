@@ -5,9 +5,9 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 /// À appeler une seule fois au début du `main.rs`.
 pub fn init_logging() {
     // Si RUST_LOG n'est pas défini, on met un niveau par défaut raisonnable
-    // On filtre pour voir les logs de "genaptitude" en debug, et le reste en info
+    // On filtre pour voir les logs de "raise" en debug, et le reste en info
     if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "info,genaptitude=debug");
+        env::set_var("RUST_LOG", "info,raise=debug");
     }
 
     // Configuration du formatteur (affichage compact pour le terminal)

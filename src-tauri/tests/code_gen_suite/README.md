@@ -22,7 +22,7 @@ Pour garantir l'isolation et la reproductibilité, chaque test instancie un envi
 ### Caractéristiques du Mock
 
 - **Stockage Temporaire** : Utilise `tempfile` pour créer un dossier jetable.
-- **Bootstrap DB Complet** : Simule l'arborescence de production GenAptitude :
+- **Bootstrap DB Complet** : Simule l'arborescence de production RAISE :
   - Espace : `un2` (Convention Arcadia).
   - Base : `_system`.
   - Schémas : Crée physiquement des fichiers de schéma valides dans `schemas/v1/arcadia/oa/` (ex: `actor.schema.json`).

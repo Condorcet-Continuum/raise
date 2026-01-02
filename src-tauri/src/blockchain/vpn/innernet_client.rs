@@ -1,6 +1,6 @@
 // src-tauri/src/vpn/innernet_client.rs
-//! Client Innernet pour GenAptitude
-//! 
+//! Client Innernet pour RAISE
+//!
 //! Ce module gère la connexion au mesh VPN Innernet pour assurer
 //! la souveraineté et la sécurité des communications.
 
@@ -20,10 +20,10 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            name: "genaptitude".to_string(),
+            name: "raise".to_string(),
             cidr: "10.42.0.0/16".to_string(),
-            server_endpoint: "vpn.genaptitude.local:51820".to_string(),
-            interface: "genaptitude0".to_string(),
+            server_endpoint: "vpn.raise.local:51820".to_string(),
+            interface: "raise0".to_string(),
         }
     }
 }
@@ -52,13 +52,13 @@ pub struct NetworkStatus {
 pub enum VpnError {
     #[error("Connection error: {0}")]
     Connection(String),
-    
+
     #[error("Command execution error: {0}")]
     CommandExecution(String),
-    
+
     #[error("Parse error: {0}")]
     Parse(String),
-    
+
     #[error("Network not configured")]
     NotConfigured,
 }
@@ -80,7 +80,7 @@ impl InnernetClient {
             peers: Vec::new(),
             uptime_seconds: None,
         };
-        
+
         Self {
             config,
             status: Arc::new(RwLock::new(status)),
@@ -93,13 +93,13 @@ impl InnernetClient {
             .arg("--version")
             .output()
             .map_err(|e| VpnError::CommandExecution(format!("Innernet not found: {}", e)))?;
-        
+
         if !output.status.success() {
             return Err(VpnError::CommandExecution(
                 "Innernet command failed".to_string(),
             ));
         }
-        
+
         let version = String::from_utf8_lossy(&output.stdout);
         Ok(version.trim().to_string())
     }
@@ -107,9 +107,9 @@ impl InnernetClient {
     /// Se connecte au réseau mesh
     pub async fn connect(&self) -> Result<()> {
         tracing::info!("Connecting to Innernet network: {}", self.config.name);
-        
+
         let output = self.run_command(&["up", &self.config.name])?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(VpnError::Connection(format!(
@@ -117,27 +117,27 @@ impl InnernetClient {
                 stderr
             )));
         }
-        
+
         // Mettre à jour le statut
         let mut status = self.status.write().await;
         status.connected = true;
-        
+
         // Récupérer l'IP assignée
         if let Ok(ip) = self.get_interface_ip().await {
             status.ip_address = Some(ip);
         }
-        
+
         tracing::info!("Successfully connected to {}", self.config.name);
-        
+
         Ok(())
     }
 
     /// Se déconnecte du réseau mesh
     pub async fn disconnect(&self) -> Result<()> {
         tracing::info!("Disconnecting from Innernet network: {}", self.config.name);
-        
+
         let output = self.run_command(&["down", &self.config.name])?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(VpnError::Connection(format!(
@@ -145,15 +145,15 @@ impl InnernetClient {
                 stderr
             )));
         }
-        
+
         // Mettre à jour le statut
         let mut status = self.status.write().await;
         status.connected = false;
         status.ip_address = None;
         status.peers.clear();
-        
+
         tracing::info!("Successfully disconnected from {}", self.config.name);
-        
+
         Ok(())
     }
 
@@ -162,13 +162,13 @@ impl InnernetClient {
         if !self.status.read().await.connected {
             return Ok(self.status.read().await.clone());
         }
-        
+
         // Mettre à jour la liste des peers
         if let Ok(peers) = self.fetch_peers().await {
             let mut status = self.status.write().await;
             status.peers = peers;
         }
-        
+
         Ok(self.status.read().await.clone())
     }
 
@@ -180,10 +180,10 @@ impl InnernetClient {
     /// Ajoute un nouveau peer via un code d'invitation
     pub async fn add_peer(&self, invitation_code: &str) -> Result<String> {
         tracing::info!("Adding peer with invitation code");
-        
+
         // TODO: Implémenter l'ajout de peer via invitation
         // innernet install <invitation-file>
-        
+
         Ok("Peer added successfully".to_string())
     }
 
@@ -198,15 +198,15 @@ impl InnernetClient {
     /// Récupère l'IP de l'interface
     async fn get_interface_ip(&self) -> Result<String> {
         let output = self.run_command(&["show", &self.config.name])?;
-        
+
         if !output.status.success() {
             return Err(VpnError::Parse("Failed to get interface info".to_string()));
         }
-        
+
         let stdout = String::from_utf8_lossy(&output.stdout);
-        
+
         // Parser la sortie pour extraire l'IP
-        // Format attendu: "interface: genaptitude0, ip: 10.42.1.1/24"
+        // Format attendu: "interface: raise0, ip: 10.42.1.1/24"
         for line in stdout.lines() {
             if line.contains("ip:") {
                 if let Some(ip_part) = line.split("ip:").nth(1) {
@@ -217,7 +217,7 @@ impl InnernetClient {
                 }
             }
         }
-        
+
         Err(VpnError::Parse("Could not parse IP address".to_string()))
     }
 
@@ -228,14 +228,14 @@ impl InnernetClient {
             .args(&["show", &self.config.interface])
             .output()
             .map_err(|e| VpnError::CommandExecution(e.to_string()))?;
-        
+
         if !output.status.success() {
             return Ok(Vec::new());
         }
-        
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         let peers = self.parse_wg_output(&stdout)?;
-        
+
         Ok(peers)
     }
 
@@ -243,23 +243,19 @@ impl InnernetClient {
     fn parse_wg_output(&self, output: &str) -> Result<Vec<Peer>> {
         let mut peers = Vec::new();
         let mut current_peer: Option<Peer> = None;
-        
+
         for line in output.lines() {
             let line = line.trim();
-            
+
             if line.starts_with("peer:") {
                 // Sauvegarder le peer précédent
                 if let Some(peer) = current_peer.take() {
                     peers.push(peer);
                 }
-                
+
                 // Nouveau peer
-                let public_key = line
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("")
-                    .to_string();
-                
+                let public_key = line.split_whitespace().nth(1).unwrap_or("").to_string();
+
                 current_peer = Some(Peer {
                     name: "unknown".to_string(),
                     ip: "0.0.0.0".to_string(),
@@ -275,7 +271,12 @@ impl InnernetClient {
                 } else if line.starts_with("allowed ips:") {
                     if let Some(ips) = line.split(':').nth(1) {
                         if let Some(first_ip) = ips.split(',').next() {
-                            peer.ip = first_ip.trim().split('/').next().unwrap_or("0.0.0.0").to_string();
+                            peer.ip = first_ip
+                                .trim()
+                                .split('/')
+                                .next()
+                                .unwrap_or("0.0.0.0")
+                                .to_string();
                         }
                     }
                 } else if line.starts_with("latest handshake:") {
@@ -288,12 +289,12 @@ impl InnernetClient {
                 }
             }
         }
-        
+
         // Ajouter le dernier peer
         if let Some(peer) = current_peer {
             peers.push(peer);
         }
-        
+
         Ok(peers)
     }
 
@@ -303,7 +304,7 @@ impl InnernetClient {
             .args(&["-c", "1", "-W", "2", peer_ip])
             .output()
             .map_err(|e| VpnError::CommandExecution(e.to_string()))?;
-        
+
         Ok(output.status.success())
     }
 }
@@ -315,7 +316,7 @@ mod tests {
     #[test]
     fn test_network_config_default() {
         let config = NetworkConfig::default();
-        assert_eq!(config.name, "genaptitude");
+        assert_eq!(config.name, "raise");
         assert_eq!(config.cidr, "10.42.0.0/16");
     }
 
@@ -323,7 +324,7 @@ mod tests {
     async fn test_innernet_client_creation() {
         let config = NetworkConfig::default();
         let client = InnernetClient::new(config);
-        
+
         let status = client.status.read().await;
         assert!(!status.connected);
     }
@@ -332,9 +333,9 @@ mod tests {
     fn test_parse_wg_output() {
         let config = NetworkConfig::default();
         let client = InnernetClient::new(config);
-        
+
         let wg_output = r#"
-interface: genaptitude0
+interface: raise0
   public key: abc123...
   private key: (hidden)
   listening port: 51820
@@ -345,7 +346,7 @@ peer: def456...
   latest handshake: 30 seconds ago
   transfer: 1.5 KiB received, 2.3 KiB sent
         "#;
-        
+
         let peers = client.parse_wg_output(wg_output).unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].ip, "10.42.1.1");

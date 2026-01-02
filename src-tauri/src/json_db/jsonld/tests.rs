@@ -98,7 +98,7 @@ fn test_expand_with_oa() {
     let obj = expanded.as_object().unwrap();
 
     let type_val = obj.get("@type").unwrap().as_str().unwrap();
-    assert!(type_val.contains("genaptitude.io/ontology/arcadia/oa#OperationalActivity"));
+    assert!(type_val.contains("raise.io/ontology/arcadia/oa#OperationalActivity"));
 }
 
 #[test]
@@ -176,8 +176,5 @@ fn test_vocabulary_registry() {
 
 #[test]
 fn test_namespaces() {
-    assert_eq!(
-        namespaces::ARCADIA,
-        "https://genaptitude.io/ontology/arcadia#"
-    );
+    assert_eq!(namespaces::ARCADIA, "https://raise.io/ontology/arcadia#");
 }

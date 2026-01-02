@@ -2,7 +2,7 @@
 
 ## Vue d'Ensemble
 
-Le module **`blockchain`** de GenAptitude intègre deux technologies clés pour assurer la **traçabilité réglementaire** et la **souveraineté des communications** :
+Le module **`blockchain`** de RAISE intègre deux technologies clés pour assurer la **traçabilité réglementaire** et la **souveraineté des communications** :
 
 1. **Hyperledger Fabric** : Blockchain privée pour l'immuabilité des décisions d'architecture
 2. **Innernet VPN** : Mesh VPN basé sur WireGuard pour des communications souveraines et sécurisées
@@ -27,7 +27,7 @@ Ce module constitue le socle de confiance et de sécurité de la plateforme, per
 - ✅ Gestion des peers
 - ✅ Statut réseau en temps réel
 - ✅ Ping et diagnostic
-- ⚙️ Interface réseau : `genaptitude0`
+- ⚙️ Interface réseau : `raise0`
 
 ---
 
@@ -112,13 +112,13 @@ UI: Demande de connexion
 Tauri Command: vpn_connect()
     ↓
 InnernetClient::connect()
-    ├─ Exécution: innernet up genaptitude
+    ├─ Exécution: innernet up raise
     ├─ WireGuard interface setup
     ├─ Handshake avec peers
     └─ Attribution IP (10.42.x.x/16)
     ↓
 NetworkStatus::connected = true
-    ├─ interface: genaptitude0
+    ├─ interface: raise0
     ├─ ip_address: 10.42.1.x
     └─ peers: [...]
 ```
@@ -319,8 +319,8 @@ impl Default for FabricConfig {
     fn default() -> Self {
         Self {
             endpoint: "grpc://localhost:7051".to_string(),
-            msp_id: "GenAptitudeMSP".to_string(),
-            channel_name: "genaptitude-channel".to_string(),
+            msp_id: "RAISEMSP".to_string(),
+            channel_name: "raise-channel".to_string(),
             chaincode_name: "arcadia-chaincode".to_string(),
             tls_enabled: false,
         }
@@ -353,7 +353,7 @@ Identité MSP pour signer les transactions.
 ```rust
 #[derive(Debug, Clone)]
 pub struct Identity {
-    pub msp_id: String,         // "GenAptitudeMSP"
+    pub msp_id: String,         // "RAISEMSP"
     pub certificate: Vec<u8>,   // Certificat X.509 PEM
     pub private_key: Vec<u8>,   // Clé privée ECDSA PEM
 }
@@ -382,10 +382,10 @@ pub async fn load_identity(&self, cert_path: &str, key_path: &str) -> Result<()>
 ```rust
 let fabric_client = FabricClient::new(config);
 
-// Charger l'identité depuis le crypto-config
+// Charger l'identité depuis le crypto-config - RAISE
 fabric_client.load_identity(
-    "crypto-config/peerOrganizations/genaptitude/users/Admin@genaptitude/msp/signcerts/Admin@genaptitude-cert.pem",
-    "crypto-config/peerOrganizations/genaptitude/users/Admin@genaptitude/msp/keystore/priv_sk"
+    "crypto-config/peerOrganizations/raise/users/Admin@raise/msp/signcerts/Admin@raise-cert.pem",
+    "crypto-config/peerOrganizations/raise/users/Admin@raise/msp/keystore/priv_sk"
 ).await?;
 ```
 
@@ -586,10 +586,10 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            name: "genaptitude".to_string(),
+            name: "raise".to_string(),
             cidr: "10.42.0.0/16".to_string(),
-            server_endpoint: "vpn.genaptitude.local:51820".to_string(),
-            interface: "genaptitude0".to_string(),
+            server_endpoint: "vpn.raise.local:51820".to_string(),
+            interface: "raise0".to_string(),
         }
     }
 }
@@ -652,7 +652,7 @@ pub struct NetworkStatus {
 ```json
 {
   "connected": true,
-  "interface": "genaptitude0",
+  "interface": "raise0",
   "ip_address": "10.42.1.15",
   "peers": [
     { "name": "server", "ip": "10.42.0.1", ... },
@@ -740,8 +740,8 @@ pub async fn connect(&self) -> Result<()>
 **Processus** :
 
 ```
-1. Exécuter : innernet up genaptitude
-2. WireGuard crée l'interface genaptitude0
+1. Exécuter : innernet up raise
+2. WireGuard crée l'interface raise
 3. Handshake avec les peers connus
 4. Attribution IP depuis le coordinateur
 5. Mise à jour du statut (connected = true)
@@ -752,8 +752,8 @@ pub async fn connect(&self) -> Result<()>
 **Exemple de logs** :
 
 ```
-[INFO] Connecting to Innernet network: genaptitude
-[INFO] Successfully connected to genaptitude
+[INFO] Connecting to Innernet network: raise
+[INFO] Successfully connected to raise
 [INFO] Assigned IP: 10.42.1.15
 ```
 
@@ -777,8 +777,8 @@ pub async fn disconnect(&self) -> Result<()>
 **Processus** :
 
 ```
-1. Exécuter : innernet down genaptitude
-2. WireGuard détruit l'interface genaptitude0
+1. Exécuter : innernet down raise
+2. WireGuard détruit l'interface raise0
 3. Fermeture des connexions aux peers
 4. Mise à jour du statut (connected = false)
 5. Effacement IP et peers
@@ -788,8 +788,8 @@ pub async fn disconnect(&self) -> Result<()>
 **Exemple de logs** :
 
 ```
-[INFO] Disconnecting from Innernet network: genaptitude
-[INFO] Successfully disconnected from genaptitude
+[INFO] Disconnecting from Innernet network: raise
+[INFO] Successfully disconnected from raise
 ```
 
 ##### `get_status()`
@@ -860,13 +860,13 @@ pub async fn add_peer(&self, invitation_code: &str) -> Result<String>
 
 ```toml
 [interface]
-network_name = "genaptitude"
+network_name = "raise"
 address = "10.42.1.25/32"
 private_key = "..."
 
 [peer]
 public_key = "..."
-endpoint = "vpn.genaptitude.local:51820"
+endpoint = "vpn.raise.local:51820"
 allowed_ips = "10.42.0.0/16"
 ```
 
@@ -912,9 +912,9 @@ fn run_command(&self, args: &[&str]) -> Result<Output> {
 **Exemples d'utilisation** :
 
 ```rust
-self.run_command(&["up", "genaptitude"])?;
-self.run_command(&["down", "genaptitude"])?;
-self.run_command(&["show", "genaptitude"])?;
+self.run_command(&["up", "raise"])?;
+self.run_command(&["down", "raise"])?;
+self.run_command(&["show", "raise"])?;
 ```
 
 ##### `get_interface_ip()`
@@ -928,7 +928,7 @@ async fn get_interface_ip(&self) -> Result<String>
 **Processus** :
 
 ```
-1. Exécuter : innernet show genaptitude
+1. Exécuter : innernet show raise
 2. Parser la sortie pour trouver la ligne "ip:"
 3. Extraire l'IP (format: "10.42.1.15/24" → "10.42.1.15")
 4. Retourner l'IP ou erreur
@@ -937,8 +937,8 @@ async fn get_interface_ip(&self) -> Result<String>
 **Exemple de sortie parsée** :
 
 ```
-interface: genaptitude0, ip: 10.42.1.15/24
-endpoint: vpn.genaptitude.local:51820
+interface: raise0, ip: 10.42.1.15/24
+endpoint: vpn.raise.local:51820
 ```
 
 ##### `fetch_peers()`
@@ -979,7 +979,7 @@ fn parse_wg_output(&self, output: &str) -> Result<Vec<Peer>>
 **Format de sortie `wg show`** :
 
 ```
-interface: genaptitude0
+interface: raise0
   public key: abc123...
   private key: (hidden)
   listening port: 51820
@@ -1036,7 +1036,7 @@ Peer {
 #[test]
 fn test_network_config_default() {
     let config = NetworkConfig::default();
-    assert_eq!(config.name, "genaptitude");
+    assert_eq!(config.name, "raise");
     assert_eq!(config.cidr, "10.42.0.0/16");
 }
 
@@ -1055,7 +1055,7 @@ fn test_parse_wg_output() {
     let client = InnernetClient::new(config);
 
     let wg_output = r#"
-interface: genaptitude0
+interface: raise0
   public key: abc123...
 
 peer: def456...
@@ -1125,7 +1125,7 @@ Hash cryptographique du block
 Vérification ultérieure possible
 ```
 
-**Cas d'usage GenAptitude** :
+**Cas d'usage RAISE** :
 
 - Décisions d'architecture MBSE
 - Snapshots de modèles Capella/Arcadia
@@ -1175,7 +1175,7 @@ Vérification ultérieure possible
 | Souveraineté         | Dépend du fournisseur     | Totale (auto-hébergé) |
 | Complexité           | Simple                    | Modérée               |
 
-**Cas d'usage GenAptitude** :
+**Cas d'usage RAISE** :
 
 - Collaboration inter-sites (Paris ↔ Lyon ↔ Toulouse)
 - Accès distant sécurisé aux modèles
@@ -1194,7 +1194,7 @@ Vérification ultérieure possible
 **Prérequis** :
 
 - Réseau Fabric déployé (peers, orderers, CA)
-- Channel créé : `genaptitude-channel`
+- Channel créé : `raise-channel`
 - Chaincode déployé : `arcadia-chaincode`
 - Certificats MSP générés
 
@@ -1203,27 +1203,27 @@ Vérification ultérieure possible
 ```
 crypto-config/
 └── peerOrganizations/
-    └── genaptitude/
+    └── raise/
         ├── peers/
-        │   └── peer0.genaptitude/
+        │   └── peer0.raise/
         ├── users/
-        │   └── Admin@genaptitude/
+        │   └── Admin@raise/
         │       └── msp/
         │           ├── signcerts/
-        │           │   └── Admin@genaptitude-cert.pem
+        │           │   └── Admin@raise-cert.pem
         │           └── keystore/
         │               └── priv_sk
         └── msp/
             └── ...
 ```
 
-**Configuration dans GenAptitude** :
+**Configuration dans RAISE** :
 
 ```rust
 let fabric_config = FabricConfig {
-    endpoint: "grpc://peer0.genaptitude.local:7051".to_string(),
-    msp_id: "GenAptitudeMSP".to_string(),
-    channel_name: "genaptitude-channel".to_string(),
+    endpoint: "grpc://peer0.raise.local:7051".to_string(),
+    msp_id: "RAISEMSP".to_string(),
+    channel_name: "raise-channel".to_string(),
     chaincode_name: "arcadia-chaincode".to_string(),
     tls_enabled: true,
 };
@@ -1231,7 +1231,7 @@ let fabric_config = FabricConfig {
 let fabric_client = FabricClient::new(fabric_config);
 
 fabric_client.load_identity(
-    "./crypto-config/.../Admin@genaptitude-cert.pem",
+    "./crypto-config/.../Admin@raise-cert.pem",
     "./crypto-config/.../priv_sk"
 ).await?;
 ```
@@ -1253,27 +1253,27 @@ innernet --version
 
 ```bash
 # Créer le réseau
-sudo innernet-server new genaptitude \
+sudo innernet-server new raise \
     --cidr 10.42.0.0/16 \
     --listen-port 51820 \
-    --data-dir /var/lib/innernet-server/genaptitude
+    --data-dir /var/lib/innernet-server/raise
 
 # Démarrer le service
-sudo systemctl enable innernet-server@genaptitude
-sudo systemctl start innernet-server@genaptitude
+sudo systemctl enable innernet-server@raise
+sudo systemctl start innernet-server@raise
 ```
 
 **Génération d'invitation pour un peer** :
 
 ```bash
 # Sur le serveur
-sudo innernet-server add-peer genaptitude \
+sudo innernet-server add-peer raise \
     --name "workstation-paris" \
     --cidr 10.42.1.0/24 \
     --admin
 
 # Exporter l'invitation
-sudo innernet-server export genaptitude \
+sudo innernet-server export raise \
     --peer workstation-paris \
     > invitation-paris.toml
 ```
@@ -1285,21 +1285,21 @@ sudo innernet-server export genaptitude \
 sudo innernet install invitation-paris.toml
 
 # Connexion manuelle
-sudo innernet up genaptitude
+sudo innernet up raise
 
 # Vérification
-sudo innernet show genaptitude
-sudo wg show genaptitude0
+sudo innernet show raise
+sudo wg show raise0
 ```
 
-**Configuration dans GenAptitude** :
+**Configuration dans RAISE** :
 
 ```rust
 let vpn_config = NetworkConfig {
-    name: "genaptitude".to_string(),
+    name: "raise".to_string(),
     cidr: "10.42.0.0/16".to_string(),
-    server_endpoint: "vpn.genaptitude.local:51820".to_string(),
-    interface: "genaptitude0".to_string(),
+    server_endpoint: "vpn.raise.local:51820".to_string(),
+    interface: "raise0".to_string(),
 };
 
 let vpn_client = InnernetClient::new(vpn_config);
@@ -1479,7 +1479,7 @@ async function pingPeer(peerIp: string) {
 **Fabric** :
 
 ```rust
-cargo test --package genaptitude --lib fabric
+cargo test --package raise --lib fabric
 ```
 
 **Tests disponibles** :
@@ -1490,7 +1490,7 @@ cargo test --package genaptitude --lib fabric
 **VPN** :
 
 ```rust
-cargo test --package genaptitude --lib vpn
+cargo test --package raise --lib vpn
 ```
 
 **Tests disponibles** :
@@ -1585,20 +1585,20 @@ docker ps | grep hyperledger
 
 # 2. Tester une transaction via CLI Fabric
 peer chaincode invoke \
-    -C genaptitude-channel \
+    -C raise-channel \
     -n arcadia-chaincode \
     -c '{"function":"RecordDecision","Args":["decision-test-1","Test Decision"]}' \
     --waitForEvent
 
 # 3. Query la décision
 peer chaincode query \
-    -C genaptitude-channel \
+    -C raise-channel \
     -n arcadia-chaincode \
     -c '{"function":"GetDecision","Args":["decision-test-1"]}'
 
 # 4. Historique
 peer chaincode query \
-    -C genaptitude-channel \
+    -C raise-channel \
     -n arcadia-chaincode \
     -c '{"function":"GetHistory","Args":["decision-test-1"]}'
 ```
@@ -1611,23 +1611,23 @@ innernet --version
 wg --version
 
 # 2. Connexion manuelle
-sudo innernet up genaptitude
+sudo innernet up raise
 
 # 3. Vérifier interface
-ip addr show genaptitude0
-sudo wg show genaptitude0
+ip addr show raise0
+sudo wg show raise0
 
 # 4. Lister peers
-sudo innernet list genaptitude
+sudo innernet list raise
 
 # 5. Ping un peer
 ping -c 3 10.42.1.1
 
 # 6. Statistiques WireGuard
-sudo wg show genaptitude0 transfer
+sudo wg show raise0 transfer
 
 # 7. Déconnexion
-sudo innernet down genaptitude
+sudo innernet down raise
 ```
 
 ---
@@ -1653,7 +1653,7 @@ sudo innernet down genaptitude
 RUST_LOG=debug cargo run
 
 # Logs spécifiques au module blockchain
-RUST_LOG=genaptitude::fabric=trace,genaptitude::vpn=debug cargo run
+RUST_LOG=raise::fabric=trace,raise::vpn=debug cargo run
 
 # Production : warnings et erreurs uniquement
 RUST_LOG=warn cargo run --release
@@ -1662,17 +1662,17 @@ RUST_LOG=warn cargo run --release
 **Exemples de logs** :
 
 ```
-[INFO  genaptitude] Starting GenAptitude v0.1.0
-[INFO  genaptitude::fabric] Fabric client initialized
-[INFO  genaptitude::vpn] Innernet found: innernet 1.6.1
-[INFO  genaptitude::vpn] Connecting to Innernet network: genaptitude
-[INFO  genaptitude::vpn] Successfully connected to genaptitude
-[INFO  genaptitude::vpn] Assigned IP: 10.42.1.15
-[INFO  genaptitude::fabric] Submitting transaction to genaptitude-channel/arcadia-chaincode: RecordDecision with 1 args
-[DEBUG genaptitude::vpn] Fetching peers via WireGuard
-[DEBUG genaptitude::vpn] Parsed 3 peers from wg output
-[WARN  genaptitude::vpn] VPN auto-connect failed: Network not configured
-[ERROR genaptitude::fabric] Transaction error: Identity not loaded
+[INFO  raise] Starting RAISE v0.1.0
+[INFO  raise::fabric] Fabric client initialized
+[INFO  raise::vpn] Innernet found: innernet 1.6.1
+[INFO  raise::vpn] Connecting to Innernet network: raise
+[INFO  raise::vpn] Successfully connected to raise
+[INFO  raise::vpn] Assigned IP: 10.42.1.15
+[INFO  raise::fabric] Submitting transaction to raise-channel/arcadia-chaincode: RecordDecision with 1 args
+[DEBUG raise::vpn] Fetching peers via WireGuard
+[DEBUG raise::vpn] Parsed 3 peers from wg output
+[WARN  raise::vpn] VPN auto-connect failed: Network not configured
+[ERROR raise::fabric] Transaction error: Identity not loaded
 ```
 
 ### Métriques
@@ -1912,7 +1912,7 @@ Solution :
 Cause : Le peer Fabric n'est pas accessible
 Solution :
   1. Vérifier que le réseau Fabric est démarré
-  2. Tester la connectivité : telnet peer0.genaptitude.local 7051
+  2. Tester la connectivité : telnet peer0.raise.local 7051
   3. Vérifier la configuration endpoint dans FabricConfig
   4. Vérifier les logs du peer Fabric
 ```
@@ -1948,17 +1948,17 @@ Solution :
 Cause : Réseau Innernet non configuré ou coordinateur inaccessible
 Solution :
   1. Vérifier que le coordinateur est démarré :
-     sudo systemctl status innernet-server@genaptitude
+     sudo systemctl status innernet-server@raise
 
   2. Tester la connectivité :
-     ping vpn.genaptitude.local
-     nc -zv vpn.genaptitude.local 51820
+     ping vpn.raise.local
+     nc -zv vpn.raise.local 51820
 
   3. Vérifier l'invitation :
-     sudo innernet show genaptitude
+     sudo innernet show raise
 
   4. Réinstaller si nécessaire :
-     sudo innernet uninstall genaptitude
+     sudo innernet uninstall raise
      sudo innernet install invitation.toml
 ```
 
@@ -1969,7 +1969,7 @@ Cause : Format de sortie `innernet show` inattendu
 Solution :
   1. Vérifier la version d'Innernet
   2. Utiliser `wg show` en fallback
-  3. Vérifier les logs : journalctl -u wg-quick@genaptitude0
+  3. Vérifier les logs : journalctl -u wg-quick@raise0
 ```
 
 **Problème : Peers non visibles dans WireGuard**
@@ -1981,13 +1981,13 @@ Solution :
      sudo ufw allow 51820/udp
 
   2. Vérifier les clés publiques :
-     sudo wg show genaptitude0
+     sudo wg show raise0
 
   3. Forcer un handshake :
-     sudo wg set genaptitude0 peer <PUBLIC_KEY> persistent-keepalive 25
+     sudo wg set raise0 peer <PUBLIC_KEY> persistent-keepalive 25
 
   4. Vérifier NAT traversal :
-     sudo innernet fetch genaptitude
+     sudo innernet fetch raise
 ```
 
 ### Général
@@ -2074,16 +2074,16 @@ Solution :
 - `json_db.md` : Module de persistance
 - `jsondb_cli_usages.md` : CLI pour la base de données
 - `json_db_tests.md` : Suite de tests json_db
-- Architecture GenAptitude (à venir)
+- Architecture RAISE (à venir)
 
 ---
 
 ## 📜 Licence
 
-Ce module fait partie de GenAptitude et est soumis à la licence du projet.
+Ce module fait partie de RAISE et est soumis à la licence du projet.
 
 ---
 
 **Version** : 0.1.0  
 **Dernière mise à jour** : Novembre 2024  
-**Auteur** : Équipe GenAptitude
+**Auteur** : Équipe GenAptiRAISEtude

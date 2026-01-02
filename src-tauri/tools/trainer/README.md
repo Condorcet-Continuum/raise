@@ -1,6 +1,6 @@
-# 🎓 Module d'Entraînement IA (GenAptitude Trainer)
+# 🎓 Module d'Entraînement IA (RAISE Trainer)
 
-Ce module permet d'effectuer le **Fine-Tuning** (raffinage) de modèles de langage (LLM) à partir des données exportées par GenAptitude.
+Ce module permet d'effectuer le **Fine-Tuning** (raffinage) de modèles de langage (LLM) à partir des données exportées par RAISE.
 
 Il utilise la technique **QLoRA** (Quantized Low-Rank Adaptation) pour adapter efficacement un modèle générique (ex: Qwen 2.5) à votre domaine spécifique (Ingénierie Système, Arcadia, etc.).
 
@@ -19,7 +19,7 @@ tools/trainer/
 
 Avant de lancer un entraînement, vous devez générer le fichier de données `dataset.jsonl`.
 
-- **Via la CLI Rust :** `cargo run --bin genaptitude ai_export_dataset`
+- **Via la CLI Rust :** `cargo run --bin raise ai_export_dataset`
 - **Via l'Application :** En utilisant la commande d'export dans la Console Développeur.
 
 ---
@@ -103,7 +103,7 @@ Créez une deuxième cellule et exécutez :
 Colab ne permet pas de télécharger un dossier directement. Compressez le résultat :
 
 ```bash
-!zip -r mon_modele.zip genaptitude-qwen-adapter
+!zip -r mon_modele.zip raise-qwen-adapter
 
 ```
 
@@ -132,14 +132,14 @@ L'entraînement génère un adaptateur LoRA composé de deux fichiers principaux
 - `adapter_config.json` : Les hyperparamètres du réseau.
 - `adapter_model.safetensors` : Les poids entraînés (environ 50-200 Mo).
 
-## 📥 Intégration dans GenAptitude
+## 📥 Intégration dans RAISE
 
 Pour utiliser votre modèle entraîné :
 
 1. Créez le dossier de stockage :
 
 ```bash
-mkdir -p ~/genaptitude-llm/ai-assets/lora
+mkdir -p ~/raise-llm/ai-assets/lora
 
 ```
 
@@ -147,7 +147,7 @@ mkdir -p ~/genaptitude-llm/ai-assets/lora
 3. Configurez votre fichier `.env` (si supporté par la version actuelle) :
 
 ```ini
-RAISE_LORA_PATH=~/genaptitude-llm/ai-assets/lora/genaptitude-qwen-adapter
+RAISE_LORA_PATH=~/raise-llm/ai-assets/lora/raise-qwen-adapter
 
 ```
 

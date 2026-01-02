@@ -1,6 +1,6 @@
 # Module Query (JSON-DB)
 
-Ce module implémente le moteur de requêtes de GenAptitude. Il permet d'interroger les collections JSON en utilisant soit un constructeur fluide (Fluent Builder), soit une syntaxe SQL standard, avec support de l'optimisation et de la pagination.
+Ce module implémente le moteur de requêtes de RAISE. Il permet d'interroger les collections JSON en utilisant soit un constructeur fluide (Fluent Builder), soit une syntaxe SQL standard, avec support de l'optimisation et de la pagination.
 
 ## 🏗️ Architecture
 

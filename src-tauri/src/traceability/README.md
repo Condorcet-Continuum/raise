@@ -1,6 +1,6 @@
 # Module de Traçabilité (Traceability Engine)
 
-Ce module constitue le cœur de l'analyse d'impact et de la vérification système de **GenAptitude**. Il est responsable de l'interprétation des relations entre les éléments du modèle Arcadia (Operational, System, Logical, Physical) pour garantir la cohérence et la conformité du projet.
+Ce module constitue le cœur de l'analyse d'impact et de la vérification système de **RAISE**. Il est responsable de l'interprétation des relations entre les éléments du modèle Arcadia (Operational, System, Logical, Physical) pour garantir la cohérence et la conformité du projet.
 
 ## 🎯 Objectifs
 

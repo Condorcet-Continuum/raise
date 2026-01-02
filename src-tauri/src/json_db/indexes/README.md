@@ -1,6 +1,6 @@
 # Module Indexes (JSON-DB)
 
-Ce module fournit un système d'indexation performant et extensible pour les collections JSON de GenAptitude. Il permet d'accélérer les requêtes, d'imposer des contraintes d'unicité et de supporter la recherche plein texte rudimentaire.
+Ce module fournit un système d'indexation performant et extensible pour les collections JSON de RAISE. Il permet d'accélérer les requêtes, d'imposer des contraintes d'unicité et de supporter la recherche plein texte rudimentaire.
 
 ## 🏗️ Architecture
 

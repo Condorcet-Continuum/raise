@@ -1,6 +1,6 @@
 # Styles & Theming 🎨
 
-Ce répertoire contient l'ensemble des définitions graphiques de GenAptitude.
+Ce répertoire contient l'ensemble des définitions graphiques de RAISE.
 L'architecture repose sur les **Variables CSS natives** (Custom Properties) pour permettre un changement de thème instantané sans rechargement de page (via l'attribut `data-theme` sur la racine HTML).
 
 ---

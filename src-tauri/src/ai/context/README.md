@@ -6,7 +6,7 @@ Ce module est le garant de la **Vérité Terrain** (Grounding) de l'IA. Il est r
 
 ## 🏗️ Architecture Globale (The 4-Pillars)
 
-Le contexte de GenAptitude repose sur 4 piliers distincts pour couvrir tous les horizons temporels :
+Le contexte de RAISE repose sur 4 piliers distincts pour couvrir tous les horizons temporels :
 
 | Composant       | Fichier                   | Type de Mémoire           | Objectif                                                | Exemple                           |
 | --------------- | ------------------------- | ------------------------- | ------------------------------------------------------- | --------------------------------- |
@@ -125,5 +125,5 @@ cargo test rag_integration_test
 - [x] **Retriever Symbolique** : Fonctionnel (Recherche par mots-clés).
 - [x] **RAG Sémantique** : Fonctionnel (Connexion Qdrant + FastEmbed).
 - [ ] **Conversation Manager** : À implémenter (Structure de données `ChatHistory`).
-- [ ] **Memory Store** : À implémenter (Sauvegarde JSON locale dans `.genaptitude/chats/`).
+- [ ] **Memory Store** : À implémenter (Sauvegarde JSON locale dans `.raise/chats/`).
 - [ ] **Orchestrateur Unifié** : Fusionner les 4 sources avant l'envoi au LLM.

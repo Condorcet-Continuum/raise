@@ -1,6 +1,6 @@
 # Module Rules Engine (GenRules)
 
-Ce module implémente **GenRules**, le moteur de règles déclaratif et réactif de GenAptitude. Il permet de définir des logiques métier (calculs, validations, transformations) directement dans les schémas JSON, sans modifier le code compilé de l'application.
+Ce module implémente **GenRules**, le moteur de règles déclaratif et réactif de RAISE. Il permet de définir des logiques métier (calculs, validations, transformations) directement dans les schémas JSON, sans modifier le code compilé de l'application.
 
 ## 🏗️ Architecture
 

@@ -1,6 +1,6 @@
 # Module `ai::llm` - Infrastructure Bas Niveau LLM
 
-Ce module constitue la couche d'infrastructure (**Low-Level Layer**) de GenAptitude pour la communication avec les modèles de langage. Il fournit la "tuyauterie" technique permettant aux Agents de fonctionner sans se soucier de la complexité réseau ou du formatage des réponses.
+Ce module constitue la couche d'infrastructure (**Low-Level Layer**) de RAISE pour la communication avec les modèles de langage. Il fournit la "tuyauterie" technique permettant aux Agents de fonctionner sans se soucier de la complexité réseau ou du formatage des réponses.
 
 ---
 
@@ -127,10 +127,10 @@ async fn generate_rust_code(task_description: &str) -> Result<String, String> {
 
 Variables d'environnement (fichier `.env` ou contexte d'exécution) :
 
-| Variable                    | Description                                                 |
-| --------------------------- | ----------------------------------------------------------- |
-| `GENAPTITUDE_LLM_LOCAL_URL` | URL du serveur local (défaut : `http://localhost:11434/v1`) |
-| `RAISE_GEMINI_KEY`          | Clé API de secours (Google AI Studio)                       |
+| Variable              | Description                                                 |
+| --------------------- | ----------------------------------------------------------- |
+| `RAISE_LLM_LOCAL_URL` | URL du serveur local (défaut : `http://localhost:11434/v1`) |
+| `RAISE_GEMINI_KEY`    | Clé API de secours (Google AI Studio)                       |
 
 ---
 

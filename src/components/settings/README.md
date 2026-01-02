@@ -1,6 +1,6 @@
 # ⚙️ Paramètres Système (Settings)
 
-Ce répertoire contient l'interface de configuration globale de **GenAptitude**. Cette page permet à l'utilisateur de définir comment le frontend React interagit avec les services backend (IA et Base de Données).
+Ce répertoire contient l'interface de configuration globale de **RAISE**. Cette page permet à l'utilisateur de définir comment le frontend React interagit avec les services backend (IA et Base de Données).
 
 ## 📂 Structure des Fichiers
 

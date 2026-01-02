@@ -1,6 +1,6 @@
 # Module Storage (JSON-DB)
 
-Ce module implémente la couche physique de stockage de données pour GenAptitude. Il gère l'interaction directe avec le système de fichiers, l'organisation des répertoires, le cache mémoire, et l'atomicité des écritures.
+Ce module implémente la couche physique de stockage de données pour RAISE. Il gère l'interaction directe avec le système de fichiers, l'organisation des répertoires, le cache mémoire, et l'atomicité des écritures.
 
 ## 🏗️ Architecture
 
@@ -51,7 +51,7 @@ Grâce à la crate `include_dir`, les fichiers du dossier `schemas/v1` sont comp
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
 // 1. Configuration
-let config = JsonDbConfig::new(PathBuf::from("/tmp/genaptitude_data"));
+let config = JsonDbConfig::new(PathBuf::from("/tmp/raise_data"));
 let storage = StorageEngine::new(config);
 
 // 2. Initialisation d'une DB (déploie les schémas)

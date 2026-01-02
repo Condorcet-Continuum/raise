@@ -1,22 +1,22 @@
-# GenAptitude · Workstation-First AI Use-Case Factory
+# RAISE · Workstation-First AI Use-Case Factory
 
 <p align="center">
-  <img src="../../src/assets/images/logo-white.svg" alt="GenAptitude Logo" width="200">
+  <img src="../../src/assets/images/logo-white.svg" alt="RAISE Logo" width="200">
 </p>
 
 > 🌍 **Navigation:** [Global Home](../../README.md) | **🇺🇸 English** | [🇫🇷 Français](../fr/README.md)
 
-**GenAptitude** is a sovereign **Use-Case Factory** for complex engineering.
+**RAISE** is a sovereign **Use-Case Factory** for complex engineering.
 
 More than just a tool, it is a unified platform designed to build, deploy, and execute specialized AI assistants for **System, Software, Hardware, and AI Engineering**. Its mission is to serve as a **Digital Commons Infrastructure**, restoring engineers' control over their tools and expertise.
 
-Unlike proprietary silos, GenAptitude breaks down disciplinary barriers by combining the creativity of Generative AI with the rigor of formal methods, all within a **Local-First, Transparent, and Secure** environment.
+Unlike proprietary silos, RAISE breaks down disciplinary barriers by combining the creativity of Generative AI with the rigor of formal methods, all within a **Local-First, Transparent, and Secure** environment.
 
 ---
 
 ## 🌐 Engineering Spectrum (Multidisciplinary)
 
-GenAptitude orchestrates collaboration across four critical domains through its modular architecture:
+RAISE orchestrates collaboration across four critical domains through its modular architecture:
 
 ### 1. System Engineering (MBSE)
 
@@ -50,7 +50,7 @@ _The system's intelligence._
 
 ## 🏛️ Philosophy & Technical Pillars
 
-GenAptitude rests on four pillars that guarantee technological independence and industrial rigor:
+RAISE rests on four pillars that guarantee technological independence and industrial rigor:
 
 ### 1. Sovereignty (Local-First & JSON-DB)
 
@@ -87,7 +87,7 @@ _Durable and modular technology._
 
 ## 🗣️ Linguistic Strategy: The Bet on Precision
 
-GenAptitude adopts a strong stance on **Cognitive Sovereignty**:
+RAISE adopts a strong stance on **Cognitive Sovereignty**:
 
 - **Code & Infrastructure (English)**: To ensure technical universality and Open Source contribution, source code, APIs, and low-level comments follow the international standard (English).
 - **Semantics & Business Rules (French)**: We prioritize **French** for defining formal models, requirements, and ontologies.
@@ -121,7 +121,7 @@ GenAptitude adopts a strong stance on **Cognitive Sovereignty**:
 
 ## 🔧 Command Line Tools (CLI)
 
-GenAptitude provides a suite of tools to administer the system and validate models without the graphical interface:
+RAISE provides a suite of tools to administer the system and validate models without the graphical interface:
 
 ### 1. DB Administration (`jsondb_cli`)
 
@@ -172,7 +172,7 @@ cargo run -p validator_cli -- --data ./data/comp.json --schema arcadia/pa/phys-c
 
 ## Contact
 
-**GenAptitude — Workstation-First AI Use-Case Factory**
+**RAISE — Workstation-First AI Use-Case Factory**
 Contact: **zair@bezghiche.com**
 
 ```

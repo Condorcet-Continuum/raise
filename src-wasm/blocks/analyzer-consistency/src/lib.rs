@@ -1,4 +1,4 @@
-use genaptitude_core_api::{AnalysisReport, AnalysisStatus, CognitiveBlock, CognitiveModel};
+use raise_core_api::{AnalysisReport, AnalysisStatus, CognitiveBlock, CognitiveModel};
 use std::mem;
 use std::slice;
 
@@ -10,7 +10,7 @@ struct ConsistencyChecker;
 
 impl CognitiveBlock for ConsistencyChecker {
     fn id(&self) -> &str {
-        "fr.genaptitude.blocks.consistency.basic"
+        "fr.raise.blocks.consistency.basic"
     }
 
     fn execute(&self, model: &CognitiveModel) -> Result<AnalysisReport, String> {
@@ -107,7 +107,7 @@ pub unsafe extern "C" fn run_analysis(ptr: *mut u8, len: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use genaptitude_core_api::{AnalysisStatus, CognitiveModel, ModelElement};
+    use raise_core_api::{AnalysisStatus, CognitiveModel, ModelElement};
     use std::collections::HashMap;
 
     // Helper pour créer un modèle rapidement

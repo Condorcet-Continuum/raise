@@ -24,7 +24,7 @@ impl RustGenerator {
             "actor_struct",
             r#"
 // ---------------------------------------------------------
-// GÉNÉRÉ PAR GENAPTITUDE (Module: code_generator)
+// GÉNÉRÉ PAR RAISE (Module: code_generator)
 // Type: {{ type }}
 // ID: {{ id }}
 // ---------------------------------------------------------

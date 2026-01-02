@@ -22,11 +22,11 @@ pub async fn generate_source_code(
 
     let generated_code = match language.as_str() {
         "rust" => format!(
-            "// Généré par GenAptitude pour le projet {}\n\npub struct SystemRoot {{\n    pub name: String,\n    pub components: Vec<Component>,\n}}\n\nimpl SystemRoot {{\n    pub fn new() -> Self {{\n        println!(\"System initialized\");\n        Self {{ name: \"{}\".into(), components: vec![] }}\n    }}\n}}", 
+            "// Généré par RAISE pour le projet {}\n\npub struct SystemRoot {{\n    pub name: String,\n    pub components: Vec<Component>,\n}}\n\nimpl SystemRoot {{\n    pub fn new() -> Self {{\n        println!(\"System initialized\");\n        Self {{ name: \"{}\".into(), components: vec![] }}\n    }}\n}}", 
             model_name, model_name
         ),
         "python" => format!(
-            "# Généré par GenAptitude pour le projet {}\n\nclass SystemRoot:\n    def __init__(self):\n        self.name = \"{}\"\n        self.components = []\n        print(\"System initialized\")", 
+            "# Généré par RAISE pour le projet {}\n\nclass SystemRoot:\n    def __init__(self):\n        self.name = \"{}\"\n        self.components = []\n        print(\"System initialized\")", 
             model_name, model_name
         ),
         _ => return Err(format!("Langage non supporté : {}", language)),

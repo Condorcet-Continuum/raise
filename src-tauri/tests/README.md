@@ -1,10 +1,10 @@
-Based on the provided test suite configuration files (`json_db_suite.rs`, `rules_suite.rs`, `code_gen_suite.rs`, `ai_suite.rs`), here is the documentation for the `src-tauri/tests/` directory. This directory orchestrates the validation of all major components of the GenAptitude backend.
+Based on the provided test suite configuration files (`json_db_suite.rs`, `rules_suite.rs`, `code_gen_suite.rs`, `ai_suite.rs`), here is the documentation for the `src-tauri/tests/` directory. This directory orchestrates the validation of all major components of the RAISE backend.
 
 ---
 
 # Tests d'Intégration (Rust)
 
-Ce répertoire contient l'ensemble des suites de tests d'intégration pour le backend Rust de GenAptitude. Ces tests valident le fonctionnement conjoint des différents modules (Stockage, Sémantique, IA, Règles) dans des environnements isolés et reproductibles.
+Ce répertoire contient l'ensemble des suites de tests d'intégration pour le backend Rust de RAISE. Ces tests valident le fonctionnement conjoint des différents modules (Stockage, Sémantique, IA, Règles) dans des environnements isolés et reproductibles.
 
 ## 📂 Organisation des Suites
 

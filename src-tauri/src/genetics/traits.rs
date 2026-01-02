@@ -14,7 +14,7 @@ pub trait Genome: Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> {
     fn crossover(&self, other: &Self) -> Self;
 }
 
-/// Le trait Evaluator fait le lien avec le métier (GenAptitude Model Engine).
+/// Le trait Evaluator fait le lien avec le métier (RAISE Model Engine).
 pub trait Evaluator<G: Genome>: Send + Sync {
     /// Calcule le score (fitness). Plus c'est haut, mieux c'est.
     /// Peut être asynchrone ou coûteux (ex: simulation).

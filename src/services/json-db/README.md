@@ -1,6 +1,6 @@
 # JSON-DB Client SDK 🗄️
 
-Ce module fournit une couche de service ("Bridge") pour interagir avec le moteur de base de données **GenAptitude JSON-DB** (implémenté en Rust).
+Ce module fournit une couche de service ("Bridge") pour interagir avec le moteur de base de données **RAISE JSON-DB** (implémenté en Rust).
 Il expose des méthodes typées pour gérer les collections, exécuter des requêtes NoSQL/SQL et gérer des transactions atomiques via l'IPC Tauri.
 
 ---

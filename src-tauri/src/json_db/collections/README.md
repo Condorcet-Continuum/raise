@@ -1,6 +1,6 @@
 # Module Collections (JSON-DB)
 
-Ce module constitue la **façade de haut niveau** pour la manipulation des documents dans la base de données JSON de GenAptitude. Il orchestre le stockage, la validation, l'indexation et l'exécution des règles métier.
+Ce module constitue la **façade de haut niveau** pour la manipulation des documents dans la base de données JSON de RAISE. Il orchestre le stockage, la validation, l'indexation et l'exécution des règles métier.
 
 ## 🏗️ Architecture
 

@@ -1,5 +1,5 @@
 // src-tauri/src/blockchain/mod.rs
-//! Abstraction minimale de la couche Blockchain / VPN pour GenAptitude.
+//! Abstraction minimale de la couche Blockchain / VPN pour RAISE.
 //!
 //! Ici on définit uniquement :
 //! - les types de configuration Fabric / réseau,

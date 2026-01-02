@@ -1,6 +1,6 @@
 # Module Genetics (Optimisation) 🧬
 
-Ce module propose une interface de tableau de bord pour piloter les algorithmes d'optimisation génétique de GenAptitude.
+Ce module propose une interface de tableau de bord pour piloter les algorithmes d'optimisation génétique de RAISE.
 Il permet de configurer les hyperparamètres de la simulation (population, mutation), de lancer l'évolution et de visualiser la convergence des résultats en temps réel.
 
 ---

@@ -1,6 +1,6 @@
 # Module Model Viewer (Explorateur Arcadia) 💠
 
-Ce module est le cœur fonctionnel de GenAptitude pour la visualisation des modèles d'architecture système (Capella / Arcadia).
+Ce module est le cœur fonctionnel de RAISE pour la visualisation des modèles d'architecture système (Capella / Arcadia).
 Il offre une interface riche et dense ("Data-Heavy") permettant de naviguer dans les arborescences complexes tout en visualisant les diagrammes associés.
 
 ---

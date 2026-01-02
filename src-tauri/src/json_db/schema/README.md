@@ -1,6 +1,6 @@
 # Module Schema (Validation Structurelle)
 
-Ce module implémente un moteur de validation JSON Schema "léger" et intégré, spécifiquement conçu pour l'architecture de GenAptitude. Il ne dépend pas de validateurs externes lourds et gère nativement la résolution de références internes (`$ref`) via un registre en mémoire.
+Ce module implémente un moteur de validation JSON Schema "léger" et intégré, spécifiquement conçu pour l'architecture de RAISE. Il ne dépend pas de validateurs externes lourds et gère nativement la résolution de références internes (`$ref`) via un registre en mémoire.
 
 ## 🏗️ Architecture
 

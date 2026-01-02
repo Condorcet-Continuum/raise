@@ -4,7 +4,7 @@ This module is responsible for the **Data Preparation** phase of the Fine-Tuning
 
 ## 📂 Architecture
 
-The Fine-Tuning workflow in GenAptitude is hybrid:
+The Fine-Tuning workflow in RAISE is hybrid:
 
 1.  **Rust (This Module):** Extracts high-quality conversations and documentation from the database, formats them into a structured dataset, and exports them to disk.
 2.  **Python (`/tools/trainer`):** Loads this dataset to fine-tune a base LLM (e.g., Mistral, Llama 3) using QLoRA.
@@ -46,7 +46,7 @@ This command is exposed to the frontend via Tauri.
 ### Rust (Backend Test)
 
 ```rust
-use genaptitude::ai::training::dataset;
+use raise::ai::training::dataset;
 
 // Exports to a temporary file
 dataset::internal_export_process("/tmp/my_dataset.jsonl");

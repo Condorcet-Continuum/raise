@@ -1,6 +1,6 @@
 # Module Migrations (JSON-DB)
 
-Ce module fournit un système robuste de **gestion de versions de schéma** pour la base de données JSON (NoSQL) de GenAptitude.
+Ce module fournit un système robuste de **gestion de versions de schéma** pour la base de données JSON (NoSQL) de RAISE.
 
 Bien que JSON-DB soit "Schemaless" (sans schéma rigide) par nature, l'application a besoin de garanties sur la structure des données pour fonctionner correctement. Ce module permet de faire évoluer la structure des données existantes (ajout de champs, renommage, indexation) de manière ordonnée et traçable.
 

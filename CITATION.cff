@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software for engineering or research, please cite it as below."
 title: "RAISE: Rationalized Advanced Intelligence System Engine"
-abstract: "A Workstation-First AI Use-Case Factory combining Neuro-Symbolic AI with formal Model-Based Systems Engineering (Arcadia) for critical industries. Powered by GenAptitude."
+abstract: "A Workstation-First AI Use-Case Factory combining Neuro-Symbolic AI with formal Model-Based Systems Engineering (Arcadia) for critical industries. Powered by RAISE."
 authors:
   - family-names: "Bezghiche"
     given-names: "Zair"

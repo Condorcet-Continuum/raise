@@ -1,16 +1,16 @@
-# 📝 GenAptitude - Référence Rapide des Commandes
+# 📝 RAISE - Référence Rapide des Commandes
 
 ## 🚀 Démarrage Rapide (Quick Start)
 
 ```bash
 # 1. Tout créer et lancer automatiquement
-./test-genaptitude.sh --all
+./test-raise.sh --all
 
 # OU étape par étape :
 
 # 2. Créer la structure
-./create-genaptitude-structure.sh
-cd genaptitude
+./create-raise-structure.sh
+cd raise
 ../add-json-db-module.sh
 
 # 3. Installer et lancer
@@ -183,7 +183,7 @@ npm run tauri:build -- --target x86_64-pc-windows-msvc
 npm run tauri:build -- --target x86_64-apple-darwin
 
 # Trouver les binaires
-find src-tauri/target/release -name "genaptitude*"
+find src-tauri/target/release -name "raise*"
 
 # Créer les installeurs
 # Les bundles sont dans src-tauri/target/release/bundle/
@@ -249,7 +249,7 @@ vim tsconfig.json
 # Initialiser Git (si pas fait)
 git init
 git add .
-git commit -m "Initial commit: GenAptitude structure"
+git commit -m "Initial commit: RAISE structure"
 
 # Créer une branche de développement
 git checkout -b develop

@@ -25,7 +25,7 @@ Le système priorise les variables définies dans le fichier `.env` ou l'environ
 | Variable            | Description                                 | Valeur par défaut       |
 | :------------------ | :------------------------------------------ | :---------------------- |
 | `APP_ENV`           | Environnement d'exécution (`dev`, `prod`)   | `"development"`         |
-| `PATH_RAISE_DOMAIN` | Dossier racine pour la base de données JSON | `~/genaptitude_domain`  |
+| `PATH_RAISE_DOMAIN` | Dossier racine pour la base de données JSON | `~/raise_domain`        |
 | `RAISE_LOCAL_URL`   | URL du LLM local (Ollama/Llama.cpp)         | `http://localhost:8080` |
 | `RAISE_GEMINI_KEY`  | Clé API pour le mode Cloud (Optionnel)      | `None`                  |
 
@@ -82,11 +82,11 @@ Le niveau de verbosité est contrôlé par la variable `RUST_LOG`.
 # Voir uniquement les infos importantes
 RUST_LOG=info cargo run
 
-# Voir tout ce qui se passe dans GenAptitude (très verbeux)
-RUST_LOG=genaptitude=debug cargo run
+# Voir tout ce qui se passe dans RAISE (très verbeux)
+RUST_LOG=raise=debug cargo run
 
 # Cibler un module spécifique
-RUST_LOG=genaptitude::json_db=trace cargo run
+RUST_LOG=raise::json_db=trace cargo run
 ```
 
 ### Utilisation

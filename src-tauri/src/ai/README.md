@@ -1,10 +1,10 @@
 # Module AI — Intelligence Artificielle Neuro-Symbolique
 
-Ce module implémente l'approche **MBAIE** (Model-Based AI Engineering) de GenAptitude. Il transforme le langage naturel en structures d'ingénierie formelles, valides et persistées.
+Ce module implémente l'approche **MBAIE** (Model-Based AI Engineering) de RAISE. Il transforme le langage naturel en structures d'ingénierie formelles, valides et persistées.
 
 ## 🎯 Vision & Philosophie
 
-L'IA de GenAptitude n'est pas un simple chatbot. C'est un **opérateur qualifié** qui agit sur le modèle.
+L'IA de RAISE n'est pas un simple chatbot. C'est un **opérateur qualifié** qui agit sur le modèle.
 
 1.  **Workstation-First** : Par défaut, l'intelligence tourne localement (Mistral via Docker).
 2.  **Dual Mode** : Capacité à déborder sur le Cloud (Gemini Pro) pour les tâches complexes nécessitant un raisonnement supérieur.

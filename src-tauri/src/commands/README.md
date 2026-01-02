@@ -1,6 +1,6 @@
 # Module `commands` — Interface Tauri (Backend API)
 
-Ce module expose toutes les fonctions Rust accessibles depuis le Frontend (React/TypeScript) via le pont Tauri `invoke()`. Il agit comme la **Couche de Contrôle** de l'architecture Hexagonale de GenAptitude.
+Ce module expose toutes les fonctions Rust accessibles depuis le Frontend (React/TypeScript) via le pont Tauri `invoke()`. Il agit comme la **Couche de Contrôle** de l'architecture Hexagonale de RAISE.
 
 ## 🧩 Vue d'ensemble des Modules
 

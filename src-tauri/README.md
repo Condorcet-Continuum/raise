@@ -1,20 +1,20 @@
-# GenAptitude · Usine de Cas d'Usage IA Orientée Poste de Travail
+# RAISE · Usine de Cas d'Usage IA Orientée Poste de Travail
 
 <p align="center">
-<img src="src/assets/images/logo-white.svg" alt="GenAptitude Logo" width="200">
+<img src="src/assets/images/logo-white.svg" alt="RAISE Logo" width="200">
 </p>
 
-**GenAptitude** est une **Use-Case Factory** (Usine à Cas d'Usage) souveraine pour l'ingénierie complexe.
+**RAISE** est une **Use-Case Factory** (Usine à Cas d'Usage) souveraine pour l'ingénierie complexe.
 
 Plus qu'un simple outil, c'est une plateforme unifiée qui permet de concevoir, déployer et exécuter des assistants IA spécialisés pour l'**Ingénierie Système, Logicielle, Matérielle et IA**. Elle a pour vocation d'être une **infrastructure de Bien Commun Numérique**, redonnant aux ingénieurs la maîtrise de leurs outils et de leur savoir-faire.
 
-Contrairement aux silos propriétaires, GenAptitude décloisonne les disciplines en combinant la créativité de l'IA Générative avec la rigueur des méthodes formelles, le tout dans un environnement **Local-First, Transparent et Sécurisé**.
+Contrairement aux silos propriétaires, RAISE décloisonne les disciplines en combinant la créativité de l'IA Générative avec la rigueur des méthodes formelles, le tout dans un environnement **Local-First, Transparent et Sécurisé**.
 
 ---
 
 ## 🌐 Spectre d'Ingénierie (Multidisciplinaire)
 
-GenAptitude orchestre la collaboration entre quatre domaines critiques grâce à son architecture modulaire :
+RAISE orchestre la collaboration entre quatre domaines critiques grâce à son architecture modulaire :
 
 ### 1. Ingénierie Système (MBSE)
 
@@ -48,7 +48,7 @@ _L'intelligence du système._
 
 ## 🏛️ Philosophie & Piliers Techniques
 
-GenAptitude repose sur quatre piliers qui garantissent l'indépendance technologique et la rigueur industrielle :
+RAISE repose sur quatre piliers qui garantissent l'indépendance technologique et la rigueur industrielle :
 
 ### 1. Souveraineté (Local-First & JSON-DB)
 
@@ -85,7 +85,7 @@ _Une technologie durable et modulaire._
 
 ## 🗣️ Stratégie Linguistique : Le Pari de la Précision
 
-GenAptitude adopte une position forte sur la **Souveraineté Cognitive** :
+RAISE adopte une position forte sur la **Souveraineté Cognitive** :
 
 - **Code & Infrastructure (Anglais)** : Pour garantir l'universalité technique et la contribution Open Source, le code source, les APIs et les commentaires bas-niveau respectent le standard international (Anglais).
 - **Sémantique & Règles Métier (Français)** : Nous privilégions le **Français** pour la définition des modèles formels, des exigences et des ontologies.
@@ -122,7 +122,7 @@ cargo tauri dev
 
 ## 🔧 Outils en Ligne de Commande (CLI)
 
-GenAptitude fournit une suite d'outils pour administrer le système et valider les modèles sans interface graphique :
+RAISE fournit une suite d'outils pour administrer le système et valider les modèles sans interface graphique :
 
 ### 1. Administration BDD (`jsondb_cli`)
 
@@ -173,5 +173,5 @@ cargo run -p validator_cli -- --data ./data/comp.json --schema arcadia/pa/phys-c
 
 ## Contact
 
-**GenAptitude — Usine de Cas d'Usage IA Orientée Poste de Travail**
+**RAISE — Usine de Cas d'Usage IA Orientée Poste de Travail**
 Contact : **zair@bezghiche.com**

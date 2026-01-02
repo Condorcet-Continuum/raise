@@ -1,6 +1,6 @@
 // src-wasm/blocks/spy-plugin/src/lib.rs
 
-use genaptitude_core_api as core;
+use raise_core_api as core;
 use serde_json::json;
 
 #[no_mangle]

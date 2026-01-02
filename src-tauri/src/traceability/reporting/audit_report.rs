@@ -80,7 +80,7 @@ mod tests {
 
         // Setup Metadonnées
         model.meta = ProjectMeta {
-            name: "Projet Test GenAptitude".to_string(),
+            name: "Projet Test RAISE".to_string(),
             element_count: 5, // Simulé
             ..Default::default()
         };
@@ -95,7 +95,7 @@ mod tests {
         let report = AuditGenerator::generate(&model);
 
         // 1. Vérification des infos générales
-        assert_eq!(report.project_name, "Projet Test GenAptitude");
+        assert_eq!(report.project_name, "Projet Test RAISE");
         assert!(!report.date.is_empty());
 
         // 2. Vérification des statistiques calculées

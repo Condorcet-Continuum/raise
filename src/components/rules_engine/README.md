@@ -2,7 +2,7 @@
 
 Ce répertoire contient l'interface utilisateur dédiée à la démonstration et à l'interaction avec le moteur de règles réactif **GenRules** (implémenté en Rust).
 
-L'objectif de ces composants est de montrer comment **GenAptitude** peut fournir une validation "Correct-by-Construction" et des calculs en temps réel (champs dérivés) sans obliger l'utilisateur à sauvegarder ses données en base.
+L'objectif de ces composants est de montrer comment **RAISE** peut fournir une validation "Correct-by-Construction" et des calculs en temps réel (champs dérivés) sans obliger l'utilisateur à sauvegarder ses données en base.
 
 ## 📂 Structure des Fichiers
 

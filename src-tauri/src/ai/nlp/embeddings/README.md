@@ -1,6 +1,6 @@
 # 🧠 NLP Embeddings Engine
 
-Ce module gère la vectorisation de texte (Text Embedding), brique fondamentale du système RAG (Retrieval-Augmented Generation) de GenAptitude. Il transforme le langage naturel en vecteurs mathématiques comparables.
+Ce module gère la vectorisation de texte (Text Embedding), brique fondamentale du système RAG (Retrieval-Augmented Generation) de RAISE. Il transforme le langage naturel en vecteurs mathématiques comparables.
 
 ## 🏗 Architecture
 

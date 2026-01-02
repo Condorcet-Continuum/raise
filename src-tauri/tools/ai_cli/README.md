@@ -2,13 +2,13 @@
 
 **Package :** `ai_cli`
 **Localisation :** `src-tauri/tools/ai_cli`
-**Rôle :** Outil de développement, de debug et d'automatisation pour le backend IA de GenAptitude.
+**Rôle :** Outil de développement, de debug et d'automatisation pour le backend IA de RAISE.
 
 ---
 
 ## 🎯 Objectifs
 
-L'`ai_cli` est un exécutable léger ("Thin Client") qui permet d'interagir directement avec la librairie `genaptitude` sans passer par l'interface graphique (Tauri/React).
+L'`ai_cli` est un exécutable léger ("Thin Client") qui permet d'interagir directement avec la librairie `raise` sans passer par l'interface graphique (Tauri/React).
 
 Il est essentiel pour :
 
@@ -67,8 +67,8 @@ RAISE_LOCAL_URL="http://localhost:8080"
 RAISE_GEMINI_KEY="AIza..."
 
 # Cibles de données (Absolues de préférence)
-PATH_RAISE_DOMAIN="/home/user/genaptitude/data"
-PATH_RAISE_DATASET="/home/user/genaptitude/dataset"
+PATH_RAISE_DOMAIN="/home/user/raise/data"
+PATH_RAISE_DATASET="/home/user/raise/dataset"
 
 ```
 

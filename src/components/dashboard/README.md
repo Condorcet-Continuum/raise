@@ -1,6 +1,6 @@
 # 📊 Tableau de Bord (Dashboard)
 
-Ce répertoire contient la vue principale de l'application **GenAptitude**. C'est l'écran d'accueil qui s'affiche au démarrage, offrant une vue synthétique de l'état du système et du projet en cours.
+Ce répertoire contient la vue principale de l'application **RAISE**. C'est l'écran d'accueil qui s'affiche au démarrage, offrant une vue synthétique de l'état du système et du projet en cours.
 
 ## 📂 Structure des Fichiers
 
