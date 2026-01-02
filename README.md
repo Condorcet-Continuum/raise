@@ -52,13 +52,13 @@ npm install
 npm run tauri dev
 ```
 
-````
-
 ---
 
 ## 🏗️ Architecture Overview
 
 RAISE is designed as a **Local-First** system, ensuring that sensitive engineering data never leaves the workstation without explicit consent.
+
+<p align="center"> <img src="docs/en/architecture.svg" alt="RAISE Architecture Diagram" width="100%"> </p>
 
 ### Key Architectural Pillars
 
@@ -126,8 +126,3 @@ We aim to support engineering standards across all EU member states:
 <p align="center">
 <img src="src/assets/images/logo-white.svg" alt="RAISE Logo" width="150">
 </p>
-
-```
-
-```
-````
