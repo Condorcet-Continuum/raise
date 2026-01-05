@@ -1,0 +1,36 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="logic_grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#1e40af" />
+            <stop offset="100%" stop-color="#3b82f6" />
+        </linearGradient>
+        <linearGradient id="rust_grad" x1="100%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#ea580c" />
+            <stop offset="100%" stop-color="#9a3412" />
+        </linearGradient>
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="15" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+    </defs>
+    <path d="M256 48 L458 162 V350 L256 464 L54 350 V162 L256 48Z" fill="#f8fafc" stroke="#e2e8f0" stroke-width="2" />
+    <g filter="url(#glow)">
+        <path d="M256 80 L100 170 V342 L256 432 V256 L190 220 V290 L256 330 V432" fill="url(#logic_grad)" stroke="white"
+            stroke-width="2" opacity="0.9" />
+        <circle cx="190" cy="220" r="15" fill="white" fill-opacity="0.9" />
+        <circle cx="190" cy="290" r="10" fill="white" fill-opacity="0.5" />
+        <path d="M100 170 L190 220 M190 290 L100 342" stroke="white" stroke-width="3" stroke-linecap="round" />
+        <path d="M256 80 L412 170 V342 L256 432 C 256 432, 320 350, 320 256 C 320 162, 256 80, 256 80 Z"
+            fill="url(#rust_grad)" opacity="0.9" />
+        <path d="M256 256 C 300 256, 360 200, 412 170 M256 256 C 300 256, 360 312, 412 342" stroke="white"
+            stroke-width="4" stroke-linecap="round" opacity="0.8" />
+        <circle cx="350" cy="210" r="12" fill="white" />
+        <circle cx="350" cy="302" r="12" fill="white" />
+        <circle cx="412" cy="170" r="8" fill="white" />
+        <circle cx="412" cy="342" r="8" fill="white" />
+        <path d="M256 140 L300 256 L256 372 L212 256 L256 140 Z" fill="white" stroke="url(#rust_grad)"
+            stroke-width="4" />
+        <circle cx="256" cy="256" r="25" fill="white" />
+        <path d="M256 240 V272 M240 256 H272" stroke="url(#logic_grad)" stroke-width="4" stroke-linecap="round" />
+    </g>
+</svg>

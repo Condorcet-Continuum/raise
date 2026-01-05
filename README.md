@@ -1,5 +1,11 @@
 <p align="center">
-  <img src="src/assets/images/logo.svg" alt="R.A.I.S.E. Logo" width="100%">
+  <img src="docs/assets/logo-raise-emblem.svg" alt="R.A.I.S.E. Logo" width="200" height="200">
+</p>
+<h1 align="center">R.A.I.S.E. Engine</h1>
+
+<p align="center">
+  <strong>Rationalized Advanced Intelligence System Engine.</strong><br>
+  <em>(Moteur de Système d'Intelligence Avancée Rationalisé).</em>
 </p>
 
 <p align="left">
@@ -22,6 +28,17 @@
     <img src="https://img.shields.io/badge/Frontend-TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   </a>
 </p>
+
+---
+
+> [!WARNING] > **🚧 PROTOTYPE STATUS: v0.1.0-alpha**
+>
+> This repository contains a **Functional Prototype** intended for the validation of **Neuro-Symbolic Architecture** and **Traceability concepts**.
+> <br>It is currently an engineering sandbox and is **not** a production-ready MVP.
+>
+> _Ce dépôt contient un prototype fonctionnel destiné à la validation des concepts. Ce n'est pas encore une version de production._
+
+---
 
 **R.A.I.S.E. — Rationalized Advanced Intelligence System Engine.**
 _(Moteur de Système d'Intelligence Avancée Rationalisé)._
