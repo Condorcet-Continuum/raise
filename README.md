@@ -96,8 +96,6 @@ RAISE is built to serve the critical industrial needs of the European Union, gua
 
 ### Available Documentation / Documentation Disponible
 
-### Available Documentation / Documentation Disponible
-
 | Language                             | Description                                          | Status           |
 | :----------------------------------- | :--------------------------------------------------- | :--------------- |
 | [🇺🇸 **English**](docs/en/README.md)  | **Global Reference.** (Code & Architecture).         | ✅ Active        |

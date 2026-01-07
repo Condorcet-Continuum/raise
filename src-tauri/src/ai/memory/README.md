@@ -1,77 +1,99 @@
-# Module Memory — Mémoire Long-Terme & Vectorielle
+# Module Memory — Mémoire Sémantique Hybride
 
-Ce module gère la **persistance sémantique** de l'IA. Il agit comme l'hippocampe du système RAISE : il stocke les informations (documents, notes, fragments de modèle) sous forme vectorielle pour permettre une recherche par le sens (Sémantique) plutôt que par mot-clé exact.
-
----
-
-## 🏗️ Architecture Technique
-
-Le module repose sur le **Pattern Strategy** pour découpler l'application du moteur de base de données sous-jacent.
-
-### 1. L'Abstraction (`mod.rs`)
-
-Nous définissons une interface générique `VectorStore` que tout backend doit implémenter. Cela permettrait, théoriquement, de passer de Qdrant à PgVector ou Milvus sans casser le reste du code.
-
-- **`MemoryRecord`** : La structure de donnée standard. Contient l'ID, le texte brut, les métadonnées JSON et le vecteur (embedding).
-- **`VectorStore` (Trait)** : Définit les opérations atomiques : `init_collection`, `add_documents`, `search_similarity`.
-
-### 2. L'Implémentation (`qdrant_store.rs`)
-
-L'implémentation actuelle utilise **Qdrant**, une base de données vectorielle performante écrite en Rust.
-
-- **Protocole** : gRPC (Port 6334) pour une performance maximale.
-- **Payload** : Les métadonnées et le contenu textuel sont stockés dans le payload JSON de Qdrant.
-- **Conversion** : Gère la sérialisation complexe entre les types Rust natifs et les types Protobuf de Qdrant.
+Ce module gère la **persistance sémantique** de l'IA (Long-Term Memory). Il agit comme l'hippocampe du système RAISE en stockant les documents et contextes sous forme vectorielle (embeddings) pour permettre une recherche par le sens plutôt que par mot-clé exact.
 
 ---
 
-## 🛠️ Prérequis Infrastructure
+## 🏗️ Architecture : Pattern Strategy
 
-Ce module nécessite une instance Qdrant active. Dans l'environnement de développement RAISE, cela est géré par Docker.
+Le module est conçu autour d'une architecture flexible qui découple la logique métier du moteur de stockage sous-jacent.
+
+### 1. L'Abstraction (`VectorStore`)
+
+Nous définissons une interface générique (Trait) `VectorStore`. Tout moteur de base de données doit implémenter ces trois méthodes atomiques :
+
+- `init_collection` : Prépare l'index ou la table.
+- `add_documents` : Vectorise et stocke les données.
+- `search_similarity` : Retrouve les documents les plus proches sémantiquement.
+
+### 2. Les Moteurs (Backends)
+
+Nous supportons actuellement deux implémentations distinctes selon les besoins de déploiement :
+
+| Caractéristique | **Qdrant** (`qdrant_store.rs`) | **LEANN** (`leann_store.rs`)            |
+| --------------- | ------------------------------ | --------------------------------------- |
+| **Type**        | Serveur DB Autonome (Rust)     | Librairie/Service Python léger          |
+| **Protocole**   | **gRPC** (Port 6334)           | **HTTP/REST** (Port 8000)               |
+| **Performance** | Très Haute (Production)        | Moyenne (Optimisé Low-RAM)              |
+| **Usage Idéal** | Serveur, Cloud, Gros volumes   | Local-first, Laptop, Embarqué           |
+| **Dépendance**  | Image Docker Officielle        | Dockerfile Custom (Wrapper Rust/Python) |
+
+---
+
+## 🛠️ Installation & Infrastructure
+
+L'infrastructure est gérée via Docker Compose.
+
+### 1. Démarrer les services
+
+Pour lancer la stack complète (Qdrant + LEANN) :
 
 ```bash
-# Lancer l'infrastructure (à la racine du projet)
-docker-compose up -d
+# L'option --build est nécessaire la première fois pour compiler le wrapper LEANN
+docker-compose up -d --build
 
 ```
 
-| Service         | Port Interne (Docker) | Port Hôte (Localhost) | Usage                                         |
-| --------------- | --------------------- | --------------------- | --------------------------------------------- |
-| **Qdrant gRPC** | 6334                  | **6334**              | Ingestion & Recherche (Utilisé par ce module) |
-| **Qdrant HTTP** | 6333                  | **6333**              | Dashboard & API REST                          |
+### 2. Configuration des Ports
+
+Les ports sont configurables via le fichier `.env` ou `docker-compose.yml`:
+
+| Service         | Port Défaut | Variable ENV       | Description                           |
+| --------------- | ----------- | ------------------ | ------------------------------------- |
+| **Qdrant gRPC** | 6334        | `PORT_QDRANT_GRPC` | Performance maximale pour l'ingestion |
+| **Qdrant HTTP** | 6333        | `PORT_QDRANT_HTTP` | Dashboard UI de Qdrant                |
+| **LEANN API**   | 8000        | `PORT_LEANN`       | API REST du wrapper Python/Rust       |
 
 ---
 
-## 💻 Utilisation dans le Code
+## 💻 Exemple d'Utilisation (Code)
 
-Ce module est rarement utilisé seul. Il est généralement orchestré par le module `ai::context::rag`. Cependant, voici comment l'utiliser bas niveau :
+Le choix du moteur se fait à l'instanciation. Le reste du code est agnostique grâce au trait `VectorStore`.
 
 ```rust
-use crate::ai::memory::{qdrant_store::QdrantMemory, MemoryRecord, VectorStore};
+use crate::ai::memory::{
+    qdrant_store::QdrantMemory,
+    leann_store::LeannMemory,
+    MemoryRecord, VectorStore
+};
 use serde_json::json;
 
-async fn example_usage() -> anyhow::Result<()> {
-    // 1. Connexion
-    let store = QdrantMemory::new("http://localhost:6334")?;
+async fn init_memory(engine: &str) -> anyhow::Result<Box<dyn VectorStore>> {
+    let store: Box<dyn VectorStore> = match engine {
+        "local" => {
+            println!("🚀 Démarrage en mode LEANN (Léger)");
+            Box::new(LeannMemory::new("http://localhost:8000")?)
+        },
+        _ => {
+            println!("🚀 Démarrage en mode QDRANT (Production)");
+            Box::new(QdrantMemory::new("http://localhost:6334")?)
+        }
+    };
 
-    // 2. Initialisation (Si la collection n'existe pas)
-    // 384 est la taille standard pour le modèle 'BGE-Small'
-    store.init_collection("ma_base_connaissance", 384).await?;
+    // Le reste du code est identique quel que soit le moteur !
+    store.init_collection("ma_base", 384).await?;
 
-    // 3. Insertion
+    // Insertion
     let doc = MemoryRecord {
         id: uuid::Uuid::new_v4().to_string(),
-        content: "La spec ISO-26262 traite de la sécurité fonctionnelle.".to_string(),
-        metadata: json!({"source": "specs", "page": 42}),
-        vectors: Some(vec![0.1, 0.5, ...]), // Vecteur généré par le module NLP
+        content: "L'architecture hexagonale permet de tester facilement.".to_string(),
+        metadata: json!({"tag": "archi"}),
+        vectors: Some(vec![0.1, 0.2, 0.3, 0.4]),
     };
-    store.add_documents("ma_base_connaissance", vec![doc]).await?;
 
-    // 4. Recherche
-    let query_vector = vec![0.1, 0.5, ...];
-    let results = store.search_similarity("ma_base_connaissance", &query_vector, 5, 0.7).await?;
+    store.add_documents("ma_base", vec![doc]).await?;
 
-    Ok(())
+    Ok(store)
 }
 
 ```
@@ -80,22 +102,29 @@ async fn example_usage() -> anyhow::Result<()> {
 
 ## 🧪 Tests & Validation
 
-Le module contient un test d'intégration (`tests.rs`) qui vérifie le cycle de vie complet : Connexion -> Création Collection -> Insertion -> Recherche.
+Le module contient des tests d'intégration spécifiques pour chaque moteur.
 
-**Note :** Docker doit être lancé pour que ces tests passent.
+> **⚠️ Prérequis :** Les conteneurs Docker (`raise_qdrant` et `raise_leann`) doivent être lancés avant de jouer les tests.
+
+### Tester Qdrant
+
+Vérifie la connexion gRPC et la persistance standard.
 
 ```bash
-# Lancer uniquement les tests de ce module
-cargo test --package raise --lib -- ai::memory::tests
+cargo test --package raise --lib -- test_qdrant_lifecycle --nocapture
 
 ```
 
-### Scénario de Test
+### Tester LEANN
 
-1. Crée une collection temporaire `test_memory_suite`.
-2. Insère deux vecteurs orthogonaux (ex: "Nord" et "Est").
-3. Effectue une recherche proche de l'un des vecteurs.
-4. Vérifie que le bon document est retrouvé et que les métadonnées sont intactes.
+Vérifie la connexion HTTP et le wrapper Python.
+
+```bash
+cargo test --package raise --lib -- test_leann_lifecycle --nocapture --ignored
+
+```
+
+_(Note : Le flag `--ignored` est requis car ce test est désactivé par défaut pour la CI/CD rapide)._
 
 ---
 
@@ -103,9 +132,10 @@ cargo test --package raise --lib -- ai::memory::tests
 
 ```text
 src-tauri/src/ai/memory/
-├── mod.rs            # Définition des Traits et Structs (Interface)
-├── qdrant_store.rs   # Driver Qdrant (Implémentation)
-├── tests.rs          # Tests d'intégration (requires Docker)
-└── README.md         # Ce fichier
+├── mod.rs            # Interface VectorStore & Structs communes
+├── qdrant_store.rs   # Implémentation Client gRPC Qdrant
+├── leann_store.rs    # Implémentation Client HTTP LEANN
+├── tests.rs          # Tests d'intégration (Lifecycle Qdrant & LEANN)
+└── README.md         # Documentation
 
 ```

@@ -16,7 +16,6 @@ pub struct QdrantMemory {
 }
 
 impl QdrantMemory {
-    /// Url par défaut: "http://localhost:6334"
     pub fn new(url: &str) -> Result<Self> {
         let client = Qdrant::from_url(url).build()?;
         Ok(Self { client })

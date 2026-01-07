@@ -13,6 +13,8 @@ pub mod traceability;
 pub mod utils;
 pub mod workflow_engine;
 
+pub mod graph_store;
+
 use crate::model_engine::types::ProjectModel;
 use std::sync::Mutex;
 

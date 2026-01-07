@@ -32,9 +32,12 @@ use raise::commands::workflow_commands::WorkflowStore;
 use raise::model_engine::types::ProjectModel;
 use raise::AppState;
 
-// Imports pour l'initialisation Background de l'IA
+// Imports IA & Workflow
 use raise::ai::orchestrator::AiOrchestrator;
 use raise::model_engine::loader::ModelLoader;
+
+// Import du GraphStore ---
+use raise::graph_store::GraphStore;
 
 fn main() {
     // 1. Initialisation des logs & de la configuration globale
@@ -47,36 +50,61 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             // =================================================================
-            // 2. CONFIGURATION DU STOCKAGE (DB)
+            // 1. RÉSOLUTION DU DOMAINE DE DONNÉES (PATH_RAISE_DOMAIN)
             // =================================================================
-
             let db_root = if let Ok(env_path) = env::var("PATH_RAISE_DOMAIN") {
                 if env_path.starts_with("~/") {
                     let home = env::var("HOME").expect("Impossible de trouver la variable $HOME");
                     let expanded = env_path.replace("~", &home);
-                    println!(
-                        "📂 Configuration DB Personnalisée (Expanded) : {}",
-                        expanded
-                    );
+                    println!("📂 Config Domain (Expanded) : {}", expanded);
                     PathBuf::from(expanded)
                 } else {
-                    println!("📂 Configuration DB Personnalisée : {}", env_path);
+                    println!("📂 Config Domain (Env) : {}", env_path);
                     PathBuf::from(env_path)
                 }
             } else {
+                // Fallback sur AppData/raise_db si pas de variable d'env
                 let default_path = app.path().app_data_dir().unwrap().join("raise_db");
-                println!("📂 Configuration DB Par défaut : {:?}", default_path);
+                println!("📂 Config Domain (Default) : {:?}", default_path);
                 default_path
             };
 
-            let config = JsonDbConfig::new(db_root);
+            // Création du dossier racine s'il n'existe pas
+            if !db_root.exists() {
+                fs::create_dir_all(&db_root)?;
+            }
+
+            // =================================================================
+            // 2. CONFIGURATION DU STOCKAGE (DB)
+            // =================================================================
+            let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
 
             let default_space = "un2";
-            let default_db = "default";
+            let default_db = "_system";
 
             // =================================================================
-            // 3. MIGRATIONS AUTOMATIQUES
+            // 3. INITIALISATION GRAPH STORE (SURREALDB)
+            // =================================================================
+            let graph_path = db_root.join("graph_store");
+            let graph_store_result =
+                tauri::async_runtime::block_on(async { GraphStore::new(graph_path).await });
+            match graph_store_result {
+                Ok(store) => {
+                    // On injecte le store directement dans l'app
+                    app.manage(store);
+                    println!("✅ GraphStore injecté.");
+                }
+                Err(e) => {
+                    eprintln!("❌ Erreur critique GraphStore: {}", e);
+                    // CORRECTION ICI : On convertit l'erreur en String puis en Box<dyn Error>
+                    // Cela satisfait la signature attendue par tauri::setup
+                    return Err(e.to_string().into());
+                }
+            }
+
+            // =================================================================
+            // 4. MIGRATIONS & CHARGEMENT
             // =================================================================
             println!("⚙️ Vérification des migrations au démarrage...");
             if let Err(e) = run_app_migrations(&storage, default_space, default_db) {
@@ -84,12 +112,7 @@ fn main() {
             } else {
                 println!("✅ Migrations : Base de données à jour.");
             }
-
-            // =================================================================
-            // 4. INITIALISATION DES PLUGINS COGNITIFS
-            // =================================================================
             let plugin_mgr = PluginManager::new(&storage);
-
             // Auto-chargement des plugins .wasm
             let plugins_dir = app.path().app_data_dir().unwrap().join("plugins");
             if plugins_dir.exists() {
@@ -131,10 +154,9 @@ fn main() {
             raise::blockchain::ensure_innernet_state(app_handle, "default");
 
             // =================================================================
-            // 6. INITIALISATION IA (BACKGROUND)
+            // 6. INITIALISATION IA (BACKGROUND THREAD)
             // =================================================================
             let app_handle_clone = app.handle().clone();
-
             tauri::async_runtime::spawn(async move {
                 let llm_url = env::var("RAISE_LOCAL_URL")
                     .unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());

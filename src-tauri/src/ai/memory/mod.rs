@@ -1,3 +1,4 @@
+pub mod leann_store;
 pub mod qdrant_store;
 pub mod tests;
 use anyhow::Result;

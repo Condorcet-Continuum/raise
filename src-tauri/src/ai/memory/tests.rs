@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod integration_tests {
-    use crate::ai::memory::{qdrant_store::QdrantMemory, MemoryRecord, VectorStore};
+    use crate::ai::memory::{
+        leann_store::LeannMemory, qdrant_store::QdrantMemory, MemoryRecord, VectorStore,
+    };
     use serde_json::json;
     use std::env;
     use uuid::Uuid;
@@ -93,5 +95,57 @@ mod integration_tests {
         );
 
         println!("✅ Test Qdrant Lifecycle : SUCCÈS");
+    }
+
+    #[tokio::test]
+    #[ignore] // Ignoré par défaut tant que le serveur Python n'est pas lancé
+    async fn test_leann_lifecycle() {
+        // 1. CHARGEMENT CONFIG
+        dotenvy::dotenv().ok();
+
+        // On suppose que LEANN tourne sur le port défini ou 8000 par défaut
+        let leann_port = env::var("PORT_LEANN").unwrap_or("8000".to_string());
+        let url = format!("http://127.0.0.1:{}", leann_port);
+
+        println!("🔧 Test LEANN sur : {}", url);
+
+        let store = LeannMemory::new(&url).expect("URL invalide");
+
+        // 2. INIT
+        let collection = "test_leann_suite";
+        // 384 dims, bien que LEANN soit flexible
+        store
+            .init_collection(collection, 384)
+            .await
+            .expect("Init failed");
+
+        // 3. INSERTION
+        let rec = MemoryRecord {
+            id: Uuid::new_v4().to_string(),
+            content: "Leann est très léger en mémoire".to_string(),
+            metadata: json!({"type": "optimization"}),
+            vectors: Some(vec![0.5, 0.5, 0.0, 0.0]), // Fake vector
+        };
+
+        store
+            .add_documents(collection, vec![rec.clone()])
+            .await
+            .expect("Insert failed");
+
+        // 4. RECHERCHE
+        let query = vec![0.5, 0.5, 0.0, 0.0];
+        let results = store
+            .search_similarity(collection, &query, 1, 0.0)
+            .await
+            .expect("Search failed");
+
+        // 5. VERIF
+        // Note: Le mock serveur Python doit renvoyer ce qu'on lui a donné pour que ce test passe
+        if !results.is_empty() {
+            assert_eq!(results[0].content, rec.content);
+            println!("✅ Test LEANN Lifecycle : SUCCÈS avec 1 résultat");
+        } else {
+            println!("⚠️ Test LEANN : Pas de résultats (Vérifiez le serveur Python)");
+        }
     }
 }

@@ -5,23 +5,48 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: raise_qdrant
+    # --- INTERRUPTEUR ON/OFF ---
+    profiles: ["core", "qdrant"] 
+    # ---------------------------
     restart: unless-stopped
     ports:
-      - "${PORT_QDRANT_HTTP:-6333}:6333" # HTTP
-      - "${PORT_QDRANT_GRPC:-6334}:6334" # gRPC
+      - "${PORT_QDRANT_HTTP:-6333}:6333"
+      - "${PORT_QDRANT_GRPC:-6334}:6334"
     volumes:
-      # On stocke les données Qdrant dans ton dossier de domaine
       - ${PATH_RAISE_DOMAIN}/qdrant_storage:/qdrant/storage
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
+
+  # 📚 LEANN (Nouvelle Mémoire Légère)
+  leann:
+    # On construit l'image depuis le dossier ./leann (où se trouve le Dockerfile)
+    build: 
+      context: ./leann
+    container_name: raise_leann
+    # --- INTERRUPTEUR ON/OFF ---
+    profiles: ["leann"]
+    # ---------------------------
+    restart: unless-stopped
+    ports:
+      - "${PORT_LEANN:-8000}:8000"
+    volumes:
+      # Persistance de l'index LEANN
+      - ${PATH_RAISE_DOMAIN}/leann_storage:/data
+      # Dossier des documents à scanner (à adapter selon votre structure)
+      - ${PATH_RAISE_DOMAIN}/documents:/app/documents
+    environment:
+      # Si LEANN doit utiliser un modèle d'embedding spécifique ou une clé API
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
 
   # 🤖 LLM LOCAL (Llama.cpp Server)
   llm:
     image: ghcr.io/ggerganov/llama.cpp:server-cuda
     container_name: raise_llm
+    # --- INTERRUPTEUR ON/OFF ---
+    profiles: ["core", "llm"]
+    # ---------------------------
     restart: unless-stopped
     ports:
-      # Mappe le port hôte défini dans .env vers le port 8080 du conteneur
       - "${PORT_LLM:-8081}:8080"
     deploy:
       resources:
@@ -31,9 +56,7 @@ services:
               count: all
               capabilities: [gpu]
     volumes:
-      # Montage des modèles en lecture seule (:ro)
       - ${PATH_LLM_MODELS}:/models:ro
-    # La commande utilise la variable pour le nom du fichier
     command: >
       -m /models/${LLM_MODEL_FILE}
       -c 8192
