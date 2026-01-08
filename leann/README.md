@@ -25,7 +25,7 @@ graph LR
 
 ## 🚀 Démarrage Rapide (Docker)
 
-C'est la méthode recommandée pour l'utilisation dans le projet RAISE.
+C'est la méthode recommandée pour l'intégration dans le projet RAISE.
 
 ```bash
 # Depuis la racine du projet 'raise'
@@ -39,112 +39,106 @@ Le service sera accessible sur `http://localhost:8000`.
 
 ## 🛠️ Développement Local (Sans Docker)
 
-Pour modifier le code Rust ou tester rapidement sans reconstruire l'image, suivez ces étapes.
+Pour développer, debugger ou tester sans reconstruire l'image Docker à chaque fois.
 
-### 1. Prérequis Système
+### 1. Prérequis Système (Debian/Ubuntu)
 
-Vous devez installer les outils de compilation C++ et les librairies mathématiques requises par LEANN.
+Vous devez installer les outils de compilation C++ et les librairies mathématiques.
 
 ```bash
-# Debian/Ubuntu
 sudo apt update && sudo apt install -y \
     build-essential cmake pkg-config libssl-dev \
     libzmq3-dev libopenblas-dev liblapack-dev python3-dev
 
 ```
 
-### 2. Environnement Python
+### 2. Environnement Python (Virtualenv)
 
-Le wrapper Rust a besoin d'un environnement Python avec LEANN installé pour compiler.
+Le wrapper Rust a besoin d'un environnement Python isolé avec LEANN installé.
 
 ```bash
-# Dans le dossier leann/
+cd leann
+
+# 1. Créer et activer l'environnement virtuel
 python3 -m venv venv
 source venv/bin/activate
 
-# Installation de uv (plus rapide) et des dépendances
+# 2. Installer 'uv' (pip rapide) et les dépendances
 pip install uv
 uv pip install "git+https://github.com/yichuan-w/LEANN.git" sentence-transformers
 
 ```
 
-### 3. Lancer le Serveur Rust
+### 3. Lancer le Serveur
 
-Une fois l'environnement Python activé :
+Avant de lancer `cargo run`, il faut configurer le dossier de stockage et, si vous n'avez pas de GPU configuré, forcer le mode CPU.
 
 ```bash
-# Définir où stocker l'index (par défaut /data qui n'est pas inscriptible hors root)
-export DATA_DIR="./local_storage"
+# 1. Créer le dossier local (ignoré par git)
 mkdir -p local_storage
 
-# Lancer le serveur
+# 2. Configurer les variables d'environnement
+export DATA_DIR="./local_storage"
+export CUDA_VISIBLE_DEVICES=""  # ⚠️ Important : Force le mode CPU pour éviter les erreurs CUDA
+
+# 3. Lancer le serveur
 cargo run
 
 ```
 
 ---
 
-## 🔌 API Reference
+## 🧪 Guide de Test (cURL)
 
-Le serveur expose une API REST simple sur le port **8000**.
+Une fois le serveur lancé (localement ou via Docker), utilisez ces commandes pour tester.
 
 ### 1. Health Check
 
-Vérifie que le serveur et le pont Python fonctionnent.
+Vérifie que le pont Rust-Python est actif.
 
-- **GET** `/health`
-- **Réponse :**
+```bash
+curl http://127.0.0.1:8000/health
 
-```json
-{
-  "status": "ok",
-  "engine": "leann-rust-wrapper"
-}
 ```
 
-### 2. Insertion de Documents
+✅ _Réponse attendue :_ `{"status":"ok","engine":"leann-rust-wrapper"}`
 
-Ajoute des documents à l'index et déclenche une reconstruction (opération bloquante gérée dans un thread pool).
+### 2. Insertion (Indexation)
 
-- **POST** `/insert`
-- **Body :**
+Envoie des documents pour créer l'index. Cela va télécharger le modèle `all-MiniLM-L6-v2` au premier lancement.
 
-```json
-{
-  "documents": [
-    { "text": "Le contenu de mon document..." },
-    { "text": "Un autre document à indexer." }
-  ]
-}
+```bash
+curl -X POST http://127.0.0.1:8000/insert \
+     -H "Content-Type: application/json" \
+     -d '{
+           "documents": [
+             { "text": "Le chat mange des croquettes." },
+             { "text": "L intelligence artificielle modulaire est le futur." }
+           ]
+         }'
+
 ```
 
-- **Réponse :** `200 OK`
+✅ _Réponse attendue :_ `{"status":"indexed","count":2}`
 
-### 3. Recherche (Similarity Search)
+### 3. Recherche (Search)
 
 Recherche les documents les plus proches sémantiquement.
 
-> **Note :** Actuellement, la recherche utilise une requête "placeholder" définie dans le code Rust. L'implémentation future devra accepter un champ `query` ou `vector`.
+```bash
+curl -X POST http://127.0.0.1:8000/search \
+     -H "Content-Type: application/json" \
+     -d '{ "k": 2 }'
 
-- **POST** `/search`
-- **Body :**
-
-```json
-{
-  "k": 5 // Nombre de voisins à retourner
-}
 ```
 
-- **Réponse :**
+✅ _Réponse attendue :_
 
 ```json
 {
   "results": [
-    {
-      "id": "unknown",
-      "text": "Le contenu de mon document...",
-      "score": 0.85
-    }
+    { "id": "0", "text": "Le chat mange des croquettes.", "score": 2.04 },
+    { "id": "1", "text": "L intelligence artificielle...", "score": 0.64 }
   ]
 }
 ```
@@ -155,10 +149,13 @@ Recherche les documents les plus proches sémantiquement.
 
 - **`Cargo.toml`** : Dépendances Rust (`actix-web`, `pyo3`).
 - **`Dockerfile`** : Build multi-étape (Install Python deps -> Build Rust Binary -> Runtime).
-
-- **`src/main.rs`** : Code source unique contenant le serveur Web et la logique de pont `init_python_leann`, `python_insert`, `python_search`.
+- **`src/main.rs`** : Code source unique. Contient :
+- L'API HTTP (Actix).
+- Le Wrapper PyO3 (`python_insert`, `python_search`).
+- La gestion du GIL et du Hot Reload.
 
 ## ⚠️ Notes Techniques
 
-- **Concurrence** : L'objet Python `LeannSearcher` est protégé par un `Mutex` Rust. Cependant, lors des recherches, nous clonons le pointeur `Py<PyAny>` pour permettre une exécution parallèle si le GIL le permet.
-- **Persistance** : L'index est stocké dans le volume Docker monté sur `/data`. Si vous redémarrez le conteneur, l'index est rechargé au démarrage via `init_python_leann`.
+- **Hot Reload** : Après chaque insertion `/insert`, le serveur recharge automatiquement l'index en mémoire pour que les nouveaux documents soient immédiatement consultables via `/search`.
+- **Fichiers Index** : LEANN génère des fichiers `.index` et `.json`. Le wrapper Rust détecte automatiquement le fichier principal `[index_name].index` pour le chargement.
+- **Concurrence** : L'objet Python est protégé par un `Mutex`, mais les pointeurs sont clonés lors de la recherche pour minimiser le blocage du thread principal.

@@ -52,3 +52,11 @@ src-tauri/tools/trainer/__pycache__/
 src-tauri/tools/trainer/*.pyc
 src-tauri/tools/trainer/results/
 src-tauri/tools/trainer/dataset.jsonl
+
+
+# --- LEANN Service ---
+leann/venv/
+leann/__pycache__/
+leann/.pytest_cache/
+leann/local_storage/
+

@@ -2,7 +2,6 @@ use super::{MemoryRecord, VectorStore};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 /// Client pour communiquer avec le serveur Python LEANN via HTTP
 pub struct LeannMemory {
@@ -12,7 +11,6 @@ pub struct LeannMemory {
 
 impl LeannMemory {
     pub fn new(url: &str) -> Result<Self> {
-        // On s'assure que l'URL ne finit pas par '/' pour la concaténation propre
         let clean_url = url.trim_end_matches('/').to_string();
         Ok(Self {
             base_url: clean_url,
@@ -21,63 +19,80 @@ impl LeannMemory {
     }
 }
 
-// Structures pour la communication JSON avec le serveur Python
+// --- STRUCTURES INTERNES POUR LE SERVEUR ---
+// Ces structures matchent exactement ce que le main.rs du serveur attend
+
 #[derive(Serialize)]
-struct LeannSearchRequest {
-    collection: String,
-    vector: Vec<f32>,
-    limit: u64,
+struct ServerDocument {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct ServerInsertRequest {
+    documents: Vec<ServerDocument>,
+}
+
+#[derive(Serialize)]
+struct ServerSearchRequest {
+    k: u64,
 }
 
 #[derive(Deserialize)]
-struct LeannSearchResult {
+struct ServerSearchResultItem {
     id: String,
-    content: String,
-    metadata: serde_json::Value,
+    text: String, // Le serveur renvoie 'text', pas 'content'
     score: f32,
+}
+
+#[derive(Deserialize)]
+struct ServerSearchResponse {
+    results: Vec<ServerSearchResultItem>,
 }
 
 #[async_trait]
 impl VectorStore for LeannMemory {
-    async fn init_collection(&self, collection_name: &str, _vector_size: u64) -> Result<()> {
-        // LEANN gère l'index dynamiquement, mais on peut pinguer le serveur pour dire "prépare ce dossier"
-        let url = format!("{}/init", self.base_url);
-
-        let payload = json!({
-            "collection": collection_name
-        });
+    // 1. CORRECTION : On utilise /health au lieu de /init
+    async fn init_collection(&self, _collection_name: &str, _vector_size: u64) -> Result<()> {
+        let url = format!("{}/health", self.base_url);
 
         let res = self
             .client
-            .post(&url)
-            .json(&payload)
+            .get(&url)
             .send()
             .await
             .context("Impossible de contacter le serveur LEANN")?;
 
         if !res.status().is_success() {
-            anyhow::bail!("Erreur serveur LEANN lors de l'init: {}", res.status());
+            anyhow::bail!("Le serveur LEANN n'est pas prêt: {}", res.status());
         }
 
-        println!(
-            "🧠 LEANN : Collection '{}' prête (virtuellement)",
-            collection_name
-        );
+        println!("🧠 LEANN : Connexion établie avec succès.");
         Ok(())
     }
 
-    async fn add_documents(&self, collection_name: &str, records: Vec<MemoryRecord>) -> Result<()> {
+    // 2. CORRECTION : On utilise /insert et on mappe MemoryRecord vers ServerDocument
+    async fn add_documents(
+        &self,
+        _collection_name: &str,
+        records: Vec<MemoryRecord>,
+    ) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
 
-        let url = format!("{}/upsert", self.base_url);
+        let url = format!("{}/insert", self.base_url);
 
-        // On envoie le batch complet
-        let payload = json!({
-            "collection": collection_name,
-            "documents": records
-        });
+        // Transformation des données pour le serveur
+        let server_docs: Vec<ServerDocument> = records
+            .iter()
+            .map(|r| ServerDocument {
+                text: r.content.clone(),
+            })
+            .collect();
+
+        let payload = ServerInsertRequest {
+            documents: server_docs,
+        };
 
         let res = self
             .client
@@ -89,26 +104,23 @@ impl VectorStore for LeannMemory {
 
         if !res.status().is_success() {
             let error_text = res.text().await.unwrap_or_default();
-            anyhow::bail!("Erreur LEANN upsert: {}", error_text);
+            anyhow::bail!("Erreur LEANN insert: {}", error_text);
         }
 
         Ok(())
     }
 
+    // 3. CORRECTION : On utilise /search et on gère la réponse wrapper { results: [...] }
     async fn search_similarity(
         &self,
-        collection_name: &str,
-        vector: &[f32],
+        _collection_name: &str,
+        _vector: &[f32], // Note: Le serveur actuel calcule lui-même l'embedding, on ignore ce vecteur pour l'instant
         limit: u64,
         score_threshold: f32,
     ) -> Result<Vec<MemoryRecord>> {
         let url = format!("{}/search", self.base_url);
 
-        let payload = LeannSearchRequest {
-            collection: collection_name.to_string(),
-            vector: vector.to_vec(),
-            limit,
-        };
+        let payload = ServerSearchRequest { k: limit };
 
         let res = self
             .client
@@ -122,17 +134,19 @@ impl VectorStore for LeannMemory {
             anyhow::bail!("Erreur recherche LEANN: {}", res.status());
         }
 
-        let results: Vec<LeannSearchResult> = res.json().await?;
+        // On désérialise la réponse englobante
+        let response_wrapper: ServerSearchResponse = res.json().await?;
 
-        // Conversion des résultats bruts en MemoryRecord, en filtrant par score
-        let records = results
+        // Conversion des résultats serveur vers MemoryRecord
+        let records = response_wrapper
+            .results
             .into_iter()
-            .filter(|r| r.score >= score_threshold)
+            .filter(|r| r.score >= score_threshold) // Le score du serveur peut être une distance ou similarité
             .map(|r| MemoryRecord {
                 id: r.id,
-                content: r.content,
-                metadata: r.metadata,
-                vectors: None, // LEANN ne renvoie pas forcément le vecteur source
+                content: r.text,                   // Mapping 'text' -> 'content'
+                metadata: serde_json::Value::Null, // Le serveur actuel ne stocke pas encore les métadonnées
+                vectors: None,
             })
             .collect();
 
