@@ -83,7 +83,7 @@ fn test_client_instantiation() {
 #[tokio::test]
 #[ignore]
 async fn integration_test_local_availability() {
-    // On suppose un port standard OLLAMA ou LM Studio
+    // On suppose un port standard LLAMA.CPP ou LM Studio
     let client = LlmClient::new("http://localhost:8080", "dummy", None);
     let is_alive = client.ping_local().await;
 

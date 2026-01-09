@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
     // --- CORRECTION CRITIQUE ICI ---
     // On cherche RAISE_LOCAL_URL (comme dans le .env) et non RAISE_LLM_LOCAL_URL
     let local_url =
-        env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+        env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8081".to_string());
 
     let domain_path = env::var("PATH_RAISE_DOMAIN")
         .map(PathBuf::from)

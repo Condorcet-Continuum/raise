@@ -33,7 +33,7 @@ impl AppConfig {
                         .join("raise_domain")
                 }),
 
-            // URL par défaut pour le LLM local (Docker/Ollama)
+            // URL par défaut pour le LLM local (Docker/llama.cpp)
             llm_api_url: env::var("RAISE_LOCAL_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".to_string()),
 

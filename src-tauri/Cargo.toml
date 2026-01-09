@@ -37,7 +37,7 @@ pathdiff = "0.2"
 url = "2.5"
 tempfile = "3.10"
 
-wasmtime = "40.0.0"# --- Plugins & Runtime WASM (Manquant dans la version précédente) ---
+wasmtime = "40.0.0" # --- Plugins & Runtime WASM  ---
 
 # Requis pour l'embarquement des schémas (file_storage.rs)
 include_dir = "0.7"
@@ -73,6 +73,15 @@ qdrant-client = "1.11"
 
 # --- GÉNÉRATION DE CODE ---
 tera = "1.19"
+
+# --- CRYPTO ---
+ed25519-dalek = { version = "2.1", features = [
+    "rand_core",
+    "serde",
+] } # Pour la signature
+sha2 = "0.10" # Pour le hash du mandat
+hex = "0.4" # Pour manipuler les signatures en string
+
 
 # --- Dépendances de développement (Pour les tests) ---
 [dev-dependencies]

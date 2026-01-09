@@ -4,7 +4,7 @@ use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub enum LlmBackend {
-    LocalLlama,   // Format OpenAI (Ollama)
+    LocalLlama,   // Format OpenAI (llama.cpp)
     GoogleGemini, // Cloud Google
     LlamaCpp,     // Format natif llama-server (Votre Docker 8081)
 }
@@ -55,7 +55,7 @@ impl LlmClient {
             return true;
         }
 
-        // Fallback sur /models (Standard OpenAI/Ollama)
+        // Fallback sur /models (Standard OpenAI/llama.cpp)
         let url_models = format!("{}/models", self.local_url);
         match self
             .http_client
@@ -180,7 +180,7 @@ impl LlmClient {
             .ok_or_else(|| "Réponse LlamaCpp malformée (champ 'content' manquant)".to_string())
     }
 
-    // --- BACKEND: OPENAI FORMAT (Ollama) ---
+    // --- BACKEND: OPENAI FORMAT (llama.cpp) ---
     async fn call_openai_format(
         &self,
         base_url: &str,

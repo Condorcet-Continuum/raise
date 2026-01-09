@@ -1,155 +1,111 @@
-# Module `commands` — Interface Tauri (Backend API)
+# 🎮 Commands Module (Interface Tauri)
 
-Ce module expose toutes les fonctions Rust accessibles depuis le Frontend (React/TypeScript) via le pont Tauri `invoke()`. Il agit comme la **Couche de Contrôle** de l'architecture Hexagonale de RAISE.
+Ce module constitue la **Couche d'Adaptation (API)** de l'architecture Hexagonale de RAISE.
+Il expose l'ensemble des capacités fonctionnelles du backend Rust au frontend React/TypeScript via le pont IPC sécurisé de Tauri (`invoke`).
 
-## 🧩 Vue d'ensemble des Modules
-
-Voici la liste des modules de commandes disponibles et leurs responsabilités :
-
-| Module              | Fichier Source             | Rôle Principal                                                                   | Statut    |
-| :------------------ | :------------------------- | :------------------------------------------------------------------------------- | :-------- |
-| **I.A. & Agents**   | `ai_commands.rs`           | **Dispatcher** : Analyse d'intention et pilotage des Agents (OA/SA/LA/PA/IVVQ).  | ✅ Stable |
-| **Base de Données** | `json_db_commands.rs`      | **CRUD & NoCode** : Gestion des collections, schémas, requêtes et règles métier. | ✅ Stable |
-| **Workflow**        | `workflow_commands.rs`     | **Orchestration** : Moteur d'exécution de processus (BPMN-like).                 | ✅ Stable |
-| **Traçabilité**     | `traceability_commands.rs` | **Compliance** : Analyse d'impact, matrices de couverture et audits.             | ✅ Stable |
-| **Blockchain**      | `blockchain_commands.rs`   | **Sécurité** : Transactions Hyperledger Fabric et VPN Mesh.                      | 🚧 Stub   |
-| **Génération Code** | `codegen_commands.rs`      | **Transpilation** : Transformation des modèles en code source (Rust/Python).     | 🚧 Beta   |
-| **Cognitif**        | `cognitive_commands.rs`    | **Plugins** : Exécution de modules d'analyse WASM externes.                      | 🚧 Beta   |
-| **Génétique**       | `genetics_commands.rs`     | **Optimisation** : Algorithmes évolutionnaires pour l'architecture.              | 🚧 Simu   |
-| **Modèle**          | `model_commands.rs`        | **I/O Lourd** : Chargement global et gestion de la mémoire projet.               | ✅ Stable |
-| **Utilitaires**     | `utils_commands.rs`        | **Système** : Infos de build, configuration et état de santé.                    | ✅ Stable |
+Il agit comme le **Contrôleur** unique, garantissant que chaque action utilisateur passe par un point d'entrée validé, audité et typé.
 
 ---
 
-## 🏛️ Architecture & Flux de Données
+## 🏗️ Architecture & Flux de Données
 
-Les commandes servent d'aiguilleur : elles reçoivent les requêtes UI, valident les entrées, appellent les services métier, et retournent des résultats sérialisés.
+Le module `commands` orchestre les interactions entre l'interface utilisateur et le cœur métier (Domain). Il ne contient **aucune logique métier complexe**, mais délègue immédiatement aux services appropriés (Agents IA, Moteurs, Stockage).
 
-```text
-┌──────────────┐
-│   FRONTEND   │ (React / TypeScript)
-└──────┬───────┘
-       │ invoke('nom_commande', { params })
-       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      TAURI COMMANDS                         │
-│                  (src-tauri/src/commands)                   │
-├──────────────┬──────────────┬───────────────┬───────────────┤
-│  ai_commands │ db_commands  │ flow_commands │  ...others    │
-└──────┬───────┴──────┬───────┴───────┬───────┴───────┬───────┘
-       │              │               │               │
-       ▼              ▼               ▼               ▼
-┌──────────────┐┌─────────────┐┌──────────────┐┌──────────────┐
-│  AI AGENTS   ││   JSON-DB   ││   WORKFLOW   ││  BLOCKCHAIN  │
-│ (Mistral/Gem)││  (Storage)  ││   ENGINE     ││   (Fabric)   │
-└──────────────┘└─────────────┘└──────────────┘└──────────────┘
+```mermaid
+graph TD
+    UI[Frontend React] -->|invoke('cmd_name', args)| Bridge[Tauri IPC Bridge]
+    Bridge --> CmdLayer[Commands Layer]
+
+    subgraph "Module Commands (Adapters)"
+        CmdLayer --> AIC[AI Commands]
+        CmdLayer --> WFC[Workflow Commands]
+        CmdLayer --> DBC[DB Commands]
+    end
+
+    subgraph "Core Domain (Hexagon)"
+        AIC --> Agent[AI Agents & Orchestrator]
+        WFC --> Engine[Workflow Engine]
+        DBC --> Storage[Storage Engine]
+    end
+
+    Agent -->|State Update| State[App State (Mutex/Arc)]
+    Engine -->|State Update| State
+
 ```
 
 ---
 
-## 📦 Catalogue Détaillé des Commandes
+## 🧩 Catalogue des Domaines Fonctionnels
 
-### 1\. Intelligence Artificielle (`ai_commands.rs`)
+Le module est découpé par domaine de responsabilité pour assurer une séparation claire des préoccupations (SoC).
 
-Le point d'entrée pour le système multi-agents.
-
-| Commande  | Description                                                                                                                                                                          |
-| :-------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ai_chat` | **Dispatcher principal**. Analyse l'intention utilisateur et route vers l'agent approprié (Business, System, Software, Hardware, Data, Transverse) ou le mode conversationnel (RAG). |
-
-### 2\. Base de Données & NoCode (`json_db_commands.rs`)
-
-Gestion bas niveau du stockage JSON et des collections.
-
-| Commande                   | Description                                                                                            |
-| :------------------------- | :----------------------------------------------------------------------------------------------------- |
-| `jsondb_create_collection` | Crée une collection avec ou sans schéma JSON.                                                          |
-| `jsondb_insert_document`   | Insère un document (avec validation automatique du schéma).                                            |
-| `jsondb_execute_query`     | Moteur de recherche structuré (filtres, tris).                                                         |
-| `jsondb_evaluate_draft`    | **Simulateur de Règles** : Teste un document contre les règles métier (`x_rules`) sans le sauvegarder. |
-
-### 3\. Workflow Engine (`workflow_commands.rs`)
-
-Orchestration des processus métier (BPMN-like).
-
-| Commande             | Description                                   |
-| :------------------- | :-------------------------------------------- |
-| `start_workflow`     | Instancie et démarre un nouveau workflow.     |
-| `resume_workflow`    | Débloque une étape (ex: approbation humaine). |
-| `get_workflow_state` | Récupère l'état courant (logs, nœuds actifs). |
-
-### 4\. Traçabilité & Compliance (`traceability_commands.rs`)
-
-Outils d'analyse d'impact et d'audit.
-
-| Commande                  | Description                                                   |
-| :------------------------ | :------------------------------------------------------------ |
-| `analyze_impact`          | Calcule la propagation des changements (Upstream/Downstream). |
-| `run_compliance_audit`    | Vérifie la conformité du modèle (Règles Qualité).             |
-| `get_traceability_matrix` | Génère la matrice de couverture (ex: SA vers LA).             |
-
-### 5\. Blockchain & VPN (`blockchain_commands.rs`)
-
-Infrastructure décentralisée pour la collaboration sécurisée.
-
-| Commande                    | Description                                            |
-| :-------------------------- | :----------------------------------------------------- |
-| `fabric_submit_transaction` | Enregistre une preuve immuable sur Hyperledger Fabric. |
-| `vpn_network_status`        | État du réseau Mesh (Innernet/WireGuard).              |
-
-### 6\. Génération de Code (`codegen_commands.rs`)
-
-Transformation des modèles en code source.
-
-| Commande               | Description                                                                      |
-| :--------------------- | :------------------------------------------------------------------------------- |
-| `generate_source_code` | Génère du code (Rust/Python) à partir d'un élément du modèle (ex: Composant LA). |
-
-### 7\. Cognition & WASM (`cognitive_commands.rs`)
-
-Exécution de plugins d'analyse avancée (WebAssembly).
-
-| Commande                   | Description                                                           |
-| :------------------------- | :-------------------------------------------------------------------- |
-| `run_consistency_analysis` | Lance un plugin WASM pour analyser la cohérence sémantique du modèle. |
-
-### 8\. Génétique (`genetics_commands.rs`)
-
-Optimisation architecturale par algorithmes évolutionnaires.
-
-| Commande                   | Description                                                                            |
-| :------------------------- | :------------------------------------------------------------------------------------- |
-| `run_genetic_optimization` | Lance une simulation pour trouver la meilleure architecture (ex: compromis Coût/Perf). |
-
-### 9\. Modèle (`model_commands.rs`)
-
-Chargement global du projet.
-
-| Commande             | Description                                                                 |
-| :------------------- | :-------------------------------------------------------------------------- |
-| `load_project_model` | Charge l'intégralité du modèle en mémoire (opération lourde, thread dédié). |
-
-### 10\. Utilitaires (`utils_commands.rs`)
-
-| Commande       | Description                                                 |
-| :------------- | :---------------------------------------------------------- |
-| `get_app_info` | Retourne la version, l'état de l'API et le mode (Dev/Prod). |
+| Domaine                          | Fichier                    | Responsabilité & Intégration                                                                                                                                      |
+| -------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **🧠 Intelligence Artificielle** | `ai_commands.rs`           | **Dispatcher Agentique**. Point d'entrée pour le système multi-agents. Gère l'état conversationnel (`AiState`) et route les prompts vers l'Orchestrateur partagé. |
+| **⚙️ Workflow Engine**           | `workflow_commands.rs`     | **Pilotage de Processus**. Permet de démarrer, mettre en pause et reprendre des workflows. Intègre le feedback humain (RLHF) via `resume_workflow`.               |
+| **💾 Données & NoCode**          | `json_db_commands.rs`      | **Persistance**. Interface CRUD pour le moteur JSON-DB. Expose aussi le moteur de règles pour tester des hypothèses (`evaluate_draft`).                           |
+| **🔍 Traçabilité**               | `traceability_commands.rs` | **Assurance Qualité**. Outils d'analyse d'impact et d'audit de conformité (Trace Matrix, Compliance Check).                                                       |
+| **⛓️ Blockchain**                | `blockchain_commands.rs`   | **Sécurité Décentralisée**. Gestion des transactions Hyperledger Fabric et de la connectivité Mesh VPN (Innernet).                                                |
+| **🏭 Génération Code**           | `codegen_commands.rs`      | **Transpilation**. Transforme les modèles d'architecture (LA/PA) en code source exécutable (Rust, Python).                                                        |
+| **🧬 Optimisation**              | `genetics_commands.rs`     | **Exploration**. Lance les algorithmes génétiques pour l'optimisation architecturale (compromis Coût/Perf).                                                       |
+| **🧩 Cognitif**                  | `cognitive_commands.rs`    | **Extensibilité**. Charge et exécute des plugins d'analyse tiers au format WebAssembly (.wasm).                                                                   |
+| **🏗️ Modèle Projet**             | `model_commands.rs`        | **Gestion de l'État**. Chargement et sauvegarde atomique du `ProjectModel` complet en mémoire.                                                                    |
+| **🛠️ Utilitaires**               | `utils_commands.rs`        | **Système**. Informations de diagnostic, versioning et configuration de l'environnement.                                                                          |
 
 ---
 
-## 🛠️ Ajouter une nouvelle commande
+## 🔐 Gestion de l'État et Sécurité
 
-1.  Créer la fonction dans un fichier existant ou nouveau (ex: `my_commands.rs`).
-2.  Annoter avec `#[tauri::command]`.
-3.  Enregistrer la commande dans `src-tauri/src/lib.rs` (fonction `generate_handler!`).
+### Injection de Dépendances (State Management)
 
-<!-- end list -->
+Les commandes utilisent le système d'injection de Tauri (`State<T>`) pour accéder aux ressources partagées de manière thread-safe.
+
+- **`AiState`** : Mutex protégeant l'accès à l'Orchestrateur IA (partagé entre Chat et Workflow).
+- **`WorkflowStore`** : Stocke les instances de processus en cours d'exécution.
+- **`StorageEngine`** : Accès direct à la couche de persistance JSON.
+
+### Sécurité des Entrées
+
+Toutes les commandes sont typées statiquement via `serde`.
+
+- **Validation** : Les arguments JSON du frontend sont automatiquement désérialisés en structs Rust. Si le format est invalide, la commande est rejetée avant même d'être exécutée.
+- **Erreurs** : Les erreurs sont renvoyées sous forme de `Result<T, String>` pour être gérées proprement par le frontend (promesse rejetée).
+
+---
+
+## 🚀 Guide du Développeur : Ajouter une Commande
+
+Pour exposer une nouvelle fonctionnalité au frontend :
+
+1. **Définir la fonction** dans le fichier approprié (ex: `workflow_commands.rs`) :
 
 ```rust
 #[tauri::command]
-pub fn my_custom_command(name: String) -> String {
-    format!("Hello, {}!", name)
+pub async fn my_new_action(
+    state: State<'_, MyState>, // Injection de dépendance
+    param_1: String            // Argument du frontend
+) -> Result<String, String> {  // Retour standardisé
+    // Logique métier...
+    Ok("Succès".into())
 }
+
+```
+
+2. **Enregistrer la commande** dans `src-tauri/src/lib.rs` (ou `main.rs`) :
+
+```rust
+.invoke_handler(tauri::generate_handler![
+    // ... existantes
+    workflow_commands::my_new_action, // Ajout ici
+])
+
+```
+
+3. **Appeler depuis React** :
+
+```typescript
+import { invoke } from '@tauri-apps/api/core';
+const result = await invoke('my_new_action', { param1: 'test' });
 ```
 
 ```

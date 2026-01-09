@@ -11,7 +11,7 @@ Voici l'organisation physique des fichiers de ce module :
 ```text
 src-tauri/src/ai/llm/
 ├── mod.rs               # Point d'entrée : expose les sous-modules publics.
-├── client.rs            # Client HTTP : gère la connexion (Ollama/Gemini) et le Fallback.
+├── client.rs            # Client HTTP : gère la connexion (llama.cpp/Gemini) et le Fallback.
 ├── prompts.rs           # Personas : contient les constantes des "System Prompts".
 ├── response_parser.rs   # Nettoyeur : extrait le JSON/Code des réponses brutes.
 └── tests.rs             # Validation : tests unitaires et d'intégration.
@@ -31,7 +31,7 @@ Le système implémente une stratégie **"Local First"** avec un mécanisme de *
     |   AGENT   |  >> 1. Envoi du Prompt (Persona) >> |   LLM CLIENT    |
     +-----------+                                     +-----------------+
           ^                                                    |
-          |                                          (Tentative Local : OLLAMA)
+          |                                          (Tentative Local : LLAMA.CPP)
           |                                                    v
     (Retour JSON)                                    [ ECHEC ? -> FALLBACK ]
           |                                                    |
@@ -48,7 +48,7 @@ Le système implémente une stratégie **"Local First"** avec un mécanisme de *
 1. **Conditionnement (`prompts.rs`) :** L'Agent sélectionne une personnalité (ex: `SYSTEM_AGENT_PROMPT`) pour orienter l'expertise du modèle.
 2. **Transport & Résilience (`client.rs`) :**
 
-- Le client tente d'abord d'interroger le modèle local (port 11434 ou 8080).
+- Le client tente d'abord d'interroger le modèle local ($LOCAL_URL_LLM:$LOCAL_PORT_LLM).
 - Si le serveur local ne répond pas, il bascule automatiquement sur l'API Google Gemini (si la clé est configurée).
 
 3. **Nettoyage (`response_parser.rs`) :**
@@ -71,8 +71,8 @@ use crate::ai::llm::{client, prompts, response_parser};
 
 async fn classify_user_request(user_input: &str) -> Result<serde_json::Value, String> {
     // 1. Initialisation du Client (souvent fait au démarrage de l'app)
-    // On cible le port par défaut d'Ollama
-    let llm_client = client::LlmClient::new("http://localhost:11434", "optional_api_key", None);
+    // On cible le port par défaut de llama.cpp
+    let llm_client = client::LlmClient::new("http://localhost:8081", "optional_api_key", None);
 
     // 2. Construction du Prompt avec le Persona "Routeur"
     let full_prompt = format!(
@@ -104,7 +104,7 @@ Ce cas est utilisé par le `SoftwareAgent` pour écrire des fichiers Rust.
 use crate::ai::llm::{client, prompts, response_parser};
 
 async fn generate_rust_code(task_description: &str) -> Result<String, String> {
-    let llm_client = client::LlmClient::new("http://localhost:11434", "", None);
+    let llm_client = client::LlmClient::new("http://localhost:8081", "", None);
 
     // On utilise le Persona "Software Engineer"
     let prompt = format!("{}\nTask: {}", prompts::SOFTWARE_AGENT_PROMPT, task_description);
@@ -127,10 +127,10 @@ async fn generate_rust_code(task_description: &str) -> Result<String, String> {
 
 Variables d'environnement (fichier `.env` ou contexte d'exécution) :
 
-| Variable              | Description                                                 |
-| --------------------- | ----------------------------------------------------------- |
-| `RAISE_LLM_LOCAL_URL` | URL du serveur local (défaut : `http://localhost:11434/v1`) |
-| `RAISE_GEMINI_KEY`    | Clé API de secours (Google AI Studio)                       |
+| Variable              | Description                                                |
+| --------------------- | ---------------------------------------------------------- |
+| `RAISE_LLM_LOCAL_URL` | URL du serveur local (défaut : `http://localhost:8081/v1`) |
+| `RAISE_GEMINI_KEY`    | Clé API de secours (Google AI Studio)                      |
 
 ---
 

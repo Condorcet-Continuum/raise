@@ -46,7 +46,7 @@ Pour garantir l'isolation et la reproductibilité, chaque test instancie un envi
 
 ## 🚀 Exécution des Tests
 
-Certains tests nécessitent une infrastructure externe (Docker/Ollama) et sont marqués `#[ignore]` par défaut.
+Certains tests nécessitent une infrastructure externe (Docker/llama.cpp) et sont marqués `#[ignore]` par défaut.
 
 ### 1\. Tests Unitaires (Rapides)
 

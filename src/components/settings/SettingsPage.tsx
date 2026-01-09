@@ -96,7 +96,7 @@ export default function SettingsPage() {
           style={inputStyle}
         >
           <option value="mock">Simulation (Mock) - Pour dév UI sans backend</option>
-          <option value="tauri-local">Local LLM (Ollama/Rust) - Via Tauri IPC</option>
+          <option value="tauri-local">Local LLM (llama.cpp/Rust) - Via Tauri IPC</option>
           <option value="remote-api">Remote API (OpenAI/Mistral) - Via HTTPS</option>
         </select>
 

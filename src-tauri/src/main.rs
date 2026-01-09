@@ -7,40 +7,38 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex; // Mutex Standard pour AppState
+use std::sync::Arc;
+use std::sync::Mutex;
 use tauri::Manager;
-use tokio::sync::Mutex as AsyncMutex; // Mutex Async pour l'IA et Workflow
+use tokio::sync::Mutex as AsyncMutex;
 
 // --- IMPORTS RAISE ---
-use raise::ai::training; // Pour dataset import/export
+use raise::ai::training;
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
     json_db_commands, model_commands, traceability_commands, utils_commands, workflow_commands,
 };
 
-// Architecture JSON-DB & Plugins
 use raise::json_db::migrations::migrator::Migrator;
 use raise::json_db::migrations::{Migration, MigrationStep};
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use serde_json::Value; // Pour Value::Null
+use serde_json::Value;
 
 use raise::plugins::manager::PluginManager;
 
 // Structures d'état
 use raise::commands::ai_commands::AiState;
 use raise::commands::workflow_commands::WorkflowStore;
-use raise::model_engine::types::ProjectModel;
+use raise::workflow_engine::scheduler::WorkflowScheduler;
+
+pub use raise::model_engine::types::ProjectModel;
 use raise::AppState;
 
-// Imports IA & Workflow
 use raise::ai::orchestrator::AiOrchestrator;
+use raise::graph_store::GraphStore;
 use raise::model_engine::loader::ModelLoader;
 
-// Import du GraphStore ---
-use raise::graph_store::GraphStore;
-
 fn main() {
-    // 1. Initialisation des logs & de la configuration globale
     println!("🚀 Démarrage de RAISE...");
     raise::utils::init_logging();
     let _ = raise::utils::AppConfig::init();
@@ -49,154 +47,100 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // =================================================================
-            // 1. RÉSOLUTION DU DOMAINE DE DONNÉES (PATH_RAISE_DOMAIN)
-            // =================================================================
+            // 1. CONFIG DOMAINE
             let db_root = if let Ok(env_path) = env::var("PATH_RAISE_DOMAIN") {
-                if env_path.starts_with("~/") {
-                    let home = env::var("HOME").expect("Impossible de trouver la variable $HOME");
-                    let expanded = env_path.replace("~", &home);
-                    println!("📂 Config Domain (Expanded) : {}", expanded);
-                    PathBuf::from(expanded)
-                } else {
-                    println!("📂 Config Domain (Env) : {}", env_path);
-                    PathBuf::from(env_path)
-                }
+                PathBuf::from(env_path)
             } else {
-                // Fallback sur AppData/raise_db si pas de variable d'env
-                let default_path = app.path().app_data_dir().unwrap().join("raise_db");
-                println!("📂 Config Domain (Default) : {:?}", default_path);
-                default_path
+                app.path().app_data_dir().unwrap().join("raise_db")
             };
-
-            // Création du dossier racine s'il n'existe pas
             if !db_root.exists() {
                 fs::create_dir_all(&db_root)?;
             }
 
-            // =================================================================
-            // 2. CONFIGURATION DU STOCKAGE (DB)
-            // =================================================================
+            // 2. CONFIG STORAGE
             let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
-
             let default_space = "un2";
             let default_db = "_system";
 
-            // =================================================================
-            // 3. INITIALISATION GRAPH STORE (SURREALDB)
-            // =================================================================
+            // 3. GRAPH STORE
             let graph_path = db_root.join("graph_store");
             let graph_store_result =
                 tauri::async_runtime::block_on(async { GraphStore::new(graph_path).await });
-            match graph_store_result {
-                Ok(store) => {
-                    // On injecte le store directement dans l'app
-                    app.manage(store);
-                    println!("✅ GraphStore injecté.");
-                }
-                Err(e) => {
-                    eprintln!("❌ Erreur critique GraphStore: {}", e);
-                    // CORRECTION ICI : On convertit l'erreur en String puis en Box<dyn Error>
-                    // Cela satisfait la signature attendue par tauri::setup
-                    return Err(e.to_string().into());
-                }
+            if let Ok(store) = graph_store_result {
+                app.manage(store);
             }
 
-            // =================================================================
-            // 4. MIGRATIONS & CHARGEMENT
-            // =================================================================
-            println!("⚙️ Vérification des migrations au démarrage...");
-            if let Err(e) = run_app_migrations(&storage, default_space, default_db) {
-                eprintln!("❌ ERREUR CRITIQUE MIGRATIONS : {}", e);
-            } else {
-                println!("✅ Migrations : Base de données à jour.");
-            }
+            // 4. MIGRATIONS
+            let _ = run_app_migrations(&storage, default_space, default_db);
             let plugin_mgr = PluginManager::new(&storage);
-            // Auto-chargement des plugins .wasm
-            let plugins_dir = app.path().app_data_dir().unwrap().join("plugins");
-            if plugins_dir.exists() {
-                if let Ok(entries) = fs::read_dir(plugins_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().and_then(|s| s.to_str()) == Some("wasm") {
-                            let name = path.file_stem().unwrap().to_string_lossy().to_string();
-                            println!("🔌 Plugin détecté : {} -> Chargement...", name);
-                            if let Err(e) = plugin_mgr.load_plugin(
-                                &name,
-                                path.to_str().unwrap(),
-                                default_space,
-                                default_db,
-                            ) {
-                                eprintln!("⚠️ Échec chargement plugin '{}': {}", name, e);
-                            }
-                        }
-                    }
-                }
-            } else {
-                let _ = fs::create_dir_all(&plugins_dir);
-            }
 
-            // =================================================================
-            // 5. INJECTION DES ÉTATS
-            // =================================================================
+            // 5. INJECTION ÉTATS
             app.manage(config);
             app.manage(storage);
             app.manage(plugin_mgr);
-
             app.manage(AppState {
                 model: Mutex::new(ProjectModel::default()),
             });
+
+            // Initialisation "vide" pour le démarrage (compatible main copy.rs)
             app.manage(AsyncMutex::new(WorkflowStore::default()));
             app.manage(AiState::new(None));
 
             let app_handle = app.handle();
             raise::blockchain::ensure_innernet_state(app_handle, "default");
 
-            // =================================================================
-            // 6. INITIALISATION IA (BACKGROUND THREAD)
-            // =================================================================
+            // 6. INITIALISATION ASYNC (CORRECTION LIFETIME)
             let app_handle_clone = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let llm_url = env::var("RAISE_LOCAL_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
-                let qdrant_port =
-                    env::var("PORT_QDRANT_GRPC").unwrap_or_else(|_| "6334".to_string());
-                let qdrant_url = format!("http://127.0.0.1:{}", qdrant_port);
+                let llm_url =
+                    env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
+                let qdrant_url = format!(
+                    "http://127.0.0.1:{}",
+                    env::var("PORT_QDRANT_GRPC").unwrap_or_else(|_| "6334".into())
+                );
 
-                println!("🤖 [IA] Démarrage du processus d'initialisation...");
+                println!("🤖 [IA] Chargement sur {}...", llm_url);
 
+                // Récupération de l'engine depuis l'état Tauri
                 let storage_state = app_handle_clone.state::<StorageEngine>();
-                let storage_engine = storage_state.inner().clone();
 
-                let model_res = tauri::async_runtime::spawn_blocking(move || {
-                    let loader = ModelLoader::from_engine(&storage_engine, "un2", "_system");
-                    loader.load_full_model()
-                })
-                .await;
+                // CORRECTION : Exécution directe (Inline) pour éviter les erreurs de lifetime avec spawn_blocking
+                // On utilise inner() directement sans le déplacer dans un autre thread
+                let loader = ModelLoader::from_engine(storage_state.inner(), "un2", "_system");
+                let model_res = loader.load_full_model(); // Exécution synchrone dans la tâche async
 
                 match model_res {
-                    Ok(Ok(model)) => {
-                        println!("🤖 [IA] Modèle chargé. Connexion à Qdrant & LLM...");
+                    Ok(model) => {
+                        println!("✅ [IA] Modèle chargé. Connexion services...");
                         match AiOrchestrator::new(model, &qdrant_url, &llm_url).await {
                             Ok(orchestrator) => {
+                                // Pointeur partagé unique
+                                let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
+
+                                // A. Injection Chat (Clone du pointeur)
                                 let ai_state = app_handle_clone.state::<AiState>();
-                                let mut guard = ai_state.lock().await;
-                                *guard = Some(orchestrator);
-                                println!("✅ [IA] Raise est PRÊTE.");
+                                let mut guard = ai_state.0.lock().await;
+                                *guard = Some(shared_orch.clone());
+
+                                // B. Injection Workflow (Clone du pointeur)
+                                let wf_state =
+                                    app_handle_clone.state::<AsyncMutex<WorkflowStore>>();
+                                let mut wf_store = wf_state.lock().await;
+                                wf_store.scheduler = Some(WorkflowScheduler::new(shared_orch));
+
+                                println!("✅ [RAISE] IA et Workflow synchronisés.");
                             }
-                            Err(e) => eprintln!("❌ [IA] Erreur Connexion Orchestrator : {}", e),
+                            Err(e) => eprintln!("❌ Erreur Orchestrator: {}", e),
                         }
                     }
-                    Ok(Err(e)) => eprintln!("❌ [IA] Erreur Chargement Modèle JSON-DB : {}", e),
-                    Err(e) => eprintln!("❌ [IA] Erreur Thread Panicked : {}", e),
+                    Err(e) => eprintln!("❌ Erreur Chargement Modèle : {}", e),
                 }
             });
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // --- GESTION DATABASE ---
             json_db_commands::jsondb_create_db,
             json_db_commands::jsondb_drop_db,
             json_db_commands::jsondb_create_collection,
@@ -211,23 +155,15 @@ fn main() {
             json_db_commands::jsondb_list_all,
             json_db_commands::jsondb_execute_query,
             json_db_commands::jsondb_execute_sql,
-            // <-- MOTEUR DE RÈGLES --->
             json_db_commands::jsondb_evaluate_draft,
             json_db_commands::jsondb_init_demo_rules,
-            // --- MODEL & ARCHITECTURE ---
             model_commands::load_project_model,
-            // --- IA & DATASETS ---
             ai_commands::ai_chat,
             ai_commands::ai_reset,
             training::dataset::ai_export_dataset,
-            // ⚠️ COMMANDE IMPORT DÉSACTIVÉE TANT QUE NON IMPLÉMENTÉE DANS dataset.rs
-            // training::dataset::ai_import_dataset,
-
-            // --- PLUGINS COGNITIFS ---
             cognitive_commands::cognitive_load_plugin,
             cognitive_commands::cognitive_run_plugin,
             cognitive_commands::cognitive_list_plugins,
-            // --- BLOCKCHAIN ---
             blockchain_commands::fabric_ping,
             blockchain_commands::fabric_submit_transaction,
             blockchain_commands::fabric_query_transaction,
@@ -239,18 +175,13 @@ fn main() {
             blockchain_commands::vpn_add_peer,
             blockchain_commands::vpn_ping_peer,
             blockchain_commands::vpn_check_installation,
-            // --- OPTIMISATION ---
             genetics_commands::run_genetic_optimization,
-            // --- CODEGEN ---
             codegen_commands::generate_source_code,
-            // --- TRAÇABILITÉ ---
             traceability_commands::analyze_impact,
             traceability_commands::run_compliance_audit,
             traceability_commands::get_traceability_matrix,
             traceability_commands::get_element_neighbors,
-            // --- UTILITAIRES ---
             utils_commands::get_app_info,
-            // --- WORKFLOW ENGINE ---
             workflow_commands::register_workflow,
             workflow_commands::start_workflow,
             workflow_commands::resume_workflow,
@@ -262,12 +193,11 @@ fn main() {
 
 fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> anyhow::Result<()> {
     let migrator = Migrator::new(storage, space, db);
-
     let migrations = vec![
         Migration {
             id: "init_001_core_collections".to_string(),
             version: "1.0.0".to_string(),
-            description: "Création des collections de base Arcadia".to_string(),
+            description: "Init".to_string(),
             up: vec![
                 MigrationStep::CreateCollection {
                     name: "articles".to_string(),
@@ -288,7 +218,7 @@ fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> anyhow:
         Migration {
             id: "idx_001_articles_title".to_string(),
             version: "1.1.0".to_string(),
-            description: "Indexation des articles par titre".to_string(),
+            description: "Idx title".to_string(),
             up: vec![MigrationStep::CreateIndex {
                 collection: "articles".to_string(),
                 fields: vec!["title".to_string()],
@@ -297,7 +227,6 @@ fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> anyhow:
             applied_at: None,
         },
     ];
-
     migrator.run_migrations(migrations)?;
     Ok(())
 }

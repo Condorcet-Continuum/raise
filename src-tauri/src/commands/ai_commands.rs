@@ -9,20 +9,33 @@ use crate::ai::agents::{
 use crate::ai::llm::client::LlmClient;
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::storage::StorageEngine;
-use tokio::sync::Mutex;
+use tokio::sync::Mutex; // Async Mutex
 
 use std::env;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::Arc; // Standard Arc
 use tauri::{command, State};
 
-// --- DÉFINITION DE L'ÉTAT GLOBAL ---
-pub type AiState = Mutex<Option<AiOrchestrator>>;
+// --- DÉFINITION DE L'ÉTAT GLOBAL (PROPRIÉTÉ PARTAGÉE) ---
+// On utilise une structure tuple pour envelopper le Mutex
+// Type = Un Mutex qui contient (peut-être) un Pointeur Partagé vers un Mutex qui contient l'Orchestrateur
+pub struct AiState(pub Mutex<Option<Arc<Mutex<AiOrchestrator>>>>);
+
+impl AiState {
+    pub fn new(orch: Option<Arc<Mutex<AiOrchestrator>>>) -> Self {
+        Self(Mutex::new(orch))
+    }
+}
 
 #[command]
 pub async fn ai_reset(ai_state: State<'_, AiState>) -> Result<(), String> {
-    let mut guard = ai_state.lock().await;
-    if let Some(orchestrator) = guard.as_mut() {
+    // 1. On verrouille le conteneur principal
+    let guard = ai_state.0.lock().await;
+
+    // 2. Si l'IA est initialisée, on accède au pointeur partagé
+    if let Some(shared_orch) = &*guard {
+        // 3. On verrouille l'orchestrateur lui-même
+        let mut orchestrator = shared_orch.lock().await;
         orchestrator.clear_history().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -40,7 +53,6 @@ pub async fn ai_chat(
     let gemini_key = env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     let model_name = env::var("RAISE_MODEL_NAME").ok();
 
-    // Correction URL
     let local_url_raw =
         env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
     let local_url = local_url_raw.replace("localhost", "127.0.0.1");
@@ -66,7 +78,6 @@ pub async fn ai_chat(
     );
 
     // 3. Routage
-    // Ici, 'result' sera de type Result<Option<AgentResult>, anyhow::Error>
     let result = match intent {
         EngineeringIntent::DefineBusinessUseCase { .. } => {
             BusinessAgent::new().process(&ctx, &intent).await
@@ -95,14 +106,15 @@ pub async fn ai_chat(
         }
         EngineeringIntent::GenerateCode { .. } => SoftwareAgent::new().process(&ctx, &intent).await,
 
-        // --- CORRECTION : Uniformisation des types d'erreur ---
         EngineeringIntent::Unknown | EngineeringIntent::Chat => {
-            let mut guard = ai_state.lock().await;
+            // --- ACCÈS À L'ORCHESTRATEUR VIA ARC ---
+            let guard = ai_state.0.lock().await;
 
-            if let Some(orchestrator) = guard.as_mut() {
+            if let Some(shared_orch) = &*guard {
+                // On verrouille l'instance partagée pour lui parler
+                let mut orchestrator = shared_orch.lock().await;
                 match orchestrator.ask(&user_input).await {
                     Ok(response_text) => Ok(Some(AgentResult::text(response_text))),
-                    // CORRECTION : On propage l'erreur anyhow telle quelle, sans .to_string()
                     Err(e) => Err(e),
                 }
             } else {
@@ -115,7 +127,7 @@ pub async fn ai_chat(
         _ => Ok(Some(AgentResult::text("Commande non gérée.".to_string()))),
     };
 
-    // 4. Conversion finale pour Tauri (String)
+    // 4. Conversion finale
     match result {
         Ok(Some(res)) => Ok(res),
         Ok(None) => Ok(AgentResult::text("Aucune action effectuée.".to_string())),

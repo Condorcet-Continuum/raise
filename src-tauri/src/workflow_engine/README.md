@@ -1,115 +1,139 @@
-# 🔀 Module Workflow Engine
+# 🧠 Workflow Engine (Neuro-Symbolic & Sovereign)
 
-Ce module implémente le moteur d'orchestration **symbolique** de RAISE.
-Il est responsable de l'exécution déterministe des plans d'actions, qu'ils soient définis manuellement par un ingénieur ou générés dynamiquement par un Agent IA.
+Ce module implémente le cœur d'exécution **Neuro-Symbolique** de RAISE.
+Il dépasse le simple moteur de script pour devenir une architecture de **Gouvernance par le Code**, mariant :
 
-Contrairement aux agents (qui sont "créatifs" et probabilistes), le Workflow Engine est **rigide et auditable**.
-
----
-
-## 🏗️ Architecture
-
-Le moteur repose sur une séparation stricte des responsabilités en trois composants :
-
-| Composant         | Fichier            | Rôle                                                                                                                                             |
-| :---------------- | :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Scheduler**     | `scheduler.rs`     | **Chef d'orchestre**. Il maintient le registre des définitions de workflow et pilote le cycle de vie des instances (Start, Step, Pause, Resume). |
-| **State Machine** | `state_machine.rs` | **Navigateur**. Il analyse le graphe (Nœuds + Liens) pour déterminer quels sont les prochains nœuds éligibles en fonction de l'état actuel.      |
-| **Executor**      | `executor.rs`      | **Ouvrier**. Il exécute une tâche unitaire (Appel API, Agent IA, Calcul) sans se soucier du reste du graphe.                                     |
+1. **La Rigueur Constitutionnelle** : Mandats signés cryptographiquement, lignes rouges inviolables (Vetos), compilation déterministe.
+2. **L'Intelligence Générative** : Agents IA contextuels, raisonnement dynamique, auto-critique.
+3. **L'Ancrage dans le Réel (Grounding)** : Capacité d'agir physiquement sur le système via des outils déterministes (MCP).
+4. **Le Consensus Algorithmique** : Résolution de conflits par vote pondéré (Méthode de Condorcet).
 
 ---
 
-## 🧩 Modèle de Données
+## 🏛️ Architecture : Cerveau, Mains et Loi
 
-Le moteur manipule deux concepts distincts :
+Le système repose sur une séparation stricte des pouvoirs. L'utilisateur (Législateur) ne code pas le workflow ; il définit un **Mandat**. Le système le compile ensuite en une structure exécutable qui orchestre Agents (Probabilistes) et Outils (Déterministes).
 
-1.  **Définition (`WorkflowDefinition`)** : Le "Moule" statique (JSON). Il contient la liste des nœuds et des arêtes (edges). Il est immuable.
-2.  **Instance (`WorkflowInstance`)** : L'exécution dynamique. Elle contient l'état de chaque nœud (`Pending`, `Running`, `Completed`), les logs et le contexte de données (variables).
-
-### Types de Nœuds Supportés
-
-| Type           | Description       | Comportement                                                                      |
-| :------------- | :---------------- | :-------------------------------------------------------------------------------- |
-| **`Task`**     | Tâche standard    | Exécute une action (ex: Appel IA) puis passe à `Completed`.                       |
-| **`Decision`** | Branchement       | Évalue une condition pour choisir la branche de sortie.                           |
-| **`Parallel`** | Fork              | Lance plusieurs branches simultanément.                                           |
-| **`GateHitl`** | Human-In-The-Loop | **Met le workflow en PAUSE**. Attend une intervention humaine via l'API `resume`. |
-| **`CallMcp`**  | Tool Call         | Appelle un outil externe via le protocole MCP (Model Context Protocol).           |
+| Composant         | Fichier            | Rôle & Responsabilité                                                                                             |
+| ----------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| **Mandate**       | `mandate.rs`       | **La Constitution**. Structure JSON signée (Ed25519) définissant la stratégie, les poids politiques et les vetos. |
+| **Compiler**      | `compiler.rs`      | **Le Traducteur**. Transforme le Mandat (Politique) en un Graphe orienté (Technique) exécutable.                  |
+| **Scheduler**     | `scheduler.rs`     | **Le Chef d'Orchestre**. Gère le cycle de vie, la persistance et l'injection des ressources.                      |
+| **Executor**      | `executor.rs`      | **L'Interface Agentique**. Exécute les tâches, appelle les outils (MCP), consulte l'IA et applique les votes.     |
+| **Tools (MCP)**   | `tools/`           | **Les Mains**. Modules Rust natifs pour interagir avec le matériel, le système de fichiers ou les API.            |
+| **Critic**        | `critic.rs`        | **Le Juge Interne**. Évalue la qualité des réponses de l'IA (Reward Model) avant validation.                      |
+| **State Machine** | `state_machine.rs` | **Le Navigateur**. Gère la topologie du graphe (DAG) et les transitions d'états.                                  |
 
 ---
 
-## 🔄 Cycle de Vie d'une Exécution
+## 📜 Le Protocole de Mandat
 
-### 1. Démarrage (`start_workflow`)
+Le moteur ne lance pas un script arbitraire. Il exécute un **Contrat de Gouvernance**.
 
-Une nouvelle `WorkflowInstance` est créée à partir d'une définition. Son statut est `Pending`.
+### 1. Structure du Mandat
 
-### 2. Boucle d'Exécution (`run_step`)
+Le `Mandate` contient :
 
-Le Scheduler entre dans une boucle :
+- **Méta-données** : Auteur, Version, Signature Cryptographique.
+- **Gouvernance** : Poids des agents virtuels (ex: `Sécurité: 3.0`, `Finance: 1.0`).
+- **Hard Logic (Vetos)** : Règles bloquantes (ex: `VIBRATION_MAX` -> `EMERGENCY_SHUTDOWN`).
+- **Observabilité** : Fréquence de reporting et métriques obligatoires.
 
-1.  Il demande à la **State Machine** : _"Quels sont les prochains nœuds ?"_
-2.  Si la liste est vide : Le workflow est terminé (`Completed`).
-3.  Sinon, pour chaque nœud :
-    - Il délègue l'exécution à l'**Executor**.
-    - Il met à jour le statut du nœud dans l'instance.
+### 2. Compilation
 
-### 3. Gestion de la Pause (`GateHitl`)
+Le `WorkflowCompiler` injecte ces règles dans le graphe :
 
-Si l'Executor rencontre un nœud de type `GateHitl` (Validation Humaine) :
-
-1.  Il retourne un statut `Paused`.
-2.  Le Scheduler arrête immédiatement la boucle d'exécution.
-3.  L'instance reste figée dans l'état `Paused`.
-
-### 4. Reprise (`resume_node`)
-
-Lorsque l'utilisateur (via le Frontend) valide l'étape :
-
-1.  La commande `resume_workflow` est appelée avec `approved: true/false`.
-2.  Le Scheduler force le statut du nœud à `Completed` (ou `Failed`).
-3.  La boucle d'exécution reprend son cours normal.
+1. Les **Vetos** deviennent des nœuds `GatePolicy` placés en amont.
+2. Les **Poids** sont injectés dans les nœuds `Decision` (Condorcet).
+3. La **Stratégie** conditionne le prompt des nœuds `Task`.
 
 ---
 
-## 💻 Exemple d'Utilisation (Rust)
+## 🛠️ Écosystème d'Outils (Native MCP)
 
-```rust
-use crate::workflow_engine::{WorkflowScheduler, WorkflowInstance};
+Pour éviter les hallucinations lors d'actions critiques, Raise sépare nettement la **Réflexion** de l'**Action**.
 
-// 1. Initialisation
-let mut scheduler = WorkflowScheduler::new();
-scheduler.register_workflow(my_definition);
+- **Agents (`src/ai/agents`)** : "Bavards" et créatifs. Ils génèrent du texte, du code ou des plans.
+- **Outils (`src/workflow_engine/tools`)** : "Muets" et robustes. Ils exécutent des fonctions Rust natives.
 
-// 2. Démarrage
-let mut instance = WorkflowInstance::new("mon-workflow-id", context);
+Cette architecture implémente une version native du **Model Context Protocol (MCP)**.
+Les outils sont exposés au moteur via le trait `AgentTool` et exécutés via le nœud `CallMcp`.
 
-// 3. Exécution (Async)
-// Avance tant que possible, s'arrête si Pause ou Fin
-scheduler.run_step(&mut instance).await?;
+> **Exemple de Flux Sécurisé :**
+>
+> 1. Un nœud `CallMcp` appelle l'outil `read_system_metrics` (Lecture physique).
+> 2. Le résultat JSON est stocké dans le contexte.
+> 3. Un nœud `GatePolicy` lit ce contexte et applique un Veto si la valeur dépasse le seuil mandaté.
 
-// 4. Reprise (si pause)
-if instance.status == ExecutionStatus::Paused {
-    scheduler.resume_node(&mut instance, "node-validation", true)?;
-    // On relance la boucle après reprise
-    scheduler.run_step(&mut instance).await?;
-}
+---
+
+## 🔄 Flux d'Exécution Global
+
+```mermaid
+sequenceDiagram
+    participant U as Utilisateur (Médiateur)
+    participant C as Compiler
+    participant S as Scheduler
+    participant E as Executor
+    participant T as Tools (MCP)
+    participant AI as AiOrchestrator
+    participant CR as Critic
+
+    Note over U, C: Phase Législative
+    U->>C: submit_mandate(Signed JSON)
+    C->>C: Verify Signature & Compile DAG
+    C->>S: register_workflow(DAG)
+
+    Note over S, AI: Phase Exécutive
+    loop Boucle Agentique
+        S->>E: execute_node()
+
+        alt CallMcp (Action)
+            E->>T: execute(args)
+            T-->>E: Result JSON (Real World Data)
+
+        else GatePolicy (Veto)
+            E->>E: Check Context vs Rules
+            opt Violation
+                E-->>S: Failed (Emergency Stop)
+            end
+
+        else Task (Réflexion)
+            E->>AI: ask(Mission)
+            AI-->>E: Response
+            E->>CR: evaluate(XaiFrame)
+            CR-->>E: Score & Quality
+
+        else Decision (Consensus)
+            E->>E: Simuler Vote Condorcet (Pondéré)
+            E->>E: Élire Vainqueur
+        end
+
+        E-->>S: Completed
+    end
+
 ```
 
 ---
 
-## 🔗 Intégration Tauri
+## 🧩 Modèle de Données (Nœuds)
 
-Le moteur est exposé au Frontend via le module `commands::workflow_commands`.
-L'état global est stocké dans un `Mutex<WorkflowStore>` géré par Tauri.
+| Type             | Description       | Comportement                                                             |
+| ---------------- | ----------------- | ------------------------------------------------------------------------ |
+| **`Task`**       | Agent Cognitif    | Exécute une instruction, génère une trace XAI, soumise au **Critique**.  |
+| **`CallMcp`**    | Action Système    | Appelle un **Outil Rust** (Lecture capteur, Fichier, API). Déterministe. |
+| **`Decision`**   | Vote Condorcet    | Applique les **Poids du Mandat** pour arbitrer entre plusieurs options.  |
+| **`GatePolicy`** | Veto              | Vérifie une règle stricte sur les données du contexte. **Bloquant**.     |
+| **`GateHitl`**   | Human-In-The-Loop | Pause le workflow pour une signature humaine explicite.                  |
+| **`Parallel`**   | Fork              | Lance plusieurs branches simultanément.                                  |
 
-- **`register_workflow`** : Sauvegarde un graphe dessiné dans l'éditeur.
-- **`start_workflow`** : Lance une instance.
-- **`resume_workflow`** : Débloque une porte HITL.
-- **`get_workflow_state`** : Permet au frontend de poller l'avancement.
+---
 
-<!-- end list -->
+## 💻 Commandes Tauri Exposées
 
-```
+L'API permet désormais de piloter la gouvernance, l'exécution et le feedback.
 
-```
+- **`submit_mandate(mandate: Mandate)`** : Compile une politique signée en workflow technique.
+- **`start_workflow(id)`** : Lance l'exécution d'une instance.
+- **`resume_workflow(id, node_id, approved)`** : Feedback humain (RLHF) pour débloquer un `GateHitl`.
+- **`get_workflow_state(id)`** : Récupère l'état temps-réel, les logs, et les valeurs des variables de contexte.

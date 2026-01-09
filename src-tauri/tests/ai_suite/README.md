@@ -59,7 +59,7 @@ Les tests sont organisés pour couvrir chaque couche du cycle en V et les aspect
 | **EPBS** (Config)     | `epbs_agent_tests.rs`       | Industrialisation -> Création de **ConfigurationItems** (P/N généré).           |
 | **DATA** (MDM)        | `data_agent_tests.rs`       | Dictionnaire -> Création de **Classes** et **Enums** (Nettoyage JSON agressif). |
 | **IVVQ** (Transverse) | `transverse_agent_tests.rs` | Cycle Qualité -> **Exigence** -> **TestProcedure** -> **Campagne**.             |
-| **INFRA**             | `llm_tests.rs`              | Vérifie que le serveur LLM (Ollama/Llama) répond (Ping).                        |
+| **INFRA**             | `llm_tests.rs`              | Vérifie que le serveur LLM (llama.cpp) répond (Ping).                           |
 
 ### Suite Code (`code_gen_suite`)
 
@@ -120,7 +120,7 @@ Le fichier `mod.rs` contient la logic de **Setup/Teardown**.
 
 **Erreur : `SKIPPED: Pas d'IA disponible**`
 
-> Le test a détecté qu'aucune clé API n'est présente et que `http://localhost:8080/health` ne répond pas. Lancez votre serveur Ollama ou configurez `RAISE_GEMINI_KEY`.
+> Le test a détecté qu'aucune clé API n'est présente et que `http://localhost:8081/health` ne répond pas. Lancez votre serveur llama.cpp ou configurez `RAISE_GEMINI_KEY`.
 
 **Erreur : `panicked at ... byte index ... is out of bounds**`
 

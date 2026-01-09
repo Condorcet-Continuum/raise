@@ -80,7 +80,7 @@ The application's brain, divided into three main pillars:
 #### A. Neuro Pillar (Creative Intelligence)
 
 - **`ai/agents/`**: Multi-agent system specialized by domain (Business, Software, Hardware, EPBS).
-- **`ai/llm/`**: Prompt management and abstraction of model providers (Ollama, etc.).
+  llama.cpp- **`ai/llm/`**: Prompt management and abstraction of model providers (llama.cpp, etc.).
 - **`ai/context/`**: Conversational memory management (RAG).
 
 #### B. Symbolic Pillar (Engineering Rigor)
@@ -122,15 +122,15 @@ The key concept of RAISE is to never blindly trust the AI. Here is the lifecycle
 
 ## 🛠️ Tech Stack
 
-| Domain       | Technologies                                    |
-| ------------ | ----------------------------------------------- |
-| **Frontend** | React, TypeScript, Vite, TailwindCSS            |
-| **Backend**  | Rust, Tauri, Tokio (Async)                      |
-| **WASM**     | `wasm-bindgen`, Rust                            |
-| **Database** | Custom Engine (Rust), Serde, SQL Parser         |
-| **AI/ML**    | LLM (Local via Ollama/Rust-Bert), Vector Stores |
-| **Modeling** | JSON-LD, Arcadia Metamodel                      |
-| **Security** | VPN (Innernet), Ed25519 (Signatures)            |
+| Domain       | Technologies                                       |
+| ------------ | -------------------------------------------------- |
+| **Frontend** | React, TypeScript, Vite, TailwindCSS               |
+| **Backend**  | Rust, Tauri, Tokio (Async)                         |
+| **WASM**     | `wasm-bindgen`, Rust                               |
+| **Database** | Custom Engine (Rust), Serde, SQL Parser            |
+| **AI/ML**    | LLM (Local via llama.cpp/Rust-Bert), Vector Stores |
+| **Modeling** | JSON-LD, Arcadia Metamodel                         |
+| **Security** | VPN (Innernet), Ed25519 (Signatures)               |
 
 ````
 

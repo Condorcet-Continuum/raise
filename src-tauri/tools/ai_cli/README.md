@@ -154,12 +154,12 @@ cargo run -p ai_cli -- classify "Crée un FPGA Xilinx pour le traitement vidéo"
 
 ## 🐛 Dépannage
 
-| Erreur               | Solution                                                                 |
-| -------------------- | ------------------------------------------------------------------------ |
-| `Connection refused` | Vérifiez que votre serveur local (Ollama/Llama) tourne sur le port 8080. |
-| `API Key Missing`    | Vérifiez votre fichier `.env`.                                           |
-| `Partial move`       | Erreur de compilation Rust interne (signalez-le à l'équipe).             |
-| `Schema not found`   | Le dossier `dataset` est mal configuré dans le `.env`.                   |
+| Erreur               | Solution                                                              |
+| -------------------- | --------------------------------------------------------------------- |
+| `Connection refused` | Vérifiez que votre serveur local (llama.cpp) tourne sur le port 8080. |
+| `API Key Missing`    | Vérifiez votre fichier `.env`.                                        |
+| `Partial move`       | Erreur de compilation Rust interne (signalez-le à l'équipe).          |
+| `Schema not found`   | Le dossier `dataset` est mal configuré dans le `.env`.                |
 
 ---
 

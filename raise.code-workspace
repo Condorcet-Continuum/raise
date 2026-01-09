@@ -1,13 +1,16 @@
 {
   "folders": [
     {
+      "name": "raise",
       "path": "."
     },
     {
-      "path": "../JobEnCours"
+      "name": "Condorcet-Continuum.github.io",
+      "path": "../condorcet-continuum/Condorcet-Continuum.github.io"
     },
     {
-      "path": "../condorcet-continuum/Condorcet-Continuum.github.io"
+      "name": "JobEnCours",
+      "path": "../JobEnCours"
     }
   ]
 }

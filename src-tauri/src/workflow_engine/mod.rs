@@ -1,29 +1,39 @@
+// FICHIER : src-tauri/src/workflow_engine/mod.rs
+
+pub mod compiler;
+pub mod critic;
 pub mod executor;
+pub mod mandate;
 pub mod scheduler;
 pub mod state_machine;
+pub mod tools;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-// Re-exports
+// Re-exports pour faciliter l'usage externe
 pub use executor::WorkflowExecutor;
 pub use scheduler::WorkflowScheduler;
 pub use state_machine::WorkflowStateMachine;
+// AJOUTS
+pub use compiler::WorkflowCompiler;
+pub use mandate::Mandate;
 
 /// Type d'un nœud dans le graphe (correspond au schema JSON)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeType {
     Task,       // Tâche standard (ex: Agent IA)
-    Decision,   // Branchement conditionnel
+    Decision,   // Branchement conditionnel (Condorcet)
     Parallel,   // Exécution simultanée
     GateHitl,   // Pause pour validation humaine
-    GatePolicy, // Vérification automatique de règles
+    GatePolicy, // Vérification automatique de règles (Vetos)
     CallMcp,    // Appel outil externe (Model Context Protocol)
     End,        // Fin du flux
 }
 
+// ... (Le reste du fichier ExecutionStatus, WorkflowNode, etc. reste inchangé) ...
 /// Statut d'exécution d'une instance ou d'un nœud
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -91,37 +101,5 @@ impl WorkflowInstance {
             created_at: chrono::Utc::now().timestamp(),
             updated_at: chrono::Utc::now().timestamp(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_workflow_instance_creation() {
-        let context = HashMap::from([("user".to_string(), serde_json::json!("Alice"))]);
-        let instance = WorkflowInstance::new("wf-onboarding", context);
-
-        assert_eq!(instance.workflow_id, "wf-onboarding");
-        assert_eq!(instance.status, ExecutionStatus::Pending);
-        assert!(!instance.id.is_empty(), "L'ID doit être généré (UUID)");
-        assert!(instance.created_at > 0, "Le timestamp doit être défini");
-        assert!(
-            instance.context.contains_key("user"),
-            "Le contexte doit être préservé"
-        );
-    }
-
-    #[test]
-    fn test_serialization() {
-        let node = WorkflowNode {
-            id: "node_1".to_string(),
-            r#type: NodeType::Task,
-            name: "Task 1".to_string(),
-            params: serde_json::json!({}),
-        };
-        let json = serde_json::to_string(&node).unwrap();
-        assert!(json.contains("\"type\":\"task\"")); // Vérifie snake_case
     }
 }

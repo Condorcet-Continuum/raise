@@ -24,7 +24,7 @@ Cette section permet de choisir le moteur d'intelligence artificielle utilisé p
 
 - **Options de Backend** :
   - `Mock` : Simulation (pas d'appels réels, utile pour le développement UI).
-  - `Tauri Local` : Utilise un modèle LLM local (via Ollama ou Rust interne).
+  - `Tauri Local` : Utilise un modèle LLM local (via llama.cpp ou Rust interne).
   - `Remote API` : Connecte à des APIs externes (OpenAI, Mistral) via HTTPS.
 
 #### 2\. Base de Données (JSON-DB)
