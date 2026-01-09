@@ -3,13 +3,12 @@ name: CI/CD RAISE
 on:
   push:
     branches: [ "main" ]
-    tags: [ "v*" ] # Déclenche la release sur un tag (ex: v1.0.0)
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
-  # On désactive l'interactivité pour les apt-get
   DEBIAN_FRONTEND: noninteractive
 
 jobs:
@@ -20,10 +19,20 @@ jobs:
     name: 🛡️ Quality & Tests
     runs-on: ubuntu-latest
     steps:
+      # --- AJOUT CRITIQUE : NETTOYAGE DISQUE ---
+      - name: 🧹 Free Disk Space
+        run: |
+          echo "Espace libre avant :" && df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+          echo "Espace libre après :" && df -h
+      # -----------------------------------------
+
       - uses: actions/checkout@v4
 
-      # Installation des dépendances Système (Linux)
-      # Similaire à ton template .install_linux_deps
       - name: Install System Dependencies
         run: |
           sudo apt-get update
@@ -35,12 +44,13 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            xvfb
 
       - name: Install Rust (Stable)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown, wasm32-wasip1 # Cibles WASM requises
+          targets: wasm32-unknown-unknown, wasm32-wasip1
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -51,28 +61,22 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      # Compilation du module WASM (nécessaire pour les tests d'intégration)
       - name: Build WASM Core
         run: |
           cd src-wasm
           ./build.sh
 
-      # Linting (Clippy & Fmt)
       - name: Check Formatting
         run: cargo fmt --all -- --check
       
       - name: Lint with Clippy
         run: cargo clippy -- -D warnings
 
-      # Tests (Backend + WASM)
-      # On utilise xvfb-run pour simuler un écran (requis par les tests Tauri/GTK)
       - name: Run Headless Tests
-        run: |
-          sudo apt-get install -y xvfb
-          xvfb-run cargo test --all-features
+        run: xvfb-run cargo test --all-features
 
   # ------------------------------------------------------------------
-  # JOB 2 : SBOM (Sécurité & Transparence "Bien Commun")
+  # JOB 2 : SBOM (Léger, pas besoin de nettoyage)
   # ------------------------------------------------------------------
   sbom:
     name: 🔍 Generate SBOMs
@@ -82,14 +86,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # SBOM Rust (CycloneDX)
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx
       
       - name: Generate Rust SBOM
         run: cargo cyclonedx --format json --all > sbom-rust.cdx.json
 
-      # SBOM JS & Files (Syft) - GitHub a une action officielle pour ça !
       - name: Generate Filesystem SBOM (Syft)
         uses: anchore/sbom-action@v0
         with:
@@ -104,18 +106,27 @@ jobs:
           path: "*.cdx.json"
           retention-days: 5
 
-# ------------------------------------------------------------------
-  # JOB 3 : BUILD & RELEASE (Strictement séquencé)
+  # ------------------------------------------------------------------
+  # JOB 3 : BUILD & RELEASE
   # ------------------------------------------------------------------
   build-release:
     name: 📦 Build, Checksum & Release
-    needs: [quality-check, sbom] # Attend que la qualité ET les SBOMs soient OK
+    needs: [quality-check, sbom]
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      # --- AJOUT CRITIQUE : NETTOYAGE DISQUE ---
+      - name: 🧹 Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+      # -----------------------------------------
+
       - uses: actions/checkout@v4
 
-      # 1. Préparation Environnement (Identique GitLab .install_linux_deps)
       - name: Install System Dependencies
         run: |
           sudo apt-get update
@@ -130,16 +141,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: 'wasm32-unknown-unknown,wasm32-wasip1' }
 
-      # 2. Séquence de Build (WASM -> Front -> Back)
-      # Correspond à 'wasm:build' puis 'tauri:bundle' dans GitLab
       - name: Build WASM Core
         run: cd src-wasm && ./build.sh
 
       - name: Install & Build Frontend
         run: |
           npm ci
-          # Le build frontend est souvent déclenché par tauri build, 
-          # mais le faire ici assure que les assets sont prêts.
           npm run build 
 
       - name: Build Tauri App (Native)
@@ -150,31 +157,24 @@ jobs:
         with:
           args: --target x86_64-unknown-linux-gnu
 
-      # 3. Récupération des SBOMs (Générés par le job parallèle)
       - name: Retrieve SBOMs
         uses: actions/download-artifact@v4
         with:
           name: sboms
           path: release_out/sboms
 
-      # 4. Préparation & Preuve (Checksums) - SPÉCIFIQUE GITLAB RÉINTÉGRÉ
       - name: Prepare Artifacts & Checksums
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           mkdir -p release_out
-          
-          # Copie des binaires Tauri générés (AppImage, Deb)
-          # tauri-action place souvent les outputs dans src-tauri/target/release/bundle/
           cp src-tauri/target/release/bundle/deb/*.deb release_out/ 2>/dev/null || true
           cp src-tauri/target/release/bundle/appimage/*.AppImage release_out/ 2>/dev/null || true
           
-          # Génération des empreintes SHA256 (La "Preuve")
           cd release_out
           echo "Generating SHA256 Checksums..."
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      # 5. Publication GitHub Release
       - name: Publish Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
