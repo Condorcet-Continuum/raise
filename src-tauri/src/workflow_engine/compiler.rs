@@ -35,8 +35,7 @@ impl WorkflowCompiler {
         // 2. Compilation des Lignes Rouges (VETOS -> GatePolicy)
         for (i, veto) in mandate.hard_logic.vetos.iter().enumerate() {
             if veto.active {
-                // --- MODIFICATION : Injection de l'outil de lecture AVANT le Veto ---
-                // Cette étape est cruciale pour que la valeur du slider soit récupérée
+                // --- Injection de l'outil de lecture AVANT le Veto ---
                 if veto.rule == "VIBRATION_MAX" {
                     let tool_node_id = format!("tool_read_vibration_{}", i);
 
@@ -60,7 +59,6 @@ impl WorkflowCompiler {
                     // Le nœud précédent devient l'outil
                     previous_node_id = tool_node_id;
                 }
-                // -----------------------------------------------------------------------
 
                 let node_id = format!("gate_veto_{}", i);
 
@@ -85,12 +83,30 @@ impl WorkflowCompiler {
             }
         }
 
+        // --- NOUVEAU : 2.5 Injection de la Gouvernance Dynamique (WASM) ---
+        // On insère ce nœud entre les Vetos (Hard Logic) et l'exécution (Agents)
+        let wasm_node_id = "policy_wasm_check".to_string();
+        nodes.push(WorkflowNode {
+            id: wasm_node_id.clone(),
+            r#type: NodeType::Wasm, // Hot-Swap dynamique
+            name: "🛡️ Politique WASM (Hot-Swap)".into(),
+            params: json!({}), // Utilise le path par défaut défini dans l'executor
+        });
+
+        edges.push(WorkflowEdge {
+            from: previous_node_id.clone(),
+            to: wasm_node_id.clone(),
+            condition: None,
+        });
+        previous_node_id = wasm_node_id;
+        // ------------------------------------------------------------------
+
         // 3. L'Agent d'Exécution
         let task_id = "agent_execution".to_string();
         nodes.push(WorkflowNode {
             id: task_id.clone(),
             r#type: NodeType::Task,
-            name: format!("Exécution Stratégie {}", mandate.governance.strategy),
+            name: format!("Exécution Stratégie {:?}", mandate.governance.strategy),
             params: json!({ "context_fetch": true }),
         });
         edges.push(WorkflowEdge {
@@ -143,19 +159,20 @@ impl WorkflowCompiler {
 mod tests {
     use super::*;
     use crate::workflow_engine::mandate::{
-        Governance, HardLogic, Mandate, MandateMeta, Observability, VetoRule,
+        Governance, HardLogic, Mandate, MandateMeta, Observability, Strategy, VetoRule,
     };
     use std::collections::HashMap;
 
     fn get_test_mandate() -> Mandate {
         Mandate {
+            id: "test_mandate_001".into(),
             meta: MandateMeta {
                 author: "Admin".into(),
                 status: "ACTIVE".into(),
                 version: "v1".into(),
             },
             governance: Governance {
-                strategy: "SAFETY".into(),
+                strategy: Strategy::SafetyFirst,
                 condorcet_weights: HashMap::from([
                     ("agent_security".to_string(), 3.0),
                     ("agent_finance".to_string(), 1.0),
@@ -190,9 +207,23 @@ mod tests {
 
         assert_eq!(wf.id, "wf_Admin_v1");
 
-        // On doit avoir 6 nœuds maintenant (Start + Tool + Veto + Exec + Vote + End)
-        // Car VIBRATION_MAX est actif -> injecte ToolRead + GateVeto
-        assert_eq!(wf.nodes.len(), 6);
+        // On doit avoir 7 nœuds maintenant :
+        // 1. Start
+        // 2. ToolRead (pour VIBRATION_MAX)
+        // 3. GateVeto (pour VIBRATION_MAX)
+        // 4. WASM (Politique Dynamique) <-- AJOUTÉ
+        // 5. Exec (Agent)
+        // 6. Vote (Condorcet)
+        // 7. End
+        assert_eq!(
+            wf.nodes.len(),
+            7,
+            "Le nombre de nœuds doit inclure le nœud WASM"
+        );
+
+        // Vérifions que le nœud WASM est bien présent
+        let wasm_node = wf.nodes.iter().find(|n| n.r#type == NodeType::Wasm);
+        assert!(wasm_node.is_some(), "Le nœud WASM doit être injecté");
 
         // Vérifions que le nœud CallMcp est bien présent
         let tool_node = wf.nodes.iter().find(|n| n.r#type == NodeType::CallMcp);

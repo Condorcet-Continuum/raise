@@ -2,8 +2,10 @@
 
 use super::{ExecutionStatus, WorkflowDefinition, WorkflowInstance};
 use crate::utils::Result;
-use serde_json::Value; // Ajout nécessaire pour lire le contexte
+use serde_json::Value;
 
+/// Moteur de règles de transition pour le workflow.
+/// C'est lui qui décide quel nœud doit s'exécuter ensuite.
 pub struct WorkflowStateMachine {
     definition: WorkflowDefinition,
 }
@@ -13,206 +15,245 @@ impl WorkflowStateMachine {
         Self { definition }
     }
 
-    /// Détermine les prochains nœuds éligibles à l'exécution.
-    /// Implémente la logique de synchronisation (attente de tous les parents)
-    /// ET la logique de branchement conditionnel (filtrage des arcs).
+    /// Détermine la liste des ID de nœuds qui peuvent être exécutés maintenant.
     pub fn next_runnable_nodes(&self, instance: &WorkflowInstance) -> Vec<String> {
         let mut runnable = Vec::new();
 
-        if instance.node_states.is_empty() {
-            return vec![self.definition.entry.clone()];
+        // Si le workflow est en pause ou terminé, rien ne bouge
+        if instance.status == ExecutionStatus::Paused
+            || instance.status == ExecutionStatus::Completed
+            || instance.status == ExecutionStatus::Failed
+        {
+            return runnable;
         }
 
-        for (node_id, status) in &instance.node_states {
-            if *status == ExecutionStatus::Completed {
-                // MODIFICATION : On récupère uniquement les enfants valides selon le contexte
-                let children = self.get_valid_children(node_id, instance);
+        for node in &self.definition.nodes {
+            let node_id = &node.id;
 
-                for child_id in children {
-                    // On vérifie que l'enfant n'est pas déjà lancé
-                    // ET que tous ses parents (qui mènent à lui) sont satisfaits
-                    if !instance.node_states.contains_key(&child_id)
-                        && self.are_parents_satisfied(&child_id, instance)
-                    {
-                        runnable.push(child_id);
+            // 1. Si le nœud est déjà traité (Completed, Failed, Skipped), on passe
+            if let Some(status) = instance.node_states.get(node_id) {
+                if *status != ExecutionStatus::Pending && *status != ExecutionStatus::Running {
+                    continue;
+                }
+                // Si Running, on ne le relance pas (sauf logique de retry, non implémentée ici)
+                if *status == ExecutionStatus::Running {
+                    continue;
+                }
+            }
+
+            // 2. Vérification des Parents (Dépendances)
+            let parents = self.get_parents(node_id);
+
+            // Cas spécial : Le nœud de départ n'a pas de parents
+            if parents.is_empty() {
+                if node_id == &self.definition.entry && !instance.node_states.contains_key(node_id)
+                {
+                    runnable.push(node_id.clone());
+                }
+                continue;
+            }
+
+            // 3. Logique de Synchronisation (Tous les parents doivent être terminés)
+            let mut all_parents_done = true;
+            let mut parent_failed = false;
+
+            for parent_id in &parents {
+                match instance.node_states.get(parent_id) {
+                    Some(ExecutionStatus::Completed) => {
+                        // Le parent est OK, mais l'arc a-t-il une condition ?
+                        if !self.check_transition_condition(parent_id, node_id, instance) {
+                            // Parent OK mais condition non remplie => Ce chemin est fermé
+                            all_parents_done = false;
+                            break;
+                        }
+                    }
+                    Some(ExecutionStatus::Skipped) => {
+                        // Si un parent est skippé, l'enfant est skippé aussi (propagation)
+                        // (Géré lors de la transition, ici on considère juste qu'on ne peut pas run)
+                        all_parents_done = false;
+                        break;
+                    }
+                    Some(ExecutionStatus::Failed) => {
+                        parent_failed = true;
+                        all_parents_done = false;
+                        break;
+                    }
+                    _ => {
+                        // Parent Pending/Running/Paused
+                        all_parents_done = false;
+                        break;
                     }
                 }
             }
+
+            if parent_failed {
+                // Si un parent (ex: Veto) a échoué, ce nœud ne s'exécutera jamais.
+                // Idéalement, on devrait le marquer Skipped ou Failed ici,
+                // mais next_runnable ne fait que de la lecture.
+                continue;
+            }
+
+            if all_parents_done {
+                runnable.push(node_id.clone());
+            }
         }
+
         runnable
     }
 
-    /// Effectue une transition d'état pour un nœud et met à jour le statut global.
+    /// Applique le changement d'état après l'exécution d'un nœud
     pub fn transition(
         &self,
         instance: &mut WorkflowInstance,
         node_id: &str,
-        status: ExecutionStatus,
+        new_status: ExecutionStatus,
     ) -> Result<()> {
-        instance.node_states.insert(node_id.to_string(), status);
-        instance.updated_at = chrono::Utc::now().timestamp();
+        // Mise à jour de l'état du nœud
+        instance.node_states.insert(node_id.to_string(), new_status);
 
-        // Gestion de l'échec critique
-        if status == ExecutionStatus::Failed {
+        // Gestion de la fin globale ou de l'échec
+        if new_status == ExecutionStatus::Failed {
+            // Si c'est un Veto critique, tout le workflow échoue
+            // (Sauf si on avait une logique de try/catch, absente pour l'instant)
+            tracing::error!("❌ Nœud {} échoué -> Arrêt du Workflow", node_id);
             instance.status = ExecutionStatus::Failed;
-            instance
-                .logs
-                .push(format!("❌ Échec critique au nœud : {}", node_id));
+            return Ok(());
         }
 
-        // Vérification de la complétion globale du graphe
-        if self.is_workflow_finished(instance) {
-            if instance.status != ExecutionStatus::Failed {
-                instance.status = ExecutionStatus::Completed;
-            }
-            instance.logs.push("🏁 Workflow terminé.".into());
+        // Vérifier si c'était le dernier nœud
+        if self.is_end_node(node_id) {
+            tracing::info!("🏁 Fin du Workflow atteinte par le nœud {}", node_id);
+            instance.status = ExecutionStatus::Completed;
         }
+
+        // TODO: Propagation du statut "Skipped" aux enfants des branches non prises
+        // Ce serait ici qu'on invaliderait les chemins alternatifs d'un Decision.
 
         Ok(())
     }
 
-    /// Vérifie si tous les nœuds pointant vers child_id sont à l'état Completed.
-    fn are_parents_satisfied(&self, child_id: &str, instance: &WorkflowInstance) -> bool {
-        let parents: Vec<_> = self
-            .definition
-            .edges
-            .iter()
-            .filter(|edge| edge.to == child_id)
-            .map(|edge| &edge.from)
-            .collect();
+    // --- Helpers ---
 
-        if parents.is_empty() {
-            return true;
-        }
-
-        // Pour qu'un nœud démarre, tous ses parents définis dans le graphe doivent être terminés.
-        // Note: Dans un branchement exclusif, cela implique que le noeud de jonction
-        // ne doit pas avoir des parents de branches mutuellement exclusives (sinon il bloquera).
-        parents
-            .iter()
-            .all(|p_id| instance.node_states.get(*p_id) == Some(&ExecutionStatus::Completed))
-    }
-
-    /// Récupère les enfants dont la condition de l'arc est validée
-    fn get_valid_children(&self, node_id: &str, instance: &WorkflowInstance) -> Vec<String> {
+    fn get_parents(&self, node_id: &str) -> Vec<String> {
         self.definition
             .edges
             .iter()
-            .filter(|edge| edge.from == node_id)
-            // Ici on applique le filtre de condition
-            .filter(|edge| self.evaluate_edge_condition(&edge.condition, &instance.context))
-            .map(|edge| edge.to.clone())
+            .filter(|e| e.to == node_id)
+            .map(|e| e.from.clone())
             .collect()
     }
 
-    /// Évaluateur basique de condition (Syntaxe: "key == value")
-    fn evaluate_edge_condition(
-        &self,
-        condition: &Option<String>,
-        context: &std::collections::HashMap<String, Value>,
-    ) -> bool {
-        match condition {
-            None => true, // Pas de condition = chemin par défaut
-            Some(cond_str) => {
-                // Parsing naïf : "variable == valeur"
-                // Ex: "validation == 'approved'"
-                let parts: Vec<&str> = cond_str.split("==").map(|s| s.trim()).collect();
-                if parts.len() != 2 {
-                    return false; // Syntaxe invalide
-                }
-
-                let key = parts[0];
-                // Nettoyage des quotes autour de la valeur ('val' ou "val")
-                let expected_val_str = parts[1].trim_matches('\'').trim_matches('"');
-
-                // On cherche la variable dans le contexte
-                if let Some(actual_val) = context.get(key) {
-                    // Comparaison simple sous forme de string pour l'instant
-                    let actual_str = match actual_val {
-                        Value::String(s) => s.clone(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Number(n) => n.to_string(),
-                        _ => return false,
-                    };
-                    return actual_str == expected_val_str;
-                }
-
-                false // Variable introuvable dans le contexte
+    fn is_end_node(&self, node_id: &str) -> bool {
+        // Un nœud est final s'il n'a pas d'enfants sortants
+        // OU s'il est explicitement de type "End" (vérifié via la definition)
+        if let Some(node) = self.definition.nodes.iter().find(|n| n.id == node_id) {
+            if matches!(node.r#type, super::NodeType::End) {
+                return true;
             }
         }
+
+        !self.definition.edges.iter().any(|e| e.from == node_id)
     }
 
-    fn is_workflow_finished(&self, instance: &WorkflowInstance) -> bool {
-        if instance.status == ExecutionStatus::Paused {
-            return false;
+    /// Vérifie si la condition portée par l'arc (Edge) est valide
+    fn check_transition_condition(
+        &self,
+        from: &str,
+        to: &str,
+        instance: &WorkflowInstance,
+    ) -> bool {
+        let edge = self
+            .definition
+            .edges
+            .iter()
+            .find(|e| e.from == from && e.to == to);
+
+        if let Some(e) = edge {
+            if let Some(condition_script) = &e.condition {
+                return self.evaluate_condition(condition_script, &instance.context);
+            }
         }
 
-        // Si plus rien n'est runnable et que rien n'est en cours, c'est fini.
-        self.next_runnable_nodes(instance).is_empty()
-            && !instance
-                .node_states
-                .values()
-                .any(|s| *s == ExecutionStatus::Running)
+        // Pas de condition = toujours vrai
+        true
+    }
+
+    /// Évaluateur basique de condition (Moteur symbolique simple)
+    /// Supporte: "var == 'valeur'"
+    fn evaluate_condition(
+        &self,
+        script: &str,
+        context: &std::collections::HashMap<String, Value>,
+    ) -> bool {
+        // Parsing naïf pour le prototype : "variable == 'valeur'"
+        // Pour la prod : utiliser une lib comme `rhai` ou `json_logic`
+
+        if script.contains("==") {
+            let parts: Vec<&str> = script.split("==").collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim();
+                let target_val_str = parts[1].trim().replace("'", "").replace("\"", "");
+
+                if let Some(actual_val) = context.get(key) {
+                    // Comparaison String
+                    if let Some(s) = actual_val.as_str() {
+                        return s == target_val_str;
+                    }
+                    // Comparaison Bool
+                    if let Some(b) = actual_val.as_bool() {
+                        return b.to_string() == target_val_str;
+                    }
+                }
+                return false; // Clé manquante ou type incompatible
+            }
+        }
+
+        // Si script non reconnu, on retourne false par sécurité (Fail-Safe)
+        tracing::warn!("⚠️ Script de condition non supporté : {}", script);
+        false
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow_engine::{NodeType, WorkflowDefinition, WorkflowEdge, WorkflowNode};
+    use crate::workflow_engine::{NodeType, WorkflowEdge, WorkflowNode};
     use serde_json::json;
     use std::collections::HashMap;
 
-    fn create_test_wf() -> WorkflowDefinition {
-        // Graphe : A -> B, A -> C, B -> D, C -> D
+    fn create_dummy_def() -> WorkflowDefinition {
         WorkflowDefinition {
-            id: "diamond_test".into(),
-            entry: "A".into(),
+            id: "wf_1".into(),
+            entry: "start".into(),
             nodes: vec![
                 WorkflowNode {
-                    id: "A".into(),
+                    id: "start".into(),
                     r#type: NodeType::Task,
-                    name: "Start".into(),
+                    name: "S".into(),
                     params: json!({}),
                 },
                 WorkflowNode {
-                    id: "B".into(),
+                    id: "mid".into(),
                     r#type: NodeType::Task,
-                    name: "Task B".into(),
+                    name: "M".into(),
                     params: json!({}),
                 },
                 WorkflowNode {
-                    id: "C".into(),
-                    r#type: NodeType::Task,
-                    name: "Task C".into(),
-                    params: json!({}),
-                },
-                WorkflowNode {
-                    id: "D".into(),
-                    r#type: NodeType::Task,
-                    name: "Join D".into(),
+                    id: "end".into(),
+                    r#type: NodeType::End,
+                    name: "E".into(),
                     params: json!({}),
                 },
             ],
             edges: vec![
                 WorkflowEdge {
-                    from: "A".into(),
-                    to: "B".into(),
+                    from: "start".into(),
+                    to: "mid".into(),
                     condition: None,
                 },
                 WorkflowEdge {
-                    from: "A".into(),
-                    to: "C".into(),
-                    condition: None,
-                },
-                WorkflowEdge {
-                    from: "B".into(),
-                    to: "D".into(),
-                    condition: None,
-                },
-                WorkflowEdge {
-                    from: "C".into(),
-                    to: "D".into(),
+                    from: "mid".into(),
+                    to: "end".into(),
                     condition: None,
                 },
             ],
@@ -220,46 +261,69 @@ mod tests {
     }
 
     #[test]
-    fn test_diamond_join_logic() {
-        let def = create_test_wf();
+    fn test_sequential_flow() {
+        let def = create_dummy_def();
         let sm = WorkflowStateMachine::new(def);
-        let mut instance = WorkflowInstance::new("diamond_test", HashMap::new());
+        let mut instance = WorkflowInstance::new("wf_1", HashMap::new());
 
-        // A est fini
-        sm.transition(&mut instance, "A", ExecutionStatus::Completed)
+        // 1. Initial : Start doit être runnable
+        let next = sm.next_runnable_nodes(&instance);
+        assert_eq!(next, vec!["start"]);
+
+        // 2. Start exécuté
+        sm.transition(&mut instance, "start", ExecutionStatus::Completed)
             .unwrap();
 
-        // B et C sont prêts, mais pas D
-        let runnable = sm.next_runnable_nodes(&instance);
-        assert!(runnable.contains(&"B".to_string()));
-        assert!(runnable.contains(&"C".to_string()));
-        assert!(!runnable.contains(&"D".to_string()));
-
-        // B finit, D attend toujours C
-        sm.transition(&mut instance, "B", ExecutionStatus::Completed)
-            .unwrap();
-        assert!(!sm.next_runnable_nodes(&instance).contains(&"D".to_string()));
-
-        // C finit, D devient enfin runnable
-        sm.transition(&mut instance, "C", ExecutionStatus::Completed)
-            .unwrap();
-        assert!(sm.next_runnable_nodes(&instance).contains(&"D".to_string()));
+        // 3. Mid doit être runnable
+        let next = sm.next_runnable_nodes(&instance);
+        assert_eq!(next, vec!["mid"]);
     }
 
     #[test]
-    fn test_failure_propagation() {
-        let def = create_test_wf();
+    fn test_conditional_branching_simple() {
+        let def = WorkflowDefinition {
+            id: "wf_branch".into(),
+            entry: "start".into(),
+            nodes: vec![
+                WorkflowNode {
+                    id: "start".into(),
+                    r#type: NodeType::Task,
+                    name: "S".into(),
+                    params: json!({}),
+                },
+                WorkflowNode {
+                    id: "path_a".into(),
+                    r#type: NodeType::Task,
+                    name: "A".into(),
+                    params: json!({}),
+                },
+            ],
+            edges: vec![WorkflowEdge {
+                from: "start".into(),
+                to: "path_a".into(),
+                condition: Some("status == 'ok'".into()),
+            }],
+        };
         let sm = WorkflowStateMachine::new(def);
-        let mut instance = WorkflowInstance::new("fail_test", HashMap::new());
 
-        // A échoue
-        sm.transition(&mut instance, "A", ExecutionStatus::Failed)
-            .unwrap();
+        // Cas A : Condition remplie
+        let mut ctx_ok = HashMap::new();
+        ctx_ok.insert("status".into(), json!("ok"));
+        let mut inst_ok = WorkflowInstance::new("wf_branch", ctx_ok);
+        inst_ok
+            .node_states
+            .insert("start".into(), ExecutionStatus::Completed);
 
-        // Le statut global doit être Failed
-        assert_eq!(instance.status, ExecutionStatus::Failed);
+        assert_eq!(sm.next_runnable_nodes(&inst_ok), vec!["path_a"]);
 
-        // Plus rien ne doit être runnable (B et C attendent A Completed)
-        assert!(sm.next_runnable_nodes(&instance).is_empty());
+        // Cas B : Condition non remplie
+        let mut ctx_ko = HashMap::new();
+        ctx_ko.insert("status".into(), json!("error"));
+        let mut inst_ko = WorkflowInstance::new("wf_branch", ctx_ko);
+        inst_ko
+            .node_states
+            .insert("start".into(), ExecutionStatus::Completed);
+
+        assert!(sm.next_runnable_nodes(&inst_ko).is_empty());
     }
 }

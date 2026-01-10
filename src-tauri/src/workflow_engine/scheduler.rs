@@ -5,7 +5,9 @@ use super::{
     WorkflowDefinition, WorkflowInstance,
 };
 use crate::ai::orchestrator::AiOrchestrator;
-use crate::utils::Result;
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::utils::Result; // Import nécessaire pour le Pont
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -41,6 +43,25 @@ impl WorkflowScheduler {
 
     pub fn register_workflow(&mut self, def: WorkflowDefinition) {
         self.definitions.insert(def.id.clone(), def);
+    }
+
+    /// Charge une mission complète à partir d'un Mandat stocké en base.
+    /// C'est le point d'entrée "Politique -> Technique".
+    pub fn load_mission(
+        &mut self,
+        manager: &CollectionsManager,
+        mandate_id: &str,
+    ) -> Result<String> {
+        // 1. Appel au Pont (Executor) pour transformer le Mandat en Workflow
+        let workflow = WorkflowExecutor::load_and_prepare_workflow(manager, mandate_id)?;
+
+        let wf_id = workflow.id.clone();
+        tracing::info!("🚀 Mission chargée dans le Scheduler : {}", wf_id);
+
+        // 2. Enregistrement en mémoire
+        self.register_workflow(workflow);
+
+        Ok(wf_id)
     }
 
     /// Exécute une étape du workflow (trouve les nœuds éligibles et les lance)
@@ -122,6 +143,7 @@ impl WorkflowScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::test_utils::init_test_env; // Pour le test de cycle de vie
     use crate::model_engine::types::ProjectModel;
     use crate::workflow_engine::{
         ExecutionStatus, NodeType, WorkflowDefinition, WorkflowEdge, WorkflowNode,
@@ -133,16 +155,55 @@ mod tests {
     // Helper de test
     async fn setup_test() -> WorkflowScheduler {
         let model = ProjectModel::default();
+        // Mock de l'orchestrateur pour les tests (évite la connexion réseau)
+        // CORRECTION : Utilisation d'une IP valide (127.0.0.1) au lieu de "http://mock"
+        // Cela évite l'erreur "Failed to obtain server version" du client Qdrant lors de l'initialisation
         let orch = AiOrchestrator::new(model, "http://127.0.0.1:6334", "http://127.0.0.1:8081")
             .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "Impossible de créer l'orchestrateur (Vérifiez que llama.cpp/Qdrant tournent)"
-                )
-            });
+            .unwrap_or_else(|_| panic!("Mock fail"));
 
         let shared_orch = Arc::new(Mutex::new(orch));
         WorkflowScheduler::new(shared_orch)
+    }
+
+    // --- NOUVEAU TEST : Cycle de vie complet (DB -> Mandat -> Scheduler -> Instance) ---
+    #[tokio::test]
+    #[ignore = "Nécessite AiOrchestrator (Llama.cpp/Qdrant)"]
+    async fn test_mission_lifecycle_from_mandate() {
+        // 1. Setup Environnement
+        let mut scheduler = setup_test().await;
+        let env = init_test_env();
+        let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
+
+        // 2. Création d'un mandat politique
+        let mandate = json!({
+            "id": "mission_alpha",
+            "meta": { "author": "Commander", "version": "1.0", "status": "ACTIVE" },
+            "governance": { "strategy": "PERFORMANCE" },
+            "hardLogic": { "vetos": [] },
+            "observability": { "heartbeatMs": 1000 }
+        });
+        manager.insert_raw("mandates", &mandate).unwrap();
+
+        // 3. Chargement de la mission (Le Scheduler utilise le Pont)
+        let workflow_id = scheduler
+            .load_mission(&manager, "mission_alpha")
+            .expect("Chargement échoué");
+
+        // Le compilateur génère un ID basé sur l'auteur et la version: wf_Commander_1.0
+        assert_eq!(workflow_id, "wf_Commander_1.0");
+        assert!(scheduler.definitions.contains_key(&workflow_id));
+
+        // 4. Instanciation et Démarrage
+        let mut instance = WorkflowInstance::new(&workflow_id, HashMap::new());
+
+        // Premier pas : Nœud "Start" (Initialisation Mandat)
+        let result = scheduler.run_step(&mut instance).await;
+        assert!(result.is_ok());
+        assert_eq!(instance.status, ExecutionStatus::Running);
+
+        // Vérification que l'instance contient les traces du mandat
+        assert!(instance.node_states.contains_key("start"));
     }
 
     #[tokio::test]

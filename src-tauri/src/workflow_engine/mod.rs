@@ -7,33 +7,33 @@ pub mod mandate;
 pub mod scheduler;
 pub mod state_machine;
 pub mod tools;
+pub mod wasm_host;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-// Re-exports pour faciliter l'usage externe
+// --- RE-EXPORTS (L'API Publique du Moteur) ---
+pub use compiler::WorkflowCompiler;
 pub use executor::WorkflowExecutor;
+pub use mandate::Mandate;
 pub use scheduler::WorkflowScheduler;
 pub use state_machine::WorkflowStateMachine;
-// AJOUTS
-pub use compiler::WorkflowCompiler;
-pub use mandate::Mandate;
 
 /// Type d'un nœud dans le graphe (correspond au schema JSON)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeType {
-    Task,       // Tâche standard (ex: Agent IA)
+    Task,       // Tâche standard (Agent IA)
     Decision,   // Branchement conditionnel (Condorcet)
-    Parallel,   // Exécution simultanée
-    GateHitl,   // Pause pour validation humaine
+    Parallel,   // Exécution simultanée (Réservé pour v2)
+    GateHitl,   // Pause pour validation humaine (Human In The Loop)
     GatePolicy, // Vérification automatique de règles (Vetos)
     CallMcp,    // Appel outil externe (Model Context Protocol)
+    Wasm,       // Exécution d'un module WebAssembly (Sandboxé & Hot-swappable)
     End,        // Fin du flux
 }
 
-// ... (Le reste du fichier ExecutionStatus, WorkflowNode, etc. reste inchangé) ...
 /// Statut d'exécution d'une instance ou d'un nœud
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -56,15 +56,15 @@ pub struct WorkflowNode {
     pub params: Value,
 }
 
-/// Représentation d'une transition
+/// Représentation d'une transition entre deux nœuds
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowEdge {
     pub from: String,
     pub to: String,
-    pub condition: Option<String>, // Script rhai ou json-logic
+    pub condition: Option<String>, // Script simple (ex: "status == 'ok'")
 }
 
-/// Définition statique du Workflow (le "Moule")
+/// Définition statique du Workflow (le "Plan" compilé)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDefinition {
     pub id: String,
@@ -79,12 +79,16 @@ pub struct WorkflowInstance {
     pub id: String,
     pub workflow_id: String,
     pub status: ExecutionStatus,
+
     /// État de chaque nœud : NodeID -> Status
     pub node_states: HashMap<String, ExecutionStatus>,
-    /// Mémoire contextuelle du workflow (Variables)
+
+    /// Mémoire contextuelle du workflow (Variables partagées)
     pub context: HashMap<String, Value>,
-    /// Logs d'exécution
+
+    /// Journal d'audit de l'exécution
     pub logs: Vec<String>,
+
     pub created_at: i64,
     pub updated_at: i64,
 }

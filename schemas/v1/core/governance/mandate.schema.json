@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raise.local/schemas/v1/core/governance/mandate.schema.json",
+  "title": "Mandate Policy",
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "properties": {
+        "author": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "required": ["author", "version"]
+    },
+    "governance": {
+      "type": "object",
+      "properties": {
+        "strategy": { "type": "string", "enum": ["SAFETY_FIRST", "PERFORMANCE", "BALANCED"] },
+        "weights": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        }
+      },
+      "required": ["strategy"]
+    },
+    "hardLogic": {
+      "type": "object",
+      "properties": {
+        "vetos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule": { "type": "string" },
+              "active": { "type": "boolean" }
+            },
+            "required": ["rule", "active"]
+          }
+        }
+      },
+      "required": ["vetos"]
+    }
+  },
+  "required": ["meta", "governance", "hardLogic"]
+}

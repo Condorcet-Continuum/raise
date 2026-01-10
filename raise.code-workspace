@@ -11,6 +11,9 @@
     {
       "name": "JobEnCours",
       "path": "../JobEnCours"
+    },
+    {
+      "path": "../raise_domain"
     }
   ]
 }

@@ -1,7 +1,12 @@
 [workspace]
 resolver = "2"
 
-members = ["core-api", "blocks/analyzer-consistency", "blocks/spy-plugin"]
+members = [
+    "core-api",
+    "blocks/analyzer-consistency",
+    "blocks/spy-plugin",
+    "blocks/governance",
+]
 
 [workspace.dependencies]
 # Sérialisation (JSON)

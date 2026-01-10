@@ -1,13 +1,15 @@
 // FICHIER : src-tauri/src/workflow_engine/executor.rs
 
-use super::{critic::WorkflowCritic, ExecutionStatus, NodeType, WorkflowNode};
-use crate::ai::orchestrator::AiOrchestrator;
-// Import explicite de AppError pour la conversion manuelle
-use crate::ai::assurance::xai::{ExplanationScope, XaiFrame, XaiMethod};
-use crate::utils::{AppError, Result};
-
-// Import du trait pour les outils
+use super::compiler::WorkflowCompiler;
+use super::mandate::Mandate;
 use super::tools::AgentTool;
+use super::wasm_host::WasmHost;
+use super::{critic::WorkflowCritic, ExecutionStatus, NodeType, WorkflowDefinition, WorkflowNode};
+
+use crate::ai::assurance::xai::{ExplanationScope, XaiFrame, XaiMethod};
+use crate::ai::orchestrator::AiOrchestrator;
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::utils::{AppError, Result};
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -40,8 +42,48 @@ impl WorkflowExecutor {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
+    // ========================================================================
+    // LE PONT : Chargement et Compilation Sécurisés
+    // ========================================================================
+
+    /// Point d'entrée sécurisé pour charger un mandat et préparer l'exécution.
+    ///
+    /// Cette méthode :
+    /// 1. Récupère le JSON brut depuis la DB.
+    /// 2. Le valide et le convertit en structure `Mandate` stricte (Le Pont).
+    /// 3. Compile ce mandat en `WorkflowDefinition` technique.
+    pub fn load_and_prepare_workflow(
+        manager: &CollectionsManager,
+        mandate_id: &str,
+    ) -> Result<WorkflowDefinition> {
+        // 1. PONT : Chargement validé (Fail-Fast si le JSON est invalide)
+        let mandate = Mandate::fetch_from_store(manager, mandate_id)?;
+
+        tracing::info!(
+            "📜 Mandat chargé et validé : {} v{} (Stratégie: {:?})",
+            mandate.meta.author,
+            mandate.meta.version,
+            mandate.governance.strategy
+        );
+
+        // 2. COMPILATION : Transformation en graphe technique
+        let workflow = WorkflowCompiler::compile(&mandate);
+
+        tracing::info!(
+            "🏗️ Workflow compilé avec succès : {} ({}) - {} noeuds",
+            workflow.id,
+            mandate.id,
+            workflow.nodes.len()
+        );
+
+        Ok(workflow)
+    }
+
+    // ========================================================================
+    // EXECUTION DES NOEUDS
+    // ========================================================================
+
     /// Point d'entrée pour l'exécution d'un nœud du graphe
-    /// CORRECTION : On accepte &mut HashMap pour être compatible avec WorkflowInstance
     pub async fn execute_node(
         &self,
         node: &WorkflowNode,
@@ -61,6 +103,66 @@ impl WorkflowExecutor {
 
             // Appel d'outil MCP
             NodeType::CallMcp => self.handle_tool_call(node, context).await,
+
+            // --- NOUVEAU : Exécution de Module WASM (Hot-Swap) ---
+            NodeType::Wasm => {
+                // 1. Définir le chemin par défaut (Relatif à la racine d'exécution src-tauri)
+                let default_path = "../wasm-modules/governance/governance.wasm";
+
+                // On permet de surcharger ce chemin via les paramètres du nœud
+                let wasm_path = node
+                    .params
+                    .get("path")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or(default_path);
+
+                tracing::info!("🔮 [WASM] Chargement du module : {}", wasm_path);
+
+                // 2. Lecture du fichier binaire
+                let wasm_bytes = std::fs::read(wasm_path).map_err(|e| {
+                    format!(
+                        "Impossible de lire le fichier WASM '{}'. Erreur : {}",
+                        wasm_path, e
+                    )
+                })?;
+
+                // 3. Initialisation de l'Hôte
+                let host = WasmHost::new()?;
+
+                // 4. Préparation du contexte (On envoie tout l'état actuel au WASM)
+                let input = serde_json::to_value(&context)
+                    .map_err(|e| format!("Erreur sérialisation contexte : {}", e))?;
+
+                // 5. Exécution dans la Sandbox
+                let start = std::time::Instant::now();
+                let result = host.run_module(&wasm_bytes, &input)?;
+                let duration = start.elapsed();
+
+                tracing::info!(
+                    "🔮 [WASM] Exécution terminée en {:?} : {}",
+                    duration,
+                    result
+                );
+
+                // 6. Interprétation de la décision de Gouvernance
+                if let Some(approved) = result.get("approved").and_then(|b| b.as_bool()) {
+                    if approved {
+                        Ok(ExecutionStatus::Completed)
+                    } else {
+                        // Si le WASM dit "Non", on bloque le workflow
+                        let reason = result
+                            .get("reason")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("Refus par la politique WASM");
+
+                        tracing::warn!("⛔ [WASM VETO] Workflow bloqué : {}", reason);
+                        Ok(ExecutionStatus::Failed)
+                    }
+                } else {
+                    // Si le module ne renvoie pas de booléen 'approved', on considère que c'est un succès (ex: module d'analyse pure)
+                    Ok(ExecutionStatus::Completed)
+                }
+            }
 
             // Pause explicite pour validation humaine (HITL)
             NodeType::GateHitl => {
@@ -91,7 +193,7 @@ impl WorkflowExecutor {
                 AppError::from("Paramètre 'tool_name' manquant pour CallMcp".to_string())
             })?;
 
-        // CORRECTION : On crée une variable liée pour que la référence vive assez longtemps
+        // Variable liée pour que la référence vive assez longtemps
         let default_args = json!({});
         let args = node.params.get("arguments").unwrap_or(&default_args);
 
@@ -104,10 +206,11 @@ impl WorkflowExecutor {
                     tracing::info!("✅ Résultat Outil : {:?}", output);
 
                     // 3. PERSISTANCE : On écrit directement dans la HashMap
+                    // (Note: Idéalement paramétrable via output_var, ici hardcodé pour l'exemple vibration)
                     if tool_name == "read_system_metrics" {
                         context.insert("sensor_vibration".to_string(), output);
                     }
-                    // Pour d'autres outils, on pourrait utiliser un champ "output_var" dans les params
+                    // TODO: Gérer d'autres sorties d'outils ici
 
                     Ok(ExecutionStatus::Completed)
                 }
@@ -260,6 +363,7 @@ impl WorkflowExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::test_utils::init_test_env; // Pour le test d'intégration
     use crate::model_engine::types::ProjectModel;
     use crate::workflow_engine::tools::SystemMonitorTool;
     use serde_json::json;
@@ -415,5 +519,45 @@ mod tests {
 
         let result = executor.execute_node(&node, &mut context).await;
         assert_eq!(result.unwrap(), ExecutionStatus::Failed);
+    }
+
+    // --- TEST DU PONT (Integration DB -> Mandat -> Workflow) ---
+
+    #[test]
+    fn test_bridge_loading_and_compilation() {
+        // 1. Setup DB
+        let env = init_test_env();
+        let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
+
+        // 2. Injection d'un mandat JSON valide
+        let valid_mandate = json!({
+            "id": "mandate_prod",
+            "meta": { "author": "BridgeTest", "version": "1.0", "status": "ACTIVE" },
+            "governance": { "strategy": "SAFETY_FIRST" },
+            "hardLogic": {
+                "vetos": [
+                    { "rule": "VIBRATION_MAX", "active": true, "action": "STOP" }
+                ]
+            },
+            "observability": { "heartbeatMs": 100 }
+        });
+        manager.insert_raw("mandates", &valid_mandate).unwrap();
+
+        // 3. Appel du Pont via l'Executor
+        let result = WorkflowExecutor::load_and_prepare_workflow(&manager, "mandate_prod");
+
+        assert!(
+            result.is_ok(),
+            "Le chargement et la compilation doivent réussir"
+        );
+        let workflow = result.unwrap();
+
+        // 4. Vérification que le graphe a bien été généré avec les nœuds de veto
+        // (Devrait contenir : Start, Tool(Vib), Gate(Veto), Exec, Vote, End)
+        assert!(workflow.nodes.len() >= 4);
+        assert!(workflow
+            .nodes
+            .iter()
+            .any(|n| n.name.contains("VIBRATION_MAX")));
     }
 }
