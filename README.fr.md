@@ -21,78 +21,71 @@
   <a href="https://tauri.app/">
     <img src="https://img.shields.io/badge/Framework-Tauri-24C8DB?style=flat-square&logo=tauri&logoColor=black" alt="Tauri">
   </a>
-  <a href="https://www.typescriptlang.org/">
-    <img src="https://img.shields.io/badge/Language-TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
-  </a>
   <a href="https://webassembly.org/">
     <img src="https://img.shields.io/badge/Powered_by-WebAssembly-654FF0?style=flat-square&logo=webassembly&logoColor=white" alt="WebAssembly">
   </a>
+  <a href="https://www.typescriptlang.org/">
+    <img src="https://img.shields.io/badge/Frontend-TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  </a>  
 </p>
 
 ---
 
 > [!WARNING] > **🚧 PROTOTYPE STATUS: v0.1.0-alpha**
-> This repository is a **Functional Prototype** intended for the validation of the Neuro-Symbolic architecture and industrial sovereignty concepts.
+> Ce dépôt est un **Prototype Fonctionnel** destiné à la validation de l'architecture Neuro-Symbolique et des concepts de souveraineté industrielle.
 
 ---
 
 ## 💡 Vision & Concept
 
-**R.A.I.S.E.** is a sovereign AI platform specifically designed for **Critical Engineering**. Unlike classic AI assistants, RAISE orchestrates intelligent agents within a strict and deterministic governance framework.
+**R.A.I.S.E.** est une plateforme d'IA souveraine conçue spécifiquement pour l'**Ingénierie Critique**. Contrairement aux assistants IA classiques, RAISE orchestre des agents intelligents au sein d'un cadre de gouvernance strict et déterministe.
 
-### The Neuro-Symbolic Duality
+### La Dualité Neuro-Symbolique
 
-In high-end engineering, error is unacceptable. RAISE addresses this challenge through a hybrid architecture:
+Dans l'ingénierie de pointe, l'erreur est inacceptable. RAISE résout ce défi par une architecture hybride :
 
-- **Neuro (The Brain):** LLMs (local/remote) handle reasoning, planning, and multi-agent collaboration.
-- **Symbolic (The Safeguard):** A Rust engine enforces **Mandates** through hard-coded Vetos and inviolable logical rules.
-
----
-
-## 🏗️ Architectural Pillars
-
-### 1. Digital Twin & Grounding
-
-The Digital Twin acts as the semantic bridge between the AI and physical reality. It ensures permanent **grounding** by confronting AI plans with real-time sensor data.
-
-### 2. Total Sovereignty (Offline-First)
-
-RAISE is designed to operate in complete isolation (**Air-Gapped**): local storage via `JSON-DB`, local embeddings (`Candle`), and private networking via `Innernet`.
-
-### 3. Cryptographic Trust (Mandates)
-
-Every security policy (Veto) is defined in a **Mandate** numerically signed (**Ed25519**). The system rejects any unsigned modification.
+- **Neuro (Le Cerveau) :** Des LLMs (locaux/distants) assurent le raisonnement, la planification et la collaboration multi-agents.
+- **Symbolique (Le Garde-fou) :** Un moteur Rust impose des **Mandats** via des Vetos codés en dur et des règles logiques inviolables.
 
 ---
 
-## 🛡️ Traceability & XAI (Explainable AI)
+## 🏗️ Piliers de l'Architecture
 
-RAISE transforms AI into an auditable "white box":
+### 1. Jumeau Numérique (Digital Twin) & Grounding
 
-- **Traceability Matrix:** Records the prompt, the reasoning (Thinking trace), and the state of the Digital Twin.
-- **Blockchain Anchoring:** Critical decisions are anchored on an immutable ledger (**Hyperledger Fabric**).
+Le Jumeau Numérique agit comme le pont sémantique entre l'IA et la réalité physique. Il assure un **ancrage (grounding)** permanent en confrontant les plans de l'IA aux données capteurs en temps réel.
+
+### 2. Souveraineté Totale (Offline-First)
+
+RAISE est conçu pour fonctionner en isolation complète (**Air-Gapped**) : stockage local via `JSON-DB`, embeddings locaux (`Candle`) et réseau privé via `Innernet`.
+
+### 3. Confiance Cryptographique (Mandats)
+
+Toute politique de sécurité (Veto) est définie dans un **Mandat** signé numériquement (**Ed25519**). Le système rejette toute modification non signée.
 
 ---
 
-## 🇪🇺 European Union Sovereignty / Souveraineté Européenne
+## 🛡️ Traçabilité & XAI (Explainable AI)
 
-RAISE is built to serve the critical industrial needs of the European Union, guaranteeing **Data Sovereignty**, **Offline Capability**, and **Engineering Precision**.
+RAISE transforme l'IA en une "boîte blanche" auditable :
+
+- **Matrice de Traçabilité :** Enregistre le prompt, le raisonnement (Thinking trace) et l'état du Jumeau Numérique.
+- **Ancrage Blockchain :** Les décisions critiques sont ancrées sur un registre immuable (**Hyperledger Fabric**).
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Démarrage Rapide
 
 ```bash
-# 1. Clone the project
+# 1. Cloner le projet
 git clone [https://github.com/Condorcet-Continuum/raise.git](https://github.com/Condorcet-Continuum/raise.git)
 cd raise
 
-# 2. Install UI dependencies
+# 2. Installer les dépendances UI
 npm install
 
-# 3. Launch in development mode
+# 3. Lancer en mode développement
 cargo tauri dev
-
 ```
 
 ---

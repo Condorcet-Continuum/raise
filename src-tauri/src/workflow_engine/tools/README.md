@@ -1,73 +1,56 @@
 # 🛠️ Module Tools (Native MCP)
 
-Ce module implémente la couche d'**Interactions Physiques & Déterministes** du moteur Raise.
-Il permet à l'IA de passer du stade de "Penseur" (Brain) à celui d'"Acteur" (Hands).
+Ce module implémente la couche d'**Interactions Physiques & Déterministes** du moteur Raise. Il permet à l'IA de passer du stade de "Penseur" (Brain) à celui d'"Acteur" (Hands) en interagissant avec le monde réel ou le système hôte.
 
-## 🎯 Philosophie
+## 🎯 Philosophie et Principes Directeurs
 
-Contrairement aux _Agents_ (`src/ai/agents`) qui sont probabilistes et conversationnels, les _Outils_ doivent être :
+Contrairement aux _Agents_ qui sont probabilistes et conversationnels, les _Outils_ du moteur Raise doivent répondre à quatre impératifs stricts :
 
-1. **Déterministes** : Pour une même entrée, toujours la même sortie.
-2. **Atomiques** : Une seule responsabilité par outil.
-3. **Typés** : Entrées et sorties structurées (JSON).
-4. **Souverains** : Exécutés localement en Rust, sans dépendance cloud obscure.
+1. **Déterministes** : Pour une entrée donnée, l'outil doit produire une sortie prévisible et répétable.
+2. **Atomiques** : Chaque outil possède une responsabilité unique pour faciliter la composition complexe dans le workflow.
+3. **Typés et Auto-descriptifs** : Utilisation de schémas JSON pour la validation et de descriptions riches pour permettre au LLM de comprendre le contexte d'utilisation.
+4. **Souverains et Sécurisés** : Exécutés nativement en Rust, ils garantissent que les données sensibles ne quittent jamais l'environnement local.
 
-> **Note :** Cette architecture s'inspire du standard **MCP (Model Context Protocol)** d'Anthropic, mais implémentée nativement en Rust pour des performances maximales et une latence nulle.
+> **Architecture MCP (Model Context Protocol)** : Raise s'inspire du standard d'Anthropic mais l'implémente nativement pour éliminer la latence réseau et maximiser la performance système.
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture Technique
 
 ### Le Trait `AgentTool`
 
-Tout outil doit implémenter ce contrat (interface) défini dans `mod.rs` :
+Cœur du module, ce contrat définit comment le moteur communique avec le matériel ou les APIs système :
 
 ```rust
 #[async_trait]
 pub trait AgentTool: Send + Sync + Debug {
-    /// Nom unique pour l'appel (ex: "fs_write", "sensor_read")
-    fn name(&self) -> &str;
-
-    /// Description pour le LLM (Le "Mode d'Emploi")
-    fn description(&self) -> &str;
-
-    /// Schéma des paramètres attendus (JSON Schema)
-    fn parameters_schema(&self) -> Value;
-
-    /// L'action réelle
-    async fn execute(&self, args: &Value) -> Result<Value>;
+    fn name(&self) -> &str;           // Identifiant unique (ex: "read_system_metrics")
+    fn description(&self) -> &str;    // Manuel d'utilisation pour le LLM
+    fn parameters_schema(&self) -> Value; // Validation JSON Schema des entrées
+    async fn execute(&self, args: &Value) -> Result<Value>; // Logique métier asynchrone
 }
 
 ```
 
+### Cycle de vie d'une exécution
+
+1. **Déclenchement** : Un nœud `CallMcp` est atteint dans le graphe d'exécution.
+2. **Validation** : Les arguments fournis sont validés par rapport au `parameters_schema`.
+3. **Exécution** : L'implémentation Rust exécute l'action (lecture capteur, écriture fichier).
+4. **Persistance** : Le résultat est injecté dans le contexte du workflow, le rendant disponible pour les nœuds suivants (ex: `GatePolicy`).
+
 ---
 
-## 🚀 Comment créer un nouvel outil ?
+## 🚀 Guide de Développement : Créer un Outil
 
-Exemple : Créer un outil pour lire un fichier local.
+### 1. Définition de la logique (Exemple : `fs_tools.rs`)
 
-### 1. Créer le fichier
-
-Créez `src-tauri/src/workflow_engine/tools/fs_tools.rs`.
-
-### 2. Implémenter le Trait
+Il est crucial de gérer les erreurs proprement via le type `Result` pour ne pas faire crash le moteur.
 
 ```rust
-use super::AgentTool;
-use crate::utils::Result;
-use serde_json::{json, Value};
-use std::fs;
-
-#[derive(Debug)]
-pub struct FileReadTool;
-
 #[async_trait::async_trait]
 impl AgentTool for FileReadTool {
     fn name(&self) -> &str { "read_file" }
-
-    fn description(&self) -> &str {
-        "Lit le contenu textuel d'un fichier sur le disque local."
-    }
 
     fn parameters_schema(&self) -> Value {
         json!({
@@ -80,55 +63,47 @@ impl AgentTool for FileReadTool {
     }
 
     async fn execute(&self, args: &Value) -> Result<Value> {
-        let path = args.get("path").and_then(|v| v.as_str())
-            .ok_or("Path required")?;
-
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("IO Error: {}", e))?;
-
+        let path = args.get("path").and_then(|v| v.as_str()).ok_or("Path required")?;
+        let content = fs::read_to_string(path).map_err(|e| format!("IO Error: {}", e))?;
         Ok(json!({ "content": content, "size": content.len() }))
     }
 }
 
 ```
 
-### 3. Enregistrer l'outil
+### 2. Enregistrement Système
 
-Dans `src-tauri/src/workflow_engine/scheduler.rs` (méthode `new`) :
+L'outil doit être déclaré dans le `WorkflowScheduler` lors de son initialisation :
 
 ```rust
+// Dans src-tauri/src/workflow_engine/scheduler.rs
 executor.register_tool(Box::new(fs_tools::FileReadTool));
 
 ```
 
 ---
 
-## 📦 Catalogue d'Outils Actuels
+## 📦 Catalogue des Capacités Natives
 
-| Outil                | ID (`name`)           | Description                                        | Paramètres                           |
-| -------------------- | --------------------- | -------------------------------------------------- | ------------------------------------ |
-| **Moniteur Système** | `read_system_metrics` | Lit CPU, RAM et capteurs simulés (Vibration/Temp). | `sensor_id`: "cpu", "vibration_z"... |
+| Outil                     | ID (`name`)           | Domaine       | Impact Sécurité         |
+| ------------------------- | --------------------- | ------------- | ----------------------- |
+| **Moniteur Système**      | `read_system_metrics` | Observabilité | Faible (Lecture seule)  |
+| **Gestionnaire Fichiers** | `fs_write`            | Persistance   | Élevé (Écriture disque) |
+| **Contrôleur Réseau**     | `network_ping`        | Connectivité  | Moyen                   |
 
 ---
 
-## 🔗 Intégration dans le Workflow
+## 🛡️ Sécurité et "Lignes Rouges" (Vetos)
 
-Les outils sont appelés via le nœud de type `CallMcp`.
+L'intégration d'un outil dans un workflow est souvent couplée à un nœud `GatePolicy`. Cette architecture permet de créer des **Vetos automatiques** :
 
-**Exemple de définition JSON dans le Mandat :**
+1. **Lecture** : `CallMcp` récupère une métrique (ex: `vibration_z`).
+2. **Évaluation** : `GatePolicy` compare la valeur à un seuil critique défini dans le Mandat (ex: 8.0).
+3. **Action** : Si le seuil est dépassé, le moteur interrompt immédiatement l'exécution avant que l'IA ne puisse agir.
 
 ```json
 {
-  "id": "node_check_sensor",
   "type": "call_mcp",
-  "name": "Vérification Capteur Z",
-  "params": {
-    "tool_name": "read_system_metrics",
-    "arguments": {
-      "sensor_id": "vibration_z"
-    }
-  }
+  "params": { "tool_name": "read_system_metrics", "arguments": { "sensor_id": "vibration_z" } }
 }
 ```
-
-Si l'outil renvoie une donnée critique (ex: vibration élevée), un nœud `GatePolicy` placé juste après peut déclencher un arrêt d'urgence.

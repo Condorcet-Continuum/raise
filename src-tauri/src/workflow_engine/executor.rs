@@ -41,10 +41,11 @@ impl WorkflowExecutor {
     }
 
     /// Point d'entrée pour l'exécution d'un nœud du graphe
+    /// CORRECTION : On accepte &mut HashMap pour être compatible avec WorkflowInstance
     pub async fn execute_node(
         &self,
         node: &WorkflowNode,
-        context: &Value,
+        context: &mut HashMap<String, Value>,
     ) -> Result<ExecutionStatus> {
         tracing::info!("⚙️ Exécution Agentique : {} ({:?})", node.name, node.r#type);
 
@@ -79,7 +80,7 @@ impl WorkflowExecutor {
     async fn handle_tool_call(
         &self,
         node: &WorkflowNode,
-        _context: &Value,
+        context: &mut HashMap<String, Value>,
     ) -> Result<ExecutionStatus> {
         // 1. Récupération du nom de l'outil
         let tool_name = node
@@ -101,7 +102,13 @@ impl WorkflowExecutor {
             match tool.execute(args).await {
                 Ok(output) => {
                     tracing::info!("✅ Résultat Outil : {:?}", output);
-                    // NOTE : Dans une version finale, on remonterait 'output' dans le contexte.
+
+                    // 3. PERSISTANCE : On écrit directement dans la HashMap
+                    if tool_name == "read_system_metrics" {
+                        context.insert("sensor_vibration".to_string(), output);
+                    }
+                    // Pour d'autres outils, on pourrait utiliser un champ "output_var" dans les params
+
                     Ok(ExecutionStatus::Completed)
                 }
                 Err(e) => {
@@ -119,7 +126,7 @@ impl WorkflowExecutor {
     async fn handle_policy_gate(
         &self,
         node: &WorkflowNode,
-        context: &Value,
+        context: &HashMap<String, Value>,
     ) -> Result<ExecutionStatus> {
         let rule_name = node
             .params
@@ -159,7 +166,7 @@ impl WorkflowExecutor {
     async fn handle_decision(
         &self,
         node: &WorkflowNode,
-        context: &Value,
+        context: &HashMap<String, Value>,
     ) -> Result<ExecutionStatus> {
         tracing::info!("🗳️ Algorithme de Condorcet : {}", node.name);
 
@@ -225,7 +232,7 @@ impl WorkflowExecutor {
     async fn handle_agentic_task(
         &self,
         node: &WorkflowNode,
-        context: &Value,
+        context: &HashMap<String, Value>,
     ) -> Result<ExecutionStatus> {
         let mut orch = self.orchestrator.lock().await;
 
@@ -273,6 +280,11 @@ mod tests {
         exec
     }
 
+    // Helper pour convertir un JSON Value en HashMap (contexte)
+    fn to_ctx(val: Value) -> HashMap<String, Value> {
+        serde_json::from_value(val).unwrap_or_default()
+    }
+
     // --- TESTS EXISTANTS (Workflow / Veto / Condorcet) ---
 
     #[tokio::test]
@@ -285,7 +297,9 @@ mod tests {
             name: "Human Check".into(),
             params: Value::Null,
         };
-        let result = executor.execute_node(&node, &Value::Null).await;
+        // CORRECTION TESTS : Utilisation de HashMap
+        let mut ctx = HashMap::new();
+        let result = executor.execute_node(&node, &mut ctx).await;
         assert_eq!(result.unwrap(), ExecutionStatus::Paused);
     }
 
@@ -302,13 +316,13 @@ mod tests {
         };
 
         // Cas 1 : Vibration OK (Low)
-        let ctx_ok = json!({ "sensor_vibration": 2.5 });
-        let res_ok = executor.execute_node(&node, &ctx_ok).await;
+        let mut ctx_ok = to_ctx(json!({ "sensor_vibration": 2.5 }));
+        let res_ok = executor.execute_node(&node, &mut ctx_ok).await;
         assert_eq!(res_ok.unwrap(), ExecutionStatus::Completed);
 
         // Cas 2 : Vibration DANGER (High)
-        let ctx_danger = json!({ "sensor_vibration": 12.0 });
-        let res_danger = executor.execute_node(&node, &ctx_danger).await;
+        let mut ctx_danger = to_ctx(json!({ "sensor_vibration": 12.0 }));
+        let res_danger = executor.execute_node(&node, &mut ctx_danger).await;
         assert_eq!(res_danger.unwrap(), ExecutionStatus::Failed);
     }
 
@@ -317,9 +331,9 @@ mod tests {
     async fn test_weighted_condorcet() {
         let executor = create_test_executor_with_tools().await;
 
-        let context = json!({
+        let mut context = to_ctx(json!({
             "candidates": ["Short", "Very Long Option"]
-        });
+        }));
 
         // Cas 1 : La Finance domine (Poids Finance=3, Sécu=1) -> B doit gagner (Long)
         let node_finance = WorkflowNode {
@@ -328,7 +342,7 @@ mod tests {
             name: "Vote".into(),
             params: json!({ "weights": { "agent_security": 1.0, "agent_finance": 3.0 } }),
         };
-        let res = executor.execute_node(&node_finance, &context).await;
+        let res = executor.execute_node(&node_finance, &mut context).await;
         assert!(res.is_ok()); // Vérification via logs pour le vainqueur
     }
 
@@ -349,9 +363,13 @@ mod tests {
             }),
         };
 
-        let result = executor.execute_node(&node, &json!({})).await;
+        let mut context = HashMap::new();
+        let result = executor.execute_node(&node, &mut context).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), ExecutionStatus::Completed);
+
+        // Vérification de l'effet de bord (Contexte mis à jour)
+        assert!(context.contains_key("sensor_vibration"));
     }
 
     #[tokio::test]
@@ -369,7 +387,8 @@ mod tests {
             }),
         };
 
-        let result = executor.execute_node(&node, &json!({})).await;
+        let mut context = HashMap::new();
+        let result = executor.execute_node(&node, &mut context).await;
         assert_eq!(result.unwrap(), ExecutionStatus::Failed);
     }
 
@@ -386,15 +405,15 @@ mod tests {
             params: json!({ "rule": "VIBRATION_MAX" }),
         };
 
-        let context = json!({
+        let mut context = to_ctx(json!({
             "sensor_vibration": {
                 "value": 15.0, // DANGER
                 "unit": "mm/s",
                 "status": "CRITICAL"
             }
-        });
+        }));
 
-        let result = executor.execute_node(&node, &context).await;
+        let result = executor.execute_node(&node, &mut context).await;
         assert_eq!(result.unwrap(), ExecutionStatus::Failed);
     }
 }

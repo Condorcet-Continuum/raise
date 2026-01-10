@@ -1,3 +1,5 @@
+// FICHIER : src/App.tsx
+
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import './styles/globals.css';
@@ -25,6 +27,10 @@ import CognitiveTester from '@/components/CognitiveTester';
 import RulesEngineDashboard from '@/components/rules_engine/RulesEngineDashboard';
 import BlockchainView from '@/components/blockchain/BlockchainView';
 import DashboardView from '@/components/dashboard/DashboardView';
+
+// --- GOUVERNANCE ---
+// On importe le composant depuis features
+import GovernanceConsole from '@/features/governance/GovernanceConsole';
 
 // --- TYPAGE STRICT ---
 interface SystemInfo {
@@ -60,6 +66,8 @@ export default function App() {
   // Je remets juste le bloc de rendu pour la complétude
   const renderContent = () => {
     switch (currentPage) {
+      case 'governance':
+        return <GovernanceConsole />;
       case 'model':
         return <CapellaViewer />;
       case 'genetics':

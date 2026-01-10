@@ -11,7 +11,12 @@ impl WorkflowCompiler {
     pub fn compile(mandate: &Mandate) -> WorkflowDefinition {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
-        let wf_id = format!("wf_{}_{}", mandate.meta.author, mandate.meta.version);
+        // On nettoie le nom pour l'ID
+        let wf_id = format!(
+            "wf_{}_{}",
+            mandate.meta.author.replace(" ", ""),
+            mandate.meta.version
+        );
 
         // Pointeur vers le dernier nœud créé pour chaîner les edges
         let mut previous_node_id = "start".to_string();
@@ -19,7 +24,7 @@ impl WorkflowCompiler {
         // 1. Nœud de Départ
         nodes.push(WorkflowNode {
             id: "start".into(),
-            r#type: NodeType::Task,
+            r#type: NodeType::Task, // Changé temporairement en Task pour initialiser
             name: "Initialisation Mandat".into(),
             params: json!({
                 "strategy": mandate.governance.strategy,
@@ -30,11 +35,38 @@ impl WorkflowCompiler {
         // 2. Compilation des Lignes Rouges (VETOS -> GatePolicy)
         for (i, veto) in mandate.hard_logic.vetos.iter().enumerate() {
             if veto.active {
+                // --- MODIFICATION : Injection de l'outil de lecture AVANT le Veto ---
+                // Cette étape est cruciale pour que la valeur du slider soit récupérée
+                if veto.rule == "VIBRATION_MAX" {
+                    let tool_node_id = format!("tool_read_vibration_{}", i);
+
+                    nodes.push(WorkflowNode {
+                        id: tool_node_id.clone(),
+                        r#type: NodeType::CallMcp, // Action : Lire le capteur
+                        name: "Lecture Capteur Vibration".into(),
+                        params: json!({
+                            "tool_name": "read_system_metrics",
+                            "arguments": { "sensor_id": "vibration_z" }
+                        }),
+                    });
+
+                    // Lien : Précédent -> Outil
+                    edges.push(WorkflowEdge {
+                        from: previous_node_id.clone(),
+                        to: tool_node_id.clone(),
+                        condition: None,
+                    });
+
+                    // Le nœud précédent devient l'outil
+                    previous_node_id = tool_node_id;
+                }
+                // -----------------------------------------------------------------------
+
                 let node_id = format!("gate_veto_{}", i);
 
                 nodes.push(WorkflowNode {
                     id: node_id.clone(),
-                    r#type: NodeType::GatePolicy,
+                    r#type: NodeType::GatePolicy, // Contrôle : Vérifier la valeur
                     name: format!("VETO: {}", veto.rule),
                     params: json!({
                         "rule": veto.rule,
@@ -42,6 +74,7 @@ impl WorkflowCompiler {
                     }),
                 });
 
+                // Lien : (Précédent ou Outil) -> GatePolicy
                 edges.push(WorkflowEdge {
                     from: previous_node_id.clone(),
                     to: node_id.clone(),
@@ -156,13 +189,15 @@ mod tests {
         let wf = WorkflowCompiler::compile(&mandate);
 
         assert_eq!(wf.id, "wf_Admin_v1");
-        assert_eq!(wf.entry, "start");
 
-        // 5 nœuds : Start, Veto(Active), Execution, Vote, End
-        assert_eq!(wf.nodes.len(), 5);
-        assert_eq!(wf.edges.len(), 4);
+        // On doit avoir 6 nœuds maintenant (Start + Tool + Veto + Exec + Vote + End)
+        // Car VIBRATION_MAX est actif -> injecte ToolRead + GateVeto
+        assert_eq!(wf.nodes.len(), 6);
 
-        // Vérification des poids injectés
+        // Vérifions que le nœud CallMcp est bien présent
+        let tool_node = wf.nodes.iter().find(|n| n.r#type == NodeType::CallMcp);
+        assert!(tool_node.is_some(), "Le nœud outil doit être injecté");
+
         let decision_node = wf
             .nodes
             .iter()

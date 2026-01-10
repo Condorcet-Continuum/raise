@@ -182,10 +182,12 @@ fn main() {
             traceability_commands::get_traceability_matrix,
             traceability_commands::get_element_neighbors,
             utils_commands::get_app_info,
+            workflow_commands::submit_mandate,
             workflow_commands::register_workflow,
             workflow_commands::start_workflow,
             workflow_commands::resume_workflow,
-            workflow_commands::get_workflow_state
+            workflow_commands::get_workflow_state,
+            workflow_commands::set_sensor_value
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

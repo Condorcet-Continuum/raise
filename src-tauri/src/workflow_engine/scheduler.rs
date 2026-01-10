@@ -6,7 +6,6 @@ use super::{
 };
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::utils::Result;
-use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -65,11 +64,13 @@ impl WorkflowScheduler {
 
         for node_id in runnable_nodes {
             if let Some(node) = def.nodes.iter().find(|n| n.id == node_id) {
-                // Appel à l'executeur (IA, Décision, etc.)
+                // --- CORRECTION CRITIQUE ---
+                // On passe la référence MUTABLE directe au lieu d'une copie JSON !
                 let status = self
                     .executor
-                    .execute_node(node, &json!(instance.context))
+                    .execute_node(node, &mut instance.context)
                     .await?;
+                // ---------------------------
 
                 // Transition d'état dans la machine à états
                 // CORRECTION ICI : On convertit l'erreur &str en AppError

@@ -13,7 +13,7 @@ Le module `commands` orchestre les interactions entre l'interface utilisateur et
 
 ```mermaid
 graph TD
-    UI[Frontend React] -->|invoke('cmd_name', args)| Bridge[Tauri IPC Bridge]
+    UI[Frontend React] -->|"invoke('cmd_name', args)"| Bridge[Tauri IPC Bridge]
     Bridge --> CmdLayer[Commands Layer]
 
     subgraph "Module Commands (Adapters)"
@@ -28,7 +28,7 @@ graph TD
         DBC --> Storage[Storage Engine]
     end
 
-    Agent -->|State Update| State[App State (Mutex/Arc)]
+    Agent -->|State Update| State["App State (Mutex/Arc)"]
     Engine -->|State Update| State
 
 ```

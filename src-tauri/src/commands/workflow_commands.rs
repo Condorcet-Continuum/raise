@@ -1,13 +1,12 @@
 // FICHIER : src-tauri/src/commands/workflow_commands.rs
 
 use crate::workflow_engine::{
-    ExecutionStatus,
-    Mandate,
-    WorkflowCompiler, // AJOUT des imports
-    WorkflowDefinition,
-    WorkflowInstance,
+    ExecutionStatus, Mandate, WorkflowCompiler, WorkflowDefinition, WorkflowInstance,
     WorkflowScheduler,
 };
+// AJOUT : Import du capteur simulé (Jumeau Numérique)
+use crate::workflow_engine::tools::system_tools::VIBRATION_SENSOR;
+
 use serde::Serialize;
 use std::collections::HashMap;
 use tauri::{command, State};
@@ -40,6 +39,15 @@ impl From<&WorkflowInstance> for WorkflowView {
 }
 
 // --- COMMANDES ---
+
+/// NOUVELLE COMMANDE : Met à jour la valeur du capteur de vibration (Jumeau Numérique)
+#[command]
+pub async fn set_sensor_value(value: f64) -> Result<String, String> {
+    // On verrouille le Mutex global pour mettre à jour la valeur simulée
+    let mut sensor = VIBRATION_SENSOR.lock().map_err(|_| "Mutex Poisoned")?;
+    *sensor = value;
+    Ok(format!("Capteur mis à jour : {:.2}", value))
+}
 
 /// NOUVELLE COMMANDE : Compile et Enregistre un Mandat
 #[command]
@@ -187,5 +195,32 @@ mod tests {
         let store = WorkflowStore::default();
         assert!(store.instances.is_empty());
         assert!(store.scheduler.is_none());
+    }
+
+    // --- NOUVEAUX TESTS POUR LE JUMEAU NUMÉRIQUE ---
+
+    #[tokio::test]
+    async fn test_set_sensor_value() {
+        // 1. Mise à jour de la valeur
+        let result = set_sensor_value(10.5).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Capteur mis à jour : 10.50");
+
+        // 2. Vérification de l'effet de bord sur la variable globale
+        {
+            let lock = crate::workflow_engine::tools::system_tools::VIBRATION_SENSOR
+                .lock()
+                .unwrap();
+            assert_eq!(*lock, 10.5);
+        }
+
+        // 3. Changement vers une valeur sûre
+        let _ = set_sensor_value(2.0).await;
+        {
+            let lock = crate::workflow_engine::tools::system_tools::VIBRATION_SENSOR
+                .lock()
+                .unwrap();
+            assert_eq!(*lock, 2.0);
+        }
     }
 }

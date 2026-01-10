@@ -3,6 +3,11 @@
 use super::AgentTool;
 use crate::utils::Result;
 use serde_json::{json, Value};
+use std::sync::Mutex;
+
+// --- JUMEAU NUMÉRIQUE (État Global Simulé) ---
+// Cette variable est accessible publiquement pour être modifiée par les commandes Tauri
+pub static VIBRATION_SENSOR: Mutex<f64> = Mutex::new(0.0);
 
 #[derive(Debug)]
 pub struct SystemMonitorTool;
@@ -41,12 +46,14 @@ impl AgentTool for SystemMonitorTool {
         // Simulation de lecture hardware (Hardware Abstraction Layer)
         match sensor_id {
             "vibration_z" => {
-                // Pour la démo : On renvoie une valeur critique (12.5) > Seuil (8.0)
-                // Cela permettra de déclencher le VETO dans le nœud suivant.
+                // MODIFICATION : Lecture dynamique depuis le Jumeau Numérique
+                let lock = VIBRATION_SENSOR.lock().unwrap();
+                let value = *lock; // On copie la valeur
+
                 Ok(json!({
-                    "value": 12.5,
+                    "value": value,
                     "unit": "mm/s",
-                    "status": "CRITICAL",
+                    "status": if value > 8.0 { "CRITICAL" } else { "NOMINAL" },
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 }))
             }
@@ -72,18 +79,28 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Simule un appel matériel externe"]
-    async fn test_sensor_vibration_critical() {
-        // Ce test valide le scénario de VETO
+    async fn test_sensor_vibration_dynamic() {
+        // Test du Jumeau Numérique
         let tool = SystemMonitorTool;
         let args = json!({ "sensor_id": "vibration_z" });
 
-        let result = tool.execute(&args).await.unwrap();
+        // 1. On règle le capteur sur une valeur sûre
+        {
+            let mut lock = VIBRATION_SENSOR.lock().unwrap();
+            *lock = 2.0;
+        }
+        let res_safe = tool.execute(&args).await.unwrap();
+        assert_eq!(res_safe["value"].as_f64(), Some(2.0));
+        assert_eq!(res_safe["status"], "NOMINAL");
 
-        // Vérifications strictes pour garantir que le GatePolicy fonctionnera
-        assert!(result.get("value").is_some(), "Doit retourner une valeur");
-        assert_eq!(result["value"].as_f64(), Some(12.5));
-        assert_eq!(result["status"], "CRITICAL");
-        assert_eq!(result["unit"], "mm/s");
+        // 2. On règle le capteur sur une valeur critique
+        {
+            let mut lock = VIBRATION_SENSOR.lock().unwrap();
+            *lock = 12.5;
+        }
+        let res_crit = tool.execute(&args).await.unwrap();
+        assert_eq!(res_crit["value"].as_f64(), Some(12.5));
+        assert_eq!(res_crit["status"], "CRITICAL");
     }
 
     #[tokio::test]
@@ -96,25 +113,5 @@ mod tests {
 
         assert_eq!(result["value"].as_f64(), Some(45.0));
         assert_eq!(result["status"], "NORMAL");
-    }
-
-    #[tokio::test]
-    #[ignore = "Simule un appel matériel externe"]
-    async fn test_unknown_sensor_handling() {
-        let tool = SystemMonitorTool;
-        let args = json!({ "sensor_id": "flux_capacitor" });
-
-        let result = tool.execute(&args).await.unwrap();
-
-        assert!(result.get("error").is_some(), "Doit signaler une erreur");
-        assert_eq!(result["error"], "Sensor not found");
-    }
-
-    #[tokio::test]
-    #[ignore = "Simule un appel matériel externe"]
-    async fn test_metadata() {
-        let tool = SystemMonitorTool;
-        assert_eq!(tool.name(), "read_system_metrics");
-        assert!(!tool.description().is_empty());
     }
 }

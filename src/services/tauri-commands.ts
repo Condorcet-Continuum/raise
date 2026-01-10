@@ -1,3 +1,5 @@
+// FICHIER : src/services/tauri-commands.ts
+
 /**
  * Registre central des commandes Tauri (Rust).
  * Utiliser ces constantes dans invoke() évite les typos.
@@ -27,4 +29,10 @@ export const CMDS = {
 
   // Module Cognitive
   COGNITIVE_ANALYZE: 'run_consistency_analysis',
+
+  // --- NOUVEAU : Module Workflow / Gouvernance ---
+  WORKFLOW_SUBMIT: 'submit_mandate',
+  WORKFLOW_START: 'start_workflow',
+  WORKFLOW_RESUME: 'resume_workflow',
+  WORKFLOW_STATE: 'get_workflow_state',
 } as const;

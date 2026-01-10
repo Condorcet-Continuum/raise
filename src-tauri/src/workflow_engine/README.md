@@ -14,15 +14,55 @@ Il dépasse le simple moteur de script pour devenir une architecture de **Gouver
 
 Le système repose sur une séparation stricte des pouvoirs. L'utilisateur (Législateur) ne code pas le workflow ; il définit un **Mandat**. Le système le compile ensuite en une structure exécutable qui orchestre Agents (Probabilistes) et Outils (Déterministes).
 
-| Composant         | Fichier            | Rôle & Responsabilité                                                                                             |
-| ----------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| **Mandate**       | `mandate.rs`       | **La Constitution**. Structure JSON signée (Ed25519) définissant la stratégie, les poids politiques et les vetos. |
-| **Compiler**      | `compiler.rs`      | **Le Traducteur**. Transforme le Mandat (Politique) en un Graphe orienté (Technique) exécutable.                  |
-| **Scheduler**     | `scheduler.rs`     | **Le Chef d'Orchestre**. Gère le cycle de vie, la persistance et l'injection des ressources.                      |
-| **Executor**      | `executor.rs`      | **L'Interface Agentique**. Exécute les tâches, appelle les outils (MCP), consulte l'IA et applique les votes.     |
-| **Tools (MCP)**   | `tools/`           | **Les Mains**. Modules Rust natifs pour interagir avec le matériel, le système de fichiers ou les API.            |
-| **Critic**        | `critic.rs`        | **Le Juge Interne**. Évalue la qualité des réponses de l'IA (Reward Model) avant validation.                      |
-| **State Machine** | `state_machine.rs` | **Le Navigateur**. Gère la topologie du graphe (DAG) et les transitions d'états.                                  |
+| Composant         | Fichier            | Rôle & Responsabilité                                                                                                    |
+| ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| **Mandate**       | `mandate.rs`       | **La Constitution**. Structure JSON signée (Ed25519) définissant la stratégie, les poids politiques et les vetos.        |
+| **Compiler**      | `compiler.rs`      | **Le Traducteur**. Transforme le Mandat (Politique) en un Graphe orienté (Technique) via injection de nœuds de contrôle. |
+| **Scheduler**     | `scheduler.rs`     | **Le Chef d'Orchestre**. Gère le cycle de vie des instances, la persistance et l'injection des ressources.               |
+| **Executor**      | `executor.rs`      | **L'Interface Agentique**. Exécute les tâches, appelle les outils (MCP) et consulte l'IA.                                |
+| **Tools (MCP)**   | `tools/`           | **Les Mains**. Modules Rust natifs pour interagir avec le matériel (Jumeau Numérique).                                   |
+| **Critic**        | `critic.rs`        | **Le Juge Interne**. Évalue la qualité des réponses de l'IA (Reward Model).                                              |
+| **State Machine** | `state_machine.rs` | **Le Navigateur**. Gère la topologie du graphe (DAG) et les transitions d'états.                                         |
+
+---
+
+## ♊ La Notion de Jumeau Numérique (Digital Twin)
+
+Le **Jumeau Numérique** est le pont sémantique entre la réalité physique et le raisonnement de l'IA. Dans RAISE, il sert d'**ancrage (grounding)** pour empêcher les hallucinations et garantir la sécurité.
+
+### 1. Définition et Rôle
+
+Le Jumeau Numérique est une réplique virtuelle dynamique du système :
+
+- **Observation sans risque** : Permettre à l'IA d'analyser l'état du système (vibrations, température) sans interférer avec les processus.
+- **Ancrage du Raisonnement** : L'IA ne "devine" pas l'état ; elle consulte le Jumeau pour fonder ses décisions.
+- **Boucle de Sécurité (Veto)** : Le moteur compare les données du Jumeau aux seuils du Mandat avant d'autoriser l'action.
+
+### 2. Flux de Données Neuro-Symbolique
+
+```mermaid
+sequenceDiagram
+    participant U as Utilisateur (Slider)
+    participant DT as Jumeau Numérique (Rust)
+    participant WE as Workflow Engine
+    participant V as GatePolicy (Veto)
+    participant AI as Agent LLM (Neuro)
+
+    U->>DT: Mise à jour physique (ex: 12.0 mm/s)
+    Note over DT: Le jumeau reflète l'état critique
+    WE->>DT: CallMcp (read_system_metrics)
+    DT-->>WE: Donnée physique capturée
+    WE->>V: Comparaison vs Mandat
+    alt Vibration > Seuil
+        V-->>WE: 🚨 VETO DÉCLENCHÉ
+        WE-->>U: EMERGENCY STOP (Arrêt d'Urgence)
+    else Vibration OK
+        V-->>WE: Autorisé
+        WE->>AI: Task (Raisonnement Stratégique)
+        AI-->>WE: Validation & Plan d'action
+    end
+
+```
 
 ---
 
@@ -30,87 +70,30 @@ Le système repose sur une séparation stricte des pouvoirs. L'utilisateur (Lég
 
 Le moteur ne lance pas un script arbitraire. Il exécute un **Contrat de Gouvernance**.
 
-### 1. Structure du Mandat
+### 1. Compilation & Injection
 
-Le `Mandate` contient :
+Le `WorkflowCompiler` garantit la sécurité par construction :
 
-- **Méta-données** : Auteur, Version, Signature Cryptographique.
-- **Gouvernance** : Poids des agents virtuels (ex: `Sécurité: 3.0`, `Finance: 1.0`).
-- **Hard Logic (Vetos)** : Règles bloquantes (ex: `VIBRATION_MAX` -> `EMERGENCY_SHUTDOWN`).
-- **Observabilité** : Fréquence de reporting et métriques obligatoires.
+1. **Vetos** : Ils sont transformés en nœuds `GatePolicy` bloquants.
+2. **Fraîcheur des données** : Le compilateur injecte automatiquement des nœuds de lecture (`CallMcp`) **juste avant** les vetos pour forcer la mise à jour du Jumeau Numérique.
+3. **Poids** : Les poids politiques sont injectés dans les nœuds `Decision` pour l'arbitrage Condorcet.
 
-### 2. Compilation
-
-Le `WorkflowCompiler` injecte ces règles dans le graphe :
-
-1. Les **Vetos** deviennent des nœuds `GatePolicy` placés en amont.
-2. Les **Poids** sont injectés dans les nœuds `Decision` (Condorcet).
-3. La **Stratégie** conditionne le prompt des nœuds `Task`.
-
----
-
-## 🛠️ Écosystème d'Outils (Native MCP)
-
-Pour éviter les hallucinations lors d'actions critiques, Raise sépare nettement la **Réflexion** de l'**Action**.
-
-- **Agents (`src/ai/agents`)** : "Bavards" et créatifs. Ils génèrent du texte, du code ou des plans.
-- **Outils (`src/workflow_engine/tools`)** : "Muets" et robustes. Ils exécutent des fonctions Rust natives.
-
-Cette architecture implémente une version native du **Model Context Protocol (MCP)**.
-Les outils sont exposés au moteur via le trait `AgentTool` et exécutés via le nœud `CallMcp`.
-
-> **Exemple de Flux Sécurisé :**
->
-> 1. Un nœud `CallMcp` appelle l'outil `read_system_metrics` (Lecture physique).
-> 2. Le résultat JSON est stocké dans le contexte.
-> 3. Un nœud `GatePolicy` lit ce contexte et applique un Veto si la valeur dépasse le seuil mandaté.
-
----
-
-## 🔄 Flux d'Exécution Global
+### 2. Cycle de vie d'une exécution
 
 ```mermaid
-sequenceDiagram
-    participant U as Utilisateur (Médiateur)
-    participant C as Compiler
-    participant S as Scheduler
-    participant E as Executor
-    participant T as Tools (MCP)
-    participant AI as AiOrchestrator
-    participant CR as Critic
+graph TD
+    S[Mandat JSON] --> C{Compiler}
+    C --> W[Workflow DAG]
+    W --> E[Executor]
 
-    Note over U, C: Phase Législative
-    U->>C: submit_mandate(Signed JSON)
-    C->>C: Verify Signature & Compile DAG
-    C->>S: register_workflow(DAG)
-
-    Note over S, AI: Phase Exécutive
-    loop Boucle Agentique
-        S->>E: execute_node()
-
-        alt CallMcp (Action)
-            E->>T: execute(args)
-            T-->>E: Result JSON (Real World Data)
-
-        else GatePolicy (Veto)
-            E->>E: Check Context vs Rules
-            opt Violation
-                E-->>S: Failed (Emergency Stop)
-            end
-
-        else Task (Réflexion)
-            E->>AI: ask(Mission)
-            AI-->>E: Response
-            E->>CR: evaluate(XaiFrame)
-            CR-->>E: Score & Quality
-
-        else Decision (Consensus)
-            E->>E: Simuler Vote Condorcet (Pondéré)
-            E->>E: Élire Vainqueur
-        end
-
-        E-->>S: Completed
+    subgraph Execution Loop
+        E --> T1[Task: AI Agent]
+        T1 --> Cr[Critic: Reward Model]
+        Cr --> D[Decision: Condorcet]
+        D --> H[Gate: HITL Signature]
     end
+
+    H --> END[Completed]
 
 ```
 
@@ -118,22 +101,26 @@ sequenceDiagram
 
 ## 🧩 Modèle de Données (Nœuds)
 
-| Type             | Description       | Comportement                                                             |
-| ---------------- | ----------------- | ------------------------------------------------------------------------ |
-| **`Task`**       | Agent Cognitif    | Exécute une instruction, génère une trace XAI, soumise au **Critique**.  |
-| **`CallMcp`**    | Action Système    | Appelle un **Outil Rust** (Lecture capteur, Fichier, API). Déterministe. |
-| **`Decision`**   | Vote Condorcet    | Applique les **Poids du Mandat** pour arbitrer entre plusieurs options.  |
-| **`GatePolicy`** | Veto              | Vérifie une règle stricte sur les données du contexte. **Bloquant**.     |
-| **`GateHitl`**   | Human-In-The-Loop | Pause le workflow pour une signature humaine explicite.                  |
-| **`Parallel`**   | Fork              | Lance plusieurs branches simultanément.                                  |
+| Type             | Description       | Comportement                                                                      |
+| ---------------- | ----------------- | --------------------------------------------------------------------------------- |
+| **`Task`**       | Agent Cognitif    | Exécute une instruction, génère une trace XAI, soumise au **Critique**.           |
+| **`CallMcp`**    | Action Système    | Appelle un **Outil Rust** (Lecture Jumeau Numérique, Fichier, API). Déterministe. |
+| **`Decision`**   | Vote Condorcet    | Applique les **Poids du Mandat** pour arbitrer entre plusieurs options.           |
+| **`GatePolicy`** | Veto              | Vérifie une règle stricte sur les données du contexte. **Bloquant**.              |
+| **`GateHitl`**   | Human-In-The-Loop | Pause le workflow pour une signature humaine explicite (RLHF).                    |
+| **`Parallel`**   | Fork              | Lance plusieurs branches simultanément.                                           |
 
 ---
 
 ## 💻 Commandes Tauri Exposées
 
-L'API permet désormais de piloter la gouvernance, l'exécution et le feedback.
+L'API permet de piloter la gouvernance, l'exécution et le feedback :
 
 - **`submit_mandate(mandate: Mandate)`** : Compile une politique signée en workflow technique.
 - **`start_workflow(id)`** : Lance l'exécution d'une instance.
 - **`resume_workflow(id, node_id, approved)`** : Feedback humain (RLHF) pour débloquer un `GateHitl`.
-- **`get_workflow_state(id)`** : Récupère l'état temps-réel, les logs, et les valeurs des variables de contexte.
+- **`get_workflow_state(id)`** : Récupère l'état temps-réel, les logs et le contexte du Jumeau Numérique.
+
+---
+
+_Ce module garantit qu'aucune intelligence probabiliste ne peut outrepasser les limites physiques dictées par le Jumeau Numérique et encadrées par le Mandat._

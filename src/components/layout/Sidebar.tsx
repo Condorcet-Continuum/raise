@@ -10,6 +10,9 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
   const mainMenuItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: '📊' },
+
+    { id: 'governance', label: 'Gouvernance & Mandats', icon: '⚖️' },
+
     { id: 'model', label: 'Modélisation Arcadia', icon: '💠' },
     { id: 'diagram', label: 'Éditeur de Diagrammes', icon: '✏️' },
     { id: 'workflow', label: 'Workflow Designer', icon: '🔀' },

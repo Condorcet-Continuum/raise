@@ -1,137 +1,170 @@
-# Architecture Technique RAISE
+# 🏗️ Architecture Système : RAISE
 
-Ce document décrit l'architecture de haut niveau de **RAISE**, une plateforme d'Ingénierie IA Neuro-Symbolique (MBAIE) conçue selon l'approche **Local-First**.
+Ce document présente l'architecture de haut niveau de la plateforme **RAISE** (_Reliable AI for Sovereign Engineering_). Il décrit comment le système comble le fossé entre l'IA probabiliste et les contraintes déterministes de l'ingénierie via une approche **Neuro-Symbolique**.
 
-Le système repose sur une architecture hybride **Rust/WASM** (Performance & Sécurité) orchestrée par une interface **React/TypeScript** (Expérience Utilisateur).
+## 1. Le Paradigme Central : Gouvernance Neuro-Symbolique
+
+RAISE fonctionne selon le principe que l'IA (Neuro) doit être le « Pilote » tandis qu'un moteur déterministe (Symbolique) agit comme le « Contrôleur Aérien ».
+
+- **La Couche Neuro** : Gérée par le module `ai`. Elle utilise des LLM (locaux ou distants) pour le raisonnement, la planification et le consensus multi-agents.
+- **La Couche Symbolique** : Appliquée par le `workflow_engine` et le `rules_engine`. Elle garantit la sécurité via des **Mandats**, des Vetos codés en dur et des règles algébriques.
 
 ---
 
-## 🗺️ La Big Picture (Vue Logique)
+## 2. Architecture Globale des Modules
 
-L'architecture suit un modèle en "Sandwich" : une interface riche accélérée par WebAssembly, interagissant avec un moteur système Rust via le pont Tauri.
+Le diagramme suivant illustre l'organisation structurelle du backend RAISE basée sur l'implémentation réelle de `src-tauri/src`.
 
-```text
-                                  UTILISATEUR
-                                       │
-┌──────────────────────────────────────▼───────────────────────────────────────┐
-│  🖥️  COUCHE DE PRÉSENTATION (Frontend React)                    📂 src/     │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │  ESPACE DE TRAVAIL UNIFIÉ (IDE)                                        │  │
-│  │  ┌──────────────┐  ┌───────────────┐  ┌───────────────┐  ┌──────────┐  │  │
-│  │  │ 🤖 AI Chat   │  │ 📐 Diagrammes │  │ 📝 Code Edit  │  │ ⚙️ Dash  │  │  │
-│  │  └──────┬───────┘  └───────┬───────┘  └───────┬───────┘  └────┬─────┘  │  │
-│  └─────────┼──────────────────┼──────────────────┼───────────────┼────────┘  │
-├────────────┼──────────────────┼──────────────────┼───────────────┼───────────┤
-│  🚀 ACCÉLÉRATEUR WASM (Shared Logic)             ▼               ▼           │
-│     📂 src-wasm/                                                             │
-│  ┌────────────────────┐  ┌────────────────────┐  ┌────────────────────────┐  │
-│  │ ⚡ Analyseurs      │  │ 🛡️ Validateurs     │  │ 🔄 Parsers Modèles     │  │
-│  │ (Consistency)      │  │ (Syntax Check)     │  │ (Fast Feedback)        │  │
-│  └────────────────────┘  └────────────────────┘  └────────────────────────┘  │
-├──────────────────────────────────────────────────────────────────────────────┤
-│  🌉 TAURI BRIDGE (IPC / Commands / Events)                                   │
-├──────────────────────────────────────────────────────────────────────────────┤
-│  ⚙️  MOTEUR SYSTÈME (Backend Rust)                           📂 src-tauri/  │
-│                                                                              │
-│  ┌── [ NEURO ] ───────────┐      ┌── [ ORCHESTRATION ] ──┐      ┌── [ SYMBOLIQUE ] ──┐
-│  │ 🧠 IA & AGENTS         │      │ ⚡ WORKFLOW ENGINE    │      │ 📐 MODEL ENGINE    │
-│  │ 📂 ai/agents/          │◄────►│ 📂 workflow_engine/   │◄────►│ 📂 model_engine/   │
-│  │ - Business / Soft / Hard│     │ - Scheduler           │      │ - Arcadia / Capella│
-│  │ - LLM Context / RAG    │      │ - State Machine       │      │ - Transformers     │
-│  └────────────────────────┘      └───────────┬───────────┘      └────────────────────┘
-│                                              │
-│               ┌──────────────────────────────▼──────────────────────────────┐
-│               │ 💾 INFRASTRUCTURE & SOUVERAINETÉ (Local-First)              │
-│               │ ┌──────────────────┐  ┌──────────────────┐  ┌─────────────┐ │
-│               │ │ 🗄️ JSON_DB       │  │ 🔍 TRACEABILITY  │  │ ⛓️ BLOCKCHAIN│ │
-│               │ │ (ACID/BTree/WAL) │  │ (DO-178C/Audit)  │  │ (Fabric/VPN)│ │
-│               │ └──────────────────┘  └──────────────────┘  └─────────────┘ │
-│               └─────────────────────────────────────────────────────────────┘
-└──────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph "1. Couche Interface (Commandes)"
+        CMD[Module Commands]
+        CMD_AI[Commandes AI & Workflow]
+        CMD_MODEL[Commandes Modèle & Codegen]
+        CMD_SYS[Commandes Système & DB]
+    end
+
+    subgraph "2. Moteurs Centraux (Logique)"
+        WE[Workflow Engine]
+        ME[Model Engine - Arcadia/Capella]
+        RE[Rules Engine]
+        GE[Genetics Engine]
+        CG[Code Generator]
+    end
+
+    subgraph "3. Couche Intelligence (IA & NLP)"
+        ORCH[Orchestrateur]
+        AGENTS[Système Multi-Agents]
+        RAG_MOD[Contexte & RAG]
+        NLP[NLP & Embeddings]
+        LLM[Client LLM]
+    end
+
+    subgraph "4. Infrastructure & Souveraineté"
+        JDB[JSON-DB - Collections & Stockage]
+        BC[Blockchain & Fabric]
+        TRA[Traçabilité & Conformité]
+        PLG[Gestionnaire de Plugins - WASM]
+        ST[Gestionnaire de Stockage & Fichiers]
+    end
+
+    %% Interactions de flux
+    CMD --> WE
+    CMD --> ME
+    CMD --> GE
+
+    WE --> ORCH
+    WE --> TRA
+
+    ME --> JDB
+    ME --> CG
+
+    ORCH --> AGENTS
+    ORCH --> RAG_MOD
+    RAG_MOD --> NLP
+    NLP --> LLM
+
+    AGENTS --> TRA
+    TRA --> BC
 
 ```
 
 ---
 
-## 🏗️ Description des Couches
+## 3. Vue par Couches de Haut Niveau
 
-### 1. Couche de Présentation (Frontend)
+Le système est organisé en quatre couches distinctes pour assurer la souveraineté et la modularité :
 
-**Localisation :** `src/`
-Cette couche n'est pas une simple page web, c'est un IDE complet. Elle gère l'état visuel et l'interaction utilisateur.
-
-- **`components/diagram-editor`** : Moteur de rendu graphique pour les modèles Arcadia/Capella.
-- **`components/ai-chat`** : Interface conversationnelle avancée capable d'afficher des artefacts (tableaux, code, graphiques) générés par l'IA.
-- **`components/model-viewer`** : Explorateur de modèles et de données techniques.
-
-### 2. Couche d'Accélération (WebAssembly)
-
-**Localisation :** `src-wasm/`
-Modules Rust critiques compilés en `.wasm` pour s'exécuter dans le navigateur.
-
-- **Objectif :** Fournir un feedback instantané (<10ms) à l'utilisateur sans attendre le backend.
-- **Usage :** Validation de syntaxe en temps réel, vérification de cohérence des diagrammes (`analyzer-consistency`), parsing rapide.
-
-### 3. Cœur du Système (Backend Rust)
-
-**Localisation :** `src-tauri/src/`
-Le cerveau de l'application. Il est divisé en trois piliers :
-
-#### A. Pilier Neuro (L'Intelligence Créative)
-
-- **`ai/agents/`** : Système multi-agents spécialisés (Business, Software, Hardware, EPBS).
-- **`ai/llm/`** : Gestion des prompts et abstraction des fournisseurs de modèles (llama.cpp, etc.).
-- **`ai/context/`** : Gestion de la mémoire conversationnelle (RAG).
-
-#### B. Pilier Symbolique (La Rigueur Ingénierie)
-
-- **`model_engine/`** : Implémentation du métamodèle Arcadia et compatibilité Capella.
-- **`model_engine/transformers/`** : Convertit les intentions floues (texte) en modèles structurés.
-- **`rules_engine/`** : Moteur de validation formelle (AST) pour garantir que les modèles respectent les contraintes physiques et logiques.
-
-#### C. Pilier Infrastructure (La Persistance)
-
-- **`json_db/`** : Moteur de base de données propriétaire écrit en Rust.
-- Supporte les Transactions (WAL), les Index BTree et le SQL.
-- Garantit que les données restent locales (fichiers JSON sécurisés).
-
-- **`traceability/`** : Assure la conformité aux normes critiques (DO-178C, ISO-26262).
-- **`blockchain/`** : Connecteurs pour la notarisation des actions (Hyperledger Fabric).
+| Couche                | Responsabilité                                             | Technologie                   |
+| --------------------- | ---------------------------------------------------------- | ----------------------------- |
+| **Présentation**      | Console de Gouvernance, visualisation du Jumeau Numérique. | React 18, TypeScript, Zustand |
+| **Adaptation**        | Pont IPC, routage des commandes, gestion de l'état.        | Tauri v2 (Commandes Rust)     |
+| **Logique (Moteur)**  | Planification de workflow, compilation de Mandats, Vetos.  | Rust, Tokio (Async)           |
+| **Physique (Jumeau)** | Interaction matériel, simulation capteurs, outils MCP.     | MCP Natif (Rust), JSON-DB     |
 
 ---
 
-## 🔄 Flux de Données : La Boucle Neuro-Symbolique
+## 4. Confiance Cryptographique : Signature de Mandat (Ed25519)
 
-Le concept clé de RAISE est de ne jamais faire confiance aveuglément à l'IA. Voici le cycle de vie d'une requête :
+Dans RAISE, la sécurité est un **contrat signé**. Avant qu'un Mandat (la politique définissant les Vetos) ne soit compilé en workflow, son intégrité est vérifiée par des signatures **Ed25519**.
 
-1. **Intention** : L'utilisateur exprime un besoin ("Ajoute une batterie au système").
-2. **Classification** : L'`ai/agents/intent_classifier` détermine quel Agent doit agir (ex: Hardware Agent).
-3. **Proposition** : L'Agent génère une modification potentielle du modèle.
-4. **Transformation** : `dialogue_to_model` convertit cette proposition en structure de données stricte.
-5. **Validation** : Le `rules_engine` vérifie la validité technique (ex: "Voltage compatible ?").
+```mermaid
+sequenceDiagram
+    participant U as UI (React)
+    participant B as Backend (Rust)
+    participant C as Compilateur
+    participant S as Vérificateur de Signature (Ed25519)
 
-- 🛑 _Si invalide_ : L'IA reçoit l'erreur et doit corriger sa proposition.
-- ✅ _Si valide_ : La modification est acceptée.
+    U->>B: submit_mandate(json_data, signature)
+    B->>S: verify(json_data, signature, public_key)
+    alt Signature Valide
+        S-->>B: OK
+        B->>C: compile(mandate)
+        C-->>U: Workflow Prêt
+    else Signature Invalide
+        S-->>B: REJECT
+        B-->>U: 🚨 Erreur Critique : Politique Altérée
+    end
 
-6. **Engagement** :
-
-- Les données sont écrites dans `json_db` (ACID transaction).
-- Une trace d'audit est générée dans `traceability`.
-
----
-
-## 🛠️ Stack Technique
-
-| Domaine          | Technologies                                       |
-| ---------------- | -------------------------------------------------- |
-| **Frontend**     | React, TypeScript, Vite, TailwindCSS               |
-| **Backend**      | Rust, Tauri, Tokio (Async)                         |
-| **WASM**         | `wasm-bindgen`, Rust                               |
-| **Database**     | Custom Engine (Rust), Serde, SQL Parser            |
-| **AI/ML**        | LLM (Local via llama.cpp/Rust-Bert), Vector Stores |
-| **Modélisation** | JSON-LD, Arcadia Metamodel                         |
-| **Sécurité**     | VPN (Innernet), Ed25519 (Signatures)               |
+```
 
 ---
 
-_Document généré automatiquement le 27/12/2025 pour le projet RAISE._
+## 5. Ancrage (Grounding) : Jumeau Numérique & RAG
+
+Pour éviter les hallucinations, RAISE utilise deux formes d'ancrage :
+
+### 5.1. Le Jumeau Numérique (Ancrage Physique)
+
+Le `model_engine` et les outils du `workflow_engine` maintiennent une réplique virtuelle en temps réel du système.
+
+- **Boucle de Veto** : Les nœuds `GatePolicy` du workflow comparent les propositions de l'IA aux données réelles issues du Jumeau.
+
+### 5.2. RAG & Mémoire (Ancrage Cognitif)
+
+Situé dans `ai/context` et `ai/memory`, le **RAG (Retrieval Augmented Generation)** garantit que l'IA a accès à une documentation technique souveraine.
+
+- **Bases Vectorielles** : Support de `Qdrant` et `LeannStore`.
+- **Embeddings** : Traitement local via `candle` ou `fast-embeddings`.
+
+---
+
+## 6. Blockchain & Traçabilité
+
+Pour l'ingénierie critique, chaque changement d'état et chaque mandat doit être auditable.
+
+- **Logs Immuables** : Le module `traceability` enregistre chaque trace de réflexion de l'IA et chaque décision de Veto.
+- **Ancrage** : Le module `blockchain/fabric` ancre ces traces dans un registre Hyperledger Fabric.
+- **Transport Sécurisé** : La connectivité est gérée par le module `blockchain/vpn` (**Innernet**) pour maintenir un réseau maillé privé et décentralisé.
+
+---
+
+## 7. Génération de Code & Optimisation
+
+- **Codegen** : Le module `code_generator` utilise des templates Handlebars/Jinja pour transpiler les modèles Arcadia en **Rust**, **C++**, **VHDL** ou **Verilog**.
+- **Génétique** : Le module `genetics` exécute des algorithmes évolutionnaires pour optimiser les architectures système selon des contraintes multi-objectifs (Poids, Coût, Sécurité).
+
+---
+
+## 8. Souveraineté des Données & "Offline-First"
+
+RAISE est conçu pour être **Souverain par Défaut** :
+
+- **État Local** : L'état de l'application (Zustand) et les données projet (JSON-DB) sont stockés sur la machine de l'utilisateur.
+- **Exécution Locale** : Les outils MCP natifs s'exécutent en binaires Rust compilés, garantissant qu'aucune télémétrie n'est envoyée vers des clouds tiers sans configuration explicite.
+- **Isolation Réseau** : Le système est compatible avec les VPN Mesh (Innernet) pour une collaboration sécurisée sans serveur central.
+
+---
+
+## 9. Auditabilité du Système (XAI)
+
+Chaque décision prise par le système est consignée dans une **Matrice de Traçabilité** :
+
+1. **Le Prompt** : Ce qui a été demandé à l'IA.
+2. **Le Contexte** : État du Jumeau Numérique à cet instant précis.
+3. **Le Raisonnement** : La logique interne de l'IA (processus de réflexion).
+4. **La Décision de Veto** : Pourquoi le moteur symbolique a autorisé ou bloqué l'action.
+
+---
+
+_Cette architecture garantit que le système reste fiable, explicable et sous contrôle humain total grâce au protocole de Mandat._
