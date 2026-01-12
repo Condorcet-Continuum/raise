@@ -1,4 +1,3 @@
-use crate::arcadia_element;
 use crate::model_engine::arcadia::common::ElementRef;
 
 // --- Class (UML-like) ---
