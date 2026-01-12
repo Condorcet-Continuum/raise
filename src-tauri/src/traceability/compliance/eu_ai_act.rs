@@ -1,5 +1,7 @@
+// FICHIER : src-tauri/src/traceability/compliance/eu_ai_act.rs
+
 use super::{ComplianceChecker, ComplianceReport, Violation};
-use crate::model_engine::types::ProjectModel;
+use crate::model_engine::types::{NameType, ProjectModel};
 
 pub struct EuAiActChecker;
 
@@ -10,35 +12,38 @@ impl ComplianceChecker for EuAiActChecker {
 
     fn check(&self, model: &ProjectModel) -> ComplianceReport {
         let mut violations = Vec::new();
-        let mut rules_checked = 0;
+        let mut checked_count = 0;
 
-        // Règle 1 : Transparence des modèles IA
-        // Tout composant PA marqué comme "AI_Model" doit référencer une preuve XAI récente.
-        rules_checked += 1;
-
+        // On scanne les composants physiques (PA)
         for comp in &model.pa.components {
-            // On vérifie si le composant est tagué comme étant de l'IA
-            // Convention: propriété "component_type" = "AI_Model"
+            // Est-ce un modèle IA ?
             let is_ai = comp
                 .properties
-                .get("component_type")
+                .get("nature")
                 .and_then(|v| v.as_str())
-                .map(|t| t == "AI_Model")
+                .map(|s| s == "AI_Model")
                 .unwrap_or(false);
 
             if is_ai {
-                // Vérification de la présence de la référence XAI
-                let has_evidence = comp.properties.contains_key("xai_evidence_ref");
+                checked_count += 1;
 
-                if !has_evidence {
+                // Vérification du niveau de risque
+                let has_risk = comp.properties.contains_key("risk_level");
+
+                if !has_risk {
+                    let name = match &comp.name {
+                        NameType::String(s) => s.clone(),
+                        _ => "Inconnu".to_string(),
+                    };
+
                     violations.push(Violation {
                         element_id: Some(comp.id.clone()),
-                        rule_id: "AI-ACT-TRANS-01".into(),
+                        rule_id: "AI-ACT-RISK-01".to_string(),
                         description: format!(
-                            "Le modèle IA '{}' n'a aucune trame d'explicabilité (XAI) associée.",
-                            comp.name.as_str() // [CORRECTION] Utilisation de .as_str() pour NameType
+                            "Le modèle IA '{}' n'a pas de classification de risque (risk_level)",
+                            name
                         ),
-                        severity: "Critical".into(),
+                        severity: "Critical".to_string(),
                     });
                 }
             }
@@ -47,64 +52,61 @@ impl ComplianceChecker for EuAiActChecker {
         ComplianceReport {
             standard: self.name().to_string(),
             passed: violations.is_empty(),
-            rules_checked,
+            rules_checked: checked_count,
             violations,
         }
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel}; // [CORRECTION] Import de NameType
+    use crate::model_engine::types::{ArcadiaElement, NameType};
     use serde_json::json;
     use std::collections::HashMap;
 
-    // [CORRECTION] Helper adapté : Construit l'objet entièrement sans Default
-    fn create_comp(id: &str, name: &str, props: serde_json::Value) -> ArcadiaElement {
+    fn create_ai(id: &str, props: serde_json::Value) -> ArcadiaElement {
         let mut properties = HashMap::new();
         if let Some(obj) = props.as_object() {
             for (k, v) in obj {
                 properties.insert(k.clone(), v.clone());
             }
         }
-
         ArcadiaElement {
             id: id.to_string(),
-            name: NameType::String(name.to_string()), // [CORRECTION] Envelopper dans l'Enum
-            kind: "Component".to_string(),            // [CORRECTION] Champ 'kind' obligatoire
+            name: NameType::String(id.to_string()),
+            kind: "Component".to_string(),
+            // CORRECTION : Initialisation du champ description ajouté récemment
+            description: None,
             properties,
         }
     }
 
     #[test]
-    fn test_ai_act_compliance() {
-        let checker = EuAiActChecker;
+    fn test_eu_ai_act_risk_missing() {
         let mut model = ProjectModel::default();
 
-        // 1. Composant Standard (Ignoré par le checker)
-        let std_comp = create_comp("c1", "Database", json!({ "component_type": "Database" }));
-
-        // 2. Modèle IA Non Conforme (Pas de preuve XAI)
-        let ai_bad = create_comp("ai1", "Face Reco", json!({ "component_type": "AI_Model" }));
-
-        // 3. Modèle IA Conforme (Avec preuve XAI)
-        let ai_good = create_comp(
-            "ai2",
-            "Spam Filter",
-            json!({
-                "component_type": "AI_Model",
-                "xai_evidence_ref": "uuid-1234-5678"
-            }),
+        // IA Conforme
+        let ai_good = create_ai(
+            "ai_good",
+            json!({ "nature": "AI_Model", "risk_level": "High" }),
         );
+        // IA Non Conforme
+        let ai_bad = create_ai("ai_bad", json!({ "nature": "AI_Model" }));
+        // Non IA (ignoré)
+        let classic = create_ai("classic", json!({ "nature": "Hardware" }));
 
-        model.pa.components = vec![std_comp, ai_bad, ai_good];
+        model.pa.components = vec![ai_good, ai_bad, classic];
 
+        let checker = EuAiActChecker;
         let report = checker.check(&model);
 
         assert!(!report.passed);
+        assert_eq!(report.rules_checked, 2); // Seulement les 2 IA sont checkées
         assert_eq!(report.violations.len(), 1);
-        assert_eq!(report.violations[0].element_id.as_deref(), Some("ai1"));
-        assert_eq!(report.violations[0].rule_id, "AI-ACT-TRANS-01");
+        assert!(report.violations[0].description.contains("ai_bad"));
     }
 }

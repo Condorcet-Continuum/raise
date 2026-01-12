@@ -4,9 +4,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::intent_classifier::EngineeringIntent;
+use super::tools::{extract_json_from_llm, save_artifact};
 use super::{Agent, AgentContext, AgentResult, CreatedArtifact};
 use crate::ai::llm::client::LlmBackend;
-// IMPORT NLP
 use crate::ai::nlp::entity_extractor;
 
 #[derive(Default)]
@@ -30,40 +30,30 @@ impl SoftwareAgent {
         name: &str,
         description: &str,
     ) -> Result<serde_json::Value> {
-        // NLP
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
-            nlp_hint.push_str("\n[VOCABULAIRE TECHNIQUE]:\n");
+            nlp_hint.push_str("\n[VOCABULAIRE]: ");
             for entity in entities {
-                nlp_hint.push_str(&format!("- \"{}\"\n", entity.text));
+                nlp_hint.push_str(&format!("{}, ", entity.text));
             }
         }
 
         let system_prompt = "Tu es un Architecte Logiciel. Génère JSON valide.";
         let user_prompt = format!(
-            "Crée un Composant Logique Arcadia (LA).
-            Nom: {}
-            Intention: {}
-            {}
-            Schéma: {{ \"name\": \"str\", \"is_abstract\": bool, \"implementation_language\": \"rust|cpp|python\", \"description\": \"str\" }}",
+            "Crée Composant LA.\nNom: {}\nDesc: {}\n{}\nJSON: {{ \"name\": \"str\", \"implementation_language\": \"rust|cpp\" }}",
             name, description, nlp_hint
         );
 
         let response = self.ask_llm(ctx, system_prompt, &user_prompt).await?;
+        let clean_json = extract_json_from_llm(&response);
 
-        let clean_json = response
-            .trim()
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim();
-
-        let mut data: serde_json::Value = serde_json::from_str(clean_json)
+        let mut data: serde_json::Value = serde_json::from_str(&clean_json)
             .unwrap_or(json!({ "name": name, "description": description }));
 
         data["id"] = json!(Uuid::new_v4().to_string());
         data["layer"] = json!("LA");
+        data["type"] = json!("LogicalComponent");
         data["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
 
         Ok(data)
@@ -90,25 +80,12 @@ impl Agent for SoftwareAgent {
                 let doc = self
                     .enrich_logical_component(ctx, name, &format!("Type: {}", element_type))
                     .await?;
-                let doc_id = doc["id"].as_str().unwrap_or("unknown").to_string();
 
-                let relative_path = format!("un2/la/collections/components/{}.json", doc_id);
-                let path = ctx.paths.domain_root.join(&relative_path);
-
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(&path, serde_json::to_string_pretty(&doc)?)?;
+                let artifact = save_artifact(ctx, "la", "components", &doc)?;
 
                 Ok(Some(AgentResult {
                     message: format!("Composant logiciel **{}** modélisé.", name),
-                    artifacts: vec![CreatedArtifact {
-                        id: doc_id,
-                        name: name.clone(),
-                        layer: "LA".to_string(),
-                        element_type: "Component".to_string(),
-                        path: relative_path,
-                    }],
+                    artifacts: vec![artifact],
                 }))
             }
             EngineeringIntent::GenerateCode {
@@ -124,6 +101,7 @@ impl Agent for SoftwareAgent {
                 let clean_code = code.replace("```rust", "").replace("```", "");
                 let relative_path = format!("src-gen/{}", filename);
                 let path = ctx.paths.domain_root.join(&relative_path);
+
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
@@ -142,5 +120,15 @@ impl Agent for SoftwareAgent {
             }
             _ => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_software_agent_id() {
+        assert_eq!(SoftwareAgent::new().id(), "software_engineer");
     }
 }

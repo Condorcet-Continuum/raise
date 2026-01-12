@@ -13,7 +13,12 @@ pub struct CandleEngine {
 
 impl CandleEngine {
     pub fn new() -> Result<Self> {
-        let device = Device::Cpu;
+        // 1. DÉTECTION DYNAMIQUE DU MATÉRIEL (GPU > CPU)
+        let device = Device::new_metal(0) // Apple Silicon (M1/M2/M3)
+            .or_else(|_| Device::new_cuda(0)) // Nvidia CUDA
+            .unwrap_or(Device::Cpu); // Fallback CPU standard
+
+        println!("🕯️ [Candle] Moteur initialisé sur : {:?}", device);
 
         let api = Api::new()?;
         let repo = api.repo(Repo::new(
@@ -46,6 +51,7 @@ impl CandleEngine {
             .encode(text, true)
             .map_err(anyhow::Error::msg)?;
 
+        // On s'assure que les tenseurs sont créés sur le bon Device
         let token_ids = Tensor::new(tokens.get_ids(), &self.device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
 
@@ -60,8 +66,10 @@ impl CandleEngine {
         Ok(vec)
     }
 
-    // CORRECTION : Signature alignée sur &mut self pour matcher FastEmbed
     pub fn embed_batch(&mut self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        // Note: Pour une optimisation future, on pourrait tokeniser tout le batch
+        // et faire un seul appel forward(), mais cela demande de gérer le Padding manuellement.
+        // Avec le GPU activé, cette boucle sera déjà très rapide pour des petits lots.
         let mut results = Vec::new();
         for text in texts {
             results.push(self.forward_one(&text)?);
@@ -69,7 +77,6 @@ impl CandleEngine {
         Ok(results)
     }
 
-    // CORRECTION : Signature alignée sur &mut self
     pub fn embed_query(&mut self, text: &str) -> Result<Vec<f32>> {
         self.forward_one(text)
     }
@@ -79,4 +86,46 @@ fn normalize_l2(v: &Tensor) -> Result<Tensor> {
     let sum_sq = v.sqr()?.sum_keepdim(1)?;
     let norm = sum_sq.sqrt()?;
     Ok(v.broadcast_div(&norm)?)
+}
+
+// --- TESTS UNITAIRES ---
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_candle_mini_lm_loading() {
+        let engine = CandleEngine::new();
+        assert!(
+            engine.is_ok(),
+            "Le modèle MiniLM doit se charger correctement via HF Hub"
+        );
+    }
+
+    #[test]
+    fn test_candle_dimensions() {
+        let mut engine = CandleEngine::new().expect("Init failed");
+        let vec = engine.embed_query("Test dimensions").expect("Embed failed");
+
+        // all-MiniLM-L6-v2 fait 384 dimensions
+        assert_eq!(vec.len(), 384);
+    }
+
+    #[test]
+    fn test_candle_normalization() {
+        // Vérifie que le vecteur est normalisé (L2 norm ≈ 1.0)
+        // C'est CRUCIAL pour que la Cosine Similarity fonctionne dans Qdrant
+        let mut engine = CandleEngine::new().expect("Init failed");
+        let vec = engine.embed_query("Mathematiques").expect("Embed failed");
+
+        let sum_sq: f32 = vec.iter().map(|x| x * x).sum();
+        let norm = sum_sq.sqrt();
+
+        // On tolère une petite erreur de virgule flottante
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "Le vecteur doit être normalisé (Norme proche de 1.0), actuel: {}",
+            norm
+        );
+    }
 }

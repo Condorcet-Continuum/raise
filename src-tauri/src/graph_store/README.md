@@ -1,138 +1,147 @@
-### Fichier : `src-tauri/src/graph_store/README.md`
+# 🧠 Graph Store (Hybrid Graph + Vector)
 
-# 🧠 Graph Store (SurrealDB Embedded)
+Ce module fournit une base de données locale **Multi-Modèle** pour RAISE. Il combine la persistance de graphe (Relations) et la recherche vectorielle (Sémantique) au sein d'une seule abstraction.
 
-Ce module fournit une base de données locale, persistante et orientée graphe pour l'application. Il repose sur **SurrealDB** utilisé en mode embarqué (moteur `SurrealKv`).
+Il repose sur **SurrealDB** (mode embarqué `SurrealKv`) couplé optionnellement au moteur NLP de RAISE pour l'autovectorisation.
 
-## 🌟 Pourquoi SurrealDB ? (Fonctionnalités Clés)
+## 🌟 Architecture Hybride
 
-Contrairement à une base de données traditionnelle (comme SQLite) ou purement documentaire (comme MongoDB), SurrealDB est **multi-modèle**. Ce module exploite trois capacités majeures :
+Le `GraphStore` agit comme une couche intelligente au-dessus de la base de données brute.
 
-### 1. Modèle Hybride : Document + Graphe
+```mermaid
+graph TD
+    User[Application / UI] -->|Index Entity| Store[GraphStore]
 
-SurrealDB permet de stocker des objets JSON complexes (Documents) tout en les reliant directement entre eux (Graphe).
+    subgraph "Logique d'Indexation"
+        Store -->|Check .env| Config{ENABLE_VECTORS?}
 
-- **Nœuds (Nodes)** : Ce sont des enregistrements classiques (ex: `person:alice`, `file:report_pdf`). Ils contiennent des données JSON arbitraires.
-- **Arêtes (Edges)** : Ce sont des liens directionnels qui possèdent eux-mêmes des données.
-  - _Exemple_ : `alice` -> `working_on { "since": "2023" }` -> `project_raise`.
-  - Cela permet de requêter des relations complexes sans faire de `JOIN` coûteux comme en SQL.
+        Config -- "Oui" --> Extract[Extraction Texte]
+        Extract -->|Query| NLP[NLP EmbeddingEngine]
+        NLP -->|Vec<f32>| Inject[Injection champ 'embedding']
 
-### 2. Recherche Vectorielle (IA / RAG)
+        Config -- "Non" --> Direct[Pas de Vectorisation]
+    end
 
-Ce module utilise la capacité native de SurrealDB à stocker des vecteurs (`Vec<f32>`) et à calculer des distances mathématiques.
+    Inject & Direct -->|Upsert JSON| DB[(SurrealDB Embedded)]
 
-- **Fonctionnalité** : Recherche sémantique ("Trouver les documents qui parlent de concepts similaires à X").
-- **Méthode** : Similarité Cosinus (`vector::similarity::cosine`).
-- **Usage** : Idéal pour implémenter du RAG (Retrieval-Augmented Generation) localement.
-
-### 3. Moteur Embarqué (Embedded)
-
-L'application n'a pas besoin de lancer un serveur Docker ou un processus séparé.
-
-- La base de données est un simple dossier/fichier (`raise_graph.db`) géré directement par le binaire Rust via `SurrealKv` (basé sur RocksDB).
-- **Avantage** : Latence zéro (pas de réseau) et déploiement simplifié.
-
----
-
-## 🛠 Architecture Technique
-
-### Le défi de la Sérialisation
-
-Un point critique de ce module est la gestion des types. SurrealDB utilise des types binaires internes riches (ex: `Thing` pour les IDs `table:id`, `Datetime`, etc.) qui ne sont pas compatibles nativement avec le format JSON standard.
-
-**La solution implémentée (`surreal_impl.rs`) :**
-Le client agit comme un "pont" de traduction.
-
-1.  **Entrée** : Il accepte du JSON standard (`serde_json::Value`).
-2.  **Traitement** : Il utilise les méthodes natives (`.create`, `.select`) ou du SQL avec transtypage (`<string>id`) pour interagir avec le moteur.
-3.  **Sortie** : Il convertit les structures binaires (`surrealdb::sql::Object`) en JSON propre avant de les renvoyer à l'application.
-
----
-
-## 🚀 Guide d'Utilisation
-
-### 1. Initialisation
-
-Démarre le moteur embarqué et prépare le namespace/database.
-
-```rust
-use crate::graph_store::surreal_impl::SurrealClient;
-use std::path::PathBuf;
-
-let data_dir = PathBuf::from("./data");
-let client = SurrealClient::init(data_dir).await?;
+    style NLP fill:#f9f,stroke:#333
+    style DB fill:#ccf,stroke:#333
 
 ```
 
-### 2. Gestion des Nœuds (Upsert)
+## ⚙️ Configuration (.env)
 
-La méthode `upsert_node` est idempotente : elle crée le nœud s'il n'existe pas, ou le met à jour s'il existe déjà.
+La fonctionnalité vectorielle (coûteuse en ressources) est conditionnelle. Elle s'active via le fichier `.env` :
 
-```rust
-use serde_json::json;
-
-// Table: "task", ID: "t1"
-client.upsert_node("task", "t1", json!({
-    "title": "Finir le README",
-    "status": "todo",
-    "tags": ["docs", "rust"]
-})).await?;
+```bash
+# true : Charge le modèle NLP (Candle/FastEmbed) et calcule les vecteurs à la volée.
+# false : Mode base de données classique (Graphe/Document uniquement).
+ENABLE_GRAPH_VECTORS=true
 
 ```
 
-### 3. Création de Relations (Graphe)
+## 🚀 Fonctionnalités Clés
 
-Crée un lien sémantique entre deux entités. La syntaxe est `DE -> RELATION -> VERS`.
+### 1. Indexation Auto-Vectorisée
+
+Lorsque vous sauvegardez une entité, le Store analyse le JSON pour trouver du contenu textuel pertinent, génère un vecteur (384 dimensions), et l'injecte automatiquement.
+
+**Stratégie d'extraction de texte (Ordre de priorité) :**
+
+1. Champ `description`
+2. Champ `content`
+3. Champ `name`
+4. Fallback : Dump complet du JSON.
+
+### 2. Recherche Sémantique Hybride
+
+Permet de rechercher des nœuds par sens plutôt que par mots-clés exacts.
 
 ```rust
-// Lie la tâche 't1' à l'utilisateur 'alice'
-client.create_edge(
-    ("person", "alice"), // Source
-    "assigned_to",       // Nom de la relation
-    ("task", "t1")       // Destination
+// Recherche les 5 composants qui parlent sémantiquement de "propulsion"
+let results = store.search_similar("component", "système de propulsion", 5).await?;
+
+```
+
+### 3. Relations Graphiques
+
+Stocke les liens directionnels sans schéma rigide.
+
+```rust
+store.link_entities(
+    ("person", "alice"),
+    "working_on",
+    ("project", "raise")
 ).await?;
 
 ```
 
-### 4. Recherche de Similarité (Vecteurs)
+---
 
-Récupère les objets les plus proches mathématiquement d'un vecteur donné.
+## 📚 Guide d'Utilisation (API)
+
+L'interaction se fait via la struct `GraphStore` (défini dans `mod.rs`), et non directement via `SurrealClient`.
+
+### Initialisation
 
 ```rust
-let embedding = vec![0.12, 0.88, 0.04, ...]; // Vecteur généré par un modèle IA
-let limit = 10;
+use crate::graph_store::GraphStore;
+use std::path::PathBuf;
 
-// Cherche dans la table 'chunk'
-let results = client.search_similar("chunk", embedding, limit).await?;
+// Initialise la DB et charge le modèle IA si activé dans .env
+let store = GraphStore::new(PathBuf::from("./data")).await?;
+
+```
+
+### Indexation (Upsert)
+
+```rust
+use serde_json::json;
+
+// Si ENABLE_GRAPH_VECTORS=true, un champ "embedding" sera ajouté automatiquement
+// basé sur la description "Base de données...".
+store.index_entity("tech", "surreal", json!({
+    "name": "SurrealDB",
+    "description": "Base de données multi-modèle pour le web moderne."
+})).await?;
+
+```
+
+### Recherche
+
+```rust
+// 1. Recherche Vectorielle (si activée)
+// Renvoie les objets JSON enrichis d'un score de similarité (0.0 à 1.0)
+let hits = store.search_similar("tech", "stockage données", 2).await?;
+
+// 2. Suppression
+store.remove_entity("tech", "surreal").await?;
 
 ```
 
 ---
 
-## ⚠️ Pièges Courants (Troubleshooting)
+## ⚠️ Détails Techniques (SurrealDB)
 
-### Erreur : `Serialization error: expected enum variant...`
+### Gestion des IDs
 
-Cette erreur survient si vous essayez de récupérer le résultat brut d'une requête SQL via `take::<Value>()` sans précautions.
+SurrealDB utilise le format `table:id`.
 
-- **Cause** : Le moteur renvoie une Structure binaire, mais `serde_json::Value` attend un Enum.
-- **Solution** : Utilisez toujours les méthodes wrapper de `SurrealClient` (`select`, `upsert_node`) qui gèrent la conversion `Object -> JSON` en interne.
+- Le `GraphStore` abstrait cela : vous passez `collection` ("table") et `id` ("id") séparément.
+- En interne, les requêtes gèrent le cast `<string>id` pour garantir que le JSON retourné contient des IDs lisibles et non des objets binaires `Thing`.
 
-### Erreur : `Parse error` sur les IDs
+### Performance
 
-SurrealDB force le format `table:id`.
+- **Démarrage** : Si les vecteurs sont activés, le premier lancement peut prendre 1-2 secondes (chargement des modèles ONNX/Rust).
+- **Stockage** : Les vecteurs ajoutent ~1.5 Ko de données par entité (384 floats).
 
-- ❌ `id: "123"` (Invalide sans table)
-- ✅ `id: "user:123"` (Valide)
-- Le module gère cela en demandant `table` et `id` séparément dans les arguments des fonctions.
+### Dépendances
 
----
+Ce module dépend de :
 
-## 🧪 Tests
+- `surrealdb` (Feature `kv-surrealkv` pour l'embarqué).
+- `crate::ai::nlp::embeddings` (Pour la vectorisation).
 
-Les tests unitaires couvrent le cycle de vie complet (CRUD, Relations, Vecteurs) et valident la correction des conversions de types.
-
-```bash
-cargo test graph_store
+```
 
 ```

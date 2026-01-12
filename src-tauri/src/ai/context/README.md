@@ -1,129 +1,142 @@
 # Module Context — Mémoire & Ancrage (RAG Hybride)
 
-Ce module est le garant de la **Vérité Terrain** (Grounding) de l'IA. Il est responsable de fournir au LLM le contexte nécessaire pour répondre aux questions de l'ingénieur, en combinant connaissances techniques, état du modèle et historique de la conversation.
+Ce module est le cerveau mnésique de RAISE. Il est responsable de fournir au LLM le **Grounding** (Vérité Terrain) nécessaire pour répondre aux questions de l'ingénieur, en combinant connaissances techniques (Symbolique), documentation (Sémantique) et historique (Épisodique).
 
 ---
 
-## 🏗️ Architecture Globale (The 4-Pillars)
+## 🏗️ Architecture Globale (The 5-Pillars)
 
-Le contexte de RAISE repose sur 4 piliers distincts pour couvrir tous les horizons temporels :
+Le contexte repose désormais sur une architecture orchestrée pour couvrir tous les horizons de données :
 
-| Composant       | Fichier                   | Type de Mémoire           | Objectif                                                | Exemple                           |
-| --------------- | ------------------------- | ------------------------- | ------------------------------------------------------- | --------------------------------- |
-| **Symbolique**  | `retriever.rs`            | **Immédiate** (RAM)       | Scanner le modèle structuré actuel (`ProjectModel`).    | _"Liste les acteurs définis."_    |
-| **Sémantique**  | `rag.rs`                  | **Long-Terme** (Vector)   | Chercher dans la documentation/notes (Qdrant).          | _"C'est quoi la norme ISO-123 ?"_ |
-| **Session**     | `conversation_manager.rs` | **Court-Terme** (Working) | Gérer le fil de discussion et le contexte glissant.     | _"Modifie-le."_ (Qui est "le" ?)  |
-| **Persistance** | `memory_store.rs`         | **Stockage** (File/KV)    | Sauvegarder/Charger les historiques de chat sur disque. | _Reprendre une discussion hier._  |
+| Composant            | Fichier                   | Rôle                                                                                                     | Technologie                         |
+| :------------------- | :------------------------ | :------------------------------------------------------------------------------------------------------- | :---------------------------------- |
+| **Orchestrateur**    | `orchestrator.rs`         | **Chef d'Orchestre**. Fusionne toutes les sources de contexte, gère le flux LLM et sécurise les prompts. | Rust (Native)                       |
+| **Sémantique (RAG)** | `rag.rs`                  | **Mémoire Long-Terme**. Recherche vectorielle dans la documentation et les notes.                        | **SurrealDB** (Graph+Vec) ou Qdrant |
+| **Symbolique**       | `retriever.rs`            | **Vérité Terrain**. Scanne le modèle structuré (`ProjectModel`) en RAM.                                  | Algorithmes de recherche floue      |
+| **Session**          | `conversation_manager.rs` | **Mémoire de Travail**. Gère le fil de discussion et la fenêtre glissante (Sliding Window).              | Rust Structs                        |
+| **Persistance**      | `memory_store.rs`         | **Stockage**. Sauvegarde/Charge les historiques de chat sur disque.                                      | JSON Files                          |
 
 ---
 
 ## 🔄 Flux de Données (Data Flow)
 
-Ce diagramme illustre comment la **Mémoire de Travail** (Conversation) interagit avec la **Mémoire de Recherche** (Retrievers) pour former le contexte final.
+Tout passe désormais par l'`AiOrchestrator`.
 
-```text
-                               QUESTION UTILISATEUR
-                                       |
-                                       v
-                           [ CONVERSATION MANAGER ]
-                                       |
-                   +-------------------+-------------------+
-                   | (Gestion de l'historique & Sliding Window)
-                   v
-           [ MEMORY STORE ] (Load/Save History JSON)
-                   |
-                   v
-        "Question Contextualisée" (ex: "Modifie-le" -> "Modifie le Moteur")
-                   |
-                   v
-             [ ORCHESTRATOR ] ------------------------+
-                   |                                  |
-         (Voie Déterministe)                  (Voie Probabiliste)
-                   |                                  |
-         [ SimpleRetriever ]                  [ RagRetriever ]
-                   |                                  |
-      1. Scan Mots-clés (RAM)               1. Vectorisation (FastEmbed)
-      2. Filtre Structuré                   2. Recherche Qdrant (Docker)
-                   |                                  |
-                   v                                  v
-        [ Éléments du Modèle ]               [ Chunks de Documentation ]
-                   |                                  |
-                   +----------------+-----------------+
-                                    |
-                                    v
-                           [ CONTEXT BUILDER ]
-                    (Fusion : Historique + Modèle + Docs)
-                                    |
-                                    v
-                             [ LLM CLIENT ]
+```mermaid
+graph TD
+    User[Utilisateur] -->|Question| Orch[AiOrchestrator]
 
+    subgraph "Construction du Contexte"
+        Orch -->|1. Get History| Session[Session Manager]
+        Orch -->|2. Search Model| Symb[Symbolic Retriever]
+        Orch -->|3. Search Docs| RAG[RAG Retriever]
+
+        RAG -->|Embedding| NLP[NLP Engine]
+        NLP -->|Vector| Store{Store Backend}
+
+        Store -- "Hybrid Search" --> Surreal[(SurrealDB)]
+        Store -- "Legacy" --> Qdrant[(Qdrant)]
+    end
+
+    subgraph "Inférence"
+        Symb & RAG & Session -->|Aggregated Prompt| Context[Context Builder]
+        Context -->|Truncate Token| NLP
+        NLP -->|Safe Prompt| LLM[LLM Client]
+    end
+
+    LLM -->|Réponse| Orch
+    Orch -->|Save| Memory[Memory Store]
+    Orch --> User
 ```
 
 ---
 
-## 📂 Organisation du Code
+## ⚙️ Configuration & Stockage
 
-```text
-src-tauri/src/ai/context/
-├── mod.rs                   # Point d'entrée
-├── retriever.rs             # Moteur Symbolique (Scan du Modèle structuré)
-├── rag.rs                   # Moteur Sémantique (Client Qdrant + Embeddings)
-├── conversation_manager.rs  # Gestionnaire de session (Historique, Token limit)
-├── memory_store.rs          # Persistance locale des conversations
-└── tests/                   # Tests unitaires et d'intégration
+Le système de contexte est **agnostique** au moteur de base de données vectorielle. Il se configure via le fichier `.env`.
+
+### Variables d'Environnement
+
+```bash
+# Choix du moteur (Recommandé : surreal)
+VECTOR_STORE_PROVIDER="surreal" # ou "qdrant"
+
+# Si Qdrant est choisi (nécessite Docker)
+PORT_QDRANT_GRPC=6334
+
+# Si SurrealDB est choisi (Embarqué, pas de Docker requis)
+# Active l'auto-vectorisation dans le GraphStore global
+ENABLE_GRAPH_VECTORS=true
 
 ```
 
+### Stockage Physique
+
+Les données sont stockées localement dans le dossier défini par `PATH_RAISE_DOMAIN` (par défaut `.raise_storage/`).
+
+- `/chats` : Historiques de conversation (JSON).
+- `/raise_graph.db` : Base de données SurrealDB (Graphe + Vecteurs).
+
 ---
 
-## 🧠 1. Le Moteur Symbolique (`retriever.rs`)
+## 📂 Détails des Modules
 
-_Approche "Exacte"_.
-Parcourt les structures Rust en mémoire (`ProjectModel`) pour trouver des correspondances exactes de noms ou de descriptions. Indispensable pour que l'IA manipule les bons objets du diagramme.
+### 1. L'Orchestrateur (`orchestrator.rs`)
 
-## 🔮 2. Le Moteur Sémantique (`rag.rs`)
+C'est le point d'entrée unique. Il :
 
-_Approche "Conceptuelle"_.
-Utilise **Qdrant** et **FastEmbed** pour retrouver des informations dans des textes non structurés (spécifications, wiki projet) en se basant sur le sens (vecteurs) plutôt que sur les mots exacts.
+1. Détecte l'intention (Fast Path vs LLM).
+2. Interroge les 3 mémoires (Symbolique, RAG, Session).
+3. Construit un prompt optimisé.
+4. Tronque le prompt pour respecter la fenêtre de contexte du modèle (via `nlp::tokenizers`).
+5. Gère la réponse et la sauvegarde.
 
-## 🗣️ 3. Le Gestionnaire de Session (`conversation_manager.rs`)
+### 2. Le RAG (`rag.rs`)
 
-_Mémoire de Travail_.
-L'IA n'a pas de mémoire native d'une requête à l'autre. Ce module :
+Il implémente l'ingestion et la recherche documentaire.
 
-- Stocke les échanges `User` <-> `Assistant`.
-- Applique une fenêtre glissante (ex: garde les 10 derniers échanges) pour ne pas saturer le contexte du LLM.
-- Résout les références anaphoriques (transformer "il" ou "ça" en l'objet mentionné précédemment).
+- **Ingestion** : Découpe le texte (Chunking), calcule les vecteurs (BERT/All-MiniLM), et stocke le tout.
+- **Retrieval** : Utilise la similarité cosinus pour trouver les morceaux de texte pertinents.
+- **Backend** : Utilise une abstraction pour switcher entre `GraphStore` (Surreal) et `QdrantMemory`.
 
-## 💾 4. Le Stockage de Mémoire (`memory_store.rs`)
+### 3. Gestionnaire de Session (`conversation_manager.rs`)
 
-_Persistance_.
-Assure que les conversations ne sont pas perdues au redémarrage de l'application. Il sérialise l'état du `ConversationManager` vers le système de fichiers (JSON ou Bincode).
+- Gère l'historique `User` <-> `Assistant`.
+- Implémente une **fenêtre glissante** (par défaut ~10 échanges) pour ne pas saturer le LLM avec de vieilles discussions.
 
 ---
 
 ## 🚀 Commandes de Test
 
-### Tester le Retriever Symbolique
+### Tester l'ensemble du contexte (Unitaires + Intégration)
 
 ```bash
-cargo test context::tests
+# Lance les tests avec SurrealDB (par défaut)
+cargo test ai::context -- --nocapture
+
+# Lance les tests avec Qdrant (nécessite Docker)
+cargo test ai::context -- --ignored
 
 ```
 
-### Tester le Pipeline RAG Complet
+### Tester l'Orchestrateur (Pipeline complet simulé)
 
 ```bash
-cargo test rag_integration_test
+cargo test ai::orchestrator
 
 ```
 
 ---
 
-## 🛠️ État d'avancement & Roadmap
+## 🛠️ État d'avancement
 
-- [x] **Retriever Symbolique** : Fonctionnel (Recherche par mots-clés).
-- [x] **RAG Sémantique** : Fonctionnel (Connexion Qdrant + FastEmbed).
-- [ ] **Conversation Manager** : À implémenter (Structure de données `ChatHistory`).
-- [ ] **Memory Store** : À implémenter (Sauvegarde JSON locale dans `.raise/chats/`).
-- [ ] **Orchestrateur Unifié** : Fusionner les 4 sources avant l'envoi au LLM.
+- [x] **Retriever Symbolique** : Fonctionnel.
+- [x] **RAG Sémantique** : Fonctionnel (Multi-Backend).
+- [x] **Conversation Manager** : Fonctionnel (Sliding Window).
+- [x] **Memory Store** : Fonctionnel (Persistance JSON).
+- [x] **Orchestrateur** : Fonctionnel (Router + Context Guard).
+- [x] **Intégration GraphStore** : Fonctionnel (Hybrid Search).
+
+```
+
+```

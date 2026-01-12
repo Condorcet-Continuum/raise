@@ -1,90 +1,110 @@
-# Module de Conformité (Compliance)
+# Module de Conformité (Compliance) 🛡️
 
-Ce module est responsable de la **vérification statique** des modèles d'architecture système (Arcadia). Il analyse le graphe des éléments (Fonctions, Composants, Exigences) pour s'assurer qu'ils respectent les règles définies par des standards industriels critiques (Avionique, Automobile, IA).
+Ce module constitue le "moteur de jugement" du système RAISE. Il est responsable de la **vérification statique et structurelle** des modèles d'architecture Arcadia. Son rôle est de transformer des règles normatives complexes (DO-178C, ISO-26262, AI Act) en algorithmes de vérification automatisés s'appuyant sur le graphe de traçabilité.
 
-## 📋 Standards Supportés
+## 🏗️ Architecture du Moteur
 
-Le moteur est conçu pour être extensible. Actuellement, les vérificateurs (Checkers) suivants sont implémentés :
+Le module utilise une architecture par "Checkers" interchangeables. Chaque standard est encapsulé dans une structure implémentant le trait `ComplianceChecker`.
 
-### 1. DO-178C (Avionique)
+```mermaid
+graph TD
+    ProjectModel[ProjectModel] -->|Analyse| Engine[Moteur de Conformité]
 
-_Fichier : `do_178c.rs`_
-Se concentre sur la traçabilité des exigences logicielles.
+    subgraph Checkers ["Standards (Checkers)"]
+        direction LR
+        DO["DO-178C<br/>(Aéro)"]
+        ISO["ISO-26262<br/>(Auto)"]
+        EU["EU AI Act<br/>(Réglementaire)"]
+        GOV["AI Gov<br/>(Technique)"]
+    end
 
-- **Règle HLR-01 :** Tout composant de l'Architecture Physique (PA - Software Component) doit avoir un lien de traçabilité explicite (allocation ou réalisation) vers une fonction ou un composant logique (Exigences de haut niveau).
+    Engine --> DO & ISO & EU & GOV
 
-### 2. ISO-26262 (Automobile)
+    DO & ISO & EU & GOV -->|Génère| Report[ComplianceReport]
 
-_Fichier : `iso_26262.rs`_
-Gère la sécurité fonctionnelle et les niveaux d'intégrité (ASIL).
+    subgraph Results ["Structure du Rapport"]
+        Report --> PassFail["Statut (Pass/Fail)"]
+        Report --> Violations["Liste des Violations"]
+        Violations --> Severity["Sévérité (Critical, High...)"]
+    end
 
-- **Règle ASIL-D :** Si une fonction est marquée avec un niveau `ASIL=D`, elle doit obligatoirement définir une propriété `safetyMechanism` pour mitiger les risques.
+```
 
-### 3. IEC-61508 (Industriel)
+## 📋 Standards et Règles Implémentés
 
-_Fichier : `iec_61508.rs`_
-Structure de base pour la sécurité fonctionnelle des systèmes électroniques/programmables (en cours d'implémentation).
+Le module couvre actuellement quatre domaines critiques :
 
-### 4. EU AI Act (Régulation IA)
+### 1. Aéronautique : DO-178C
 
-_Fichier : `eu_ai_act.rs`_
-Assure la transparence et la traçabilité technique des systèmes d'Intelligence Artificielle.
+_Fichier : `do_178c.rs_`
+Ce vérificateur s'assure que le logiciel est entièrement justifié par des besoins système.
 
-- **Règle AI-ACT-TRANS-01 :** Tout composant identifié comme modèle d'IA (`type="AI_Model"`) doit posséder une référence valide vers une preuve d'explicabilité (**XAI Frame**) pour garantir qu'il n'est pas une "boîte noire" totale.
+- **Règle TRACE-01 (Couverture) :** Toute "Fonction Système" (SA) doit être allouée à au moins un "Composant Logique" (LA).
+- **Objectif :** Éliminer le "Dead Code" et garantir que chaque fonction implémentée répond à une exigence certifiable.
+
+### 2. Automobile : ISO-26262
+
+_Fichier : `iso_26262.rs_`
+Gère la sécurité fonctionnelle via les niveaux d'intégrité ASIL (Automotive Safety Integrity Level).
+
+- **Règle ASIL-D :** Si un composant est marqué comme critique (`safety_critical: true`), il doit impérativement posséder un attribut `asil` défini.
+- **Objectif :** Garantir que les composants à haut risque (freinage, direction) disposent des mécanismes de sécurité appropriés.
+
+### 3. Réglementation IA : EU AI Act
+
+_Fichier : `eu_ai_act.rs_`
+Se concentre sur la transparence et la classification des systèmes d'Intelligence Artificielle.
+
+- **Règle RISK-01 :** Tout composant identifié comme `AI_Model` doit posséder une classification de risque (`risk_level`).
+- **Objectif :** Assurer la conformité avec la législation européenne sur les systèmes à haut risque.
+
+### 4. Gouvernance Technique : AI Governance
+
+_Fichier : `ai_governance.rs_`C'est le lien entre la traçabilité et le module`AI Assurance`.
+
+- **Règle GOV-CHECK :** Vérifie que chaque modèle IA est lié à un **Quality Report** (statut "Pass") et à une **XAI Frame** (explicabilité).
+- **Objectif :** Empêcher l'utilisation de modèles "boîtes noires" ou non validés techniquement.
 
 ---
 
-## Architecture Technique
+## 🔄 Fonctionnement des Vérifications
 
-Le système repose sur le trait `ComplianceChecker`. Chaque standard est une structure qui implémente ce trait.
+Le module n'analyse pas seulement les propriétés isolées, il utilise le `Tracer` pour explorer les relations :
+
+1. **Analyse Amont (Upstream) :** Remonter depuis un composant pour trouver sa source (Exigence/Fonction).
+2. **Analyse Aval (Downstream) :** Descendre depuis une exigence pour vérifier son implémentation.
+
+---
+
+## 🛠️ Guide d'Extension
+
+Pour ajouter une nouvelle norme (ex: _IEC-62304_ pour le médical) :
+
+1. **Créer le fichier** : `src/traceability/compliance/iec_62304.rs`.
+2. **Implémenter `ComplianceChecker**` :
 
 ```rust
-pub trait ComplianceChecker {
-    /// Nom lisible du standard
-    fn name(&self) -> &str;
-
-    /// Exécute l'analyse sur le modèle complet et retourne un rapport
-    fn check(&self, model: &ProjectModel) -> ComplianceReport;
+impl ComplianceChecker for Iec62304Checker {
+    fn name(&self) -> &str { "IEC-62304" }
+    fn check(&self, model: &ProjectModel) -> ComplianceReport {
+        // Utiliser le Tracer pour vérifier les liens...
+    }
 }
+
 ```
 
-### Structures de Données
-
-- **ComplianceReport** : Résultat global contenant le statut (Pass/Fail) et la liste des violations.
-- **Violation** : Détail d'une erreur incluant l'ID de l'élément fautif, l'ID de la règle enfreinte, une description et la sévérité.
+3. **Enregistrer** : Ajouter `pub mod iec_62304;` dans `mod.rs`.
 
 ---
 
-## 🛠 Comment ajouter un nouveau standard
+## 🚀 Tests et Validation
 
-Pour ajouter un nouveau standard (par exemple, _ECSS_ pour le spatial) :
-
-1.  **Créer le fichier** : Ajoutez `src-tauri/src/traceability/compliance/ecss.rs`.
-2.  **Implémenter le Trait** :
-
-    ```rust
-    use super::{ComplianceChecker, ComplianceReport, Violation};
-    use crate::model_engine::types::ProjectModel;
-
-    pub struct EcssChecker;
-
-    impl ComplianceChecker for EcssChecker {
-        fn name(&self) -> &str { "ECSS-E-ST-40C" }
-        fn check(&self, model: &ProjectModel) -> ComplianceReport {
-            // Logique de vérification ici...
-        }
-    }
-    ```
-
-3.  **Enregistrer le module** : Ajoutez `pub mod ecss;` dans `mod.rs`.
-4.  **Intégrer au Rapport** : Ajoutez le checker dans la liste `checkers` du fichier `../reporting/audit_report.rs`.
-
----
-
-## Tests
-
-Les tests unitaires sont situés directement dans les fichiers sources (`#[cfg(test)]`). Pour lancer les tests de conformité uniquement :
+Chaque fichier de conformité contient sa propre suite de tests unitaires pour valider les heuristiques de détection.
 
 ```bash
-cargo test traceability::compliance
+# Lancer tous les tests du module de conformité
+cargo test traceability::compliance -- --nocapture
+
 ```
+
+---

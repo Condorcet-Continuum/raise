@@ -6,16 +6,12 @@ use crate::json_db::jsonld::JsonLdProcessor;
 use crate::json_db::storage::StorageEngine;
 use anyhow::Result;
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use tauri::State;
 
-// Import absolu pour la sécurité
-use crate::model_engine::types::{
-    ArcadiaElement, DataLayer, EPBSLayer, LogicalArchitectureLayer, NameType,
-    OperationalAnalysisLayer, PhysicalArchitectureLayer, ProjectMeta, ProjectModel,
-    SystemAnalysisLayer,
-};
+// Import des types unifiés
+use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
 
 pub struct ModelLoader<'a> {
     manager: CollectionsManager<'a>,
@@ -23,14 +19,12 @@ pub struct ModelLoader<'a> {
 }
 
 impl<'a> ModelLoader<'a> {
-    // --- CONSTRUCTEURS UNIFIÉS ---
+    // --- CONSTRUCTEURS ---
 
-    /// Pour Tauri (State)
     pub fn new(storage: &'a State<'_, StorageEngine>, space: &str, db: &str) -> Self {
         Self::from_engine(storage.inner(), space, db)
     }
 
-    /// Pour les Commandes (Thread Background) - Rétabli pour model_commands.rs
     pub fn from_engine(storage: &'a StorageEngine, space: &str, db: &str) -> Self {
         Self {
             manager: CollectionsManager::new(storage, space, db),
@@ -38,7 +32,6 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
-    /// Pour les Tests (Manager déjà init)
     pub fn new_with_manager(manager: CollectionsManager<'a>) -> Self {
         Self {
             manager,
@@ -46,22 +39,86 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
-    // --- MÉTHODE PRINCIPALE ---
+    // --- LOGIQUE D'HYDRATATION (Pour la génération de code) ---
 
-    /// Charge tout le modèle (Nom unifié : load_full_model)
+    pub fn fetch_hydrated_element(&self, element_id: &str) -> Result<Value> {
+        // 1. Récupération de l'objet brut
+        let mut element = self
+            .find_raw_element(element_id)
+            .ok_or_else(|| anyhow::anyhow!("Élément introuvable : {}", element_id))?;
+
+        // 2. Hydratation des relations clés
+        let relations_to_hydrate = [
+            "ownedFunctionalAllocation",
+            "ownedLogicalComponents",
+            "ownedSystemComponents",
+            "base_class",
+            "incomingFunctionalExchanges",
+            "outgoingFunctionalExchanges",
+        ];
+
+        for rel in relations_to_hydrate {
+            self.hydrate_relation(&mut element, rel)?;
+        }
+
+        Ok(element)
+    }
+
+    fn find_raw_element(&self, id: &str) -> Option<Value> {
+        // Recherche dans toutes les collections probables
+        let collections = ["la", "pa", "sa", "oa", "epbs", "data", "common"];
+        for col_name in collections {
+            if let Ok(Some(doc)) = self.manager.get_document(col_name, id) {
+                return Some(doc);
+            }
+        }
+        None
+    }
+
+    fn hydrate_relation(&self, element: &mut Value, field: &str) -> Result<()> {
+        let relations_opt = element.get(field).cloned();
+
+        if let Some(relations) = relations_opt {
+            if let Some(arr) = relations.as_array() {
+                let mut hydrated_list = Vec::new();
+                for item in arr {
+                    // Supporte soit un string ID, soit un objet {"target": "ID"}
+                    let target_id = if let Some(s) = item.as_str() {
+                        Some(s)
+                    } else {
+                        item.get("target").and_then(|v| v.as_str())
+                    };
+
+                    if let Some(tid) = target_id {
+                        if let Some(obj) = self.find_raw_element(tid) {
+                            hydrated_list.push(obj);
+                        } else {
+                            hydrated_list.push(item.clone());
+                        }
+                    }
+                }
+                if !hydrated_list.is_empty() {
+                    element[field] = json!(hydrated_list);
+                }
+            } else if let Some(s) = relations.as_str() {
+                if let Some(obj) = self.find_raw_element(s) {
+                    element[field] = obj;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // --- CHARGEMENT DU MODÈLE COMPLET ---
+
     pub fn load_full_model(&self) -> Result<ProjectModel> {
         let mut model = ProjectModel {
-            oa: OperationalAnalysisLayer::default(),
-            sa: SystemAnalysisLayer::default(),
-            la: LogicalArchitectureLayer::default(),
-            pa: PhysicalArchitectureLayer::default(),
-            epbs: EPBSLayer::default(),
-            data: DataLayer::default(),
             meta: ProjectMeta {
                 name: format!("{}/{}", self.manager.space, self.manager.db),
                 loaded_at: Utc::now().to_rfc3339(),
                 element_count: 0,
             },
+            ..Default::default() // Les autres champs (oa, sa...) prennent leur valeur par défaut
         };
 
         if let Ok(collections) = self.manager.list_collections() {
@@ -69,6 +126,7 @@ impl<'a> ModelLoader<'a> {
                 if col_name.starts_with('_') {
                     continue;
                 }
+
                 if let Ok(docs) = self.manager.list_all(&col_name) {
                     for doc in docs {
                         if let Ok(element) = self.process_document_semantically(doc) {
@@ -92,6 +150,7 @@ impl<'a> ModelLoader<'a> {
         let type_uri = self.processor.get_type(&expanded).unwrap_or_default();
         let compacted = self.processor.compact(&doc);
 
+        // Gestion du Nom (String ou I18n)
         let name_val = compacted
             .get("name")
             .or_else(|| compacted.get("http://www.w3.org/2004/02/skos/core#prefLabel"))
@@ -100,12 +159,19 @@ impl<'a> ModelLoader<'a> {
 
         let name = NameType::String(name_val.to_string());
 
+        // Gestion de la Description (explicite dans types.rs maintenant)
+        let description = compacted
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // Propriétés additionnelles
         let obj = compacted
             .as_object()
             .ok_or(anyhow::anyhow!("Not an object"))?;
         let mut properties = HashMap::new();
         for (k, v) in obj {
-            if !k.starts_with('@') {
+            if !k.starts_with('@') && k != "description" && k != "name" {
                 properties.insert(k.clone(), v.clone());
             }
         }
@@ -114,36 +180,72 @@ impl<'a> ModelLoader<'a> {
             id,
             name,
             kind: type_uri,
+            description,
             properties,
         })
     }
 
     fn dispatch_element(&self, model: &mut ProjectModel, el: ArcadiaElement) {
         let kind = &el.kind;
+
+        // Dispatching basé sur les URIs Arcadia
+        // Note: On pourrait utiliser ArcadiaSemantics::get_layer() ici pour simplifier
         if kind == &arcadia_types::uri(namespaces::OA, arcadia_types::OA_ACTOR) {
             model.oa.actors.push(el);
         } else if kind == &arcadia_types::uri(namespaces::OA, arcadia_types::OA_ACTIVITY) {
             model.oa.activities.push(el);
-        } else if kind == &arcadia_types::uri(namespaces::OA, arcadia_types::OA_CAPABILITY) {
-            model.oa.capabilities.push(el);
         } else if kind == &arcadia_types::uri(namespaces::SA, arcadia_types::SA_FUNCTION) {
             model.sa.functions.push(el);
-        } else if kind == &arcadia_types::uri(namespaces::SA, arcadia_types::SA_ACTOR) {
-            model.sa.actors.push(el);
         } else if kind == &arcadia_types::uri(namespaces::SA, arcadia_types::SA_COMPONENT) {
             model.sa.components.push(el);
         } else if kind == &arcadia_types::uri(namespaces::LA, arcadia_types::LA_COMPONENT) {
             model.la.components.push(el);
         } else if kind == &arcadia_types::uri(namespaces::PA, arcadia_types::PA_COMPONENT) {
             model.pa.components.push(el);
-        } else if kind == &arcadia_types::uri(namespaces::DATA, arcadia_types::EXCHANGE_ITEM) {
-            model.data.exchange_items.push(el);
         } else if kind == &arcadia_types::uri(namespaces::DATA, arcadia_types::DATA_CLASS) {
             model.data.classes.push(el);
-        } else if kind == &arcadia_types::uri(namespaces::DATA, arcadia_types::DATA_TYPE) {
-            model.data.data_types.push(el);
-        } else if kind.ends_with("Actor") {
-            model.oa.actors.push(el);
+        } else {
+            // Fallback pour les types moins courants ou génériques
+            if kind.contains("Actor") {
+                model.oa.actors.push(el);
+            } else if kind.contains("Function") {
+                model.sa.functions.push(el);
+            } else if kind.contains("Component") {
+                model.la.components.push(el);
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_fetch_hydrated_element() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let manager = CollectionsManager::new(&storage, "test_space", "test_db");
+
+        // Création données
+        let comp = json!({
+            "id": "COMP_A",
+            "name": "Main",
+            "ownedFunctionalAllocation": ["FUNC_1"]
+        });
+        let func = json!({ "id": "FUNC_1", "name": "Compute" });
+
+        manager.insert_raw("la", &comp).unwrap();
+        manager.insert_raw("sa", &func).unwrap();
+
+        // Test
+        let loader = ModelLoader::new_with_manager(manager);
+        let hydrated = loader.fetch_hydrated_element("COMP_A").unwrap();
+
+        let allocs = hydrated["ownedFunctionalAllocation"].as_array().unwrap();
+        assert_eq!(allocs[0]["name"], "Compute");
     }
 }

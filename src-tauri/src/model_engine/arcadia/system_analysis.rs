@@ -1,5 +1,5 @@
 use crate::arcadia_element;
-use crate::model_engine::common::ElementRef;
+use crate::model_engine::arcadia::common::ElementRef;
 
 // --- System Component (Le Système) ---
 arcadia_element!(SystemComponent {
@@ -53,7 +53,7 @@ arcadia_element!(SystemCapability {
 });
 
 // --- Functional Exchange (SA) ---
-arcadia_element!(FunctionalExchange {
+arcadia_element!(SystemFunctionalExchange {
     source: ElementRef,
     target: ElementRef,
 
@@ -63,3 +63,36 @@ arcadia_element!(FunctionalExchange {
     #[serde(rename = "realizedExchanges", default)]
     realized_exchanges: Vec<ElementRef>
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model_engine::arcadia::common::{BaseEntity, I18nString};
+    use crate::model_engine::arcadia::metamodel::ArcadiaProperties;
+
+    #[test]
+    fn test_system_function_instantiation() {
+        let func = SystemFunction {
+            base: BaseEntity {
+                id: "sf-1".to_string(),
+                created_at: String::new(),
+                modified_at: String::new(),
+            },
+            props: ArcadiaProperties {
+                xmi_id: None,
+                name: I18nString::String("Compute".to_string()),
+                description: None,
+                summary: None,
+                tags: vec![],
+                property_values: vec![],
+            },
+            realized_activities: vec![],
+            allocated_to: vec!["sys-1".to_string()],
+            inputs: vec![],
+            outputs: vec![],
+        };
+
+        assert_eq!(func.allocated_to.len(), 1);
+        assert_eq!(func.props.name, I18nString::String("Compute".to_string()));
+    }
+}

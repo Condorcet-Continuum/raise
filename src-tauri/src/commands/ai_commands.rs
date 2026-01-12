@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/commands/ai_commands.rs
+
 use crate::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use crate::ai::agents::{
     business_agent::BusinessAgent, data_agent::DataAgent, epbs_agent::EpbsAgent,
@@ -11,13 +13,15 @@ use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::storage::StorageEngine;
 use tokio::sync::Mutex; // Async Mutex
 
+// Import pour le Moteur Natif
+use crate::ai::llm::NativeLlmState;
+
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc; // Standard Arc
 use tauri::{command, State};
 
 // --- DÉFINITION DE L'ÉTAT GLOBAL (PROPRIÉTÉ PARTAGÉE) ---
-// On utilise une structure tuple pour envelopper le Mutex
 // Type = Un Mutex qui contient (peut-être) un Pointeur Partagé vers un Mutex qui contient l'Orchestrateur
 pub struct AiState(pub Mutex<Option<Arc<Mutex<AiOrchestrator>>>>);
 
@@ -39,6 +43,32 @@ pub async fn ai_reset(ai_state: State<'_, AiState>) -> Result<(), String> {
         orchestrator.clear_history().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+// [NOUVEAU] Commande pour apprendre un document (RAG)
+#[command]
+pub async fn ai_learn_text(
+    ai_state: State<'_, AiState>,
+    content: String,
+    source: String,
+) -> Result<String, String> {
+    let guard = ai_state.0.lock().await;
+
+    if let Some(shared_orch) = &*guard {
+        let mut orchestrator = shared_orch.lock().await;
+        // Appel à la méthode learn_document de l'orchestrateur
+        let chunks_count = orchestrator
+            .learn_document(&content, &source)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(format!(
+            "Document appris avec succès ({} fragments).",
+            chunks_count
+        ))
+    } else {
+        Err("L'IA n'est pas initialisée.".to_string())
+    }
 }
 
 /// Commande principale : Retourne un AgentResult structuré
@@ -64,6 +94,9 @@ pub async fn ai_chat(
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap().join("dataset"));
 
+    // Note : On recrée un client ici pour le classifier d'intentions.
+    // Idéalement, l'Orchestrateur pourrait exposer son propre classifier,
+    // mais on garde cette séparation pour l'instant (Agents vs Orchestrateur).
     let client = LlmClient::new(&local_url, &gemini_key, model_name.clone());
 
     // 2. Classification
@@ -79,6 +112,7 @@ pub async fn ai_chat(
 
     // 3. Routage
     let result = match intent {
+        // --- ROUTAGE VERS LES AGENTS SPÉCIALISÉS (CRUD ARCADIA) ---
         EngineeringIntent::DefineBusinessUseCase { .. } => {
             BusinessAgent::new().process(&ctx, &intent).await
         }
@@ -106,8 +140,8 @@ pub async fn ai_chat(
         }
         EngineeringIntent::GenerateCode { .. } => SoftwareAgent::new().process(&ctx, &intent).await,
 
+        // --- ROUTAGE VERS L'ORCHESTRATEUR (RAG / CONVERSATION) ---
         EngineeringIntent::Unknown | EngineeringIntent::Chat => {
-            // --- ACCÈS À L'ORCHESTRATEUR VIA ARC ---
             let guard = ai_state.0.lock().await;
 
             if let Some(shared_orch) = &*guard {
@@ -132,5 +166,30 @@ pub async fn ai_chat(
         Ok(Some(res)) => Ok(res),
         Ok(None) => Ok(AgentResult::text("Aucune action effectuée.".to_string())),
         Err(e) => Err(format!("Erreur Agent : {}", e)),
+    }
+}
+
+// --- COMMANDE NATIVE (Llama 3.2 1B) ---
+#[command]
+pub async fn ask_native_llm(
+    state: State<'_, NativeLlmState>,
+    system_prompt: String,
+    user_prompt: String,
+) -> Result<String, String> {
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "Erreur critique : Verrouillage du moteur impossible".to_string())?;
+
+    if let Some(engine) = guard.as_mut() {
+        match engine.generate(&system_prompt, &user_prompt, 1000) {
+            Ok(response) => Ok(response),
+            Err(e) => Err(format!("Erreur lors de la génération native : {}", e)),
+        }
+    } else {
+        Err(
+            "Le modèle IA natif est encore en cours de chargement... Veuillez patienter."
+                .to_string(),
+        )
     }
 }

@@ -2,7 +2,10 @@ use crate::ai::llm::client::{LlmBackend, LlmClient};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+// Import de la Toolbox pour le parsing JSON robuste
+use super::tools::extract_json_from_llm;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "intent")]
 pub enum EngineeringIntent {
     #[serde(rename = "define_business_use_case")]
@@ -23,7 +26,6 @@ pub enum EngineeringIntent {
         target_name: String,
         relation_type: String,
     },
-    // CORRECTION 1 : On accepte explicitement "generate_code" ET l'alias "create_code"
     #[serde(rename = "generate_code", alias = "create_code")]
     GenerateCode {
         language: String,
@@ -50,15 +52,7 @@ impl IntentClassifier {
         let lower_input = user_input.to_lowercase();
 
         // --- 1. COURT-CIRCUIT (Optimisation CPU & Déterminisme) ---
-
-        // Code Generation (Si explicite)
-        if (lower_input.contains("génère") || lower_input.contains("generate"))
-            && lower_input.contains("code")
-        {
-            // On laisse le LLM faire le parsing fin (langage, filename),
-            // mais on pourrait court-circuiter ici si on voulait être agressif.
-            // Pour l'instant, on laisse passer au LLM ou Fallback.
-        }
+        // On évite le LLM si l'intention est évidente via des mots-clés forts.
 
         // TRANSVERSE (Exigences, Tests)
         if lower_input.contains("exigence") || lower_input.contains("requirement") {
@@ -127,17 +121,19 @@ impl IntentClassifier {
             .await
             .unwrap_or_else(|_| "{}".to_string());
 
-        let clean_json = extract_json(&response);
+        // UTILISATION DE LA TOOLBOX ICI (Plus de code dupliqué)
+        let clean_json = extract_json_from_llm(&response);
         let mut json_value: Value = serde_json::from_str(&clean_json).unwrap_or(json!({}));
 
         // --- MODE SECOURS (HEURISTIQUE) ---
         // Si le LLM échoue à produire un JSON valide avec un "intent"
         if json_value.get("intent").is_none() {
-            println!("⚠️  LLM confus, activation du mode heuristique.");
+            // println!("⚠️  LLM confus, activation du mode heuristique."); // Log optionnel
             json_value = heuristic_fallback(user_input);
         }
 
         // --- CORRECTIONS IMPÉRATIVES (OVERRIDES POST-LLM) ---
+        // Corrige les erreurs fréquentes du LLM sur les couches
         if let Some(intent) = json_value["intent"].as_str() {
             if intent == "create_element" || intent == "create_system" {
                 if lower_input.contains("exigence") || lower_input.contains("requirement") {
@@ -170,17 +166,14 @@ impl IntentClassifier {
             }
         }
 
-        // Nom par défaut
+        // Nom par défaut si manquant
         if json_value["intent"] == "create_element" && json_value.get("name").is_none() {
             json_value["name"] = json!(user_input.replace("Crée ", "").replace("le ", "").trim());
         }
 
         match serde_json::from_value::<EngineeringIntent>(json_value) {
             Ok(intent) => intent,
-            Err(e) => {
-                println!("❌ Echec total classification : {}", e);
-                EngineeringIntent::Unknown
-            }
+            Err(_) => EngineeringIntent::Unknown,
         }
     }
 }
@@ -208,11 +201,10 @@ fn extract_name(input: &str, keyword: &str) -> String {
 fn heuristic_fallback(input: &str) -> Value {
     let lower = input.to_lowercase();
 
-    // CORRECTION 2 : Gestion du cas "Générer Code" dans le fallback
     if lower.contains("code") || lower.contains("génère") || lower.contains("generate") {
         return json!({
             "intent": "generate_code",
-            "language": "rust", // Valeur par défaut sensée
+            "language": "rust",
             "filename": "generated_component.rs",
             "context": input
         });
@@ -237,17 +229,42 @@ fn heuristic_fallback(input: &str) -> Value {
     json!({ "intent": "create_element", "layer": layer, "element_type": etype, "name": input })
 }
 
-fn extract_json(text: &str) -> String {
-    let start_index = match text.find('{') {
-        Some(i) => i,
-        None => return text.to_string(),
-    };
-    let end_index = match text.rfind('}') {
-        Some(i) => i,
-        None => return text[start_index..].to_string(),
-    };
-    if end_index > start_index {
-        return text[start_index..=end_index].trim().to_string();
+// --- TESTS UNITAIRES ---
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_name() {
+        assert_eq!(
+            extract_name("Crée une exigence de performance", "exigence"),
+            "performance"
+        );
+        assert_eq!(
+            extract_name("Crée l'exigence l'autonomie", "exigence"),
+            "autonomie"
+        );
+        assert_eq!(
+            extract_name("Nouvelle classe utilisateur", "classe"),
+            "utilisateur"
+        );
     }
-    text.trim().to_string()
+
+    #[test]
+    fn test_heuristic_fallback_code() {
+        let val = heuristic_fallback("Génère code python");
+        assert_eq!(val["intent"], "generate_code");
+        assert_eq!(val["language"], "rust"); // Default hardcodé dans fallback
+    }
+
+    #[test]
+    fn test_heuristic_fallback_create() {
+        let val = heuristic_fallback("Ajoute un composant logiciel");
+        assert_eq!(val["intent"], "create_element");
+        assert_eq!(val["layer"], "LA");
+        assert_eq!(val["element_type"], "Component");
+    }
+
+    // Le test de `classify` complet nécessiterait de mocker LlmClient,
+    // ce qui est complexe ici. Mais on a testé les briques logiques (extract_name, fallback).
 }

@@ -1,5 +1,5 @@
 use crate::arcadia_element;
-use crate::model_engine::common::ElementRef;
+use crate::model_engine::arcadia::common::ElementRef;
 
 // --- Logical Component ---
 arcadia_element!(LogicalComponent {
@@ -53,7 +53,7 @@ arcadia_element!(LogicalActor {
 });
 
 // --- Functional Exchange (LA) ---
-arcadia_element!(FunctionalExchange {
+arcadia_element!(LogicalFunctionalExchange {
     source: ElementRef,
     target: ElementRef,
 
@@ -68,7 +68,7 @@ arcadia_element!(FunctionalExchange {
 });
 
 // --- Component Exchange (Logique) ---
-arcadia_element!(ComponentExchange {
+arcadia_element!(LogicalComponentExchange {
     source: ElementRef,
     target: ElementRef,
 
@@ -90,3 +90,38 @@ arcadia_element!(LogicalInterface {
     #[serde(rename = "exchangeItems", default)]
     exchange_items: Vec<ElementRef>
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model_engine::arcadia::common::{BaseEntity, I18nString};
+    use crate::model_engine::arcadia::metamodel::ArcadiaProperties;
+
+    #[test]
+    fn test_logical_component_structure() {
+        let comp = LogicalComponent {
+            base: BaseEntity {
+                id: "lc-1".into(),
+                created_at: "".into(),
+                modified_at: "".into(),
+            },
+            props: ArcadiaProperties {
+                xmi_id: None,
+                name: I18nString::String("Controller".into()),
+                description: None,
+                summary: None,
+                tags: vec![],
+                property_values: vec![],
+            },
+            is_abstract: false,
+            sub_components: vec![],
+            allocated_functions: vec!["lf-1".into()],
+            realized_system_components: vec![],
+            provided_interfaces: vec![],
+            required_interfaces: vec![],
+        };
+
+        assert_eq!(comp.props.name, I18nString::String("Controller".into()));
+        assert!(comp.allocated_functions.contains(&"lf-1".to_string()));
+    }
+}

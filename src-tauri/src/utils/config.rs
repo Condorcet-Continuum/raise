@@ -3,7 +3,7 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// Singleton global pour la configuration (accessible partout via AppConfig::get())
+/// Singleton global pour la configuration
 static CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
 #[derive(Debug, Clone)]
@@ -15,33 +15,15 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Charge la configuration depuis l'environnement (.env).
-    /// Doit être appelé au démarrage dans le main.rs.
+    /// Charge la configuration depuis l'environnement réel (.env + Vars système).
     pub fn init() -> Result<()> {
-        // Charge le fichier .env s'il existe
+        // 1. Charge le fichier .env
         dotenvy::dotenv().ok();
 
-        let config = AppConfig {
-            env_mode: env::var("APP_ENV").unwrap_or_else(|_| "development".to_string()),
+        // 2. Construit la config en utilisant la vraie fonction std::env::var
+        let config = Self::build_from_source(|key| env::var(key).ok());
 
-            // Chemin critique : Stockage des données (~/raise_domain par défaut)
-            database_root: env::var("PATH_RAISE_DOMAIN")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    dirs::home_dir()
-                        .unwrap_or(PathBuf::from("."))
-                        .join("raise_domain")
-                }),
-
-            // URL par défaut pour le LLM local (Docker/llama.cpp)
-            llm_api_url: env::var("RAISE_LOCAL_URL")
-                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
-
-            // Clé API optionnelle (pour le Cloud Gemini/OpenAI)
-            llm_api_key: env::var("RAISE_GEMINI_KEY").ok(),
-        };
-
-        // On initialise le singleton. Si déjà fait, on renvoie une erreur.
+        // 3. Initialise le singleton
         CONFIG
             .set(config)
             .map_err(|_| AppError::Config("La configuration a déjà été initialisée".to_string()))?;
@@ -54,51 +36,81 @@ impl AppConfig {
         Ok(())
     }
 
-    /// Accesseur global sécurisé (panique avec message clair si init() oublié)
+    /// Accesseur global
     pub fn get() -> &'static AppConfig {
         CONFIG
             .get()
             .expect("AppConfig non initialisé ! Appelez AppConfig::init() au début du main.")
+    }
+
+    /// Méthode "Pure" (sans effets de bord) qui construit la config.
+    fn build_from_source<F>(env_provider: F) -> Self
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        AppConfig {
+            // CORRECTION : || (0 argument) au lieu de |_| (1 argument)
+            env_mode: env_provider("APP_ENV").unwrap_or_else(|| "development".to_string()),
+
+            database_root: env_provider("PATH_RAISE_DOMAIN")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    // CORRECTION : ||
+                    // Fallback sur le dossier home
+                    dirs::home_dir()
+                        .unwrap_or(PathBuf::from("."))
+                        .join("raise_domain")
+                }),
+
+            llm_api_url: env_provider("RAISE_LOCAL_URL")
+                .unwrap_or_else(|| "http://localhost:8080".to_string()), // CORRECTION : ||
+
+            llm_api_key: env_provider("RAISE_GEMINI_KEY"),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+    use std::path::PathBuf;
 
-    // Note : Comme AppConfig est un Singleton (OnceLock), on ne peut l'initialiser
-    // qu'une seule fois par processus de test. On fait donc un test unique et complet.
     #[test]
-    fn test_config_initialization() {
-        // 1. Préparer l'environnement simulé
-        // On force des valeurs spécifiques pour être sûr que le test soit indépendant du fichier .env réel
-        env::set_var("APP_ENV", "test_mode");
-        env::set_var("RAISE_LOCAL_URL", "http://127.0.0.1:9090");
-        env::set_var("RAISE_GEMINI_KEY", "test_key_forced"); // On force une clé bidon
+    fn test_config_logic_pure() {
+        // 1. Définir un "Mock" de l'environnement via une simple closure
+        let mock_env = |key: &str| -> Option<String> {
+            match key {
+                "APP_ENV" => Some("test_pure_mode".to_string()),
+                "RAISE_LOCAL_URL" => Some("http://mock-url:1234".to_string()),
+                "RAISE_GEMINI_KEY" => Some("secret_mock_key".to_string()),
+                "PATH_RAISE_DOMAIN" => Some("/tmp/mock_domain".to_string()),
+                _ => None,
+            }
+        };
 
-        // 2. Initialiser
-        let init_result = AppConfig::init();
+        // 2. Construire la config avec ce mock
+        let config = AppConfig::build_from_source(mock_env);
 
-        // Gestion du Singleton : si déjà init par un autre test, ce n'est pas grave
-        if init_result.is_ok() {
-            // Si c'est nous qui l'avons initialisé, on vérifie que nos vars sont prises en compte
-            let config = AppConfig::get();
-            assert_eq!(config.env_mode, "test_mode");
-            assert_eq!(config.llm_api_url, "http://127.0.0.1:9090");
+        // 3. Vérifications
+        assert_eq!(config.env_mode, "test_pure_mode");
+        assert_eq!(config.llm_api_url, "http://mock-url:1234");
+        assert_eq!(config.llm_api_key, Some("secret_mock_key".to_string()));
+        assert_eq!(config.database_root, PathBuf::from("/tmp/mock_domain"));
+    }
 
-            // Correction ici : on vérifie que la config a bien lu notre variable forcée
-            // au lieu de vérifier qu'elle est vide.
-            assert_eq!(config.llm_api_key, Some("test_key_forced".to_string()));
+    #[test]
+    fn test_config_defaults() {
+        // Test pour vérifier les valeurs par défaut (quand les variables manquent)
+        let empty_env = |_: &str| -> Option<String> { None };
 
-            assert!(config
-                .database_root
-                .to_string_lossy()
-                .contains("raise_domain"));
-        } else {
-            // Si la config était déjà chargée (par un autre test en parallèle),
-            // on ne peut pas garantir les valeurs, donc on ignore ou on vérifie juste que ça existe.
-            assert!(CONFIG.get().is_some());
-        }
+        let config = AppConfig::build_from_source(empty_env);
+
+        assert_eq!(config.env_mode, "development");
+        assert_eq!(config.llm_api_url, "http://localhost:8080");
+        assert!(config.llm_api_key.is_none());
+        assert!(config
+            .database_root
+            .to_string_lossy()
+            .ends_with("raise_domain"));
     }
 }

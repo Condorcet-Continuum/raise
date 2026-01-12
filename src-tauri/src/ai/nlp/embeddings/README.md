@@ -1,38 +1,69 @@
 # 🧠 NLP Embeddings Engine
 
-Ce module gère la vectorisation de texte (Text Embedding), brique fondamentale du système RAG (Retrieval-Augmented Generation) de RAISE. Il transforme le langage naturel en vecteurs mathématiques comparables.
+Ce module gère la vectorisation de texte (Text Embedding), brique fondamentale du système RAG (Retrieval-Augmented Generation) de RAISE. Il transforme le langage naturel en vecteurs mathématiques comparables pour permettre la recherche sémantique dans Qdrant.
 
 ## 🏗 Architecture
 
-Le moteur utilise un **Pattern Stratégie** pour abstraire l'implémentation sous-jacente. L'interface publique est fournie par `EmbeddingEngine` dans `mod.rs`.
+Le moteur utilise un **Pattern Stratégie** pour abstraire l'implémentation sous-jacente. L'interface publique est fournie par `EmbeddingEngine` dans `mod.rs`. Il sélectionne automatiquement la meilleure implémentation disponible selon l'environnement.
+
+### Diagramme de Flux
+
+```mermaid
+graph TD
+    User[App / RAG Service] -->|Appelle| Init[EmbeddingEngine::new]
+
+    subgraph Selection_Strategy [Stratégie de Sélection]
+        Init --> TryCandle{Tentative Candle?}
+        TryCandle -- "Succès" --> CandleStr[Moteur Candle]
+        TryCandle -- "Échec (Réseau/Conflit)" --> Fallback[Fallback]
+        Fallback --> FastStr[Moteur FastEmbed]
+    end
+
+    subgraph Hardware_Abstraction [Accélération Matérielle]
+        CandleStr -- "macOS ARM" --> Metal[GPU Metal]
+        CandleStr -- "Linux/Win + Nvidia" --> Cuda[GPU CUDA]
+        CandleStr -- "Linux CPU" --> CPU_Rust[CPU Pure Rust]
+        FastStr --> CPU_Onnx[CPU ONNX Runtime]
+    end
+
+    subgraph Pipeline [Traitement Vectoriel]
+        Metal & Cuda & CPU_Rust & CPU_Onnx --> Token[Tokenization]
+        Token --> Infer[Inférence Modèle]
+        Infer --> Norm[Normalisation L2]
+    end
+
+    Norm --> Output([Vecteur 384 dims])
+
+```
 
 ### Moteurs Disponibles
 
-Nous supportons deux backends d'inférence, sélectionnables via l'enum `EngineType` :
-
-#### 1. FastEmbed (Défaut)
-
-- **Fichier** : `fast.rs`
-- **Technologie** : Runtime ONNX (via la crate `fastembed`).
-- **Modèle** : `BAAI/bge-small-en-v1.5`.
-- **Avantages** : Très rapide, optimisé, téléchargement automatique des poids (quantized).
-- **Usage** : Recommandé pour le développement et la production standard.
-
-#### 2. Candle (Pure Rust)
+#### 1. Candle (Pure Rust + GPU/Accelerate) - _Prioritaire_
 
 - **Fichier** : `candle.rs`
-- **Technologie** : Framework ML natif Rust de Hugging Face (`candle-core`, `candle-transformers`).
-- **Modèle** : `sentence-transformers/all-MiniLM-L6-v2`.
-- **Avantages** : Aucune dépendance système (pas de libonnx, pas de C++), idéal pour la compilation croisée ou les environnements restreints.
-- **Fonctionnement** : Télécharge les poids `.safetensors` via `hf-hub`, tokenize, et exécute le graphe BERT manuellement.
+- **Technologie** : Framework ML natif Rust de Hugging Face.
+- **Modèle** : `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions).
+- **Performance** :
+- **macOS (Apple Silicon)** : Utilise l'accélération **Metal** (très rapide).
+- **Linux/Windows (Nvidia)** : Utilise **CUDA** (si configuré).
+- **Linux (CPU)** : Utilise **MKL/OpenBLAS** (via la feature `accelerate` si activée, ou CPU pur).
+
+- **Avantage** : Contrôle total, pas de dépendance Python/ONNX externe, support GPU natif.
+
+#### 2. FastEmbed (ONNX Runtime) - _Fallback_
+
+- **Fichier** : `fast.rs`
+- **Technologie** : Runtime ONNX via la crate `fastembed`.
+- **Modèle** : `BAAI/bge-small-en-v1.5` (384 dimensions).
+- **Usage** : Utilisé si Candle échoue à s'initialiser ou si l'utilisateur force ce mode. Très performant sur CPU standard.
 
 ## 📂 Structure des Fichiers
 
 ```text
 src-tauri/src/ai/nlp/embeddings/
-├── mod.rs       # Façade publique et dispatcher.
-├── fast.rs      # Implémentation ONNX (FastEmbed).
-└── candle.rs    # Implémentation Pure Rust (Candle/BERT).
+├── mod.rs       # Façade publique et logique de sélection (Factory).
+├── fast.rs      # Implémentation CPU-Optimized (FastEmbed/ONNX).
+└── candle.rs    # Implémentation GPU-Capable (Candle/BERT).
 
 ```
 
@@ -42,18 +73,15 @@ src-tauri/src/ai/nlp/embeddings/
 use crate::ai::nlp::embeddings::{EmbeddingEngine, EngineType};
 
 async fn example() -> Result<()> {
-    // 1. Initialisation (Télécharge les modèles au premier lancement)
-    // Par défaut (FastEmbed) :
+    // 1. Initialisation (Auto-détection GPU/CPU)
+    // Télécharge les modèles automatiquement au premier lancement (~90 Mo)
     let mut engine = EmbeddingEngine::new()?;
-
-    // Ou spécifiquement Candle :
-    // let mut engine = EmbeddingEngine::new_with_type(EngineType::Candle)?;
 
     // 2. Vectorisation d'une requête (pour la recherche)
     let query_vec = engine.embed_query("Comment créer un acteur logique ?")?;
-    println!("Vecteur de dimension : {}", query_vec.len()); // ex: 384
+    println!("Vecteur de dimension : {}", query_vec.len()); // Toujours 384
 
-    // 3. Vectorisation par lot (pour l'indexation)
+    // 3. Vectorisation par lot (pour l'indexation massive)
     let docs = vec![
         "L'ingénierie système est complexe.".to_string(),
         "Arcadia définit 5 couches.".to_string()
@@ -65,20 +93,46 @@ async fn example() -> Result<()> {
 
 ```
 
+## ⚙️ Configuration (Cargo.toml)
+
+La performance dépend des "features" activées dans `src-tauri/Cargo.toml`.
+
+### Pour macOS (Apple Silicon)
+
+```toml
+candle-core = { version = "...", features = ["metal", "accelerate"] }
+
+```
+
+### Pour Linux / Windows (NVIDIA)
+
+```toml
+# Nécessite CUDA Toolkit installé (nvcc)
+candle-core = { version = "...", features = ["cuda"] }
+
+```
+
+### Pour Linux / Serveur (CPU Universel)
+
+```toml
+# Configuration par défaut la plus stable
+candle-core = { version = "...", features = [] }
+
+```
+
 ## 📦 Gestion du Cache
 
 Les modèles sont téléchargés automatiquement lors de la première exécution :
 
-- **FastEmbed** : Stocké dans `src-tauri/.fastembed_cache/` (à exclure de Git).
-- **Candle** : Stocké dans le cache standard Hugging Face (`~/.cache/huggingface/hub`).
+- **Candle** : Cache standard Hugging Face (`~/.cache/huggingface/hub`).
+- **FastEmbed** : Cache local `src-tauri/.fastembed_cache/` (ignoré par Git).
 
 ## ⚠️ Notes Techniques
 
-- **Mutabilité** : Les méthodes `embed_batch` et `embed_query` prennent `&mut self` car certains runtimes internes (ou tokenizers) peuvent nécessiter une mutabilité pour le cache interne ou les buffers.
-- **Normalisation** : Les vecteurs de sortie sont normalisés (L2 Norm), ce qui permet d'utiliser le _Cosine Similarity_ via un simple produit scalaire (Dot Product).
+1. **Dimensions** : Les deux moteurs sont configurés pour sortir des vecteurs de taille **384**. C'est la taille standard pour les modèles "Small" (MiniLM, BGE-Small) qui offrent le meilleur compromis vitesse/précision pour du RAG local.
+2. **Normalisation** : Les vecteurs de sortie sont **normalisés (L2 Norm)**. C'est crucial pour que la "Cosine Similarity" (utilisée par Qdrant) fonctionne correctement via un simple produit scalaire.
+3. **Thread Safety** : L'instanciation du moteur peut prendre du temps (chargement modèle). Il est recommandé de l'instancier une fois au démarrage de l'app (dans le `State` Tauri) et de le réutiliser.
 
 ```
-
----
 
 ```

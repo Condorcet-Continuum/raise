@@ -4,9 +4,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::intent_classifier::EngineeringIntent;
-use super::{Agent, AgentContext, AgentResult, CreatedArtifact};
+use super::tools::{extract_json_from_llm, save_artifact};
+use super::{Agent, AgentContext, AgentResult};
 use crate::ai::llm::client::LlmBackend;
-// IMPORT NLP
 use crate::ai::nlp::entity_extractor;
 
 #[derive(Default)]
@@ -17,7 +17,8 @@ impl HardwareAgent {
         Self {}
     }
 
-    fn determine_category(&self, name: &str, element_type: &str) -> &'static str {
+    // Méthode publique pour être testable ou utilisée ailleurs
+    pub fn determine_category(&self, name: &str, element_type: &str) -> &'static str {
         let keywords = format!("{} {}", name, element_type).to_lowercase();
         if keywords.contains("fpga") || keywords.contains("asic") || keywords.contains("pcb") {
             "Electronics"
@@ -39,19 +40,18 @@ impl HardwareAgent {
             "Contexte: Infrastructure IT."
         };
 
-        // NLP
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
-            nlp_hint.push_str("\n[COMPOSANTS]:\n");
+            nlp_hint.push_str("\n[COMPOSANTS]: ");
             for entity in entities {
-                nlp_hint.push_str(&format!("- \"{}\"\n", entity.text));
+                nlp_hint.push_str(&format!("{}, ", entity.text));
             }
         }
 
         let system_prompt = "Tu es un Architecte Matériel. Génère JSON.";
         let user_prompt = format!(
-            "Crée un Noeud Physique (PA). Nom: {}. Type: {}. {}. {} Format: {{ \"name\": \"str\", \"specs\": {{}} }}",
+            "Crée Noeud PA.\nNom: {}\nType: {}\n{}\n{}\nJSON: {{ \"name\": \"str\", \"specs\": {{}} }}",
             name, element_type, instruction, nlp_hint
         );
 
@@ -61,13 +61,9 @@ impl HardwareAgent {
             .await
             .map_err(|e| anyhow!("Erreur LLM Hardware: {}", e))?;
 
-        let clean_json = response
-            .trim()
-            .trim_start_matches("```json")
-            .trim_end_matches("```")
-            .trim();
+        let clean_json = extract_json_from_llm(&response);
         let mut data: serde_json::Value =
-            serde_json::from_str(clean_json).unwrap_or(json!({ "name": name }));
+            serde_json::from_str(&clean_json).unwrap_or(json!({ "name": name }));
 
         data["id"] = json!(Uuid::new_v4().to_string());
         data["layer"] = json!("PA");
@@ -97,29 +93,31 @@ impl Agent for HardwareAgent {
                 name,
             } if layer == "PA" => {
                 let doc = self.enrich_physical_node(ctx, name, element_type).await?;
-                let doc_id = doc["id"].as_str().unwrap_or("unknown").to_string();
                 let nature = doc["nature"].as_str().unwrap_or("Hardware").to_string();
 
-                let rel_path = format!("un2/pa/collections/physical_nodes/{}.json", doc_id);
-                let path = ctx.paths.domain_root.join(&rel_path);
-
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(&path, serde_json::to_string_pretty(&doc)?)?;
+                let artifact = save_artifact(ctx, "pa", "physical_nodes", &doc)?;
 
                 Ok(Some(AgentResult {
                     message: format!("Noeud physique **{}** ({}) provisionné.", name, nature),
-                    artifacts: vec![CreatedArtifact {
-                        id: doc_id,
-                        name: name.clone(),
-                        layer: "PA".to_string(),
-                        element_type: "PhysicalNode".to_string(),
-                        path: rel_path,
-                    }],
+                    artifacts: vec![artifact],
                 }))
             }
             _ => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_category_detection() {
+        let agent = HardwareAgent::new();
+        assert_eq!(agent.determine_category("Carte Mère", "PCB"), "Electronics");
+        assert_eq!(
+            agent.determine_category("Serveur", "Rack"),
+            "Infrastructure"
+        );
     }
 }

@@ -1,36 +1,89 @@
+use crate::code_generator::{CodeGeneratorService, TargetLanguage};
 use serde_json::Value;
-use tauri::AppHandle;
+use std::fs;
+use tauri::{AppHandle, Manager};
 
-// Ici, nous simulons l'appel à votre module code_generator existant.
-// Plus tard, nous importerons : use crate::code_generator::generator::generate;
-
+/// Commande Tauri pour déclencher la génération de code.
+///
+/// # Arguments
+/// * `language` - Le langage cible ("rust", "cpp", "verilog", "vhdl", "typescript").
+/// * `model` - L'objet JSON représentant l'élément Arcadia (Component, Actor, etc.).
+///
+/// # Retourne
+/// Une liste de chemins absolus vers les fichiers générés.
 #[tauri::command]
 pub async fn generate_source_code(
-    _app: AppHandle,
+    app: AppHandle,
     language: String,
     model: Value,
-) -> Result<String, String> {
-    println!("⚡ Demande de génération de code : {}", language);
+) -> Result<Vec<String>, String> {
+    println!(
+        "🚀 [CodeGen] Demande reçue : {} pour l'élément {:?}",
+        language,
+        model.get("name")
+    );
 
-    // Simulation de la génération (en attendant de brancher le vrai module Tera)
-    // C'est ici que nous connecterons votre module 'code_generator' réel.
+    // 1. Résolution du chemin de sortie
+    // On utilise le dossier de données de l'application + /generated_code
+    // Ex sur Linux: ~/.local/share/raise/generated_code/
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let output_dir = app_dir.join("generated_code");
 
-    let model_name = model
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("ProjetInconnu");
+    // Création du dossier si nécessaire
+    if !output_dir.exists() {
+        fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("Impossible de créer le dossier de sortie: {}", e))?;
+    }
 
-    let generated_code = match language.as_str() {
-        "rust" => format!(
-            "// Généré par RAISE pour le projet {}\n\npub struct SystemRoot {{\n    pub name: String,\n    pub components: Vec<Component>,\n}}\n\nimpl SystemRoot {{\n    pub fn new() -> Self {{\n        println!(\"System initialized\");\n        Self {{ name: \"{}\".into(), components: vec![] }}\n    }}\n}}", 
-            model_name, model_name
-        ),
-        "python" => format!(
-            "# Généré par RAISE pour le projet {}\n\nclass SystemRoot:\n    def __init__(self):\n        self.name = \"{}\"\n        self.components = []\n        print(\"System initialized\")", 
-            model_name, model_name
-        ),
-        _ => return Err(format!("Langage non supporté : {}", language)),
+    // 2. Mapping du langage (String -> Enum)
+    let target_lang = match parse_language(&language) {
+        Ok(lang) => lang,
+        Err(e) => return Err(e),
     };
 
-    Ok(generated_code)
+    // 3. Instanciation du service et exécution
+    // Note: Idéalement, le service pourrait être géré par tauri::State pour éviter de recharger les templates à chaque fois
+    let service = CodeGeneratorService::new(output_dir.clone());
+
+    let generated_paths = service
+        .generate_for_element(&model, target_lang)
+        .map_err(|e| format!("Erreur lors de la génération : {}", e))?;
+
+    // 4. Conversion des PathBuf en String pour le retour JS
+    let paths_as_strings: Vec<String> = generated_paths
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+
+    println!("✅ [CodeGen] Fichiers générés : {:?}", paths_as_strings);
+    Ok(paths_as_strings)
+}
+
+/// Helper pour convertir la string d'entrée en enum TargetLanguage
+fn parse_language(lang: &str) -> Result<TargetLanguage, String> {
+    match lang.to_lowercase().as_str() {
+        "rust" | "rs" => Ok(TargetLanguage::Rust),
+        "cpp" | "c++" | "cxx" => Ok(TargetLanguage::Cpp),
+        "verilog" | "v" => Ok(TargetLanguage::Verilog),
+        "vhdl" | "vhd" => Ok(TargetLanguage::Vhdl),
+        "typescript" | "ts" => Ok(TargetLanguage::TypeScript),
+        "python" | "py" => Err("Le générateur Python n'est pas encore activé.".to_string()),
+        _ => Err(format!("Langage non supporté : {}", lang)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_language_parsing() {
+        assert_eq!(parse_language("Rust").unwrap(), TargetLanguage::Rust);
+        assert_eq!(parse_language("c++").unwrap(), TargetLanguage::Cpp);
+        assert_eq!(parse_language("Verilog").unwrap(), TargetLanguage::Verilog);
+        assert_eq!(parse_language("ts").unwrap(), TargetLanguage::TypeScript);
+
+        assert!(parse_language("python").is_err());
+        assert!(parse_language("unknown").is_err());
+    }
 }

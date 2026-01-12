@@ -7,6 +7,7 @@ pub enum LlmBackend {
     LocalLlama,   // Format OpenAI (llama.cpp)
     GoogleGemini, // Cloud Google
     LlamaCpp,     // Format natif llama-server (Votre Docker 8081)
+    RustNative,   // Candle In-Process
 }
 
 #[derive(Clone)]
@@ -136,6 +137,12 @@ impl LlmClient {
                 self.call_llama_cpp(&self.local_url, sys, user).await
             }
             LlmBackend::GoogleGemini => self.call_google_gemini(sys, user).await,
+            LlmBackend::RustNative => {
+                // Ce cas sera géré via une Commande Tauri dédiée, car LlmClient est stateless
+                // alors que CandleEngine est stateful (et lourd).
+                // Pour l'instant, on bloque l'appel ici.
+                Err("Le mode RustNative ne doit pas être appelé via HTTP Client. Utilisez la commande Tauri directe.".to_string())
+            }
         }
     }
 

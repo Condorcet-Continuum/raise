@@ -1,8 +1,11 @@
+// FICHIER : src-tauri/src/traceability/reporting/audit_report.rs
+
 use crate::model_engine::types::ProjectModel;
 use crate::traceability::compliance::{
-    do_178c::Do178cChecker, eu_ai_act::EuAiActChecker, iso_26262::Iso26262Checker,
-    ComplianceChecker,
+    ai_governance::AiGovernanceChecker, do_178c::Do178cChecker, eu_ai_act::EuAiActChecker,
+    iso_26262::Iso26262Checker, ComplianceChecker, ComplianceReport, Violation,
 };
+use crate::traceability::tracer::Tracer;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -24,7 +27,7 @@ pub struct AuditGenerator;
 
 impl AuditGenerator {
     pub fn generate(model: &ProjectModel) -> AuditReport {
-        // Liste des checkers actifs
+        // 1. Exécution des Checkers Standards (Approche globale)
         let checkers: Vec<Box<dyn ComplianceChecker>> = vec![
             Box::new(Do178cChecker),
             Box::new(Iso26262Checker),
@@ -37,6 +40,11 @@ impl AuditGenerator {
             results.push(serde_json::to_value(report).unwrap());
         }
 
+        // 2. Exécution de l'Audit IA (Approche spécifique via Tracer)
+        let ai_report = Self::run_ai_audit(model);
+        results.push(serde_json::to_value(ai_report).unwrap());
+
+        // 3. Synthèse
         AuditReport {
             project_name: model.meta.name.clone(),
             date: chrono::Utc::now().to_rfc3339(),
@@ -52,66 +60,125 @@ impl AuditGenerator {
             },
         }
     }
+
+    /// Logique spécifique pour scanner les modèles IA et vérifier leur conformité
+    fn run_ai_audit(model: &ProjectModel) -> ComplianceReport {
+        let tracer = Tracer::new(model);
+        let ai_checker = AiGovernanceChecker::new(&tracer);
+
+        let mut violations = Vec::new();
+        let mut checked_count = 0;
+
+        // On scanne les composants de l'architecture physique (PA)
+        for component in &model.pa.components {
+            // L'auditeur renvoie Some(...) seulement si c'est un composant IA
+            if let Some(report) = ai_checker.audit_element(component) {
+                checked_count += 1;
+
+                if !report.is_compliant {
+                    for issue in report.issues {
+                        violations.push(Violation {
+                            element_id: Some(report.component_id.clone()),
+                            rule_id: "AI-GOV-CHECK".to_string(),
+                            description: format!(
+                                "Composant IA '{}' non conforme : {}",
+                                report.component_name, issue
+                            ),
+                            severity: "Critical".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        ComplianceReport {
+            standard: "RAISE AI Governance".to_string(),
+            passed: violations.is_empty(),
+            rules_checked: checked_count,
+            violations,
+        }
+    }
 }
 
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel}; // [CORRECTION] Import NameType
+    use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
+    use serde_json::json;
     use std::collections::HashMap;
-    // [CORRECTION] Suppression de unused import `serde_json::json`
 
-    // [CORRECTION] Helper robuste sans Default
     fn create_dummy_element(id: &str) -> ArcadiaElement {
         ArcadiaElement {
             id: id.to_string(),
-            // [CORRECTION] Envelopper dans NameType::String
             name: NameType::String(format!("Elem {}", id)),
-            // [CORRECTION] Ajout champ kind
-            kind: "DummyElement".to_string(),
+            kind: "Dummy".to_string(),
+            // CORRECTION : Initialisation du champ description ajouté récemment
+            description: None,
             properties: HashMap::new(),
-            // Suppression de ..Default::default()
+        }
+    }
+
+    // Helper: Création d'un composant tagué comme IA
+    fn create_ai_component(id: &str) -> ArcadiaElement {
+        let mut props = HashMap::new();
+        props.insert("nature".to_string(), json!("AI_Model"));
+        ArcadiaElement {
+            id: id.to_string(),
+            name: NameType::String(format!("AI {}", id)),
+            kind: "Component".to_string(),
+            // CORRECTION : Initialisation du champ description ajouté récemment
+            description: None,
+            properties: props,
         }
     }
 
     #[test]
-    fn test_audit_generation_stats() {
+    fn test_audit_generator_structure() {
         let mut model = ProjectModel::default();
-
-        // Setup Metadonnées
         model.meta = ProjectMeta {
-            name: "Projet Test RAISE".to_string(),
-            element_count: 5, // Simulé
+            name: "Projet Test".to_string(),
+            element_count: 10,
             ..Default::default()
         };
+        // Ajout d'éléments pour les stats
+        model.sa.functions = vec![create_dummy_element("f1")];
 
-        // Setup Éléments pour les statistiques
-        // 2 Fonctions SA, 1 Composant SA, 1 Composant PA
-        model.sa.functions = vec![create_dummy_element("f1"), create_dummy_element("f2")];
-        model.sa.components = vec![create_dummy_element("c1")];
-        model.pa.components = vec![create_dummy_element("pc1")];
-
-        // Génération
         let report = AuditGenerator::generate(&model);
 
-        // 1. Vérification des infos générales
-        assert_eq!(report.project_name, "Projet Test RAISE");
-        assert!(!report.date.is_empty());
+        assert_eq!(report.project_name, "Projet Test");
+        assert_eq!(report.model_stats.total_functions, 1);
+        // On attend 4 résultats : DO-178C, ISO-26262, EU AI Act, + AI Governance
+        assert_eq!(report.compliance_results.len(), 4);
+    }
 
-        // 2. Vérification des statistiques calculées
-        // Total functions = 2 (SA) + 0 (LA) + 0 (PA)
-        assert_eq!(report.model_stats.total_functions, 2);
-        // Total components = 1 (SA) + 0 (LA) + 1 (PA)
-        assert_eq!(report.model_stats.total_components, 2);
-        // Total elements (vient des métadonnées brutes dans ce mock)
-        assert_eq!(report.model_stats.total_elements, 5);
+    #[test]
+    fn test_audit_detects_ai_issues() {
+        let mut model = ProjectModel::default();
 
-        // 3. Vérification que les checkers ont tourné
-        // AuditGenerator hardcode 3 checkers (DO-178C, ISO-26262, EU AI Act)
-        assert_eq!(report.compliance_results.len(), 3);
+        // On insère un modèle IA "nu" (sans preuve de qualité/XAI)
+        let ai_comp = create_ai_component("ai_vision");
+        model.pa.components = vec![ai_comp];
 
-        let first_result = &report.compliance_results[0];
-        assert!(first_result.get("standard").is_some());
-        assert!(first_result.get("passed").is_some());
+        let report = AuditGenerator::generate(&model);
+
+        // On cherche la section AI Governance
+        let governance_result = report
+            .compliance_results
+            .iter()
+            .find(|r| r["standard"] == "RAISE AI Governance")
+            .expect("Le rapport de gouvernance IA est manquant");
+
+        // Il doit être en échec car pas de preuves
+        assert_eq!(governance_result["passed"], false);
+
+        let violations = governance_result["violations"].as_array().unwrap();
+        assert!(!violations.is_empty());
+        assert!(violations[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Missing valid Quality Report"));
     }
 }

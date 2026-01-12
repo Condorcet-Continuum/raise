@@ -7,17 +7,17 @@ use std::collections::HashMap;
 
 // Helper pour créer un élément factice rapidement
 fn mock_element(name: &str, desc: &str) -> ArcadiaElement {
-    let mut props = HashMap::new();
-    props.insert(
-        "description".to_string(),
-        serde_json::Value::String(desc.to_string()),
-    );
+    // Note : On n'a plus besoin d'insérer "description" dans les properties
+    // car elle a maintenant son propre champ dans la structure.
+    let props = HashMap::new();
 
     ArcadiaElement {
         id: "uuid-test".to_string(),
         // CORRECTION 2 : Enveloppement du nom dans NameType::String
         name: NameType::String(name.to_string()),
         kind: "mock:Type".to_string(),
+        // CORRECTION 3 : Initialisation du champ description
+        description: Some(desc.to_string()),
         properties: props,
     }
 }

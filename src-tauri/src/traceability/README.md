@@ -1,94 +1,112 @@
-# Module de Traçabilité (Traceability Engine)
+# Module de Traçabilité (Traceability Engine) 🧭
 
-Ce module constitue le cœur de l'analyse d'impact et de la vérification système de **RAISE**. Il est responsable de l'interprétation des relations entre les éléments du modèle Arcadia (Operational, System, Logical, Physical) pour garantir la cohérence et la conformité du projet.
+Ce module constitue le cœur analytique de **RAISE**. Il interprète les relations sémantiques entre les éléments du modèle Arcadia (Operational, System, Logical, Physical) pour garantir la cohérence système et la certification logicielle.
 
-## 🎯 Objectifs
+## 🏗️ Architecture du Moteur
 
-1.  **Navigation Bidirectionnelle** : Permettre de parcourir le graphe des éléments aussi bien en aval (Allocations/Réalisations) qu'en amont (Liens inverses).
-2.  **Analyse d'Impact** : Identifier les conséquences d'une modification sur le reste du système.
-3.  **Vérification de Conformité** : Assurer que le modèle respecte les normes critiques :
-    - **Avionique** (DO-178C)
-    - **Automobile** (ISO-26262)
-    - **Régulation IA** (EU AI Act - Transparence & Robustesse)
-4.  **Reporting** : Générer des matrices de preuves et des rapports d'audit unifiés.
+Le moteur fonctionne sur un principe d'indexation dynamique. Contrairement à une base de données relationnelle classique, il reconstruit le graphe de dépendances en mémoire pour permettre des performances d'analyse instantanées.
 
-## 📂 Structure du Module
+```mermaid
+graph TD
+    PM[ProjectModel] -->|Chargement| T[Tracer]
+    T -->|Indexation| RI[Reverse Index]
 
-| Fichier / Dossier        | Responsabilité                                                                                                   |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| **`mod.rs`**             | Point d'entrée, expose les sous-modules publics.                                                                 |
-| **`tracer.rs`**          | **Moteur principal.** Indexe les liens et fournit les méthodes de navigation (`get_upstream`, `get_downstream`). |
-| **`impact_analyzer.rs`** | Algorithme de propagation. Calcule la portée et la criticité d'un changement potentiel.                          |
-| **`change_tracker.rs`**  | Utilitaire de comparaison (Diff) entre deux versions JSON d'un même élément.                                     |
-| **`compliance/`**        | [Sous-module](./compliance/README.md) contenant les règles de validation (incluant désormais **EU AI Act**).     |
-| **`reporting/`**         | [Sous-module](./reporting/README.md) générant les artefacts de sortie (Matrices, Audits).                        |
+    subgraph "Capacités de Navigation"
+        T -->|allocatedTo / realizes| DS[Downstream: Aval]
+        RI -->|Lien Inversé| US[Upstream: Amont]
+    end
 
-## 🚀 Utilisation
+    subgraph "Services de Haut Niveau"
+        DS & US --> IA[Impact Analyzer]
+        DS & US --> RG[Reporting & Matrices]
+        DS & US --> CP[Compliance Checkers]
+    end
 
-Voici comment les différents composants interagissent typiquement au sein de l'application (ex: depuis une commande Tauri) :
-
-### 1. Navigation simple (Tracer)
-
-Récupérer ce qui est impacté par une Fonction Système.
-
-```rust
-use crate::traceability::tracer::Tracer;
-
-let tracer = Tracer::new(&project_model);
-
-// "Qui réalise cette fonction ?" (Vers le bas / Downstream)
-let components = tracer.get_downstream_elements("uuid_fonction_sa");
-
-// "Qui demande cette fonction ?" (Vers le haut / Upstream)
-let requirements = tracer.get_upstream_elements("uuid_fonction_sa");
 ```
 
-### 2\. Analyse d'Impact
+## 🎯 Fonctions Clés
 
-Calculer le score de criticité avant une modification.
+| Composant           | Description                                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tracer**          | Navigue dans les liens (`allocatedTo`, `satisfiedBy`, `model_id`). Gère la résolution automatique des IDs en références d'objets.             |
+| **Impact Analyzer** | Calcule la propagation des changements. Utilise une recherche en largeur (BFS) pour déterminer la distance d'impact et un score de criticité. |
+| **Change Tracker**  | Détecte les deltas entre deux versions JSON. Indispensable pour l'auditabilité et le suivi des exigences.                                     |
+
+---
+
+## 🔍 Logique de Navigation
+
+### 1. Navigation Bidirectionnelle (`Tracer`)
+
+Le moteur supporte nativement la navigation dans les deux sens du cycle en V :
+
+- **Downstream (Aval)** : Part de l'exigence vers l'implémentation (ex: "Quels composants réalisent cette fonction ?").
+- **Upstream (Amont)** : Remonte de l'implémentation vers la justification (ex: "Quelle exigence justifie la présence de ce code ?").
+
+### 2. Analyse d'Impact (`ImpactAnalyzer`)
+
+L'analyse d'impact est **bidirectionnelle par défaut**. Si vous modifiez un composant central, le moteur identifie :
+
+1. Les éléments qu'il contrôle (Aval).
+2. Les éléments qui dépendent de lui (Amont).
+
+### 3. Traçabilité de l'IA (Trustworthy AI)
+
+Le moteur reconnaît désormais la propriété `model_id`. Cela permet de lier des **Preuves d'Assurance** (Quality Reports, Xai Frames) à des **Composants d'Architecture**, assurant ainsi la conformité au **EU AI Act**.
+
+---
+
+## 🚀 Exemples d'Utilisation
+
+### Navigation et Audit IA
 
 ```rust
-use crate::traceability::impact_analyzer::ImpactAnalyzer;
-
 let tracer = Tracer::new(&project_model);
-let analyzer = ImpactAnalyzer::new(tracer);
 
-// Analyse jusqu'à 5 niveaux de profondeur
-let report = analyzer.analyze("uuid_element_modifie", 5);
+// Trouver les preuves d'assurance pour un modèle IA spécifique
+let proofs = tracer.get_upstream_elements("ai_model_v1");
+// proofs contient maintenant les QualityReport et XaiFrame liés.
+
+```
+
+### Analyse de Criticité
+
+```rust
+let analyzer = ImpactAnalyzer::new(Tracer::new(&project_model));
+let report = analyzer.analyze("engine_control_unit", 3);
 
 println!("Score de criticité : {}", report.criticality_score);
-println!("Éléments touchés : {:?}", report.impacted_elements);
+// Plus le score est élevé, plus le changement nécessite une validation rigoureuse.
+
 ```
 
-### 3\. Audit Complet
+---
 
-Générer un rapport de santé du projet incluant les preuves d'assurance IA.
+## 📂 Organisation du Code
 
-```rust
-use crate::traceability::reporting::audit_report::AuditGenerator;
+```text
+traceability/
+├── mod.rs              # Point d'entrée et re-exports
+├── tracer.rs           # Moteur d'indexation et navigation
+├── impact_analyzer.rs  # Calcul de propagation et criticité
+├── change_tracker.rs   # Algorithme de Diff JSON
+├── compliance/         # Sous-module des règles métier (DO-178C, AI Act...)
+└── reporting/          # Génération de Matrices et Rapports d'Audit
 
-let audit = AuditGenerator::generate(&project_model);
-
-// Sérialisation pour le frontend (JSON contenant DO-178C, EU AI Act, etc.)
-let json_output = serde_json::to_string(&audit).unwrap();
 ```
 
-## 🧠 Concepts Clés
+## ✅ Validation Technique
 
-- **Upstream (Amont)** : Désigne les éléments "parents" ou demandeurs (ex: Une Exigence est en amont d'une Fonction). Le `Tracer` reconstruit ces liens dynamiquement via un index inversé.
-- **Downstream (Aval)** : Désigne les éléments "enfants" ou réalisateurs (ex: Un Composant est en aval d'une Fonction).
-- **Couverture** : Un élément est dit "couvert" s'il possède au moins un lien vers l'aval.
-- **Preuve IA** : Le moteur vérifie l'existence de liens vers des trames XAI (générées par `src/ai/assurance`) pour valider la conformité des composants marqués comme "AI_Model".
+Le module Core maintient une couverture de tests stricte sur :
 
-## ✅ Tests
-
-L'ensemble de la logique de traçabilité est couverte par des tests unitaires intégrés.
+- La résolution des liens simples et multiples (arrays).
+- La détection des cycles dans le graphe.
+- La précision du calcul de distance d'impact.
 
 ```bash
-# Lancer tous les tests de traçabilité (moteur, compliance, reporting)
-cargo test traceability
-```
+# Pour valider le moteur complet
+cargo test traceability -- --nocapture
 
 ```
 
-```
+---

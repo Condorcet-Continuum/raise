@@ -2,8 +2,9 @@ use super::{MemoryRecord, VectorStore};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
 
-/// Client pour communiquer avec le serveur Python LEANN via HTTP
 pub struct LeannMemory {
     base_url: String,
     client: reqwest::Client,
@@ -12,38 +13,36 @@ pub struct LeannMemory {
 impl LeannMemory {
     pub fn new(url: &str) -> Result<Self> {
         let clean_url = url.trim_end_matches('/').to_string();
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()?;
         Ok(Self {
             base_url: clean_url,
-            client: reqwest::Client::new(),
+            client,
         })
     }
 }
 
-// --- STRUCTURES INTERNES POUR LE SERVEUR ---
-// Ces structures matchent exactement ce que le main.rs du serveur attend
-
 #[derive(Serialize)]
 struct ServerDocument {
     text: String,
+    metadata: serde_json::Value,
 }
-
 #[derive(Serialize)]
 struct ServerInsertRequest {
     documents: Vec<ServerDocument>,
 }
-
 #[derive(Serialize)]
 struct ServerSearchRequest {
     k: u64,
 }
-
 #[derive(Deserialize)]
 struct ServerSearchResultItem {
     id: String,
-    text: String, // Le serveur renvoie 'text', pas 'content'
+    text: String,
     score: f32,
+    metadata: Option<serde_json::Value>,
 }
-
 #[derive(Deserialize)]
 struct ServerSearchResponse {
     results: Vec<ServerSearchResultItem>,
@@ -51,105 +50,91 @@ struct ServerSearchResponse {
 
 #[async_trait]
 impl VectorStore for LeannMemory {
-    // 1. CORRECTION : On utilise /health au lieu de /init
-    async fn init_collection(&self, _collection_name: &str, _vector_size: u64) -> Result<()> {
+    async fn init_collection(&self, _col: &str, _size: u64) -> Result<()> {
         let url = format!("{}/health", self.base_url);
-
         let res = self
             .client
             .get(&url)
             .send()
             .await
-            .context("Impossible de contacter le serveur LEANN")?;
-
+            .context("Serveur LEANN injoignable")?;
         if !res.status().is_success() {
-            anyhow::bail!("Le serveur LEANN n'est pas prêt: {}", res.status());
+            anyhow::bail!("LEANN Health Error");
         }
-
-        println!("🧠 LEANN : Connexion établie avec succès.");
         Ok(())
     }
 
-    // 2. CORRECTION : On utilise /insert et on mappe MemoryRecord vers ServerDocument
-    async fn add_documents(
-        &self,
-        _collection_name: &str,
-        records: Vec<MemoryRecord>,
-    ) -> Result<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
-
+    async fn add_documents(&self, _col: &str, records: Vec<MemoryRecord>) -> Result<()> {
         let url = format!("{}/insert", self.base_url);
-
-        // Transformation des données pour le serveur
-        let server_docs: Vec<ServerDocument> = records
+        let server_docs = records
             .iter()
             .map(|r| ServerDocument {
                 text: r.content.clone(),
+                metadata: r.metadata.clone(),
             })
             .collect();
-
-        let payload = ServerInsertRequest {
-            documents: server_docs,
-        };
 
         let res = self
             .client
             .post(&url)
-            .json(&payload)
+            .json(&ServerInsertRequest {
+                documents: server_docs,
+            })
             .send()
-            .await
-            .context("Echec de l'envoi des documents à LEANN")?;
-
+            .await?;
         if !res.status().is_success() {
-            let error_text = res.text().await.unwrap_or_default();
-            anyhow::bail!("Erreur LEANN insert: {}", error_text);
+            anyhow::bail!("LEANN Insert Error");
         }
-
         Ok(())
     }
 
-    // 3. CORRECTION : On utilise /search et on gère la réponse wrapper { results: [...] }
     async fn search_similarity(
         &self,
-        _collection_name: &str,
-        _vector: &[f32], // Note: Le serveur actuel calcule lui-même l'embedding, on ignore ce vecteur pour l'instant
+        _col: &str,
+        _vec: &[f32],
         limit: u64,
-        score_threshold: f32,
+        threshold: f32,
+        _filter: Option<HashMap<String, String>>,
     ) -> Result<Vec<MemoryRecord>> {
         let url = format!("{}/search", self.base_url);
-
-        let payload = ServerSearchRequest { k: limit };
-
         let res = self
             .client
             .post(&url)
-            .json(&payload)
+            .json(&ServerSearchRequest { k: limit })
             .send()
-            .await
-            .context("Echec de la recherche LEANN")?;
+            .await?;
+        let response: ServerSearchResponse = res.json().await?;
 
-        if !res.status().is_success() {
-            anyhow::bail!("Erreur recherche LEANN: {}", res.status());
-        }
-
-        // On désérialise la réponse englobante
-        let response_wrapper: ServerSearchResponse = res.json().await?;
-
-        // Conversion des résultats serveur vers MemoryRecord
-        let records = response_wrapper
+        Ok(response
             .results
             .into_iter()
-            .filter(|r| r.score >= score_threshold) // Le score du serveur peut être une distance ou similarité
+            .filter(|r| r.score >= threshold)
             .map(|r| MemoryRecord {
                 id: r.id,
-                content: r.text,                   // Mapping 'text' -> 'content'
-                metadata: serde_json::Value::Null, // Le serveur actuel ne stocke pas encore les métadonnées
+                content: r.text,
+                metadata: r.metadata.unwrap_or(serde_json::Value::Null),
                 vectors: None,
             })
-            .collect();
+            .collect())
+    }
+}
 
-        Ok(records)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_leann_client_init() {
+        let store = LeannMemory::new("http://localhost:8000");
+        assert!(store.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_leann_health_fail() {
+        // Test réel contre un port vide, doit échouer
+        let store = LeannMemory::new("http://127.0.0.1:9999").unwrap();
+        let res = store.init_collection("any", 384).await;
+        assert!(res.is_err());
     }
 }

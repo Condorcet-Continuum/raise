@@ -79,3 +79,34 @@ impl ConversationSession {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_context_formatting() {
+        let mut session = ConversationSession::new("test".to_string());
+        session.add_user_message("Bonjour");
+        session.add_ai_message("Salut");
+
+        let ctx = session.to_context_string();
+        assert!(ctx.contains("User: Bonjour"));
+        assert!(ctx.contains("Assistant: Salut"));
+    }
+
+    #[test]
+    fn test_sliding_window() {
+        // On force une limite de 2 messages
+        let mut session = ConversationSession::new("test".to_string());
+        session.max_history_len = 2;
+
+        session.add_user_message("1");
+        session.add_ai_message("2");
+        session.add_user_message("3"); // Devrait éjecter "1"
+
+        assert_eq!(session.history.len(), 2);
+        assert_eq!(session.history[0].content, "2");
+        assert_eq!(session.history[1].content, "3");
+    }
+}

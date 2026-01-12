@@ -1,5 +1,8 @@
+// FICHIER : src-tauri/src/traceability/compliance/do_178c.rs
+
 use super::{ComplianceChecker, ComplianceReport, Violation};
-use crate::model_engine::types::ProjectModel;
+use crate::model_engine::types::{NameType, ProjectModel};
+use crate::traceability::tracer::Tracer;
 
 pub struct Do178cChecker;
 
@@ -9,22 +12,29 @@ impl ComplianceChecker for Do178cChecker {
     }
 
     fn check(&self, model: &ProjectModel) -> ComplianceReport {
+        let tracer = Tracer::new(model);
         let mut violations = Vec::new();
-        let mut rules_checked = 0;
+        let mut checked_count = 0;
 
-        // Règle 1 : Chaque composant logiciel (PA) doit tracer vers une fonction (SA/LA)
-        rules_checked += 1;
-        for comp in &model.pa.components {
-            let has_trace = comp.properties.contains_key("realizedLogicalComponents")
-                || comp.properties.contains_key("allocatedFunctions");
+        // Règle 1 : Couverture SA -> LA (Traceability)
+        for func in &model.sa.functions {
+            checked_count += 1;
+            let downstream = tracer.get_downstream_elements(&func.id);
 
-            if !has_trace {
-                // CORRECTION : utilisation de .as_str() car name est un NameType
+            if downstream.is_empty() {
+                let func_name = match &func.name {
+                    NameType::String(s) => s.clone(),
+                    _ => "Inconnu".to_string(),
+                };
+
                 violations.push(Violation {
-                    element_id: Some(comp.id.clone()),
-                    rule_id: "DO178-HLR-01".into(),
-                    description: format!("Le composant logiciel '{}' n'a pas de lien de traçabilité vers les exigences amont.", comp.name.as_str()),
-                    severity: "High".into(),
+                    element_id: Some(func.id.clone()),
+                    rule_id: "DO178-TRACE-01".to_string(),
+                    description: format!(
+                        "Fonction système '{}' non allouée (Dead Code potentiel)",
+                        func_name
+                    ),
+                    severity: "High".to_string(),
                 });
             }
         }
@@ -32,21 +42,23 @@ impl ComplianceChecker for Do178cChecker {
         ComplianceReport {
             standard: self.name().to_string(),
             passed: violations.is_empty(),
-            rules_checked,
+            rules_checked: checked_count,
             violations,
         }
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel}; // Import de NameType
+    use crate::model_engine::types::{ArcadiaElement, NameType};
     use serde_json::json;
     use std::collections::HashMap;
 
-    // Helper adapté à votre types.rs (sans Default)
-    fn create_pa_comp(id: &str, props: serde_json::Value) -> ArcadiaElement {
+    fn create_elem(id: &str, props: serde_json::Value) -> ArcadiaElement {
         let mut properties = HashMap::new();
         if let Some(obj) = props.as_object() {
             for (k, v) in obj {
@@ -55,40 +67,35 @@ mod tests {
         }
         ArcadiaElement {
             id: id.to_string(),
-            // CORRECTION : Envelopper la string dans l'Enum NameType
-            name: NameType::String(format!("PA Comp {}", id)),
-            // CORRECTION : Champ 'kind' obligatoire
-            kind: "Component".to_string(),
+            name: NameType::String(format!("Elem {}", id)),
+            kind: "Function".to_string(),
+            // CORRECTION : Initialisation du champ description ajouté récemment
+            description: None,
             properties,
-            // On ne peut pas utiliser ..Default::default() ici
         }
     }
 
     #[test]
-    fn test_do178c_traceability_rule() {
-        let checker = Do178cChecker;
+    fn test_do178c_traceability() {
         let mut model = ProjectModel::default();
 
-        // Cas 1 : Composant PA sans lien (Violation)
-        let bad_comp = create_pa_comp("bad_comp", json!({}));
+        // F1 est couverte (allouée à C1)
+        let f1 = create_elem("f1", json!({ "allocatedTo": ["c1"] }));
+        // F2 est orpheline
+        let f2 = create_elem("f2", json!({}));
 
-        // Cas 2 : Composant PA avec lien vers Logical Component (Pass)
-        let good_comp = create_pa_comp(
-            "good_comp",
-            json!({
-                "realizedLogicalComponents": ["lc_1"]
-            }),
-        );
+        // Cible (pour que le Tracer fonctionne)
+        let c1 = create_elem("c1", json!({}));
 
-        model.pa.components = vec![bad_comp, good_comp];
+        model.sa.functions = vec![f1, f2];
+        model.la.components = vec![c1];
 
+        let checker = Do178cChecker;
         let report = checker.check(&model);
 
-        assert_eq!(report.passed, false);
+        assert!(!report.passed);
+        assert_eq!(report.rules_checked, 2);
         assert_eq!(report.violations.len(), 1);
-
-        let violation = &report.violations[0];
-        assert_eq!(violation.element_id.as_deref(), Some("bad_comp"));
-        assert_eq!(violation.rule_id, "DO178-HLR-01");
+        assert_eq!(report.violations[0].element_id, Some("f2".to_string()));
     }
 }

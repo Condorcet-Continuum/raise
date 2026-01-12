@@ -1,6 +1,11 @@
 # Module `ai::llm` - Infrastructure Bas Niveau LLM
 
-Ce module constitue la couche d'infrastructure (**Low-Level Layer**) de RAISE pour la communication avec les modèles de langage. Il fournit la "tuyauterie" technique permettant aux Agents de fonctionner sans se soucier de la complexité réseau ou du formatage des réponses.
+Ce module constitue la couche d'infrastructure (**Low-Level Layer**) de RAISE pour la communication avec les modèles de langage. Il fournit la "tuyauterie" technique permettant aux services de fonctionner sans se soucier de la complexité réseau ou de l'inférence locale.
+
+Il supporte désormais deux modes de fonctionnement :
+
+1.  **Client HTTP (Agnostique)** : Pour connecter des serveurs d'inférence externes (llama.cpp, vLLM) ou Cloud (Gemini).
+2.  **Moteur Natif (Embedded)** : Pour exécuter des modèles (GGUF) directement dans le processus Rust via `Candle` (sans dépendance externe).
 
 ---
 
@@ -10,8 +15,9 @@ Voici l'organisation physique des fichiers de ce module :
 
 ```text
 src-tauri/src/ai/llm/
-├── mod.rs               # Point d'entrée : expose les sous-modules publics.
-├── client.rs            # Client HTTP : gère la connexion (llama.cpp/Gemini) et le Fallback.
+├── mod.rs               # Point d'entrée : expose les structures et gère l'état global (NativeLlmState).
+├── client.rs            # Client HTTP : gère la connexion réseau (llama.cpp/Gemini) et le Fallback.
+├── candle_engine.rs     # [NOUVEAU] Moteur Natif : Inférence locale pure via HuggingFace Candle.
 ├── prompts.rs           # Personas : contient les constantes des "System Prompts".
 ├── response_parser.rs   # Nettoyeur : extrait le JSON/Code des réponses brutes.
 └── tests.rs             # Validation : tests unitaires et d'intégration.
@@ -22,123 +28,159 @@ src-tauri/src/ai/llm/
 
 ## 📊 Architecture & Flux de Données
 
-Le système implémente une stratégie **"Local First"** avec un mécanisme de **Nettoyage Automatique** des réponses.
+Le système est **hybride**. Il permet de choisir le bon outil pour la bonne tâche.
 
 ### Schéma du Flux (Pipeline)
 
-```text
-    +-----------+                                     +-----------------+
-    |   AGENT   |  >> 1. Envoi du Prompt (Persona) >> |   LLM CLIENT    |
-    +-----------+                                     +-----------------+
-          ^                                                    |
-          |                                          (Tentative Local : LLAMA.CPP)
-          |                                                    v
-    (Retour JSON)                                    [ ECHEC ? -> FALLBACK ]
-          |                                                    |
-          |                                           (Tentative Cloud : GEMINI)
-          |                                                    |
-    +-----------+                                              |
-    |   PARSER  |  << 3. Nettoyage (No Markdown) <<   (Réponse Brute)
-    +-----------+
+```mermaid
+graph TD
+    User[Interface / Agent] --> Decision{Choix Architecture}
+
+    %% BRANCHE 1 : CLIENT HTTP (AGENTS)
+    Decision -- "Mode Réseau (Agents complexes)" --> Client[LLM Client]
+
+    subgraph Network_Flow [Flux Client HTTP]
+        direction TB
+        Client --> TryLocal[Tentative Local :8081]
+        TryLocal -- "Timeout / Échec" --> Fallback[Secours Cloud Gemini]
+        TryLocal --> RawResp[Réponse Brute]
+        Fallback --> RawResp
+    end
+
+    %% BRANCHE 2 : MOTEUR NATIF (CHAT)
+    Decision -- "Mode Natif (Chat Rapide)" --> Engine[Candle Engine]
+
+    subgraph Native_Flow [Flux Embarqué Rust]
+        direction TB
+        Engine --> Load[Chargement GGUF RAM]
+        Load --> Infer[Inférence Metal/CUDA/CPU]
+        Infer --> Tokenizer[Décodage Tokenizer]
+    end
+
+    %% CONVERGENCE ET SORTIE
+    RawResp --> Parser[Response Parser]
+    Tokenizer --> Output[Sortie Texte Standardisée]
+    Parser --> Output
 
 ```
 
-### Description des Étapes
+### Description des Moteurs
 
-1. **Conditionnement (`prompts.rs`) :** L'Agent sélectionne une personnalité (ex: `SYSTEM_AGENT_PROMPT`) pour orienter l'expertise du modèle.
-2. **Transport & Résilience (`client.rs`) :**
+1. **Le Client HTTP (`client.rs`)** :
 
-- Le client tente d'abord d'interroger le modèle local ($LOCAL_URL_LLM:$LOCAL_PORT_LLM).
-- Si le serveur local ne répond pas, il bascule automatiquement sur l'API Google Gemini (si la clé est configurée).
+- Utilisé par les **Agents Autonomes** (Software, Intent, etc.).
+- Avantage : Peut utiliser des modèles énormes (70B+) hébergés sur un serveur dédié ou dans le Cloud.
+- Résilience : Bascule sur Gemini si le serveur local est éteint.
 
-3. **Nettoyage (`response_parser.rs`) :**
+2. **Le Moteur Natif (`candle_engine.rs`)** :
 
-- La réponse brute arrive souvent polluée (ex: "Voici le JSON : `json ... `").
-- Le parser extrait chirurgicalement les données utiles (JSON ou Code) avant de les renvoyer à l'Agent.
+- Utilisé par le **Chat Direct** ou les tâches rapides.
+- Avantage : **Zéro configuration**. Pas besoin de Docker ni de Python. L'application télécharge et lance le modèle (ex: Llama 3.2 1B) toute seule.
+- Performance : Utilise l'accélération matérielle (Metal sur Mac, CUDA sur Nvidia, AVX sur CPU).
 
 ---
 
 ## 💻 Exemples d'Utilisation (Rust)
 
-Voici comment utiliser les briques de ce module pour construire un Agent.
+### Cas 1 : Via le Client HTTP (Agents)
 
-### Cas 1 : Analyse d'Intention (Retour JSON)
+Utilisé pour les tâches complexes nécessitant un modèle puissant distant.
 
-Ce cas est utilisé par le `IntentClassifier` pour router la demande.
-
-````rust
+```rust
 use crate::ai::llm::{client, prompts, response_parser};
 
 async fn classify_user_request(user_input: &str) -> Result<serde_json::Value, String> {
-    // 1. Initialisation du Client (souvent fait au démarrage de l'app)
-    // On cible le port par défaut de llama.cpp
-    let llm_client = client::LlmClient::new("http://localhost:8081", "optional_api_key", None);
+    // 1. Initialisation
+    let llm_client = client::LlmClient::new("http://localhost:8081", "api_key", None);
 
-    // 2. Construction du Prompt avec le Persona "Routeur"
-    let full_prompt = format!(
-        "{}\n\nUSER REQUEST: {}",
-        prompts::INTENT_CLASSIFIER_PROMPT,
-        user_input
-    );
+    // 2. Prompting
+    let full_prompt = format!("{}\nREQ: {}", prompts::INTENT_CLASSIFIER_PROMPT, user_input);
 
-    // 3. Envoi de la requête (Le client gère le réseau et le fallback)
-    let raw_response = llm_client.ask_raw(&full_prompt).await
-        .map_err(|e| format!("Erreur LLM: {}", e))?;
+    // 3. Appel Réseau
+    let raw_response = llm_client.ask_raw(&full_prompt).await.map_err(|e| e.to_string())?;
 
-    // 4. Nettoyage et Parsing JSON
-    // Cela gère les cas où l'IA répond "Voici le JSON : ```json { ... } ```"
-    let json_data = response_parser::extract_json(&raw_response)
-        .map_err(|e| format!("Erreur Parsing: {}", e))?;
-
-    // On retourne l'objet JSON propre
+    // 4. Parsing
+    let json_data = response_parser::extract_json(&raw_response).map_err(|e| e.to_string())?;
     Ok(json_data)
 }
 
-````
+```
 
-### Cas 2 : Génération de Code (Retour Texte Brut)
+### Cas 2 : Via le Moteur Natif (Embedded)
 
-Ce cas est utilisé par le `SoftwareAgent` pour écrire des fichiers Rust.
+Utilisé pour interagir avec le modèle chargé en mémoire (State Tauri).
 
-````rust
-use crate::ai::llm::{client, prompts, response_parser};
+```rust
+use crate::ai::llm::NativeLlmState;
+use tauri::State;
 
-async fn generate_rust_code(task_description: &str) -> Result<String, String> {
-    let llm_client = client::LlmClient::new("http://localhost:8081", "", None);
+#[tauri::command]
+pub async fn chat_with_local_model(
+    state: State<'_, NativeLlmState>,
+    prompt: String
+) -> Result<String, String> {
+    // 1. Récupération du verrou (Mutex)
+    let mut guard = state.0.lock().map_err(|_| "Erreur Lock".to_string())?;
 
-    // On utilise le Persona "Software Engineer"
-    let prompt = format!("{}\nTask: {}", prompts::SOFTWARE_AGENT_PROMPT, task_description);
-
-    let raw_response = llm_client.ask_raw(&prompt).await
-        .map_err(|e| e.to_string())?;
-
-    // Ici, on ne veut pas parser du JSON, mais extraire le bloc de code
-    // Cette fonction retire le texte "Voici le code" et les balises ```rust
-    let clean_code = response_parser::extract_code_block(&raw_response);
-
-    Ok(clean_code)
+    // 2. Vérification si le modèle est chargé
+    if let Some(engine) = guard.as_mut() {
+        // 3. Génération directe (In-Process)
+        // Pas de réseau, pas de JSON, c'est du "Raw Text"
+        engine.generate("Tu es un assistant.", &prompt, 200)
+            .map_err(|e| e.to_string())
+    } else {
+        Err("Le modèle charge encore...".to_string())
+    }
 }
 
-````
+```
 
 ---
 
 ## ⚙️ Configuration Requise
 
-Variables d'environnement (fichier `.env` ou contexte d'exécution) :
+Variables d'environnement (fichier `.env`) :
 
-| Variable              | Description                                                |
-| --------------------- | ---------------------------------------------------------- |
-| `RAISE_LLM_LOCAL_URL` | URL du serveur local (défaut : `http://localhost:8081/v1`) |
-| `RAISE_GEMINI_KEY`    | Clé API de secours (Google AI Studio)                      |
+### Configuration Client HTTP (Agents)
+
+| Variable           | Description                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `RAISE_LOCAL_URL`  | URL du serveur d'inférence local (ex: `http://localhost:8081`)               |
+| `LLM_MODEL_FILE`   | Fichier modèle chargé par le serveur (ex: qwen2.5-1.5b-instruct-q4_k_m.gguf) |
+| `RAISE_GEMINI_KEY` | Clé API Google (Backup)                                                      |
+
+### Configuration Moteur Natif (Rust/Candle)
+
+Si ces variables ne sont pas définies, des valeurs par défaut (Llama 3.2 1B) sont utilisées.
+
+| Variable                  | Description                      | Exemple / Recommandé                   |
+| ------------------------- | -------------------------------- | -------------------------------------- |
+| `LLM_RUST_REPO_ID`        | Dépôt HuggingFace du modèle GGUF | `bartowski/Llama-3.2-1B-Instruct-GGUF` |
+| `LLM_RUST_MODEL_FILE`     | Nom du fichier GGUF spécifique   | `Llama-3.2-1B-Instruct-Q4_K_M.gguf`    |
+| `LLM_RUST_TOKENIZER_REPO` | Dépôt contenant `tokenizer.json` | `unsloth/Llama-3.2-1B-Instruct`        |
 
 ---
 
 ## ✅ Validation
 
-Pour vérifier que ce module fonctionne correctement (Parser + Prompts + Client), exécutez la suite de tests dédiée :
+### Tester la logique générale
+
+Pour vérifier le parser et le client HTTP :
 
 ```bash
 cargo test ai::llm
+
+```
+
+### Tester le Moteur Natif (Téléchargement + Inférence)
+
+**Attention :** Ce test télécharge le modèle (~700 Mo) lors de la première exécution.
+
+```bash
+cargo test candle_engine -- --ignored
+
+```
+
+```
 
 ```

@@ -1,117 +1,249 @@
-# 🚀 RAISE Backend - Entry Point (`src-tauri/src`)
+# Raise - Backend Architecture (Rust)
 
-Ce répertoire contient le point d'entrée de l'application Rust (**Backend**) et la configuration du pont avec le Frontend (Tauri).
+Ce répertoire contient le cœur technologique de la plateforme **Raise**. Il s'agit d'un backend écrit en Rust, orchestré par Tauri, conçu pour l'ingénierie système assistée par IA, la conformité normative et la modélisation MBSE (Arcadia).
 
-C'est ici que s'opère la "Soudure" entre :
+## 🌍 Vue d'ensemble de l'Architecture
 
-1. Le système d'exploitation (Fenêtres, Fichiers, Threads).
-2. Le cœur métier (IA, Workflow, Base de données).
-3. L'interface utilisateur (Commandes, Événements).
+L'architecture suit un modèle modulaire centré sur le domaine (Domain-Driven Design), où chaque module majeur encapsule sa propre logique, ses données et ses règles. L'interaction avec le frontend se fait via la couche `commands`.
+
+```mermaid
+graph TD
+    Frontend["Tauri Frontend"] <-->|Commands API| CMD["Commands Layer"]
+
+    subgraph "Core Logic Engines"
+        AI["AI & Multi-Agents"]
+        MBSE["Model Engine (Arcadia)"]
+        Workflow["Workflow Engine (WASM)"]
+        CodeGen["Code Generator"]
+    end
+
+    subgraph "Governance & Rules"
+        Trace["Traceability & Compliance"]
+        Rules["Rules Engine"]
+        Gene["Genetics Engine"]
+    end
+
+    subgraph "Persistence & Network"
+        JDB[("JSON DB")]
+        Graph[("Graph Store")]
+        Block[("Blockchain / Fabric")]
+    end
+
+    CMD --> AI
+    CMD --> MBSE
+    CMD --> Workflow
+    CMD --> Trace
+
+    AI <--> MBSE
+    MBSE --> Rules
+    Trace --> Block
+
+    AI --> JDB
+    MBSE --> Graph
+    MBSE --> JDB
+
+```
 
 ---
 
-## 📂 Structure des Fichiers Clés
+## 🧠 Module AI (`/ai`)
 
-| Fichier       | Rôle Principal                                     | Détails Techniques                                                                                                                   |
-| ------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **`main.rs`** | **Bootloader Exécutable**. Point d'entrée binaire. | Initialise les logs, configure la DB, lance les migrations et **spawne le thread asynchrone** pour l'IA.                             |
-| **`lib.rs`**  | **Bibliothèque Partagée**.                         | (Convention Tauri) Expose les modules, les commandes et la configuration du builder pour être utilisés par les tests ou les mobiles. |
+Le cerveau de Raise. Ce module implémente un système multi-agents autonome capable de raisonner sur les modèles d'ingénierie, aidé par des LLM locaux (via Candle) et une mémoire contextuelle (RAG).
 
----
+### Structure des Agents
 
-## ⚙️ Cycle de Démarrage (Boot Process)
+L'architecture multi-agents est spécialisée par domaine d'ingénierie :
 
-Le démarrage de RAISE suit une procédure stricte en deux temps pour garantir une interface réactive (GUI) même pendant le chargement des modèles lourds (IA).
+- **Business Agent** : Analyse des besoins et contraintes métier.
+- **System Agent** : Architecture système (haut niveau).
+- **EPBS Agent** : Décomposition produit (End Product Breakdown Structure).
+- **Hardware/Software Agents** : Spécialistes des couches physiques et logicielles.
+- **Orchestrator** : Coordonne les agents et résout les conflits.
 
-### 1. Initialisation Synchrone (Main Thread)
-
-Au lancement de `main()`, l'application effectue les actions bloquantes légères :
-
-- Resolution des chemins (`PATH_RAISE_DOMAIN`).
-- Démarrage du `StorageEngine` (JSON-DB) et du `GraphStore` (SurrealDB).
-- Exécution des **Migrations** de base de données.
-- Injection des États "Vides" (`Default`) pour le Workflow et l'IA.
-- Démarrage de l'interface graphique (Tauri Window).
-
-### 2. Chargement Asynchrone (Background Thread)
-
-Une tâche `tokio::spawn` est lancée immédiatement pour charger le "Cerveau" sans geler l'UI.
+### Flux de Traitement IA
 
 ```mermaid
 sequenceDiagram
-    participant Main as Main Thread (GUI)
-    participant State as Tauri State
-    participant Async as Background Task
-    participant AI as Llama/Qdrant
+    participant User
+    participant Orch as Orchestrator
+    participant RAG as RAG/Memory
+    participant LLM as Candle Engine
+    participant Agent as Specialist Agent
 
-    Main->>State: Inject Storage & Config
-    Main->>State: Inject Empty WorkflowStore (None)
-    Main->>State: Inject Empty AiState (None)
-    Main->>Async: Spawn Init Task
-    Main->>User: Affichage GUI (Ready)
-
-    Note over Async: Chargement Lourd (Model)
-
-    Async->>AI: Load Model & Connect
-    AI-->>Async: AiOrchestrator Ready
-
-    Async->>Async: Create Arc<Mutex<Orchestrator>>
-
-    Async->>State: Update AiState (For Chat)
-    Async->>State: Hydrate WorkflowStore (For Automation)
-
-    Note over User: L'IA devient disponible
+    User->>Orch: User Query / Intent
+    Orch->>RAG: Retrieve Context (Vector Store)
+    RAG-->>Orch: Contextual Data
+    Orch->>Agent: Delegate Task
+    Agent->>LLM: Generate Solution (Inference)
+    LLM-->>Agent: Raw Response
+    Agent->>Agent: Validate & Format
+    Agent-->>Orch: Structured Result
+    Orch-->>User: Final Response
 
 ```
 
+- **Composants Clés :**
+- `llm/candle_engine.rs` : Inférence locale optimisée Rust pour modèles type Llama/Mistral.
+- `context/rag.rs` : Moteur de Retrieval-Augmented Generation.
+- `assurance/xai.rs` : eXplainable AI, pour justifier les décisions d'ingénierie critique.
+
 ---
 
-## 🧠 Gestion de la Mémoire Partagée (The Continuum)
+## 📐 Model Engine (`/model_engine`)
 
-RAISE utilise une architecture **Shared Ownership** pour permettre au Chat (Interactif) et au Workflow (Automatique) de partager le même contexte IA.
+Ce module est l'implémentation Rust du métamodèle **Arcadia**. Il gère la logique métier de l'ingénierie système.
 
-### Le Problème
+### Capacités
 
-L'`AiOrchestrator` est un objet lourd (connexions réseaux, contexte LLM, vecteurs) qui ne peut pas être dupliqué naïvement.
+1. **Support Méthodologique** : Couverture complète des phases Arcadia.
 
-### La Solution (`Arc<Mutex>`)
+- `operational_analysis.rs` (OA)
+- `system_analysis.rs` (SA)
+- `logical_architecture.rs` (LA)
+- `physical_architecture.rs` (PA)
+- `epbs.rs` (Produit)
 
-Dans `main.rs`, nous utilisons un pointeur atomique compté référence (`Arc`) protégé par un verrou asynchrone (`Tokio Mutex`).
+2. **Interopérabilité Capella** : Lecteurs et écrivains pour le format XML/XMI de Capella, permettant d'importer/exporter des modèles existants.
+3. **Transformateurs** : Conversion automatique entre couches (ex: `dialogue_to_model` ou `system_transformer`).
 
-1. **Workflow Engine** : Reçoit une **copie du pointeur** (`shared_orch.clone()`). Il l'utilise pour exécuter des tâches autonomes.
-2. **AiState (Chat)** : Reçoit le **même pointeur**. Il l'utilise pour répondre aux questions de l'utilisateur.
+### Validation et Cohérence
 
-```rust
-// Extrait conceptuel de main.rs
-let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
+Intégré avec le `/rules_engine`, ce module assure que chaque modification du modèle respecte les contraintes structurelles d'Arcadia.
 
-// Les deux modules pointent vers la MÊME adresse mémoire
-let wf_scheduler = WorkflowScheduler::new(shared_orch.clone());
-let ai_state = Some(shared_orch.clone());
+---
+
+## 💾 JsonDB (`/json_db`)
+
+Raise embarque sa propre base de données documentaire NoSQL/SQL hybride, écrite purement en Rust, pour garantir la portabilité et la performance sans dépendances externes lourdes.
+
+### Architecture Interne
+
+```mermaid
+graph LR
+    Query["SQL/JSON Query"] --> Parser["SQL Parser"]
+    Parser --> Opt["Optimizer"]
+    Opt --> Exec["Executor"]
+
+    subgraph "Storage Engine"
+        Exec --> Index["BTree/Hash Indexes"]
+        Exec --> Cache["Cache Manager"]
+        Exec --> File["File Storage"]
+    end
+
+    subgraph "Transaction"
+        Exec --> Lock["Lock Manager"]
+        Exec --> WAL["Write Ahead Log"]
+    end
 
 ```
 
----
-
-## 🛡️ Injection de Dépendances (State Management)
-
-Tauri gère l'état global de l'application. Les modules accèdent à ces états via l'injection `State<T>` dans les commandes.
-
-| État            | Type Rust               | Description                                                        |
-| --------------- | ----------------------- | ------------------------------------------------------------------ |
-| `StorageEngine` | `StorageEngine`         | Accès direct au système de fichiers JSON (Thread-safe interne).    |
-| `AiState`       | `Mutex<Option<Arc...>>` | Conteneur pour l'IA. `None` au démarrage, `Some` une fois chargé.  |
-| `WorkflowStore` | `Mutex<WorkflowStore>`  | Contient le `Scheduler` (Optionnel) et les instances de processus. |
-| `AppState`      | `AppState`              | Contient le `ProjectModel` (Architecture Système).                 |
-| `PluginManager` | `PluginManager`         | Gestionnaire des plugins WASM chargés.                             |
+- **Fonctionnalités avancées** :
+- Support **JSON-LD** pour le Web Sémantique et les ontologies.
+- Transactions ACID avec **WAL** (Write Ahead Log).
+- Indexation textuelle et BTree.
 
 ---
 
-## ⚠️ Points d'Attention pour les Développeurs
+## 🔗 Traceability & Compliance (`/traceability`)
 
-1. **Pas de `spawn_blocking` pour les Références** :
-   Dans `main.rs`, le chargement du modèle utilise des références au `StorageEngine`. Il ne faut **jamais** utiliser `spawn_blocking` ici car cela causerait une erreur de durée de vie (`lifetime 'static`). Le chargement se fait "inline" dans la tâche asynchrone.
-2. **Initialisation Tardive** :
-   Les commandes `start_workflow` ou `ai_chat` doivent toujours vérifier si le service sous-jacent est prêt (`Some(...)`) avant de l'utiliser, et renvoyer une erreur explicite ("IA en cours de chargement") si ce n'est pas le cas.
-3. **Commandes** :
-   Toutes les nouvelles commandes doivent être enregistrées dans le macro `generate_handler!` dans `main.rs`.
+Module critique pour les systèmes normés (Aérospatial, Médical, Automobile, IA).
+
+- **Change Tracker** : Surveille chaque mutation dans le `model_engine` ou le code généré.
+- **Compliance Engines** : Vérificateurs dédiés pour :
+- `do_178c.rs` (Avionique Logicielle)
+- `iso_26262.rs` (Sécurité Automobile)
+- `eu_ai_act.rs` (Régulation IA Européenne)
+
+- **Reporting** : Génération de matrices de traçabilité et rapports d'audit.
+
+---
+
+## ⚙️ Workflow Engine (`/workflow_engine`)
+
+Un moteur d'exécution de processus capable de faire tourner des plugins et des scripts définis par l'utilisateur.
+
+- **WASM Host** : Exécution sécurisée de code arbitraire (plugins) via WebAssembly.
+- **State Machine** : Gestion des états des workflows longs.
+- **Scheduler** : Planification des tâches d'ingénierie automatisées.
+
+---
+
+## 🧬 Genetics (`/genetics`)
+
+Moteur d'optimisation évolutionnaire pour l'architecture système.
+
+- Permet de générer des milliers de variantes d'architectures (`genomes/arcadia_arch.rs`).
+- Évalue les candidats selon des fonctions de fitness (coût, poids, latence, fiabilité).
+- Opérateurs génétiques : Crossover, Mutation, Sélection.
+
+---
+
+## 💻 Code Generator (`/code_generator`)
+
+Pont entre le modèle et l'implémentation.
+
+- **Langages supportés** :
+- Software : Rust, C++, TypeScript.
+- Hardware : Verilog, VHDL.
+
+- **Templates** : Moteur de template pour personnaliser la génération.
+- **Analyzers** : Vérifie les dépendances avant la génération.
+
+---
+
+## 🛡️ Blockchain (`/blockchain`)
+
+Assure l'immuabilité et la sécurité des données critiques de traçabilité.
+
+- **Fabric Client** : Connecteur pour Hyperledger Fabric.
+- **VPN** : Gestion réseau sécurisée (Innernet) pour les communications distribuées.
+
+---
+
+## 🚀 Commandes et API (`/commands`)
+
+C'est la "Façade" du backend. Tous les appels depuis le frontend Tauri passent par ici.
+
+| Module                   | Description                                     |
+| ------------------------ | ----------------------------------------------- |
+| `ai_commands.rs`         | Chat, RAG, requêtes agents                      |
+| `model_commands.rs`      | Manipulation des diagrammes et éléments Arcadia |
+| `blockchain_commands.rs` | Audit logs et signature                         |
+| `project_commands.rs`    | Gestion de fichiers et configurations           |
+| `codegen_commands.rs`    | Déclenchement de la génération de code          |
+
+---
+
+## 🛠️ Développement et Tests
+
+### Prérequis
+
+- Rust (Dernière version stable)
+- Node.js & Pnpm (pour le frontend)
+- Dépendances système pour Tauri (libwebkit2gtk, etc.)
+
+### Lancer les tests
+
+L'architecture est testée unitairement et par intégration.
+
+```bash
+# Tester le module AI uniquement
+cargo test ai::
+
+# Tester le moteur de base de données
+cargo test json_db::
+
+# Lancer toute la suite de tests
+cargo test
+
+```
+
+### Ajouter une nouvelle commande Tauri
+
+1. Créer la fonction dans `commands/votre_module.rs`.
+2. L'ajouter au handler dans `main.rs` ou `lib.rs`.
+3. Invoquer depuis le frontend via `invoke('nom_de_la_commande', { args })`.
+
+---
+
+© 2024-2025 Raise Project. Architecture Confidentielle.

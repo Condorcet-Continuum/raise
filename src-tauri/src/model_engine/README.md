@@ -1,145 +1,151 @@
-# Model Engine
+# Model Engine (`src/model_engine`)
 
-Le **Model Engine** est la couche d'abstraction qui transforme les données brutes stockées dans la base de données (`json_db`) en structures Rust fortement typées et interconnectées.
+Le **Model Engine** est le cœur métier de l'application RAISE. Il encapsule toute la logique d'Ingénierie Système basée sur la méthodologie **Arcadia**.
 
-Il agit comme un **ORM (Object-Relational Mapping)** spécialisé pour la méthode **Arcadia** et l'architecture **RAISE**, en s'appuyant sur une résolution sémantique stricte (JSON-LD).
+Il agit comme une couche d'abstraction entre les données brutes (JSON-LD, Fichiers Capella) et les fonctionnalités utilisateur (Visualisation, IA, Génération de code).
 
----
+## 🌍 Vue d'Ensemble Architecturelle
 
-## 🏗️ Architecture Globale
-
-Le flux de données suit ce chemin :
+Le moteur orchestre le cycle de vie d'un modèle système, du chargement à la génération d'artefacts.
 
 ```mermaid
-graph LR
-    Disk[(Disque JSON)] -->|json_db| Loader(ModelLoader)
-    Loader -->|Désérialisation & Sémantique| Structs(Structures Rust)
-    Structs -->|Aggregation| Model(ProjectModel)
-    Model -->|Analyse/IA| App(Application / IA)
+flowchart TD
+    subgraph Sources
+        DB[(JSON-LD Database)]
+        XMI[Capella Files]
+    end
+
+    subgraph "Ingestion Layer"
+        L[ModelLoader]
+        B[Capella Bridge]
+    end
+
+    subgraph "Core Model (In-Memory)"
+        PM[ProjectModel]
+
+        subgraph Layers
+            OA[Operational Analysis]
+            SA[System Analysis]
+            LA[Logical Architecture]
+            PA[Physical Architecture]
+            EPBS[EPBS & Data]
+        end
+    end
+
+    subgraph "Services & Features"
+        V[Validators]
+        T[Transformers]
+        Trace[Tracer]
+    end
+
+    subgraph Outputs
+        Code[Rust / VHDL]
+        UI[Frontend Graph]
+        Rep[Reports / Issues]
+    end
+
+    DB --> L
+    XMI --> B
+    L --> PM
+    B --> PM
+
+    PM --- OA & SA & LA & PA & EPBS
+
+    PM --> V
+    PM --> T
+    PM --> Trace
+
+    V --> Rep
+    T --> Code
+    Trace --> UI
+
 ```
 
----
+## 📂 Organisation des Modules
 
-## 📦 Rôles des Modules
+| Module              | Description                                                                                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`arcadia/`**      | **Définitions Sémantiques**. Contient les types forts (Structs) pour chaque élément (ex: `LogicalComponent`, `SystemFunction`) et les règles de classification (`Layer`, `Category`). |
+| **`capella/`**      | **Interopérabilité**. Parsers XML spécialisés pour lire les projets `.capella` (sémantique) et `.aird` (diagrammes) d'Eclipse Capella.                                                |
+| **`transformers/`** | **Génération**. Moteur de transformation Model-to-Text (Génération de code Rust/VHDL) et Text-to-Model (Interprétation des réponses IA).                                              |
+| **`validators/`**   | **Qualité**. Moteur de règles vérifiant la cohérence technique (liens brisés, orphelins) et la conformité méthodologique.                                                             |
+| **`loader.rs`**     | **Hydratation**. Charge les données depuis la base JSON-LD et reconstruit les liens d'objets en mémoire.                                                                              |
+| **`types.rs`**      | **Structures Unifiées**. Définit le `ProjectModel` global et l'`ArcadiaElement` générique utilisé comme pivot.                                                                        |
+| **`traceability/`** | **Navigation**. Gère l'indexation inverse des liens (ex: trouver "qui alloue cette fonction ?") via le `Tracer`.                                                                      |
 
-| Module      | Description                                                                                                                                                           |
-| :---------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.rs`  | (Anciennement `model.rs`) Définit la structure racine `ProjectModel` qui contient toutes les couches (OA, SA, LA, PA, EPBS) en mémoire.                               |
-| `loader.rs` | Contient la logique d'extraction (`ModelLoader`). Il scanne les collections, effectue l'expansion JSON-LD, valide et instancie les objets selon leur type sémantique. |
-| `common.rs` | Types primitifs partagés : `Uuid`, `I18nString` (multilingue), `BaseEntity` (ID, dates).                                                                              |
-| `arcadia/`  | Implémentation des concepts métier Arcadia (Acteurs, Fonctions, Composants) via des macros.                                                                           |
+## 🔑 Concepts Clés
 
----
+### 1. Le Double Modèle (Generic vs Typed)
 
-## 🧠 Le Modèle en Mémoire (`ProjectModel`)
+Le moteur gère deux représentations des données :
 
-L'objet `ProjectModel` est le **jumeau numérique** du projet stocké sur le disque.
-Il est organisé par couches d'ingénierie et défini dans `src/model_engine/types.rs` :
+- **Le Modèle Générique (`ArcadiaElement`)** :
+- Utilisé par le `Loader` et l'IA.
+- Flexible : C'est un "sac de propriétés" (`HashMap`).
+- Permet de manipuler des données incomplètes ou en cours de création.
 
-```rust
-pub struct ProjectModel {
-    #[serde(default)]
-    pub oa: OperationalAnalysis,   // Besoins & Métier
-    #[serde(default)]
-    pub sa: SystemAnalysis,        // Ce que fait le système
-    #[serde(default)]
-    pub la: LogicalArchitecture,   // Comment (Logique)
-    #[serde(default)]
-    pub pa: PhysicalArchitecture,  // Comment (Physique/Logiciel)
-    #[serde(default)]
-    pub epbs: EPBS,                // Configuration Produits
-    #[serde(default)]
-    pub meta: ProjectMeta,         // Métadonnées globales
-}
-```
+- **Le Modèle Typé (via `arcadia/*`)** :
+- Utilisé par les `Validators` et `Transformers`.
+- Strict : Un `LogicalComponent` est une struct Rust précise.
+- Garantit la sûreté du typage pour la génération de code.
 
-Chaque couche encapsule ses propres entités (acteurs, fonctions, composants, échanges, etc.) dans des vecteurs typés (`Vec<ArcadiaElement>`).
+### 2. La Gestion des Liens
 
----
+Dans la base de données, les liens sont directionnels (ex: `Component --allocatedFunctions--> Function`).
+Le **`Tracer`** construit dynamiquement l'index inverse au chargement, permettant des requêtes bidirectionnelles instantanées (ex: `Function --isAllocatedTo--> Component`).
 
-## 🔧 Implémentation Arcadia (`arcadia/`)
+## 🚀 Guide d'Utilisation Rapide
 
-Pour éviter la répétition de code (boilerplate) et garantir la conformité avec les schémas JSON, nous utilisons une macro Rust puissante : **`arcadia_element!`**.
-
-### La macro `arcadia_element!`
-
-Définie dans `arcadia/metamodel.rs`, elle injecte automatiquement :
-
-- **Héritage technique (`BaseEntity`)** : `id`, `$schema`, `createdAt`, `updatedAt`.
-- **Héritage métier (`ArcadiaProperties`)** : `name`, `description`, `xmi_id`, `tags`, `propertyValues` (PVMT).
-- **Champs spécifiques** : Ceux définis explicitement pour l'élément Arcadia (ex. nature, allocations, relations, etc.).
-
-### Exemple d’implémentation (Physical Component)
+### Chargement d'un projet
 
 ```rust
-arcadia_element!(PhysicalComponent {
-    nature: String, // "Node" ou "Behavior"
-
-    #[serde(default)]
-    sub_components: Vec<ElementRef>, // Liste d'UUIDs
-
-    #[serde(rename = "allocatedFunctions", default)]
-    allocated_functions: Vec<ElementRef>
-});
-```
-
-Cette macro génère une `struct PhysicalComponent` complète, prête à être sérialisée/désérialisée par **Serde**, avec tous les champs techniques et métier nécessaires.
-
----
-
-## 📥 Le Chargeur (`loader.rs`)
-
-Le `ModelLoader` est responsable de l'**hydratation** du modèle en mémoire à partir de la `json_db`. Il utilise une approche sémantique robuste basée sur le vocabulaire centralisé (`vocabulary.rs`).
-
-### Responsabilités
-
-1.  **Connexion** : Se connecter au `StorageEngine` (via `CollectionsManager`).
-2.  **Expansion JSON-LD** : Utiliser le `JsonLdProcessor` pour résoudre les types (ex: `"oa:Actor"` devient `"https://raise.io/ontology/arcadia/oa#OperationalActor"`).
-3.  **Dispatch** : Trier les éléments dans les bonnes couches (`OA`, `SA`, `LA`...) en se basant sur leur URI de type canonique, et non sur des noms de fichiers ou de collections arbitraires.
-
-### Utilisation
-
-Le chargement est une opération lourde (I/O + CPU) qui doit être exécutée dans un thread dédié (`spawn_blocking`).
-
-```rust
-// 1. Initialiser le loader (depuis une commande Tauri)
-// Utilise StorageEngine cloné pour être thread-safe et indépendant de l'état Tauri
-let loader = ModelLoader::from_engine(&storage_engine, "space_id", "db_id");
-
-// 2. Charger tout le projet (Synchrone, bloquant)
+use crate::model_engine::loader::ModelLoader;
+// Supposons que 'storage' est injecté par Tauri
+let loader = ModelLoader::new(&storage, "my_space", "my_project");
 let model = loader.load_full_model()?;
 
-// 3. Accéder aux données typées
-println!("Nombre d'acteurs OA : {}", model.oa.actors.len());
+println!("Projet chargé : {} éléments", model.meta.element_count);
+
 ```
 
----
+### Validation
 
-## 🛠️ Types Communs (`common.rs`)
+```rust
+use crate::model_engine::validators::{ConsistencyChecker, ComplianceValidator};
 
-### `I18nString`
+let validator = ComplianceValidator::new();
+let issues = validator.validate(&model);
 
-`I18nString` gère le **multilinguisme nativement** :
+if !issues.is_empty() {
+    println!("Attention, {} problèmes détectés !", issues.len());
+}
 
-- Peut être une simple `String` : `"Bonjour"`
-- Peut être une map clé/valeur : `{ "fr": "Bonjour", "en": "Hello" }`
+```
 
-Cela permet de stocker les noms, descriptions et labels dans plusieurs langues sans complexifier le modèle métier.
+### Transformation (Génération de Code)
 
-### `ElementRef`
+```rust
+use crate::model_engine::transformers::{get_transformer, TransformationDomain};
 
-`ElementRef` représente une référence vers un autre élément du modèle :
+let generator = get_transformer(TransformationDomain::Software);
+let input = serde_json::to_value(&model)?;
+let output = generator.transform(&input)?;
 
-- Pour l'instant, c’est un **alias vers `String` (UUID)**.
-- À l’avenir, cela pourra devenir un type intelligent permettant de **résoudre la référence** (pointeur vers l'objet réel en mémoire, avec éventuellement une API de navigation).
+println!("Code généré : {}", output["code"]);
 
----
+```
 
-## ⚠️ Points d’Attention
+## ⚠️ Conventions de Développement
 
-- **Adhésion Sémantique** : Le moteur ne se base plus sur des chaînes magiques. Il utilise les constantes définies dans `src/json_db/jsonld/vocabulary.rs`. Si un type JSON-LD est inconnu, l'élément ne sera pas correctement classé dans le modèle en mémoire.
-- **Performance & Threading** : Le chargement (`load_full_model`) est synchrone pour simplifier la logique interne (parcours récursif, I/O fichier standard). Il doit impérativement être encapsulé dans `tauri::async_runtime::spawn_blocking` lorsqu'il est appelé depuis une commande asynchrone pour ne pas bloquer la boucle d'événements principale.
+1. **Immutabilité par défaut** : Le `ProjectModel` chargé est généralement traité en lecture seule par les services de transformation et de validation.
+2. **Séparation des préoccupation** :
 
----
+- Si ça concerne la _structure_ de la donnée -> `arcadia/`
+- Si ça concerne la _vérification_ -> `validators/`
+- Si ça concerne la _production_ -> `transformers/`
 
-Ce **Model Engine** fournit ainsi une base unique, cohérente et sémantiquement rigoureuse pour toutes les fonctionnalités d’analyse, de génération de code et d’IA de RAISE.
+3. **Gestion des Erreurs** : Utilisation systématique de `anyhow::Result` pour la propagation des erreurs contextuelles.
+
+```
+
+```

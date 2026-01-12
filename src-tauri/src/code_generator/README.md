@@ -10,38 +10,76 @@ Il constitue le pont critique entre la **modélisation formelle MBSE** et l'**im
 
 Contrairement aux générateurs classiques (trop rigides) ou aux LLMs purs (trop hallucinatoires), RAISE utilise une approche hybride en deux passes :
 
-1.  **Passe Symbolique (Squelette)** : Un moteur de templates déterministe (`Tera`) génère une structure de code garantie sans erreur de compilation (Imports, Classes, Types, Signatures).
-2.  **Passe Neuronale (Chair)** : L'IA (via `SoftwareAgent`) repasse sur le fichier pour injecter la logique métier intelligente aux points d'extension prévus.
-
-<!-- end list -->
+1. **Passe Symbolique (Squelette & Préservation)** : Un moteur de templates déterministe (`Tera`) génère une structure de code garantie sans erreur de compilation, tout en préservant le code existant grâce à une analyse syntaxique fine.
+2. **Passe Neuronale (Chair)** : L'IA (via `SoftwareAgent`) repasse sur le fichier pour injecter la logique métier intelligente aux points d'extension prévus.
 
 ```mermaid
 sequenceDiagram
     participant Agent as SoftwareAgent (IA)
     participant Gen as CodeGenerator (Symbolique)
+    participant Analyzer as Analyzers (Injection/Deps)
     participant Tpl as Tera Templates
     participant FS as FileSystem
-    participant LLM as Mistral/Gemini
 
     Note over Agent: 1. Intention "GenerateCode"
-    Agent->>Gen: generate_for_element(Actor)
-    Gen->>Tpl: Rendu "actor_struct.rs"
-    Tpl-->>Gen: Code Squelette (Struct, Impl, Imports)
-    Gen->>FS: Écriture Fichier.rs
+    Agent->>Gen: generate_for_element(Actor, Lang)
 
-    Note over FS: Le fichier contient un marqueur<br/>// AI_INJECTION_POINT
+    rect rgb(240, 248, 255)
+        Note right of Gen: Phase d'Analyse
+        Gen->>Analyzer: analyze_dependencies(Model)
+        Analyzer-->>Gen: Imports & Includes
 
-    Agent->>FS: Relire Fichier.rs
-    Agent->>LLM: "Remplace le marqueur par la logique : <Contexte>"
-    LLM-->>Agent: Code de la méthode execute()
-    Agent->>FS: Ré-écriture finale (Code complet)
+        Gen->>FS: Check if file exists
+        opt Fichier Existant
+            Gen->>Analyzer: extract_injections(FileContent)
+            Analyzer-->>Gen: UserCode Blocks
+        end
+    end
+
+    Gen->>Tpl: Render("template", Context + UserCode)
+    Tpl-->>Gen: Code Complet (Struct + Logic preserved)
+    Gen->>FS: Écriture Fichier
+    FS-->>Agent: PathBuf
+
 ```
+
+### Standards de code visés
+
+- **Software** :
+- **Rust** : `rustfmt`, `clippy`, conformité Rust 2021, Sérialisation `Serde`.
+- **C++** : C++17/20, séparation Header/Source (`.hpp`/`.cpp`), `pragma once`.
+- **TypeScript** : ESLint, Prettier, TSDoc, Classes exportées.
+
+- **Hardware** :
+- **VHDL** : IEEE 1076 (Entity/Architecture), Typage fort.
+- **Verilog** : IEEE 1364 (Modules standard), gestion `clk`/`rst`.
+
+### Méthodologies
+
+- **MBSE** : Alignement strict avec la méthodologie Arcadia (Capella).
+- **Traçabilité** : Le code généré contient des headers avec les UUIDs du modèle (Prêt pour **ISO 26262** / **DO-178C**).
+- **Round-Trip** : Capacité à régénérer le code sans écraser la logique métier manuelle ("Injection Points").
 
 ---
 
-## 🏗️ Architecture du Module
+## 🏗️ Architecture Interne
 
-L'architecture est modulaire pour supporter l'extension progressive vers de nouveaux langages (Logiciels et Matériels).
+Le module est subdivisé en trois sous-systèmes spécialisés :
+
+1. **`analyzers/`** : L'intelligence contextuelle.
+
+- `DependencyAnalyzer` : Construit le graphe d'imports.
+- `InjectionAnalyzer` : Extrait chirurgicalement le code utilisateur existant via Regex.
+
+2. **`generators/`** : La stratégie par langage.
+
+- Implémentations spécifiques (`RustGenerator`, `CppGenerator`, `VerilogGenerator`...) du trait `LanguageGenerator`.
+
+3. **`templates/`** : La couche de présentation.
+
+- Moteur `Tera` avec filtres typographiques (`pascal_case`, `snake_case`) et modèles `.tera`.
+
+---
 
 ```
 code_generator/
@@ -61,80 +99,29 @@ code_generator/
     └── rust_analyzer.rs             # Pour préserver le code existant lors des mises à jour
 ```
 
----
+## 📊 État d'avancement (v1.0.0)
 
-## 🛠️ Stack Technique
+| Composant           | Statut    | Description                                                |
+| ------------------- | --------- | ---------------------------------------------------------- |
+| **Moteur Tera**     | ✅ Stable | Intégration réussie, filtres `heck` actifs.                |
+| **Générateur Rust** | ✅ Actif  | Génère des structs propres avec `serde`.                   |
+| **Générateur C++**  | ✅ Actif  | Support multi-fichiers (Header + Source).                  |
+| **Générateur Web**  | ✅ Actif  | Support TypeScript/JavaScript.                             |
+| **Hardware Gen**    | ✅ Actif  | Support Verilog et VHDL pour FPGA/ASIC.                    |
+| **Analyse Graph**   | ✅ Actif  | Déduction automatique des `imports` Arcadia.               |
+| **Round-Trip**      | ✅ Actif  | Préservation totale du code manuel (`AI_INJECTION_POINT`). |
+| **API Tauri**       | ✅ Actif  | Commande `generate_source_code` exposée au frontend.       |
 
-Le module repose sur des bibliothèques Rust robustes pour garantir performance et sécurité.
-
-### Cœur (Implémenté)
-
-- **`tera`** : Moteur de template (équivalent Jinja2) pour la génération de squelettes sûrs et maintenables.
-- **`serde`** : Sérialisation/désérialisation universelle des modèles JSON-DB.
-- **`anyhow`** : Gestion robuste des erreurs et du contexte.
-
-### Avancé (Roadmap)
-
-- **`syn` / `quote`** : Manipulation de l'AST Rust (pour modifier du code existant sans casser la syntaxe).
-- **`swc`** : Parser TypeScript haute performance.
-- **`tree-sitter`** : Parsing multi-langage générique pour l'analyse d'impact.
-- **`rayon`** : Parallélisation de la génération pour les gros projets.
-
----
-
-## 🚀 Utilisation
-
-Ce module est conçu pour être piloté par le module `ai` (`SoftwareAgent`), mais peut être utilisé en standalone pour du scaffolding.
-
-### Via le CLI (Mode Hybride)
+## 🚀 Utilisation Rapide
 
 ```bash
-# 1. Créer l'objet en base (Modélisation)
-cargo run -p ai_cli -- classify "Crée un acteur Moteur" -x
+# Lancer toute la suite de tests de génération
+cargo test code_generator
 
-# 2. Générer le code (Implémentation)
-cargo run -p ai_cli -- classify "Génère le code Rust pour Moteur.rs. Contexte: Il doit gérer la surchauffe." -x
+# Invocation depuis le frontend (Tauri)
+invoke('generate_source_code', {
+  language: 'cpp',
+  model: { name: "FlightControl", id: "UUID..." }
+})
+
 ```
-
-### Via le Code (Rust)
-
-```rust
-let service = CodeGeneratorService::new(path);
-// Génère le squelette garanti sans erreur de syntaxe
-let files = service.generate_for_element(&actor_json, TargetLanguage::Rust)?;
-```
-
----
-
-## 📏 Références et Standards
-
-RAISE vise la conformité avec les standards industriels pour le code généré, afin d'assurer son intégration dans des chaînes critiques.
-
-### Standards de code visés
-
-- **Rust** : `rustfmt`, `clippy`, conformité Rust 2021.
-- **TypeScript** : ESLint, Prettier, TSDoc.
-- **Hardware** : IEEE 1076-2008 (VHDL), IEEE 1800-2017 (SystemVerilog).
-
-### Méthodologies
-
-- **MBSE** : Alignement strict avec la méthodologie Arcadia (Capella).
-- **Traçabilité** : Le code généré contient des headers avec les UUIDs du modèle (Prêt pour **ISO 26262** / **DO-178C**).
-- **MDA** : Approche Model-Driven Architecture conforme OMG.
-
----
-
-## 📊 État d'avancement (v0.1.0)
-
-| Composant           | Statut     | Description                                                         |
-| :------------------ | :--------- | :------------------------------------------------------------------ |
-| **Moteur Tera**     | ✅ Stable  | Intégration réussie, templates fonctionnels.                        |
-| **Générateur Rust** | ✅ Actif   | Génère des structs propres avec `serde`.                            |
-| **Injection IA**    | ✅ Actif   | Le `SoftwareAgent` remplit intelligemment les `AI_INJECTION_POINT`. |
-| **Analyse AST**     | ⚠️ Partiel | Détection basique des marqueurs, pas encore de parsing complet.     |
-| **Multi-Langage**   | ❌ Prévu   | TypeScript et Python sont les prochains sur la liste.               |
-| **Hardware Gen**    | ❌ Prévu   | Génération VHDL/Verilog pour FPGA.                                  |
-
----
-
-**Document version:** 1.1 (Fusion Architecture & Implémentation)

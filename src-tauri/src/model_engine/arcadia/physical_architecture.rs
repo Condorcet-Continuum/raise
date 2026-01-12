@@ -1,5 +1,5 @@
 use crate::arcadia_element;
-use crate::model_engine::common::ElementRef;
+use crate::model_engine::arcadia::common::ElementRef;
 
 // --- Physical Component (Node / Behavior) ---
 arcadia_element!(PhysicalComponent {
@@ -60,7 +60,7 @@ arcadia_element!(PhysicalLink {
 });
 
 // --- Component Exchange (Physique) ---
-arcadia_element!(ComponentExchange {
+arcadia_element!(PhysicalComponentExchange {
     source: ElementRef,
     target: ElementRef,
 
@@ -70,3 +70,38 @@ arcadia_element!(ComponentExchange {
     #[serde(rename = "allocatesFunctionalExchanges", default)]
     allocates_functional_exchanges: Vec<ElementRef>
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model_engine::arcadia::common::{BaseEntity, I18nString};
+    use crate::model_engine::arcadia::metamodel::ArcadiaProperties;
+
+    #[test]
+    fn test_physical_component_node() {
+        let node = PhysicalComponent {
+            base: BaseEntity {
+                id: "pc-1".into(),
+                created_at: "".into(),
+                modified_at: "".into(),
+            },
+            props: ArcadiaProperties {
+                xmi_id: None,
+                name: I18nString::String("Server".into()),
+                description: None,
+                summary: None,
+                tags: vec![],
+                property_values: vec![],
+            },
+            nature: "Node".to_string(),
+            sub_components: vec![],
+            allocated_functions: vec![],
+            realized_logical_components: vec![],
+            deployed_on: vec![],
+            deployed_components: vec!["pc-2-behavior".into()], // Héberge un composant comportemental
+        };
+
+        assert_eq!(node.nature, "Node");
+        assert_eq!(node.deployed_components.len(), 1);
+    }
+}

@@ -1,13 +1,15 @@
-use crate::model_engine::common::{ElementRef, I18nString};
+use super::common::{ElementRef, I18nString};
 use serde::{Deserialize, Serialize};
 
 /// Propriétés fonctionnelles communes (Arcadia Metamodel)
-/// Correspond à `BaseProperties` du schéma
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Tous les éléments métiers (Acteurs, Fonctions, Composants...) ont ces champs.
+// CORRECTION : Ajout de `Default` ici
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ArcadiaProperties {
     #[serde(rename = "xmi_id", skip_serializing_if = "Option::is_none")]
     pub xmi_id: Option<String>,
 
+    #[serde(default)]
     pub name: I18nString,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -24,8 +26,8 @@ pub struct ArcadiaProperties {
     pub property_values: Vec<ElementRef>,
 }
 
-/// Macro pour faciliter la composition des structures
-/// CORRECTION : Ajout du support pour les attributs (#[serde...])
+/// Macro pour générer les structures typées en composant les socles communs.
+/// Les chemins sont absolus ($crate::...) pour fonctionner depuis n'importe où.
 #[macro_export]
 macro_rules! arcadia_element {
     (
@@ -33,24 +35,45 @@ macro_rules! arcadia_element {
             $(
                 $(#[$meta:meta])* // Capture les attributs (ex: #[serde(rename = "...")])
                 $field:ident : $type:ty
-            ),* $(,)? // Virgule traînante optionnelle
+            ),* $(,)?
         }
     ) => {
         #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub struct $name {
             // Socle technique (ID, Dates...)
             #[serde(flatten)]
-            pub base: $crate::model_engine::common::BaseEntity,
+            pub base: $crate::model_engine::arcadia::common::BaseEntity,
 
             // Socle métier (Nom, Desc, Tags...)
             #[serde(flatten)]
             pub props: $crate::model_engine::arcadia::metamodel::ArcadiaProperties,
 
-            // Champs spécifiques déclarés dans l'appel
+            // Champs spécifiques déclarés dans l'appel de la macro
             $(
-                $(#[$meta])* // Ré-applique les attributs capturés sur le champ
+                $(#[$meta])*
                 pub $field: $type
             ),*
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_arcadia_properties_serialization() {
+        let props = ArcadiaProperties {
+            xmi_id: Some("xmi_1".to_string()),
+            name: I18nString::String("MyElement".to_string()),
+            description: None,
+            summary: None,
+            tags: vec!["tag1".to_string()],
+            property_values: vec![],
+        };
+
+        let json = serde_json::to_string(&props).unwrap();
+        assert!(json.contains("xmi_1"));
+        assert!(json.contains("MyElement"));
+    }
 }

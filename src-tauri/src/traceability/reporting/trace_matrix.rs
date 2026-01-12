@@ -1,4 +1,6 @@
-use crate::model_engine::types::ProjectModel;
+// FICHIER : src-tauri/src/traceability/reporting/trace_matrix.rs
+
+use crate::model_engine::types::{NameType, ProjectModel};
 use crate::traceability::tracer::Tracer;
 use serde::Serialize;
 
@@ -18,31 +20,40 @@ pub struct TraceRow {
 pub struct MatrixGenerator;
 
 impl MatrixGenerator {
-    /// Génère une matrice montrant comment les Fonctions Système (SA) sont couvertes par les Composants Logiques (LA).
+    /// Génère une matrice SA -> LA (Fonctions Système vers Composants Logiques)
     pub fn generate_sa_to_la(model: &ProjectModel) -> TraceabilityMatrix {
         let tracer = Tracer::new(model);
         let mut rows = Vec::new();
 
         for func in &model.sa.functions {
-            // On cherche les éléments "downstream" (qui réalisent cette fonction)
+            // 1. Identification des éléments aval (Downstream)
             let realized_by = tracer.get_downstream_elements(&func.id);
 
-            // [CORRECTION] Utilisation de .name.as_str() pour gérer le NameType
+            // 2. Extraction des noms (avec gestion NameType)
             let targets: Vec<String> = realized_by
                 .iter()
-                .map(|e| e.name.as_str().to_string())
+                .map(|e| match &e.name {
+                    NameType::String(s) => s.clone(),
+                    _ => "Nom Inconnu".to_string(),
+                })
                 .collect();
 
+            // 3. Calcul du statut
             let status = if targets.is_empty() {
                 "Uncovered".to_string()
             } else {
                 "Covered".to_string()
             };
 
+            // 4. Extraction du nom source
+            let source_name = match &func.name {
+                NameType::String(s) => s.clone(),
+                _ => "Nom Inconnu".to_string(),
+            };
+
             rows.push(TraceRow {
                 source_id: func.id.clone(),
-                // [CORRECTION] Conversion NameType -> String
-                source_name: func.name.as_str().to_string(),
+                source_name,
                 target_ids: targets,
                 coverage_status: status,
             });
@@ -52,15 +63,17 @@ impl MatrixGenerator {
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel}; // [CORRECTION] Import NameType
+    use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
     use serde_json::json;
     use std::collections::HashMap;
 
-    // Helper pour créer un élément rapidement
-    // [CORRECTION] Pas de Default, construction manuelle
+    // Helper pour créer des éléments mockés
     fn create_element(id: &str, name: &str, props: serde_json::Value) -> ArcadiaElement {
         let mut properties = HashMap::new();
         if let Some(obj) = props.as_object() {
@@ -70,55 +83,42 @@ mod tests {
         }
         ArcadiaElement {
             id: id.to_string(),
-            // [CORRECTION] Envelopper dans l'enum
             name: NameType::String(name.to_string()),
-            // [CORRECTION] Champ kind obligatoire
             kind: "Element".to_string(),
+            // CORRECTION : Initialisation du champ description ajouté récemment
+            description: None,
             properties,
         }
     }
 
     #[test]
-    fn test_matrix_sa_to_la_coverage() {
+    fn test_matrix_generation_sa_to_la() {
         let mut model = ProjectModel::default();
 
-        // 1. Fonction SA couverte (elle pointe vers un composant LA)
-        let sa_func_covered = create_element(
-            "sa_func_1",
-            "Syst Function 1",
-            json!({ "allocatedTo": ["la_comp_1"] }),
-        );
+        // Cas 1 : Fonction couverte (Lien 'allocatedTo')
+        let func_covered = create_element("f1", "Fonction 1", json!({ "allocatedTo": ["comp1"] }));
 
-        // 2. Fonction SA non couverte (aucun lien)
-        let sa_func_uncovered = create_element("sa_func_2", "Syst Function 2", json!({}));
+        // Cas 2 : Fonction orpheline
+        let func_orphan = create_element("f2", "Fonction 2", json!({}));
 
-        // 3. Le composant LA cible (doit exister pour que le Tracer le trouve)
-        let la_comp = create_element("la_comp_1", "Logical Comp 1", json!({}));
+        // Cible (doit exister pour le Tracer)
+        let comp_target = create_element("comp1", "Composant 1", json!({}));
 
-        model.sa.functions = vec![sa_func_covered, sa_func_uncovered];
-        model.la.components = vec![la_comp];
+        model.sa.functions = vec![func_covered, func_orphan];
+        model.la.components = vec![comp_target];
 
-        // Génération de la matrice
         let matrix = MatrixGenerator::generate_sa_to_la(&model);
 
-        assert_eq!(matrix.rows.len(), 2, "La matrice doit contenir 2 lignes");
+        assert_eq!(matrix.rows.len(), 2);
 
-        // Vérification Ligne 1 : Covered
-        let row_1 = matrix
-            .rows
-            .iter()
-            .find(|r| r.source_id == "sa_func_1")
-            .unwrap();
-        assert_eq!(row_1.coverage_status, "Covered");
-        assert!(row_1.target_ids.contains(&"Logical Comp 1".to_string()));
+        // Vérification Ligne 1
+        let row1 = matrix.rows.iter().find(|r| r.source_id == "f1").unwrap();
+        assert_eq!(row1.coverage_status, "Covered");
+        assert!(row1.target_ids.contains(&"Composant 1".to_string()));
 
-        // Vérification Ligne 2 : Uncovered
-        let row_2 = matrix
-            .rows
-            .iter()
-            .find(|r| r.source_id == "sa_func_2")
-            .unwrap();
-        assert_eq!(row_2.coverage_status, "Uncovered");
-        assert!(row_2.target_ids.is_empty());
+        // Vérification Ligne 2
+        let row2 = matrix.rows.iter().find(|r| r.source_id == "f2").unwrap();
+        assert_eq!(row2.coverage_status, "Uncovered");
+        assert!(row2.target_ids.is_empty());
     }
 }

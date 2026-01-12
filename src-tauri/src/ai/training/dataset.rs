@@ -1,218 +1,121 @@
-use serde_json::json;
-use std::env;
-use std::fs::{self, File};
-use std::io::Write;
-use std::path::PathBuf;
-use tauri::State;
-
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
+use serde::{Deserialize, Serialize};
 
-// --- 1. La Commande Tauri (Le Wrapper) ---
-#[tauri::command]
-pub async fn ai_export_dataset(
-    storage: State<'_, StorageEngine>,
-    output_path: String,
-    space: String,
-    db_name: String,
-) -> Result<String, String> {
-    // On appelle la logique pure en passant la référence interne (&StorageEngine)
-    // Cela permet de tester la logique sans avoir besoin de mocker l'objet "State" de Tauri
-    export_logic(storage.inner(), output_path, space, db_name)
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct TrainingExample {
+    pub instruction: String,
+    pub input: String,
+    pub output: String,
 }
 
-// --- 2. La Logique Métier (Testable) ---
-pub fn export_logic(
+/// Extrait les données spécifiquement pour un domaine métier à partir du JSON-DB.
+/// Cette fonction est utilisée par le moteur d'entraînement natif.
+pub fn extract_domain_data(
     storage: &StorageEngine,
-    output_path: String,
-    space: String,
-    db_name: String,
-) -> Result<String, String> {
-    println!(
-        "🦀 Rust : Export Logic (Space: {}, DB: {})...",
-        space, db_name
-    );
+    space: &str,
+    db_name: &str,
+    domain: &str,
+) -> Result<Vec<TrainingExample>, String> {
+    let manager = CollectionsManager::new(storage, space, db_name);
+    let mut dataset = Vec::new();
 
-    let manager = CollectionsManager::new(storage, &space, &db_name);
+    // Récupération de toutes les collections pour filtrer celles du domaine
+    let collections = manager.list_collections().map_err(|e| e.to_string())?;
 
-    // Récupération de la variable d'env (Mockable via std::env::set_var dans les tests)
-    let env_path_str =
-        env::var("PATH_RAISE_DATASET").unwrap_or_else(|_| "~/raise_dataset".to_string());
-
-    let base_path = if env_path_str.starts_with("~/") {
-        let home = env::var("HOME").map_err(|_| "Impossible de trouver $HOME".to_string())?;
-        PathBuf::from(env_path_str.replace("~", &home))
-    } else {
-        PathBuf::from(&env_path_str)
-    };
-
-    let training_dir = base_path.join("training");
-    if !training_dir.exists() {
-        fs::create_dir_all(&training_dir)
-            .map_err(|e| format!("Erreur création dossier training : {}", e))?;
-    }
-    let full_file_path = training_dir.join(&output_path);
-
-    let mut file = File::create(&full_file_path)
-        .map_err(|e| format!("Impossible de créer le fichier de sortie : {}", e))?;
-
-    let collections = manager
-        .list_collections()
-        .map_err(|e| format!("Erreur listing collections : {}", e))?;
-
-    let mut count = 0;
-
-    for col_name in collections {
-        if col_name.starts_with('_') {
+    for col in collections {
+        // Logique de filtrage : on cherche le nom du domaine dans le nom de la collection
+        // ou on prend tout si le domaine est "all".
+        if !col.contains(domain) && domain != "all" {
             continue;
         }
 
-        let documents = manager
-            .list_all(&col_name)
-            .map_err(|e| format!("Erreur lecture collection {}: {}", col_name, e))?;
+        let docs = manager.list_all(&col).map_err(|e| e.to_string())?;
 
-        for doc in documents {
-            let doc_id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-
-            let doc_name = doc
-                .get("name")
-                .or(doc.get("label"))
-                .or(doc.get("title"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(doc_id);
-
-            let training_entry = json!({
-                "instruction": format!("Voici un objet technique de type '{}' provenant de la base Arcadia. Analyse sa structure.", col_name),
-                "input": serde_json::to_string(&doc).unwrap_or_default(),
-                "output": format!("Ceci est l'entité '{}' (ID: {}). Elle est définie dans la collection '{}' du projet '{}'.",
-                    doc_name, doc_id, col_name, space)
+        for doc in docs {
+            // Construction de l'exemple d'entraînement structuré
+            dataset.push(TrainingExample {
+                instruction: format!("Analyser cet élément technique du domaine {}.", domain),
+                input: serde_json::to_string(&doc).unwrap_or_default(),
+                output: format!(
+                    "L'entité appartient à la collection '{}' dans l'espace projet '{}'.",
+                    col, space
+                ),
             });
-
-            if let Err(e) = writeln!(file, "{}", training_entry) {
-                eprintln!("❌ Erreur écriture ligne : {}", e);
-            }
-            count += 1;
         }
     }
 
-    Ok(format!(
-        "Export terminé ! {} documents extraits vers : {}",
-        count,
-        full_file_path.to_string_lossy()
-    ))
+    Ok(dataset)
 }
 
-// --- 3. Les Tests Unitaires ---
+// --- COMMANDES TAURI ---
+
+#[tauri::command]
+pub async fn ai_export_dataset(
+    storage: tauri::State<'_, StorageEngine>,
+    space: String,
+    db_name: String,
+    domain: String,
+) -> Result<Vec<TrainingExample>, String> {
+    // Cette commande permet au frontend de prévisualiser ou d'exporter les données
+    extract_domain_data(storage.inner(), &space, &db_name, &domain)
+}
+
+// --- TESTS UNITAIRES ---
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json_db::storage::JsonDbConfig;
     use serde_json::json;
-    use std::io::BufRead;
     use tempfile::tempdir;
 
-    // Helper pour créer un moteur de stockage temporaire
-    fn create_test_storage() -> (StorageEngine, tempfile::TempDir) {
-        let temp_dir = tempdir().expect("Impossible de créer dossier temp DB");
+    #[test]
+    fn test_extract_domain_data_filtering() {
+        // A. Setup d'une base de données temporaire
+        let temp_dir = tempdir().expect("Échec création dossier temp");
         let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
-        (storage, temp_dir)
-    }
 
-    #[test]
-    fn test_export_dataset_nominal_case() {
-        // A. SETUP : Création d'une DB virtuelle
-        let (storage, _db_dir) = create_test_storage();
         let space = "test_space";
         let db = "test_db";
-        let col = "robots";
-
-        // Insertion de données via le Manager
         let manager = CollectionsManager::new(&storage, space, db);
-        manager
-            .create_collection(col, None)
-            .expect("Création collection failed");
 
-        let doc1 = json!({
-            "id": "r1",
-            "name": "R2D2",
-            "type": "astromech"
-        });
-        manager.insert_raw(col, &doc1).expect("Insert failed");
+        // B. Création de collections (une 'safety' et une 'other')
+        manager.create_collection("safety_rules", None).unwrap();
+        manager.create_collection("general_info", None).unwrap();
 
-        // B. SETUP : Dossier de sortie temporaire (pour simuler ~/raise_dataset)
-        let dataset_dir = tempdir().expect("Impossible de créer dossier dataset");
-        // On force la variable d'env pour le test
-        env::set_var("PATH_RAISE_DATASET", dataset_dir.path());
+        let doc = json!({"id": "1", "content": "test"});
+        manager.insert_raw("safety_rules", &doc).unwrap();
+        manager.insert_raw("general_info", &doc).unwrap();
 
-        // C. EXECUTION : Lancement de l'export
-        let output_filename = "test_dataset.jsonl";
-        let result = export_logic(
-            &storage,
-            output_filename.to_string(),
-            space.to_string(),
-            db.to_string(),
+        // C. Test du filtrage par domaine 'safety'
+        let results = extract_domain_data(&storage, space, db, "safety").unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "Devrait trouver uniquement la collection safety"
         );
+        assert!(results[0].instruction.contains("safety"));
 
-        // D. ASSERTIONS
-        assert!(result.is_ok(), "L'export a échoué : {:?}", result.err());
-
-        // Vérification du fichier généré
-        let expected_path = dataset_dir.path().join("training").join(output_filename);
-        assert!(expected_path.exists(), "Le fichier JSONL n'a pas été créé");
-
-        // Lecture du contenu
-        let file = File::open(expected_path).expect("Impossible d'ouvrir le fichier généré");
-        let lines: Vec<String> = std::io::BufReader::new(file)
-            .lines()
-            .collect::<Result<_, _>>()
-            .unwrap();
-
-        assert_eq!(lines.len(), 1, "Il devrait y avoir 1 ligne dans le dataset");
-
-        let first_line: serde_json::Value =
-            serde_json::from_str(&lines[0]).expect("JSONL invalide");
-
-        // Vérification du contenu sémantique
-        assert!(first_line["instruction"]
-            .as_str()
-            .unwrap()
-            .contains("robots"));
-        assert!(first_line["output"].as_str().unwrap().contains("R2D2"));
-        assert!(first_line["output"]
-            .as_str()
-            .unwrap()
-            .contains("test_space"));
+        // D. Test avec le domaine 'all'
+        let all_results = extract_domain_data(&storage, space, db, "all").unwrap();
+        assert_eq!(
+            all_results.len(),
+            2,
+            "Devrait trouver toutes les collections"
+        );
     }
 
     #[test]
-    fn test_export_empty_db() {
-        // A. Setup Vide
-        let (storage, _db_dir) = create_test_storage();
-        let dataset_dir = tempdir().expect("dataset temp dir");
-        env::set_var("PATH_RAISE_DATASET", dataset_dir.path());
+    fn test_extract_empty_domain() {
+        let temp_dir = tempdir().unwrap();
+        let storage = StorageEngine::new(JsonDbConfig::new(temp_dir.path().to_path_buf()));
 
-        // B. Execution
-        let result = export_logic(
-            &storage,
-            "empty.jsonl".to_string(),
-            "vide".to_string(),
-            "db".to_string(),
-        );
-
-        // C. Assertion
-        assert!(result.is_ok());
-        let msg = result.unwrap();
+        let results = extract_domain_data(&storage, "space", "db", "nonexistent").unwrap();
         assert!(
-            msg.contains("0 documents"),
-            "Le message devrait indiquer 0 documents"
+            results.is_empty(),
+            "Le dataset devrait être vide pour un domaine inconnu"
         );
-
-        // Le fichier doit quand même exister (mais vide ou juste créé)
-        let expected_path = dataset_dir.path().join("training").join("empty.jsonl");
-        assert!(expected_path.exists());
-
-        let metadata = fs::metadata(expected_path).unwrap();
-        assert_eq!(metadata.len(), 0, "Le fichier devrait être vide");
     }
 }

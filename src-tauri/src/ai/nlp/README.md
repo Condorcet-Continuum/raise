@@ -1,87 +1,151 @@
 # Module `ai/nlp` — Traitement du Langage Naturel
 
-Ce module regroupe les outils de **bas niveau** pour la manipulation technique du texte. Contrairement au module `agents` qui gère le sens (sémantique), le module `nlp` gère la forme (syntaxe, tokens, vecteurs).
+Ce module regroupe les outils de **bas niveau** pour la manipulation technique du texte dans RAISE. Il combine des approches **Symboliques** (Règles, Regex) et **Sémantiques** (Vecteurs IA) pour préparer les données avant leur traitement par les Agents ou le RAG.
 
 Il sert de bibliothèque utilitaire transversale pour `llm` (gestion du contexte) et `context` (préparation des données RAG).
 
+---
+
 ## 🎯 Objectifs
 
-1.  **Tokenization** : Transformer le texte brut en tokens pour estimer la taille des prompts et éviter de dépasser la fenêtre de contexte des modèles (ex: 4096 tokens pour Mistral).
-2.  **Chunking (Découpage)** : Diviser intelligemment les documents longs en morceaux digestes pour le RAG.
-3.  **Vectorisation (Embeddings)** : Transformer le texte en vecteurs mathématiques (`Vec<f32>`) pour la recherche sémantique (via Qdrant/LEANN).
+1.  **Normalisation** : Nettoyer le texte utilisateur (accents, majuscules, stop words) pour standardiser les recherches.
+2.  **Extraction d'Entités** : Identifier les concepts clés (Noms propres, Types Arcadia) sans appeler le LLM.
+3.  **Vectorisation (Embeddings)** : Transformer le texte en vecteurs mathématiques (`Vec<f32>`) via GPU ou CPU pour la recherche sémantique.
+4.  **Découpage (Chunking)** : Diviser intelligemment les documents longs pour le RAG.
 
 ---
 
-## 📂 Architecture Prévue
+## 📂 Architecture & Flux
+
+Le module est divisé en deux pipelines complémentaires :
 
 ```mermaid
 graph TD
-    Input[Texte Brut] -->|Tokenizer| Tokens[Liste de Tokens]
-    Tokens -->|Counter| Cost[Estimation Coût/Taille]
+    Input[Texte Utilisateur / Doc] --> Pre[Preprocessing & Normalisation]
 
-    Input -->|Splitter| Chunks[Fragments de Texte]
-    Chunks -->|Embedder| Vectors[Vecteurs (Float32)]
+    subgraph Symbolic_Path ["Pipeline Symbolique (Rapide)"]
+        Pre --> Tokenizer[Tokenization Mots-Clés]
+        Pre --> Parser[Intention Simple Regex]
+        Input --> Entities[Extraction Entités Nommées]
+    end
 
-    Vectors --> VectorDB[(Vector DB / Qdrant)]
+    subgraph Semantic_Path ["Pipeline Sémantique (IA)"]
+        Input --> Splitter[Découpage Chunks]
+        Splitter --> Embedder[Génération Vecteurs 384d]
+    end
+
+    Parser --> Router[Routage Rapide]
+    Embedder --> VectorDB[(Qdrant)]
 ```
 
-### 1\. `tokenizers` _(À implémenter)_
+---
 
-Wrapper autour de la crate Rust `tokenizers` (HuggingFace).
+## 🧩 Sous-Modules Implémentés
 
-- **Usage** : Avant d'envoyer une requête à `LlmClient`, on vérifie : `if count_tokens(prompt) > 4000 { error("Prompt trop long") }`.
-- **Modèles supportés** : BPE (Byte-Pair Encoding) compatible Llama/Mistral.
+### 1. `embeddings` (Moteur Vectoriel)
 
-### 2\. `splitting` _(À implémenter)_
+Gère la transformation Texte -> Vecteur.
 
-Algorithmes de découpage de texte.
+- **Support Hybride** : Utilise **Candle** (Rust Natif + GPU CUDA/Metal) par défaut, avec fallback sur **FastEmbed** (ONNX).
+- **Modèle** : `all-MiniLM-L6-v2` (384 dimensions).
+- **Documentation détaillée** : Voir `src-tauri/src/ai/nlp/embeddings/README.md`.
 
-- **Naïf** : Découpage par caractères (ex: tous les 1000 chars).
-- **Sémantique** : Découpage respectant les paragraphes (Markdown headers, sauts de ligne) pour ne pas couper une phrase en deux.
-- **Overlap** : Gestion du chevauchement (ex: 10% de recouvrement entre deux chunks) pour préserver le contexte aux frontières.
+### 2. `preprocessing` (Nettoyage)
 
-### 3\. `embeddings` _(À implémenter)_
+Prépare le texte pour l'analyse.
 
-Interface pour générer des vecteurs.
+- **Normalisation** : Conversion minuscule, suppression des accents (ex: "Hélène" -> "helene").
+- **Stop Words** : Filtrage des mots vides français ("le", "la", "pour", "avec"...).
+- **Ponctuation** : Remplacement des caractères spéciaux par des espaces.
 
-- **Local** : Utilisation de `ort` (ONNX Runtime) avec un petit modèle type `all-MiniLM-L6-v2` (\~80MB) embarqué dans l'app.
-- **Cloud** : Appel à l'API Embeddings de Google/OpenAI (si mode Cloud activé).
+### 3. `entity_extractor` (NER - Named Entity Recognition)
+
+Extraction heuristique sans LLM (Regex).
+
+- **Types Arcadia** : Détecte `Fonction`, `Composant`, `Acteur`, `Interface`, etc.
+- **Noms Propres** : Détecte les séquences avec Majuscules (ex: "Station Sol").
+- **Citations** : Capture le contenu entre guillemets.
+
+### 4. `parser` (Intentions Rapides)
+
+Classification d'intention basée sur des règles (Zero-Latency).
+
+- Détecte les actions simples : `Create`, `Delete`, `Search`, `Explain`.
+- Permet de court-circuiter le LLM pour des commandes basiques.
+
+### 5. `splitting` (Chunking)
+
+Découpage de documents pour le RAG.
+
+- Utilise la crate `text-splitter`.
+- Respecte la sémantique (paragraphes) et une limite de tokens définie.
+
+### 6. `tokenizers` (Analyse Lexicale)
+
+Outils légers pour la recherche par mots-clés.
+
+- `tokenize` : Produit une liste de mots-clés normalisés.
+- `truncate_tokens` : Coupe une chaîne pour respecter une fenêtre contextuelle (heuristique).
 
 ---
 
-## 🔄 Intégration dans le flux
+## 🚀 Exemples d'Utilisation
 
-### Flux actuel (v0.1.0)
+### Pipeline de Recherche (Search)
 
-Le module est passif. Le découpage est fait sommairement dans `ai/context/retriever.rs`.
+```rust
+use crate::ai::nlp::{preprocessing, tokenizers};
 
-### Flux cible (v0.2.0)
+let query = "Je veux chercher le composant 'Moteur'";
+// 1. Extraction Entités
+let entities = entity_extractor::extract_entities(query);
+// -> Entity { text: "Moteur", category: QuotedLiteral }
 
-1.  **L'Agent** génère un prompt.
-2.  **NLP** calcule les tokens : "Attention, il ne reste que 500 tokens pour la réponse".
-3.  **Context** récupère un gros fichier de documentation.
-4.  **NLP** le découpe en chunks de 512 tokens.
-5.  **NLP** vectorise ces chunks.
-6.  **Context** cherche les 3 chunks les plus proches mathématiquement de la question utilisateur.
+// 2. Tokenization pour Index Inversé
+let keywords = tokenizers::tokenize(query);
+// -> ["veux", "chercher", "composant", "moteur"]
 
----
+```
 
-## 🛠️ Stack Technique envisagée
+### Pipeline d'Indexation (RAG)
 
-- **Crate `tokenizers`** : Standard industriel, écrit en Rust, très rapide.
-- **Crate `text-splitter`** : Pour le chunking intelligent.
-- **Crate `candle-core`** ou **`ort`** : Pour faire tourner des modèles d'embedding (BERT/MiniLM) directement en Rust sans Python.
+```rust
+use crate::ai::nlp::{splitting, embeddings};
+
+let doc_content = "Texte très long...";
+// 1. Découpage
+let chunks = splitting::split_text_into_chunks(doc_content, 512);
+
+// 2. Vectorisation (GPU si dispo)
+let mut engine = embeddings::EmbeddingEngine::new()?;
+let vectors = engine.embed_batch(chunks)?;
+
+```
 
 ---
 
 ## 📊 État d'Avancement
 
-| Composant             | Statut     | Priorité                          |
-| :-------------------- | :--------- | :-------------------------------- |
-| **Token Counter**     | ❌ À faire | Haute (pour robustesse LLM)       |
-| **Markdown Splitter** | ❌ À faire | Moyenne (pour RAG avancé)         |
-| **ONNX Embedder**     | ❌ À faire | Basse (pour recherche sémantique) |
+| Composant            | Statut        | Technologie                    |
+| -------------------- | ------------- | ------------------------------ |
+| **Preprocessing**    | ✅ Implémenté | Regex / Chars mapping          |
+| **Embeddings**       | ✅ Implémenté | Candle (GPU) / FastEmbed (CPU) |
+| **Entity Extractor** | ✅ Implémenté | Regex Heuristique              |
+| **Parser (Intent)**  | ✅ Implémenté | Rule-Based                     |
+| **Splitter**         | ✅ Implémenté | `text-splitter`                |
+| **Tokenizers**       | ✅ Implémenté | Whitespace / Heuristique       |
 
 ---
 
-> **Note :** Ce module est pour l'instant une coquille architecturale destinée à accueillir la complexité croissante du traitement de texte au fur et à mesure que RAISE montera en puissance.
+## ⚠️ Notes Techniques
+
+- **Performance** : Le module est conçu pour être "Zero-Latency" sur le chemin critique (Parser/Extractor). Seuls les Embeddings peuvent prendre quelques millisecondes (accélérés par GPU).
+- **Langue** : Optimisé pour le **Français** (Stopwords, Accents), mais compatible Anglais par défaut.
+
+```
+
+```
+
+```
+
+```

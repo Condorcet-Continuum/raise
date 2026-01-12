@@ -1,48 +1,45 @@
 # Module `ai/agents` — Système Multi-Agents Neuro-Symbolique
 
-Ce module implémente la logique **exécutive** de l'IA de RAISE. Il transforme des requêtes en langage naturel (floues) en artefacts d'ingénierie formels (strictes, validés et persistés) selon la méthodologie **Arcadia**.
+Ce module implémente la logique **exécutive** de l'IA de RAISE. Il transforme des requêtes en langage naturel (floues) en artefacts d'ingénierie formels (stricts, validés et persistés) selon la méthodologie **Arcadia**.
+
+---
 
 ## 🧠 Architecture Globale
 
 Le système repose sur un pipeline **Comprendre → Décider → Agir** orchestré par un Dispatcher central.
 
-```text
-┌──────────────┐
-│  UTILISATEUR │
-└──────┬───────┘
-       │ "Crée une exigence de performance"
-       ▼
-┌──────────────────────┐         1. Classification         ┌───────────────────┐
-│      DISPATCHER      │ ────────────────────────────────▶ │ INTENT CLASSIFIER │
-│   (ai_commands.rs)   │ ◀──────────────────────────────── │ (Mode JSON Strict)│
-└──────────┬───────────┘         2. EngineeringIntent      └─────────┬─────────┘
-           │                                                         │
-           │ 3. Routage (Layer = TRANSVERSE)                         │
-           ▼                                                         ▼
-┌──────────────────────┐                                   ┌───────────────────┐
-│     AGENT SQUAD      │         4. Génération             │        LLM        │
-│  (TransverseAgent)   │ ────────────────────────────────▶ │  (Local / Cloud)  │
-└──────────┬───────────┘ ◀──────────────────────────────── └───────────────────┘
-           │                     5. JSON Détaillé (Brut)
-           │
-           │ 6. Écriture (Validation Schéma + UUID)
-           ▼
-┌──────────────────────┐
-│       JSON-DB        │
-│   (StorageEngine)    │
-└──────────────────────┘
-           │
-           │ 7. AgentResult { message, artifacts: [...] }
-           ▼
-    VERS FRONTEND
+```mermaid
+graph TD
+    User[Utilisateur] -->|Prompt| Dispatcher[Dispatcher / ai_chat]
+    Dispatcher -->|Classify| Intent[Intent Classifier]
+
+    Intent -->|EngineeringIntent| Router{Router}
+
+    subgraph "Squad d'Agents Spécialisés"
+        Router -->|OA| Business[Business Agent]
+        Router -->|SA| System[System Agent]
+        Router -->|LA| Software[Software Agent]
+        Router -->|PA| Hardware[Hardware Agent]
+        Router -->|EPBS| Epbs[Epbs Agent]
+        Router -->|DATA| Data[Data Agent]
+        Router -->|TRANSVERSE| Transverse[Transverse Agent]
+    end
+
+    subgraph "Agent Toolbox (Shared Utils)"
+        Business & System & Software & Hardware & Epbs & Data & Transverse -->|1. Extract JSON| ToolJson[Tools: JSON Extractor]
+        Business & System & Software & Hardware & Epbs & Data & Transverse -->|2. Save File| ToolSave[Tools: Save Artifact]
+    end
+
+    ToolSave -->|Write JSON| FS[File System / JSON DB]
+    ToolSave -->|Return| Result[AgentResult]
 
 ```
 
 ---
 
-## 👥 La "Squad" d'Agents (Spécialisation)
+## 👥 La "Squad" d'Agents
 
-Contrairement à une approche monolithique, RAISE utilise une **équipe d'agents spécialisés**, chacun expert dans sa couche d'abstraction Arcadia.
+Chaque agent est expert dans sa couche d'abstraction Arcadia, mais partage désormais la même infrastructure technique (**AgentToolbox**).
 
 | Agent               | Rôle & Responsabilités | Couche         | Schémas gérés                                              |
 | ------------------- | ---------------------- | -------------- | ---------------------------------------------------------- |
@@ -56,84 +53,68 @@ Contrairement à une approche monolithique, RAISE utilise une **équipe d'agents
 
 ---
 
-## 🛡️ Robustesse & Tolérance aux Pannes
+## 🛠️ Refactoring & Optimisation (AgentToolbox)
 
-Le module a été durci pour fonctionner avec des **Small Language Models (SLM)** locaux (ex: Mistral, Llama 3) qui sont souvent "bavards" ou imprécis.
+Le module a été massivement optimisé pour éliminer la duplication de code et garantir la robustesse.
 
-### 1. Parsing "Chirurgical" (`extract_json`)
+### 1. Centralisation I/O (`tools::save_artifact`)
 
-Les agents n'essaient plus de parser toute la réponse du LLM. Ils utilisent une méthode d'extraction intelligente :
+Les agents ne gèrent plus manuellement les chemins de fichiers ou la création de dossiers. Ils délèguent cette tâche à la **Toolbox** (`mod.rs`).
 
-- Ignorer les balises Markdown (````json`).
-- Repérer la première accolade `{` et la dernière `}`.
-- Couper tout le texte explicatif avant ou après.
+- **Avantage** : Si la structure des dossiers change (`un2/sa/...`), il suffit de modifier une seule fonction pour mettre à jour les 7 agents.
+- **Standardisation** : Garantie que tous les artefacts ont un ID, un nom et sont stockés au bon endroit.
 
-### 2. Intent Classifier Tolérant
+### 2. Parsing Robuste (`tools::extract_json_from_llm`)
 
-- **Structure Plate** : `{ "intent": "...", "layer": "SA" }` (plus robuste que les structures imbriquées).
-- **Champs Optionnels** : Utilisation de `#[serde(default)]` pour les champs comme `context` dans la génération de code, évitant les crashs si le LLM oublie un paramètre mineur.
+Une fonction centralisée nettoie les réponses des LLM (qui sont souvent "bavards" en local).
 
-### 3. Protection "Force Name"
-
-Pour éviter que l'IA ne renomme arbitrairement les éléments (ex: "Rack Server" -> "Server"), les agents écrasent systématiquement le champ `name` du JSON généré avec la demande initiale de l'utilisateur.
+- Ignore le Markdown (````json`).
+- Trouve les accolades `{}` même s'il y a du texte avant/après.
+- Validé par des tests unitaires dédiés.
 
 ---
 
-## 📦 Sortie Structurée : `AgentResult`
+## 📦 Sortie Structurée
 
-Pour permettre une UI riche, les agents ne renvoient pas une simple chaîne de caractères, mais une structure `AgentResult` :
+Pour permettre une UI riche, les agents renvoient une structure `AgentResult` standardisée :
 
 ```rust
 pub struct AgentResult {
-    pub message: String,              // Feedback textuel (Markdown)
-    pub artifacts: Vec<CreatedArtifact>, // Liste des objets créés
-}
-
-pub struct CreatedArtifact {
-    pub id: String,
-    pub name: String,
-    pub layer: String,        // Ex: "SA"
-    pub element_type: String, // Ex: "Function"
-    pub path: String,         // Chemin relatif pour ouverture dans l'UI
+    pub message: String,                 // Feedback textuel (Markdown)
+    pub artifacts: Vec<CreatedArtifact>, // Liste des objets créés (ID, Path, Layer...)
 }
 
 ```
 
-Cela permet au Frontend d'afficher des **"Cartes d'Artefacts"** cliquables dans le chat.
+Cela permet au Frontend d'afficher des **"Cartes d'Artefacts"** cliquables directement dans le chat.
 
 ---
 
-## 🚀 Utilisation & Tests
+## 🚀 Tests Unitaires (Colocation)
 
-### Via la Suite de Tests (Recommandé)
+Les tests sont désormais **colocalisés** (situés dans les mêmes fichiers que le code) pour faciliter la maintenance.
 
-Le projet dispose d'une suite de tests d'intégration complète validant le cycle en V.
+### Lancer les tests du module
 
 ```bash
-# Lancer toute la suite IA (Agents + Code Gen)
-cargo test --test ai_suite -- --ignored
-cargo test --test code_gen_suite -- --ignored
-
-# Tester un agent spécifique (ex: Data)
-cargo test --test ai_suite data_agent_tests -- --ignored --nocapture
+cargo test ai::agents -- --nocapture
 
 ```
 
-### Via le CLI
+### Couverture actuelle (15 tests passants)
 
-```bash
-# Exemple : Création d'une procédure de test
-cargo run -p ai_cli -- classify "Crée un test pour vérifier le login" -x
+- **Toolbox** : Validation du parsing JSON (cas nominaux, markdown, bruit).
+- **Identity** : Vérification que chaque agent s'identifie correctement (`id()`).
+- **Logique Métier** : Tests spécifiques (ex: catégorisation Matériel "Electronics" vs "Infrastructure").
+- **Intent Classifier** : Validation des heuristiques de secours (`heuristic_fallback`).
 
-```
+---
 
 ## 🔮 Roadmap Technique
 
-- [ ] **Gestion des Relations (WIP)** : Implémentation complète des `DataFlow` et `ComponentExchange` (actuellement en migration).
-- [ ] **Mode RAG Avancé** : Indexation vectorielle des Exigences pour la vérification de cohérence.
-- [ ] **Review Agent** : Un agent dédié à l'audit des modèles (Quality Rules).
-
-<!-- end list -->
+- [ ] **Intégration GraphStore** : Connecter `save_artifact` pour qu'il indexe aussi directement dans SurrealDB (en plus du fichier JSON).
+- [ ] **Multi-Artefacts** : Permettre à un agent de générer une hiérarchie complète (ex: Un système + ses sous-fonctions) en une seule passe.
+- [ ] **Validation Schéma** : Intégrer une validation JSON Schema stricte avant sauvegarde.
 
 ```
 

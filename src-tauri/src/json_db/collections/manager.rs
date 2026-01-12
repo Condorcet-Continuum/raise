@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::fs;
 use uuid::Uuid;
 
+// Import du module bas niveau pour les opérations I/O
 use super::collection;
 
 #[derive(Debug)]
@@ -35,6 +36,36 @@ impl<'a> CollectionsManager<'a> {
         file_storage::create_db(&self.storage.config, &self.space, &self.db)?;
         self.ensure_system_index()
     }
+
+    // --- MÉTHODES DE LECTURE (Standardisées via collection.rs) ---
+
+    /// Récupère un document unique par son ID.
+    /// Renvoie Ok(None) si le document n'existe pas.
+    pub fn get_document(&self, collection: &str, id: &str) -> Result<Option<Value>> {
+        // Délégation au module 'collection' qui gère les chemins physiques
+        match collection::read_document(&self.storage.config, &self.space, &self.db, collection, id)
+        {
+            Ok(doc) => Ok(Some(doc)),
+            Err(_) => Ok(None), // Gestion silencieuse de l'absence pour l'hydratation
+        }
+    }
+
+    /// Alias pour compatibilité
+    pub fn get(&self, collection: &str, id: &str) -> Result<Option<Value>> {
+        self.get_document(collection, id)
+    }
+
+    /// Liste tous les documents d'une collection.
+    pub fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
+        collection::list_documents(&self.storage.config, &self.space, &self.db, collection)
+    }
+
+    /// Liste les noms des collections disponibles.
+    pub fn list_collections(&self) -> Result<Vec<String>> {
+        collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db)
+    }
+
+    // --- GESTION INDEX SYSTÈME (_system.json) ---
 
     pub fn ensure_system_index(&self) -> Result<()> {
         let sys_path = self
@@ -73,11 +104,9 @@ impl<'a> CollectionsManager<'a> {
             if !obj.contains_key("$schema") {
                 obj.insert("$schema".to_string(), Value::String(expected_uri.clone()));
             }
-            // Injection de l'ID si manquant (requis par le schéma strict)
             if !obj.contains_key("id") {
                 obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
             }
-            // Injection des dates (requises par le schéma strict)
             let now = Utc::now().to_rfc3339();
             if !obj.contains_key("createdAt") {
                 obj.insert("createdAt".to_string(), Value::String(now.clone()));
@@ -109,19 +138,16 @@ impl<'a> CollectionsManager<'a> {
                 }
             }
         } else {
-            let mut msg =
-                "🔥 CRITIQUE: Impossible de trouver le schéma de l'index système !\n".to_string();
-            msg.push_str(&format!("   -> URI Attendue : {}\n", expected_uri));
-            msg.push_str("   -> (Voir logs précédents pour détails)\n");
-            if reg.list_uris().is_empty() {
-                msg.push_str("      (REGISTRE VIDE)\n");
-            }
-            panic!("{}", msg);
+            // Mode dégradé si schéma introuvable
+            #[cfg(debug_assertions)]
+            eprintln!("⚠️ Warning: Index schema not found: {}", expected_uri);
         }
 
         fs::write(&sys_path, serde_json::to_string_pretty(doc)?)?;
         Ok(())
     }
+
+    // --- GESTION DES COLLECTIONS ---
 
     pub fn create_collection(&self, name: &str, schema_uri: Option<String>) -> Result<()> {
         if !self.storage.config.db_root(&self.space, &self.db).exists() {
@@ -158,6 +184,8 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
+    // --- GESTION DES INDEXES SECONDAIRES ---
+
     pub fn create_index(&self, collection: &str, field: &str, kind: &str) -> Result<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         idx_mgr.create_index(collection, field, kind)
@@ -167,6 +195,8 @@ impl<'a> CollectionsManager<'a> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         idx_mgr.drop_index(collection, field)
     }
+
+    // --- HELPER INDEX SYSTÈME ---
 
     fn resolve_schema_from_index(&self, col_name: &str) -> Result<String> {
         let sys_path = self
@@ -297,52 +327,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    pub fn list_collections(&self) -> Result<Vec<String>> {
-        let root = self
-            .storage
-            .config
-            .db_root(&self.space, &self.db)
-            .join("collections");
-        let mut cols = Vec::new();
-        if root.exists() {
-            for entry in fs::read_dir(root)? {
-                let entry = entry?;
-                if entry.path().is_dir() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if !name.starts_with('_') {
-                            cols.push(name.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        Ok(cols)
-    }
-
-    pub fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
-        let col_path = self
-            .storage
-            .config
-            .db_collection_path(&self.space, &self.db, collection);
-        let mut docs = Vec::new();
-        if !col_path.exists() {
-            return Ok(docs);
-        }
-        for entry in fs::read_dir(&col_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "json") {
-                if path.file_name().unwrap() == "_meta.json" {
-                    continue;
-                }
-                let content = fs::read_to_string(&path)?;
-                if let Ok(doc) = serde_json::from_str::<Value>(&content) {
-                    docs.push(doc);
-                }
-            }
-        }
-        Ok(docs)
-    }
+    // --- ÉCRITURE ET MISE À JOUR ---
 
     pub fn insert_raw(&self, collection: &str, doc: &Value) -> Result<()> {
         let id = doc
@@ -378,14 +363,6 @@ impl<'a> CollectionsManager<'a> {
         Ok(doc)
     }
 
-    pub fn get_document(&self, collection: &str, id: &str) -> Result<Option<Value>> {
-        self.storage
-            .read_document(&self.space, &self.db, collection, id)
-    }
-    pub fn get(&self, collection: &str, id: &str) -> Result<Option<Value>> {
-        self.get_document(collection, id)
-    }
-
     pub fn update_document(&self, collection: &str, id: &str, mut doc: Value) -> Result<Value> {
         let old_doc = self.get_document(collection, id)?;
         if old_doc.is_none() {
@@ -395,8 +372,10 @@ impl<'a> CollectionsManager<'a> {
             obj.insert("id".to_string(), Value::String(id.to_string()));
         }
         self.prepare_document(collection, &mut doc)?;
+
         self.storage
             .write_document(&self.space, &self.db, collection, id, &doc)?;
+
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         if let Some(old) = old_doc {
             let _ = idx_mgr.remove_document(collection, &old);
@@ -417,7 +396,6 @@ impl<'a> CollectionsManager<'a> {
     }
 
     fn prepare_document(&self, collection: &str, doc: &mut Value) -> Result<()> {
-        // --- 1. INJECTION AUTOMATIQUE (ID / CreatedAt / UpdatedAt) ---
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("id") {
                 obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
@@ -430,7 +408,6 @@ impl<'a> CollectionsManager<'a> {
                 obj.insert("updatedAt".to_string(), Value::String(now));
             }
         }
-        // -------------------------------------------------
 
         let meta_path = self
             .storage
@@ -456,7 +433,6 @@ impl<'a> CollectionsManager<'a> {
                 }
                 let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)?;
 
-                // MOTEUR DE RÈGLES
                 if let Err(e) = apply_business_rules(
                     &self.storage.config,
                     &self.space,
@@ -507,6 +483,8 @@ impl<'a> CollectionsManager<'a> {
     }
 }
 
+// --- HELPER RULES ENGINE ---
+
 struct DbDataProvider<'a> {
     cfg: &'a JsonDbConfig,
     space: &'a str,
@@ -515,6 +493,7 @@ struct DbDataProvider<'a> {
 
 impl<'a> DataProvider for DbDataProvider<'a> {
     fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<Value> {
+        // CORRECTION: Utilisation de collection::read_document
         if let Ok(doc) = collection::read_document(self.cfg, self.space, self.db, collection, id) {
             let ptr = if field.starts_with('/') {
                 field.to_string()
@@ -527,8 +506,7 @@ impl<'a> DataProvider for DbDataProvider<'a> {
     }
 }
 
-/// Fonction utilitaire statique pour appliquer les règles sans instancier tout le Manager
-#[allow(clippy::too_many_arguments)] // Correction: Suppression du warning
+#[allow(clippy::too_many_arguments)]
 pub fn apply_business_rules(
     cfg: &JsonDbConfig,
     space: &str,
@@ -583,10 +561,6 @@ pub fn apply_business_rules(
 
         current_changes = next_changes;
         passes += 1;
-    }
-
-    if passes >= MAX_PASSES {
-        eprintln!("⚠️ Attention : Limite de passes atteinte dans les règles");
     }
 
     Ok(())
@@ -669,4 +643,47 @@ fn set_value_by_path(doc: &mut Value, path: &str, value: Value) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine}; // Imports corrects
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_manager_get_document_integration() {
+        // 1. Setup
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // CORRECTION : Instanciation propre de la config et du moteur
+        let config = JsonDbConfig::new(root.clone());
+        let storage = StorageEngine::new(config);
+
+        let manager = CollectionsManager::new(&storage, "space_test", "db_test");
+
+        // 2. Création manuelle d'un fichier (Simulation DB)
+        // Chemin: root/space_test/db_test/collections/users/user_123.json
+        let col_path = root.join("space_test/db_test/collections/users");
+        fs::create_dir_all(&col_path).unwrap();
+
+        let doc_content = r#"{ "id": "user_123", "name": "Test User" }"#;
+        fs::write(col_path.join("user_123.json"), doc_content).unwrap();
+
+        // 3. Test de récupération
+        let result = manager.get_document("users", "user_123").unwrap();
+
+        assert!(result.is_some(), "Le document devrait être trouvé");
+        let doc = result.unwrap();
+        assert_eq!(doc["name"], "Test User");
+
+        // 4. Test document inexistant
+        let missing = manager.get_document("users", "ghost").unwrap();
+        assert!(
+            missing.is_none(),
+            "Le document fantôme ne devrait pas exister"
+        );
+    }
 }

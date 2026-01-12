@@ -1,113 +1,143 @@
-# Module d'Assurance IA (AI Assurance)
+# Module d'Assurance IA (Trustworthy AI)
 
-Ce module fournit les structures de données standardisées pour capturer, stocker et transporter les **preuves de confiance** des modèles d'Intelligence Artificielle de RAISE.
+Ce module est le garant de la **Confiance** dans le système RAISE. Il fournit les structures et mécanismes pour capturer, scorer, stocker et auditer les performances et le comportement des modèles d'IA.
 
-Il ne réalise pas l'inférence (gérée par `../inference.rs`), mais il est responsable de la **documentation technique** nécessaire à la conformité réglementaire (notamment l'EU AI Act).
-
-## 🎯 Objectifs
-
-1.  **Explicabilité (XAI)** : Standardiser le format des explications (SHAP, Attention Maps, LIME) pour qu'elles soient lisibles par le Frontend et vérifiables par le moteur de traçabilité.
-2.  **Qualité & Robustesse** : Structurer les rapports de tests (Performance, Biais, Équité) pour valider qu'un modèle est apte à la production.
-3.  **Interopérabilité** : Servir de langage commun entre l'exécution (Python/Rust/ONNX) et la vérification (Traceability Engine).
-
-## 📂 Structure du Module
-
-| Fichier          | Description                                                                                                                           |
-| :--------------- | :------------------------------------------------------------------------------------------------------------------------------------ |
-| **`mod.rs`**     | Point d'entrée, expose les types publics (`XaiFrame`, `QualityReport`).                                                               |
-| **`xai.rs`**     | Définit la trame d'explicabilité (**XaiFrame**). Supporte les données tabulaires (Feature Importance) et visuelles (Heatmaps).        |
-| **`quality.rs`** | Définit le rapport de validation (**QualityReport**). Gère les seuils de succès/échec pour la Performance, la Robustesse et l'Équité. |
+Il est conçu pour répondre aux exigences de documentation technique des normes critiques (DO-178C, EU AI Act).
 
 ---
 
-## 🔍 1. Explicabilité (`xai.rs`)
+## 🎯 Objectifs
 
-La structure centrale est `XaiFrame`. Elle capture "Pourquoi le modèle a pris cette décision".
+1.  **Explicabilité (XAI)** : Standardiser le "Pourquoi" d'une décision (SHAP, LIME) et la rendre digeste pour un humain ou un LLM.
+2.  **Qualité (Quality)** : Calculer un score objectif (0-100%) et un statut de validation (Pass/Fail) pour chaque modèle.
+3.  **Persistance (Audit)** : Sauvegarder ces preuves de manière immuable dans le référentiel du projet (`un2/transverse`).
 
-### Fonctionnalités Clés
+---
 
-- **Multi-méthodes** : Supporte SHAP, LIME, Attention Maps, Integrated Gradients, etc.
-- **Multi-supports** : Peut stocker des listes pondérées (pour les données tabulaires) et des **Visual Artifacts** (images Base64, SVG) pour l'affichage UI.
-- **Scope** : Distingue les explications **Locales** (une inférence précise) des explications **Globales** (comportement général du modèle).
+## 🏗️ Architecture & Flux
 
-### Exemple d'utilisation
+```mermaid
+graph TD
+    Agent[Agent / Pipeline IA] -->|Génère| Metrics[Métriques & Explications]
 
-```rust
-use crate::ai::assurance::xai::{XaiFrame, XaiMethod, ExplanationScope};
+    subgraph "Module Assurance"
+        Metrics --> Q[QualityReport]
+        Metrics --> X[XaiFrame]
 
-// Création d'une trame après une inférence
-let mut frame = XaiFrame::new(
-    "model_credit_v1",
-    XaiMethod::Shap { variant: "TreeShap".into() },
-    ExplanationScope::Local
-);
+        Q -->|Calcul| Score["Global Score (0-100%)"]
+        X -->|Synthèse| Summary[Résumé pour LLM]
 
-// Ajout de contexte
-frame.input_snapshot = "Revenu: 30k, Dette: Haute".to_string();
-frame.predicted_output = "Refus".to_string();
+        Q & X -->|Save| Persist[Persistence Module]
+    end
 
-// Ajout des facteurs explicatifs
-frame.add_feature("Dette_Totale", "50000", -0.45, 1);
-frame.add_feature("Revenu", "30000", 0.15, 2);
+    Persist -->|JSON| Disk[(Disque Projet)]
+    Disk -->|Read| UI[Frontend / Dashboard]
+    Disk -->|Check| Audit[Traceability Engine]
 
-// Ajout d'un visuel (ex: pour le frontend)
-frame.add_visual("heatmap", "image/png", "base64_string...");
 ```
 
-## 🛡️ 2. Qualité (`quality.rs`)
+## 📂 Structure du Module
 
-La structure centrale est `QualityReport`. Elle agit comme un "certificat de contrôle technique" du modèle.
+| Fichier          | Rôle                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| **`mod.rs`**     | Point d'entrée. Contient le sous-module **`persistence`** pour l'écriture disque.                        |
+| **`quality.rs`** | Gestion de la Qualité. Calcul du score global et validation des seuils (Performance, Biais, Robustesse). |
+| **`xai.rs`**     | Gestion de l'Explicabilité. Structures pour Feature Importance et génération de résumés textuels.        |
 
-### Catégories de Métriques
+---
 
-- **Performance** : Accuracy, F1-Score, RMSE.
-- **Robustness** : Stabilité face au bruit, taux de succès contre attaques adverses.
-- **Fairness** : Parité statistique, égalité des chances (biais démographiques).
-- **Efficiency** : Latence, consommation mémoire.
+## 🛡️ 1. Qualité (`quality.rs`)
 
-### Logique de Validation
+Le `QualityReport` agit comme un certificat de conformité.
 
-Le rapport calcule automatiquement un statut global (`Pass`, `Warning`, `Fail`) basé sur la criticité des métriques échouées.
+### Nouveautés
 
-### Exemple d'utilisation
+- **Scoring** : Calcule automatiquement un `global_score` (0.0 à 100.0).
+- **Validation** : Statut `Pass`, `Warning` ou `Fail` selon la criticité des métriques.
+
+### Exemple
 
 ```rust
 use crate::ai::assurance::quality::{QualityReport, MetricCategory};
 
-let mut report = QualityReport::new("model_credit_v1", "dataset_test_2025");
+let mut report = QualityReport::new("model_credit_v1", "dataset_2025");
 
-// Ajout d'une métrique critique (Doit être > 0.90)
+// Ajout d'une métrique (Critique)
 report.add_metric(
     "Accuracy",
     MetricCategory::Performance,
     0.95,       // Valeur mesurée
-    Some(0.90), // Seuil Min
-    None,       // Seuil Max
-    true        // Critique (Fail si échoué)
+    Some(0.90), // Min accepté
+    None,       // Max
+    true        // Critique ? Oui.
 );
 
-// Ajout d'une métrique informative (Latence < 50ms)
-report.add_metric(
-    "Latency",
-    MetricCategory::Efficiency,
-    45.0,
-    None,
-    Some(50.0),
-    false
-);
+// Le score et le statut sont mis à jour automatiquement
+println!("Score: {}%, Status: {:?}", report.global_score, report.overall_status);
+
 ```
 
 ---
 
-## 🔗 Intégration avec la Traçabilité
+## 🔍 2. Explicabilité (`xai.rs`)
 
-Ce module fonctionne en tandem avec `src-tauri/src/traceability`.
+Le `XaiFrame` capture les raisons d'une prédiction.
 
-1.  **Génération** : Le module `ai` génère ces objets (`XaiFrame`, `QualityReport`).
-2.  **Liaison** : Les IDs de ces objets sont stockés dans les propriétés des composants du modèle d'architecture (Physical Architecture).
-3.  **Vérification** : Le module `traceability/compliance/eu_ai_act.rs` scanne le modèle pour vérifier que chaque composant IA possède bien ces preuves associées.
+### Nouveautés
 
-> **Note :** Ce découpage assure que le moteur de traçabilité reste léger et ne dépend pas des lourdes bibliothèques de calcul d'IA.
+- **LLM Helper** : La méthode `summarize_for_llm()` génère un texte narratif décrivant l'explication. Utile pour que l'Assistant (RAG) puisse expliquer ses propres choix.
+
+### Exemple
+
+```rust
+use crate::ai::assurance::xai::{XaiFrame, XaiMethod, ExplanationScope};
+
+let mut frame = XaiFrame::new("model_v1", XaiMethod::Lime, ExplanationScope::Local);
+frame.predicted_output = "Rejeté".to_string();
+frame.add_feature("Dette", "Élevée", -0.85, 1);
+
+// Génère : "Explication pour 'Rejeté'. Facteurs principaux : - Dette (Élevée): Impact -0.85..."
+let text_summary = frame.summarize_for_llm();
+
+```
+
+---
+
+## 💾 3. Persistance (`mod.rs`)
+
+Le sous-module `persistence` standardise le stockage des preuves d'audit au sein du projet utilisateur.
+
+### Emplacements de stockage
+
+Les fichiers sont sauvegardés au format JSON dans :
+
+- `un2/transverse/collections/quality_reports/{uuid}.json`
+- `un2/transverse/collections/xai_frames/{uuid}.json`
+
+### Exemple de Sauvegarde
+
+```rust
+use crate::ai::assurance::persistence;
+use std::path::Path;
+
+let domain_root = Path::new("/path/to/project");
+
+// Sauvegarde automatique et création des dossiers
+persistence::save_quality_report(domain_root, &report)?;
+persistence::save_xai_frame(domain_root, &frame)?;
+
+```
+
+---
+
+## ✅ Tests
+
+Pour vérifier la logique de scoring et la bonne écriture sur le disque :
+
+```bash
+cargo test ai::assurance -- --nocapture
+
+```
 
 ```
 
