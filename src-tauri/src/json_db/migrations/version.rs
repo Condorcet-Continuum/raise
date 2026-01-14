@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/json_db/migrations/version.rs
+
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
@@ -55,6 +57,10 @@ impl fmt::Display for MigrationVersion {
         write!(f, "{}", self.raw)
     }
 }
+
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
 
 #[cfg(test)]
 mod tests {

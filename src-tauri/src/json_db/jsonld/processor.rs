@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/json_db/jsonld/processor.rs
+
 //! Traitement des données JSON-LD pour Arcadia
 //!
 //! Ce module fournit des fonctions pour :
@@ -7,7 +9,6 @@
 
 use anyhow::{anyhow, Result};
 use serde_json::{Map, Value};
-// use std::collections::HashMap; // SUPPRIMÉ car inutilisé
 
 use super::context::ContextManager;
 
@@ -207,5 +208,111 @@ impl JsonLdProcessor {
         }
 
         Ok(lines.join("\n"))
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_get_id() {
+        let processor = JsonLdProcessor::new();
+        let doc = json!({
+            "@id": "http://example.org/1"
+        });
+        assert_eq!(
+            processor.get_id(&doc),
+            Some("http://example.org/1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_type() {
+        let processor = JsonLdProcessor::new();
+        let doc = json!({
+            "@type": "http://example.org/Type"
+        });
+        assert_eq!(
+            processor.get_type(&doc),
+            Some("http://example.org/Type".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_required_fields() {
+        let processor = JsonLdProcessor::new();
+        let doc = json!({
+            "@id": "test",
+            "name": "Test Activity"
+        });
+
+        assert!(processor
+            .validate_required_fields(&doc, &["@id", "name"])
+            .is_ok());
+        assert!(processor
+            .validate_required_fields(&doc, &["@id", "name", "description"])
+            .is_err());
+    }
+
+    #[test]
+    fn test_rdf_graph() {
+        let mut graph = RdfGraph::new();
+
+        graph.add_triple(
+            "http://example.org/activity-1".to_string(),
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string(),
+            RdfNode::IRI("http://example.org/OperationalActivity".to_string()),
+        );
+
+        graph.add_triple(
+            "http://example.org/activity-1".to_string(),
+            "http://www.w3.org/2004/02/skos/core#prefLabel".to_string(),
+            RdfNode::Literal("Test Activity".to_string()),
+        );
+
+        assert_eq!(graph.triples().len(), 2);
+        assert_eq!(graph.subjects().len(), 1);
+    }
+
+    #[test]
+    fn test_ntriples_export() {
+        // Validation simple de la structure graph
+        let mut graph = RdfGraph::new();
+        graph.add_triple(
+            "http://example.org/s".to_string(),
+            "http://example.org/p".to_string(),
+            RdfNode::Literal("o".to_string()),
+        );
+        assert_eq!(graph.triples().len(), 1);
+    }
+
+    #[test]
+    fn test_processor_creation() {
+        let processor = JsonLdProcessor::new();
+        let ctx_manager = processor.context_manager();
+        // Le contexte par défaut doit être chargé
+        assert!(ctx_manager.active_namespaces.contains_key("oa"));
+    }
+
+    #[test]
+    fn test_expand_with_oa() {
+        let doc = json!({
+            "@id": "urn:uuid:123",
+            "@type": "oa:OperationalActivity",
+            "oa:name": "Manger"
+        });
+
+        let processor = JsonLdProcessor::new();
+        let expanded = processor.expand(&doc);
+        let obj = expanded.as_object().unwrap();
+
+        let type_val = obj.get("@type").unwrap().as_str().unwrap();
+        assert!(type_val.contains("raise.io/ontology/arcadia/oa#OperationalActivity"));
     }
 }

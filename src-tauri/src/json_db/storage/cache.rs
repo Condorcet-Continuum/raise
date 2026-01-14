@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/json_db/storage/cache.rs
+
 //! Module de gestion de cache générique en mémoire.
 
 use std::collections::HashMap;
@@ -61,11 +63,13 @@ where
         };
 
         if let Ok(mut guard) = self.store.write() {
+            // Nettoyage paresseux si capacité atteinte
             if guard.len() >= self.capacity && !guard.contains_key(&key) {
-                // Nettoyage expiré
+                // 1. Supprimer les expirés
                 guard.retain(|_, v| v.expires_at.map(|exp| exp > now).unwrap_or(true));
 
-                // Eviction simple si toujours plein
+                // 2. Si toujours plein, éviction arbitraire (pour simplifier, on prend le premier)
+                // Note: Une vraie LRU nécessiterait une LinkedHashMap ou structure additionnelle
                 if guard.len() >= self.capacity {
                     if let Some(k) = guard.keys().next().cloned() {
                         guard.remove(&k);
@@ -94,5 +98,48 @@ where
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn test_cache_basic_ops() {
+        let cache = Cache::new(10, None);
+        cache.put("k1", 100);
+        assert_eq!(cache.get(&"k1"), Some(100));
+
+        cache.remove(&"k1");
+        assert_eq!(cache.get(&"k1"), None);
+    }
+
+    #[test]
+    fn test_cache_expiration() {
+        let cache = Cache::new(10, Some(Duration::from_millis(50)));
+        cache.put("k1", 100);
+        assert_eq!(cache.get(&"k1"), Some(100));
+
+        thread::sleep(Duration::from_millis(60));
+        assert_eq!(cache.get(&"k1"), None);
+    }
+
+    #[test]
+    fn test_cache_eviction() {
+        // Capacité de 2
+        let cache = Cache::new(2, None);
+        cache.put("k1", 1);
+        cache.put("k2", 2);
+
+        // Ajout d'un 3ème, doit éjecter k1 ou k2
+        cache.put("k3", 3);
+
+        assert_eq!(cache.len(), 2);
+        // Au moins un des anciens a disparu
+        let has_k1 = cache.get(&"k1").is_some();
+        let has_k2 = cache.get(&"k2").is_some();
+        assert!(!(has_k1 && has_k2));
     }
 }

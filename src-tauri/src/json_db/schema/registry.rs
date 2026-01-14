@@ -81,3 +81,50 @@ impl SchemaRegistry {
         format!("{}{}", self.base_prefix, relative_path)
     }
 }
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_registry_loading() {
+        // 1. Setup environnement
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let _storage = StorageEngine::new(config.clone()); // Juste pour init
+
+        let space = "s1";
+        let db = "d1";
+
+        // Création structure : schemas/v1/users/user.schema.json
+        let schema_dir = config.db_schemas_root(space, db).join("v1/users");
+        fs::create_dir_all(&schema_dir).unwrap();
+
+        let schema_content = json!({
+            "type": "object",
+            "properties": { "name": { "type": "string" } }
+        });
+        fs::write(
+            schema_dir.join("user.schema.json"),
+            serde_json::to_string(&schema_content).unwrap(),
+        )
+        .unwrap();
+
+        // 2. Chargement
+        let registry = SchemaRegistry::from_db(&config, space, db).unwrap();
+
+        // 3. Vérification
+        let expected_uri = format!("db://{}/{}/schemas/v1/users/user.schema.json", space, db);
+        assert!(registry.get_by_uri(&expected_uri).is_some());
+
+        // Test helper uri()
+        assert_eq!(registry.uri("users/user.schema.json"), expected_uri);
+    }
+}

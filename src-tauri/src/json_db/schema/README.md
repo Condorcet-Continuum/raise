@@ -1,75 +1,110 @@
-# Module Schema (Validation Structurelle)
+# 🛡️ Module Schema (Validation Structurelle)
 
 Ce module implémente un moteur de validation JSON Schema "léger" et intégré, spécifiquement conçu pour l'architecture de RAISE. Il ne dépend pas de validateurs externes lourds et gère nativement la résolution de références internes (`$ref`) via un registre en mémoire.
 
-## 🏗️ Architecture
+---
 
-Le système repose sur deux composants principaux :
+## 🏗️ Architecture & Flux
 
-1.  **`SchemaRegistry`** (`registry.rs`) : Charge et indexe tous les schémas disponibles dans une base de données (`.../schemas/v1/`). Il attribue à chaque fichier une URI unique de type `db://space/db/schemas/v1/...`.
-2.  **`SchemaValidator`** (`validator.rs`) : Effectue la validation récursive d'un document JSON par rapport à un schéma racine chargé depuis le registre. Il supporte les références (`$ref`), les types (`object`, `string`...), les propriétés requises et les motifs (`patternProperties`).
+Le système repose sur la séparation entre le stockage des définitions (Registry) et la logique de vérification (Validator).
 
-## 🚀 Fonctionnalités Clés
+```mermaid
+flowchart TD
+    App([Application]) -->|"1. validate(doc)"| Validator[SchemaValidator]
 
-### 1\. Registre de Schémas (`registry.rs`)
+    subgraph Context [Contexte de Validation]
+        Validator -->|2. Check Types/Props| Instance(Document JSON)
+        Validator -.->|"3. Resolve $ref"| Registry[SchemaRegistry]
+    end
 
-Le registre est l'autorité centrale des types. Au démarrage ou à la demande :
+    Registry -->|4. Load Schema| Store[(Système de Fichiers)]
+    Store -- "db://.../schema.json" --> Registry
 
-- Il scanne récursivement le dossier `schemas/v1` de la base de données.
-- Il construit une map `URI -> Schema JSON`.
-- Il fournit une méthode `uri("relative/path.json")` pour résoudre facilement les chemins.
+    Validator -- OK --> App
+    Validator -- Error --> App
 
-### 2\. Validation (`validator.rs`)
+```
 
-Le validateur implémente une sous-partie stricte de la spécification JSON Schema Draft 2020-12, adaptée aux besoins d'Arcadia.
+### Composants Clés
 
-- **Types** : Vérification des types primitifs (`string`, `number`, `boolean`, `array`, `object`, `null`).
+| Composant             | Fichier        | Rôle                                                                                                                                                                |
+| --------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`SchemaRegistry`**  | `registry.rs`  | Charge et indexe tous les schémas disponibles dans la base (`.../schemas/v1/`). Il attribue à chaque fichier une URI unique de type `db://space/db/schemas/v1/...`. |
+| **`SchemaValidator`** | `validator.rs` | Effectue la validation récursive d'un document JSON par rapport à un schéma racine. Il gère la logique des mots-clés (`required`, `patternProperties`, etc.).       |
+
+---
+
+## 🚀 Fonctionnalités Implémentées
+
+### 1. Registre de Schémas (`registry.rs`)
+
+Le registre est l'autorité centrale des types.
+
+- **Scan Automatique** : Au démarrage, il parcourt récursivement le dossier `schemas/v1` de la base de données.
+- **Résolution d'URI** : Il normalise les chemins relatifs pour permettre des références inter-fichiers stables (`db://...`).
+
+### 2. Validation (`validator.rs`)
+
+Le validateur implémente une sous-partie stricte de JSON Schema Draft 2020-12 :
+
+- **Types Primitifs** : `string`, `number`, `integer`, `boolean`, `array`, `object`, `null`.
 - **Objets** :
-  - `required` : Vérifie la présence des champs obligatoires.
-  - `properties` : Valide récursivement les sous-objets.
-  - `patternProperties` : Valide les clés dynamiques via Regex (ex: `^x_` pour les extensions).
-  - `additionalProperties` : Si `false`, rejette toute clé non définie (sauf `$schema` toléré).
-- **Références (`$ref`)** : Résolution automatique des pointeurs JSON internes (`#/...`) et des fichiers externes (`other.schema.json`) via le registre.
+- `required` : Vérifie la présence des champs obligatoires.
+- `properties` : Valide récursivement les sous-objets définis.
+- `patternProperties` : Valide les clés dynamiques via Regex (ex: `^x_` pour les extensions).
+- `additionalProperties` : Si `false`, rejette toute clé non définie (sauf `$schema` qui est toléré).
 
-### 3\. Cycle de Vie
+- **Références (`$ref`)** :
+- Interne : `"#/$defs/myType"` (Pointeurs JSON).
+- Externe : `"../common/base.json"` (Résolution via le registre).
 
-La méthode `compute_then_validate` est un vestige de l'ancienne architecture. Aujourd'hui, elle sert de point d'entrée simple vers `validate`. Les calculs (valeurs par défaut, IDs, dates) sont désormais gérés en amont par le **Rules Engine** (`manager.rs`) avant que le document n'arrive ici.
+---
 
-## 🛠️ Utilisation
+## 🛠️ Exemple d'Utilisation
 
 ```rust
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
 use serde_json::json;
 
-// 1. Initialiser le registre (charge tous les schémas du dossier)
+// 1. Initialisation (Scan du disque)
 let registry = SchemaRegistry::from_db(&config, "my_space", "my_db")?;
 
-// 2. Préparer un validateur pour un type précis
-let root_uri = registry.uri("actors/actor.schema.json");
+// 2. Compilation d'un validateur pour un type donné
+// Le chemin relatif est automatiquement converti en URI absolue
+let root_uri = registry.uri("actors/operational_actor.json");
 let validator = SchemaValidator::compile_with_registry(&root_uri, &registry)?;
 
-// 3. Valider un document
+// 3. Validation d'une instance
 let doc = json!({
     "id": "123",
-    "name": "Alice"
+    "name": "Opérateur Radar",
+    "x_custom_field": "Extension valide" // Si patternProperties: "^x_"
 });
 
 match validator.validate(&doc) {
-    Ok(_) => println!("Document valide !"),
-    Err(e) => println!("Erreur de validation : {}", e),
+    Ok(_) => println!("✅ Document valide"),
+    Err(e) => eprintln!("❌ Erreur de validation : {}", e),
 }
+
 ```
+
+---
 
 ## 📂 Structure des Fichiers
 
 ```text
 src-tauri/src/json_db/schema/
-├── mod.rs          // Exports et définitions d'erreurs
-├── registry.rs     // Chargement et indexation des fichiers .schema.json
-└── validator.rs    // Moteur de validation récursif (types, refs, regex)
+├── mod.rs          // Exports et définition de l'enum ValidationError
+├── registry.rs     // Chargement, indexation et résolution des URIs
+└── validator.rs    // Moteur de validation récursif (logique pure)
+
 ```
 
 ## ⚠️ Limitations
 
-- **Keywords Supportés** : Seuls `type`, `properties`, `required`, `patternProperties`, `additionalProperties`, `$ref` sont pleinement supportés. Des mots-clés avancés comme `oneOf`, `anyOf`, `if/then/else` (au niveau structurel) ne sont pas implémentés dans ce validateur léger.
-- **Performance** : Le registre charge tous les schémas en mémoire. Pour des milliers de schémas, une stratégie de chargement paresseux (Lazy Loading) pourrait être nécessaire.
+- **Mots-clés manquants** : Des fonctionnalités avancées comme `oneOf`, `anyOf`, `allOf`, `if/then/else` ou les contraintes numériques (`minimum`, `maxLength`) ne sont pas encore implémentées.
+- **Performance** : Le registre charge tous les schémas en mémoire (RAM) au démarrage. Pour des bases contenant des milliers de types, une stratégie de _Lazy Loading_ (chargement à la demande) sera nécessaire.
+
+```
+
+```

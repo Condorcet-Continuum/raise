@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/json_db/schema/mod.rs
+
 //! Validation/instanciation de schémas JSON (impl. légère, sans lib externe)
 
 pub mod registry;
@@ -16,4 +18,16 @@ pub enum ValidationError {
     MissingRequired(String),
     AdditionalProperty(String),
     Other(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_enum() {
+        // Test basique pour vérifier que l'enum est utilisable
+        let err = ValidationError::SchemaNotFound("test".into());
+        assert!(matches!(err, ValidationError::SchemaNotFound(_)));
+    }
 }

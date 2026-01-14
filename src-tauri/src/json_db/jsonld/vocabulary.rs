@@ -11,7 +11,6 @@ pub mod namespaces {
     pub const LA: &str = "https://raise.io/ontology/arcadia/la#";
     pub const PA: &str = "https://raise.io/ontology/arcadia/pa#";
     pub const EPBS: &str = "https://raise.io/ontology/arcadia/epbs#";
-    // Ajout du namespace DATA
     pub const DATA: &str = "https://raise.io/ontology/arcadia/data#";
 
     // Standards
@@ -23,7 +22,7 @@ pub mod namespaces {
     pub const PROV: &str = "http://www.w3.org/ns/prov#";
 }
 
-// --- CONSTANTES DE TYPAGE (Utilisées par le Model Engine) ---
+// --- CONSTANTES DE TYPAGE ---
 pub mod arcadia_types {
     // OA
     pub const OA_ACTOR: &str = "OperationalActor";
@@ -54,7 +53,7 @@ pub mod arcadia_types {
     // EPBS
     pub const EPBS_ITEM: &str = "ConfigurationItem";
 
-    // DATA (Nouveau)
+    // DATA
     pub const DATA_CLASS: &str = "Class";
     pub const DATA_TYPE: &str = "DataType";
     pub const EXCHANGE_ITEM: &str = "ExchangeItem";
@@ -264,7 +263,6 @@ pub mod epbs {
     }
 }
 
-// <--- AJOUT DU MODULE DATA
 pub mod data {
     use super::*;
     pub const CLASS: &str = "Class";
@@ -321,7 +319,7 @@ impl VocabularyRegistry {
         registry.register_module_la();
         registry.register_module_pa();
         registry.register_module_epbs();
-        registry.register_module_data(); // <--- AJOUT
+        registry.register_module_data();
 
         registry
     }
@@ -359,7 +357,6 @@ impl VocabularyRegistry {
         }
     }
 
-    // <--- AJOUT
     fn register_module_data(&mut self) {
         for cls in data::classes() {
             self.classes.insert(cls.iri.clone(), cls);
@@ -382,7 +379,7 @@ impl VocabularyRegistry {
         map.insert("la".to_string(), namespaces::LA.to_string());
         map.insert("pa".to_string(), namespaces::PA.to_string());
         map.insert("epbs".to_string(), namespaces::EPBS.to_string());
-        map.insert("data".to_string(), namespaces::DATA.to_string()); // <--- AJOUT
+        map.insert("data".to_string(), namespaces::DATA.to_string());
 
         map.insert("rdf".to_string(), namespaces::RDF.to_string());
         map.insert("rdfs".to_string(), namespaces::RDFS.to_string());
@@ -394,5 +391,38 @@ impl VocabularyRegistry {
 
     pub fn is_iri(term: &str) -> bool {
         term.starts_with("http://") || term.starts_with("https://") || term.starts_with("urn:")
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_namespaces() {
+        assert_eq!(namespaces::ARCADIA, "https://raise.io/ontology/arcadia#");
+    }
+
+    #[test]
+    fn test_oa_classes() {
+        let classes = oa::classes();
+        assert!(!classes.is_empty());
+    }
+
+    #[test]
+    fn test_oa_properties() {
+        let properties = oa::properties();
+        assert!(!properties.is_empty());
+    }
+
+    #[test]
+    fn test_vocabulary_registry() {
+        let registry = VocabularyRegistry::new();
+        let oa_capability_iri = format!("{}{}", namespaces::OA, oa::OPERATIONAL_CAPABILITY);
+        assert!(registry.has_class(&oa_capability_iri));
     }
 }

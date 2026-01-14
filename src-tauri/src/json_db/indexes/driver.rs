@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/json_db/indexes/driver.rs
+
 use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -99,36 +101,25 @@ impl IndexMap for BTreeMap<String, Vec<String>> {
     }
 }
 
-// --- Logique I/O Générique (Version Bincode 2.0.0-rc.3) ---
+// --- Logique I/O Générique ---
 
-/// Charge un index depuis le disque (Format Binaire Bincode)
 pub fn load<T: IndexMap>(path: &Path) -> Result<T> {
     if !path.exists() {
         return Ok(T::default());
     }
-
     let content = fs::read(path).with_context(|| format!("Lecture index {}", path.display()))?;
-
-    // CORRECTION : Utilisation de bincode::serde::decode_from_slice (API v2)
-    // Retourne un tuple (valeur, taille_lue), on prend .0
     let (records, _): (Vec<IndexRecord>, usize) =
         bincode::serde::decode_from_slice(&content, bincode::config::standard())
             .with_context(|| format!("Désérialisation Bincode index {}", path.display()))?;
-
     Ok(T::from_records(records))
 }
 
-/// Sauvegarde un index sur le disque (Format Binaire Bincode)
 pub fn save<T: IndexMap>(path: &Path, index: &T) -> Result<()> {
     let records = index.to_records();
-
-    // CORRECTION : Utilisation de bincode::serde::encode_to_vec (API v2)
     let encoded: Vec<u8> = bincode::serde::encode_to_vec(&records, bincode::config::standard())?;
-
     atomic_write_binary(path, &encoded)
 }
 
-/// Met à jour un index (charge -> modifie -> sauvegarde)
 pub fn update<T: IndexMap>(
     path: &Path,
     def: &IndexDefinition,
@@ -139,7 +130,7 @@ pub fn update<T: IndexMap>(
     let mut index: T = load(path)?;
     let mut changed = false;
 
-    // 1. Suppression de l'ancienne entrée
+    // Suppression
     if let Some(doc) = old_doc {
         if let Some(old_key) = doc.pointer(&def.field_path) {
             index.remove_record(&old_key.to_string(), doc_id);
@@ -147,12 +138,12 @@ pub fn update<T: IndexMap>(
         }
     }
 
-    // 2. Ajout de la nouvelle entrée
+    // Ajout
     if let Some(doc) = new_doc {
         if let Some(new_key) = doc.pointer(&def.field_path) {
             let key_str = new_key.to_string();
 
-            // Vérification unicité
+            // Unicité
             if def.unique {
                 if let Some(ids) = index.get_doc_ids(&key_str) {
                     if !ids.is_empty() && (ids.len() > 1 || ids[0] != doc_id) {
@@ -173,6 +164,40 @@ pub fn update<T: IndexMap>(
     if changed {
         save(path, &index)?;
     }
-
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_driver_map_logic() {
+        // Test de la logique Hashmap sans I/O
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        map.insert_record("alice".into(), "1".into());
+        map.insert_record("bob".into(), "2".into());
+        map.insert_record("alice".into(), "3".into()); // Doublon de clé
+
+        assert_eq!(map.get_doc_ids("alice").unwrap().len(), 2);
+
+        map.remove_record("alice", "1");
+        assert_eq!(map.get_doc_ids("alice").unwrap().len(), 1);
+        assert_eq!(map.get_doc_ids("alice").unwrap()[0], "3");
+    }
+
+    #[test]
+    fn test_driver_io_roundtrip() {
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path();
+
+        let mut index: HashMap<String, Vec<String>> = HashMap::new();
+        index.insert_record("key1".into(), "doc1".into());
+
+        save(path, &index).unwrap();
+
+        let loaded: HashMap<String, Vec<String>> = load(path).unwrap();
+        assert_eq!(loaded.get_doc_ids("key1").unwrap()[0], "doc1");
+    }
 }

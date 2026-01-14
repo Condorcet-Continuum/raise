@@ -7,25 +7,20 @@ pub mod lock_manager;
 pub mod manager;
 pub mod wal;
 
-#[cfg(test)]
-mod tests;
-
 // --- API PUBLIQUE (Haut Niveau) ---
-// C'est ce que le CLI ou le Frontend envoie.
-// Le Manager va transformer ça en opérations atomiques.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TransactionRequest {
     Insert {
         collection: String,
-        id: Option<String>, // Optionnel (Auto-généré)
+        id: Option<String>,
         document: Value,
     },
     Update {
         collection: String,
-        id: Option<String>,     // Cible par ID
-        handle: Option<String>, // OU Cible par Handle
-        document: Value,        // Patch à merger
+        id: Option<String>,
+        handle: Option<String>,
+        document: Value,
     },
     Delete {
         collection: String,
@@ -38,7 +33,6 @@ pub enum TransactionRequest {
 }
 
 // --- INTERNE (Bas Niveau / ACID) ---
-// C'est ce qui est écrit dans le WAL et exécuté physiquement.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
     pub id: String,
@@ -53,7 +47,6 @@ impl Transaction {
         }
     }
 
-    // Helper pour les tests unitaires (C'est ce qu'il manquait !)
     pub fn add_insert(&mut self, collection: &str, id: &str, doc: Value) {
         self.operations.push(Operation::Insert {
             collection: collection.to_string(),
@@ -100,4 +93,21 @@ pub struct TransactionLog {
     pub status: TransactionStatus,
     pub operations: Vec<Operation>,
     pub timestamp: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_serialization() {
+        let req = TransactionRequest::Insert {
+            collection: "users".into(),
+            id: None,
+            document: json!({"a": 1}),
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"type\":\"insert\""));
+    }
 }

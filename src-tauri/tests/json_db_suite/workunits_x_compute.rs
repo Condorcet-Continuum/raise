@@ -1,6 +1,9 @@
+// FICHIER : src-tauri/tests/json_db_suite/workunits_x_compute.rs
+
 use crate::{ensure_db_exists, init_test_env, TEST_DB, TEST_SPACE};
-use raise::json_db::collections::manager; // On a besoin du manager pour le nouveau moteur
+use raise::json_db::collections::manager::{self, CollectionsManager}; // Import CollectionsManager
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
+use raise::json_db::storage::StorageEngine; // Import StorageEngine
 use serde_json::json;
 use uuid::Uuid;
 
@@ -41,12 +44,7 @@ fn workunit_compute_then_validate_minimal() {
         }
     });
 
-    // NOTE : Pour l'instant, apply_business_rules ne descend pas récursivement dans les sous-objets (finance).
-    // Ce test valide surtout la structure globale (validation de schéma).
     validator.validate(&doc).expect("validate workunit failed");
-
-    // Le calcul de l'ID ou createdAt est géré par le validateur/compute legacy ou le code d'insertion.
-    // Ici on vérifie juste que ça valide.
 }
 
 #[test]
@@ -86,12 +84,14 @@ fn finance_compute_minimal() {
         "synthese_build": {}
     });
 
-    // 1. APPEL DU NOUVEAU MOTEUR (GenRules via manager)
-    // C'est ce qui remplace l'ancien "apply_x_compute" implicite.
+    // 1. Initialisation des composants requis (CORRECTION)
+    let storage = StorageEngine::new(cfg.clone());
+    let manager = CollectionsManager::new(&storage, space, db);
+
+    // 2. APPEL DU NOUVEAU MOTEUR (GenRules via manager)
+    // Signature corrigée : on passe le manager au lieu des params individuels
     manager::apply_business_rules(
-        cfg,
-        space,
-        db,
+        &manager,
         "finance_test", // Nom collection fictif pour le test
         &mut finance_doc,
         None,
@@ -100,7 +100,7 @@ fn finance_compute_minimal() {
     )
     .expect("Echec du moteur de règles");
 
-    // 2. VALIDATION (Vérifie que le résultat respecte le schéma)
+    // 3. VALIDATION (Vérifie que le résultat respecte le schéma)
     validator
         .validate(&finance_doc)
         .expect("Validation du résultat échouée");
@@ -110,7 +110,7 @@ fn finance_compute_minimal() {
         serde_json::to_string_pretty(&finance_doc).unwrap()
     );
 
-    // 3. ASSERTIONS (Vérification des règles x_rules)
+    // 4. ASSERTIONS (Vérification des règles x_rules)
 
     // Règle : calc_margin_low = low_eur (1000) * low_pct (0.20) = 200
     let margin_low = finance_doc.pointer("/summary/net_margin_low");

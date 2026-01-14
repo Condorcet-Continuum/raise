@@ -1,93 +1,140 @@
-# Module JSON-LD (Semantic Engine)
+# 🕸️ Module JSON-LD (Semantic Engine)
 
-Ce module implémente une couche d'abstraction **Sémantique** pour RAISE. Il permet de traiter les documents JSON non seulement comme des objets structurés, mais comme des graphes de connaissances liés (Linked Data), conformes à l'ontologie Arcadia (OA, SA, LA, PA, EPBS).
+Ce module implémente la couche d'abstraction **Sémantique** de RAISE. Il permet de traiter les documents JSON non seulement comme des structures de données, mais comme des graphes de connaissances liés (Linked Data), conformes à l'ontologie Arcadia.
+
+Il assure l'interopérabilité sémantique et la validation des concepts métiers.
+
+---
 
 ## 🏗️ Architecture
 
-Le module est articulé autour de trois composants majeurs :
+Le module est conçu autour de trois piliers qui séparent le traitement, le contexte et la définition du vocabulaire.
 
-1.  **`JsonLdProcessor`** (`processor.rs`) : Le moteur de traitement. Il offre les algorithmes standards JSON-LD (Expansion, Compaction) et la conversion vers RDF (N-Triples).
-2.  **`ContextManager`** (`context.rs`) : Gère la résolution des préfixes (ex: `oa:` -\> `https://...`). Il maintient les mappages actifs entre les termes courts et les IRIs complets.
-3.  **`VocabularyRegistry`** (`vocabulary.rs`) : Le "Dictionnaire" de l'application. Il contient la définition codée en dur de toutes les classes et propriétés valides de l'ontologie Arcadia.
+```mermaid
+flowchart TD
+    Doc[Document JSON] --> Processor[JsonLdProcessor]
 
-## 🧠 Ontologie Arcadia
+    subgraph Engine [Moteur Sémantique]
+        Processor -->|Résolution Préfixes| Context[ContextManager]
+        Processor -->|Validation Termes| Registry[VocabularyRegistry]
 
-RAISE définit ses propres espaces de noms (Namespaces) pour mapper les concepts de la méthode Arcadia. Ces définitions se trouvent dans `vocabulary.rs`.
+        Context -->|Map oa: -> http://...| ActiveCtx(Namespace Map)
+        Registry -->|Definitions| StaticVocab(Ontologie Arcadia)
+    end
 
-| Couche           | Préfixe | URI de Base         | Description                                    |
-| :--------------- | :------ | :------------------ | :--------------------------------------------- |
-| **Opérationnel** | `oa:`   | `.../arcadia/oa#`   | Operational Analysis (Actors, Activities)      |
-| **Système**      | `sa:`   | `.../arcadia/sa#`   | System Analysis (System Functions, Components) |
-| **Logique**      | `la:`   | `.../arcadia/la#`   | Logical Architecture                           |
-| **Physique**     | `pa:`   | `.../arcadia/pa#`   | Physical Architecture (Nodes, Boards)          |
-| **EPBS**         | `epbs:` | `.../arcadia/epbs#` | End Product Breakdown Structure (CIs)          |
-| **Données**      | `data:` | `.../arcadia/data#` | Data Modeling (Classes, Exchange Items)        |
+    Processor -->|Expansion| Expanded[JSON-LD Étendu]
+    Processor -->|Compaction| Compacted[JSON-LD Compact]
+    Processor -->|To RDF| Triples[N-Triples]
+
+```
+
+### Composants Clés
+
+| Composant                | Fichier         | Rôle                                                                                                                                       |
+| ------------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`JsonLdProcessor`**    | `processor.rs`  | Le moteur principal. Implémente les algorithmes d'Expansion, de Compaction et de conversion RDF.                                           |
+| **`ContextManager`**     | `context.rs`    | Gère la résolution des IRIs. Maintient la correspondance entre les préfixes courts (`oa:`) et les URIs complètes.                          |
+| **`VocabularyRegistry`** | `vocabulary.rs` | Le "Dictionnaire" de l'application. Contient les définitions statiques (hardcodées) de toutes les classes et propriétés valides d'Arcadia. |
+
+---
+
+## 🧠 Ontologie Arcadia & Namespaces
+
+RAISE définit ses propres espaces de noms pour mapper les concepts de la méthode Arcadia. Ces définitions sont centralisées dans `vocabulary.rs`.
+
+| Couche           | Préfixe | URI de Base (`https://raise.io/ontology/...`) | Concepts Clés                                |
+| ---------------- | ------- | --------------------------------------------- | -------------------------------------------- |
+| **Opérationnel** | `oa:`   | `.../arcadia/oa#`                             | `OperationalActivity`, `Actor`, `Capability` |
+| **Système**      | `sa:`   | `.../arcadia/sa#`                             | `SystemFunction`, `SystemComponent`          |
+| **Logique**      | `la:`   | `.../arcadia/la#`                             | `LogicalFunction`, `LogicalComponent`        |
+| **Physique**     | `pa:`   | `.../arcadia/pa#`                             | `PhysicalNode`, `PhysicalLink`               |
+| **EPBS**         | `epbs:` | `.../arcadia/epbs#`                           | `ConfigurationItem`                          |
+| **Données**      | `data:` | `.../arcadia/data#`                           | `Class`, `ExchangeItem`, `DataType`          |
+
+---
 
 ## 🚀 Fonctionnalités Clés
 
-### 1\. Expansion et Compaction
+### 1. Expansion & Compaction (Normalisation)
 
-C'est le cœur du JSON-LD. Cela permet de normaliser les données avant traitement.
+Ces opérations sont fondamentales pour traiter les données indépendamment de leur formatage JSON spécifique.
 
-- **Expansion** : Transforme les clés courtes en IRIs complets. Utile pour vérifier les types de manière absolue.
-  - Entrée : `{"@type": "oa:OperationalActivity"}`
-  - Sortie : `{"@type": "https://raise.io/ontology/arcadia/oa#OperationalActivity"}`
-- **Compaction** : L'inverse. Transforme les IRIs complets en clés courtes pour le stockage ou l'affichage, en utilisant le contexte actif.
+- **Expansion** : Convertit toutes les clés en IRIs absolues.
+- _Entrée_ : `{"@type": "oa:OperationalActivity"}`
+- _Sortie_ : `{"@type": "https://raise.io/ontology/arcadia/oa#OperationalActivity"}`
+- _Usage_ : Validation, typage fort, stockage RDF.
 
-### 2\. Validation Sémantique
+- **Compaction** : Réduit les IRIs en préfixes courts pour la lisibilité.
+- _Usage_ : Stockage JSON-DB, API Frontend, Édition humaine.
 
-Contrairement à la validation de schéma (structurelle), la validation sémantique vérifie le sens des données.
+### 2. Validation Sémantique
 
-- **`validate_required_fields`** : Vérifie la présence de champs en utilisant leur identité sémantique (IRI), peu importe le préfixe utilisé dans le JSON.
-- **Vérification de Vocabulaire** : Le `CollectionsManager` utilise ce module pour vérifier si un `@type` déclaré dans un document existe réellement dans le `VocabularyRegistry`, émettant un avertissement si le type est inconnu.
+Vérifie le _sens_ des données plutôt que leur structure.
 
-### 3\. Export RDF
+- **Vérification de Vocabulaire** : S'assure que le `@type` d'un document existe réellement dans l'ontologie Arcadia connue.
+- **Champs Requis par IRI** : Permet de valider la présence d'un champ (ex: `oa:name`) peu importe le préfixe utilisé dans le document source (`name`, `oa:name`, `rdfs:label`...).
 
-Le module peut convertir un document JSON-LD en triplets RDF (format N-Triples), ce qui permet l'interopérabilité avec d'autres outils du Web Sémantique (Protégé, GraphDB, etc.).
+### 3. Export RDF (N-Triples)
 
-## 🛠️ Utilisation
+Permet d'exporter les données de RAISE vers des outils du Web Sémantique tiers (Protégé, GraphDB) ou des moteurs d'inférence.
+
+---
+
+## 🛠️ Exemple d'Utilisation
 
 ```rust
 use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use serde_json::json;
 
-// 1. Instanciation
+// 1. Initialisation
 let processor = JsonLdProcessor::new();
+let registry = VocabularyRegistry::new();
 
-// 2. Document JSON avec contexte
+// 2. Document entrant (format compact)
 let doc = json!({
-    "@context": { "oa": "https://raise.io/ontology/arcadia/oa#" },
+    "@context": { "oa": "[https://raise.io/ontology/arcadia/oa#](https://raise.io/ontology/arcadia/oa#)" },
+    "@id": "urn:uuid:1234",
     "@type": "oa:OperationalActivity",
     "oa:name": "Analyser le besoin"
 });
 
-// 3. Expansion (Accès aux données normalisées)
+// 3. Expansion (pour traitement normalisé)
 let expanded = processor.expand(&doc);
-// expanded["@type"] vaut maintenant l'URI complète
+let type_iri = processor.get_type(&expanded).unwrap();
 
-// 4. Validation Vocabulaire
-let registry = VocabularyRegistry::new();
-let type_iri = processor.get_type(&doc).unwrap();
-let expanded_type = processor.context_manager().expand_term(&type_iri);
-
-if registry.has_class(&expanded_type) {
-    println!("Classe valide : {}", expanded_type);
+// 4. Validation sémantique
+if registry.has_class(&type_iri) {
+    println!("✅ Classe Arcadia valide : {}", type_iri);
+} else {
+    println!("⚠️ Classe inconnue !");
 }
+
+// 5. Export RDF
+let ntriples = processor.to_ntriples(&doc).unwrap();
+// <urn:uuid:1234> <.../type> <.../OperationalActivity> .
+
 ```
+
+---
 
 ## 📂 Structure des Fichiers
 
+L'architecture est simplifiée, les tests unitaires sont désormais colocalisés avec le code source.
+
 ```text
 src-tauri/src/json_db/jsonld/
-├── mod.rs          // Point d'entrée, exports et structures de sérialisation
-├── context.rs      // Gestion des préfixes et contextes (@context)
+├── mod.rs          // Point d'entrée et exports publics
+├── context.rs      // Logique de résolution des contextes (@context)
 ├── processor.rs    // Algorithmes JSON-LD (Expand, Compact, RDF)
-├── vocabulary.rs   // Définitions statiques de l'ontologie Arcadia
-└── tests.rs        // Tests unitaires
+└── vocabulary.rs   // Registre statique de l'ontologie Arcadia (OA, SA, LA...)
+
 ```
 
 ## ⚠️ Notes Techniques
 
-- **Registre en Mémoire** : Le `VocabularyRegistry` est actuellement défini en dur dans le code Rust (`vocabulary.rs`). Il ne charge pas d'ontologies externes (`.owl` ou `.ttl`) dynamiquement au runtime.
-- **Validation Légère** : Ce module n'est pas un validateur SHACL ou OWL complet. Il effectue des vérifications d'existence de termes et de champs requis basiques.
-- **Standards** : Le module suit les concepts de JSON-LD 1.1 mais n'implémente pas la totalité de la spécification W3C (ex: pas de chargement de contextes distants via HTTP pour des raisons de performance et de sécurité locale).
+- **Registre en Mémoire** : Pour des raisons de performance et de stabilité (embedded), l'ontologie n'est pas chargée dynamiquement depuis le web ou des fichiers `.owl`, mais compilée statiquement dans `vocabulary.rs`.
+- **Validation Légère** : Ce module n'est pas un validateur SHACL complet. Il se concentre sur la cohérence des identifiants et des types au sein de l'écosystème RAISE.
+
+```
+
+```

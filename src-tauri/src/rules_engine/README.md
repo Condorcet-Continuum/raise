@@ -1,100 +1,153 @@
-# Module Rules Engine (GenRules)
+# 🧠 RAISE Rules Engine (GenRules)
 
-Ce module implémente **GenRules**, le moteur de règles déclaratif et réactif de RAISE. Il permet de définir des logiques métier (calculs, validations, transformations) directement dans les schémas JSON, sans modifier le code compilé de l'application.
+Le **Rules Engine** est le cœur réactif de RAISE. Il s'agit d'un moteur de règles déclaratif chargé d'exécuter la logique métier (calculs, validations, enrichissement) directement au sein des transactions de la base de données, sans nécessiter de code Rust/TS spécifique.
 
-## 🏗️ Architecture
+Il est conçu pour être :
 
-Le moteur est conçu pour être léger, sûr (pas d'exécution de code arbitraire) et intégrable au pipeline d'écriture de la base de données.
+- **Performant** : Architecture "Zero-Copy" et Caching transactionnel.
+- **Sûr** : Pas d'exécution de code arbitraire, analyse statique de profondeur.
+- **Réactif** : Calcul différentiel basé sur les dépendances.
 
-1.  **AST (`ast.rs`)** : Définit la grammaire des expressions (Maths, Logique, Dates, Strings, Lookup) sous forme d'arbre syntaxique abstrait sérialisable en JSON.
-2.  **Evaluateur (`evaluator.rs`)** : Parcourt l'AST pour calculer le résultat final. Il gère les types, les erreurs et l'accès aux données externes via le trait `DataProvider`.
-3.  **Analyseur (`analyzer.rs`)** : Inspecte statiquement une règle pour déterminer ses dépendances (quelles variables sont utilisées ?). Cela permet de construire le graphe de réactivité.
-4.  **Store (`store.rs`)** : Stocke les règles en mémoire et maintient un index inversé (Champ -\> Règles impactées) pour déclencher uniquement les calculs nécessaires lors d'une mise à jour.
+---
 
-## 🚀 Fonctionnalités du Langage
+## 🏗️ Architecture et Flux de Données
 
-Les expressions sont définies en JSON. Voici les capacités supportées par l'AST:
+Le moteur s'insère dans le pipeline d'écriture de `json_db`. Il intercepte les modifications de documents pour recalculer les champs dérivés avant la persistance finale.
 
-### 1\. Primitives et Variables
+```mermaid
+flowchart TD
+    subgraph Init [Démarrage / Chargement]
+        Schema(Schémas JSON) -->|x_rules| Registry
+        Registry -->|Sync| Store[RuleStore]
+        DB[(JSON-DB)] -->|Persistance| Store
+    end
 
-- `{"val": 42}` : Valeur littérale.
-- `{"var": "user.age"}` : Lecture d'une variable du document courant (supporte la notation pointée).
+    subgraph Transaction [Transaction d'Écriture]
+        Input(Document Entrant) --> Diff{Calcul Différentiel}
+        Diff -->|Champs modifiés| Store
 
-### 2\. Mathématiques
+        Store -->|Liste règles impactées| Engine
 
-- `add`, `sub`, `mul`, `div` : Opérations arithmétiques standard sur les nombres flottants.
-- _Exemple_ : `{"mul": [{"var": "qty"}, {"var": "price"}]}`
+        subgraph Engine [Exécution]
+            Eval[Evaluator]
+            Context(Document)
+            Provider[CachedDataProvider]
 
-### 3\. Logique et Contrôle
+            Eval -->|Lecture Zero-Copy| Context
+            Eval -->|Lookup Externe| Provider
+            Provider <-->|Memoization| DB
+        end
 
-- `and`, `or`, `not` : Opérateurs booléens.
-- `eq`, `neq`, `gt`, `gte`, `lt`, `lte` : Comparaisons.
-- `if` : Structure conditionnelle `if / then / else`.
-
-### 4\. Dates
-
-- `now` : Date courante (ISO 8601).
-- `date_diff` : Différence en jours entre deux dates.
-- `date_add` : Ajout de jours à une date.
-
-### 5\. Chaînes de Caractères
-
-- `concat` : Concaténation de chaînes.
-- `upper` : Conversion en majuscules.
-- `regex_match` : Vérification par expression régulière.
-
-### 6\. Lookups (Cross-Collection)
-
-Permet de lire une valeur dans un **autre** document d'une autre collection.
-
-- `lookup` : `{ "collection": "users", "id": "u1", "field": "email" }`.
-
-## 🛠️ Intégration
-
-Le moteur est principalement utilisé par le `CollectionsManager` de JSON-DB.
-
-1.  **Chargement** : Au démarrage ou à l'insertion, les règles sont extraites de la propriété `x_rules` du schéma JSON.
-2.  **Analyse** : L'`Analyzer` détecte que la règle R1 dépend de `price`.
-3.  **Exécution** :
-    - L'utilisateur modifie `price`.
-    - Le `RuleStore` identifie que R1 doit être rejouée.
-    - L'`Evaluator` exécute R1.
-    - Si le résultat de R1 modifie `total`, et qu'une règle R2 dépend de `total`, R2 est déclenchée (propagation).
-
-## 💻 Exemple de Règle JSON
-
-Voici comment une règle est définie dans un fichier `.schema.json` :
-
-```json
-"x_rules": [
-  {
-    "id": "calc_total_ttc",
-    "target": "billing.total_ttc",
-    "expr": {
-      "mul": [
-        { "var": "billing.total_ht" },
-        { "add": [1, { "var": "billing.tax_rate" }] }
-      ]
-    }
-  }
-]
+        Eval -->|"Résultat (Cow)"| Update(Mise à jour Doc)
+        Update -->|Boucle de convergence| Diff
+    end
 ```
+
+### Composants Clés
+
+| Composant                | Rôle                                                                                                                                              | Optimisations Clés                                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **`RuleStore`**          | Gère l'indexation des règles. Maintient un index inversé (Champ -> Règles) en RAM et persiste les définitions dans la collection `_system_rules`. | **Idempotence** : N'écrit sur disque que si la règle a changé. Lookup en O(1).                                                        |
+| **`Evaluator`**          | Exécute l'AST (Arbre Syntaxique) de la règle.                                                                                                     | **Zero-Copy** : Utilise `Cow<Value>` pour éviter de cloner les données lues. Gestion de **Scope** pour les boucles (`map`, `filter`). |
+| **`Analyzer`**           | Analyse statique de la règle avant enregistrement.                                                                                                | Détection automatique des dépendances. **Validation de profondeur** pour éviter les Stack Overflows.                                  |
+| **`CachedDataProvider`** | Interface d'accès aux données externes (`lookup`).                                                                                                | **Cache Transactionnel** : Un document externe n'est lu qu'une seule fois par transaction, même si 50 règles le demandent.            |
+
+---
 
 ## 📂 Structure des Fichiers
 
+Le module est organisé pour séparer la définition du langage (AST), l'analyse, l'exécution et le stockage.
+
 ```text
 src-tauri/src/rules_engine/
-├── mod.rs          // Point d'entrée
-├── ast.rs          // Définitions de l'Arbre Syntaxique (Enums Expr)
-├── evaluator.rs    // Moteur d'exécution récursif
-├── analyzer.rs     // Analyse statique des dépendances
-├── store.rs        // Stockage et indexation des règles
-└── README.md       // Documentation
+├── mod.rs          // Point d'entrée et re-exports
+├── ast.rs          // Définition de la grammaire (Enums Expr & Rule)
+├── analyzer.rs     // Analyse statique (Dépendances, Profondeur, Scopes)
+├── evaluator.rs    // Moteur d'exécution récursif (Logique métier)
+└── store.rs        // Gestion de la persistance et de l'indexation (Lien avec json_db)
+
 ```
 
-## ⚠️ Sécurité
+---
 
-GenRules n'est **pas** un interpréteur JavaScript ou Lua.
+## 📚 Langage de Règles (Reference)
 
-- **Pas de boucles** : Impossible de créer des boucles infinies (sauf récursion de règles mal configurée, gérée par un compteur de passes max dans le `CollectionsManager`).
-- **Pas d'I/O** : Le moteur ne peut pas lire de fichiers ou faire de requêtes réseau, sauf via le `DataProvider` strictement contrôlé (lecture DB locale uniquement).
+Les règles sont définies en JSON (format Lisp-like) dans la propriété `x_rules` des schémas.
+
+### 1. Opérations sur les Listes & Collections (Nouveau 🚀)
+
+Le moteur supporte la programmation fonctionnelle sur les tableaux.
+
+| Fonction      | Description                                                         | Exemple                                                                                         |
+| ------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `map`         | Transforme chaque élément (`alias`) d'une liste via une expression. | `{"map": {"list": {"var": "items"}, "alias": "x", "expr": {"mul": [{"var": "x.price"}, 1.2]}}}` |
+| `filter`      | Filtre les éléments selon une condition.                            | `{"filter": {"list": {"var": "users"}, "alias": "u", "expr": {"gte": [{"var": "u.age"}, 18]}}}` |
+| `len`         | Taille d'une liste ou longueur d'une chaîne.                        | `{"len": {"var": "tags"}}`                                                                      |
+| `contains`    | Vérifie la présence d'une valeur.                                   | `{"contains": {"list": {"var": "roles"}, "value": "admin"}}`                                    |
+| `min` / `max` | Minimum / Maximum d'une liste numérique.                            | `{"max": {"var": "scores"}}`                                                                    |
+
+### 2. Mathématiques
+
+| Fonction                   | Description                             | Exemple                                                |
+| -------------------------- | --------------------------------------- | ------------------------------------------------------ |
+| `add`, `sub`, `mul`, `div` | Opérations arithmétiques (+, -, \*, /). | `{"add": [{"var": "ht"}, {"var": "tva"}]}`             |
+| `round`                    | Arrondi à une précision donnée.         | `{"round": {"value": {"var": "val"}, "precision": 2}}` |
+| `abs`                      | Valeur absolue.                         | `{"abs": {"var": "delta"}}`                            |
+
+### 3. Chaînes de Caractères
+
+| Fonction          | Description                                           | Exemple                                                               |
+| ----------------- | ----------------------------------------------------- | --------------------------------------------------------------------- |
+| `concat`          | Concaténation de chaînes/nombres ("Smart Stringify"). | `{"concat": ["REF-", {"var": "id"}]}`                                 |
+| `upper` / `lower` | Conversion de casse.                                  | `{"upper": {"var": "name"}}`                                          |
+| `trim`            | Supprime les espaces début/fin.                       | `{"trim": {"var": "input"}}`                                          |
+| `replace`         | Remplacement de sous-chaîne.                          | `{"replace": {"value": "Hello", "pattern": "H", "replacement": "Y"}}` |
+| `regex_match`     | Validation par Regex.                                 | `{"regex_match": {"value": "test@mail.com", "pattern": "^.+@.+$"}}`   |
+
+### 4. Logique & Contrôle
+
+- **Conditionnelle** : `{"if": { "condition": ..., "then_branch": ..., "else_branch": ... }}`
+- **Booléens** : `and`, `or`, `not`
+- **Comparaisons** : `eq` (=), `neq` (!=), `gt` (>), `lt` (<), `gte` (>=), `lte` (<=)
+
+### 5. Dates
+
+- `now` : Date actuelle (ISO 8601).
+- `date_diff` : Différence en jours.
+- `date_add` : Ajoute X jours à une date.
+
+### 6. Accès aux Données
+
+- `var` : Variable locale ou du document courant.
+- `lookup` : Récupération d'une valeur dans une **autre collection**.
+
+```json
+{
+  "lookup": {
+    "collection": "users",
+    "id": { "var": "owner_id" },
+    "field": "settings.theme"
+  }
+}
+```
+
+---
+
+## ⚡ Optimisations Techniques
+
+### Zero-Copy (Evaluator)
+
+L'évaluateur utilise le type `std::borrow::Cow` (Copy-On-Write). Si une règle lit une valeur sans la modifier (ex: `if name == "admin"`), aucune allocation mémoire n'est faite ; le moteur pointe directement vers la mémoire du document JSON original. L'allocation ne se produit que si une nouvelle valeur est créée (calcul).
+
+### Cache Transactionnel (DataProvider)
+
+Lors d'une insertion massive ou d'un calcul complexe impliquant de multiples `lookup` vers le même document de référence (ex: configuration globale, taux de TVA), le `CachedDataProvider` garantit que le fichier n'est lu et désérialisé qu'une seule fois par transaction.
+
+### Sécurité (Analyzer)
+
+- **Anti-StackOverflow** : L'analyseur rejette les règles dont l'imbrication dépasse une profondeur critique (par défaut 50-100 niveaux).
+- **Scope Checking** : L'analyseur comprend la portée des variables (`map`, `filter`) pour ne pas confondre une variable locale temporaire avec une dépendance de base de données.
+
+```
+
+```

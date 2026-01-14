@@ -7,9 +7,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-// --- EMBARQUEMENT DES SCHÉMAS DANS LA LIBRAIRIE ---
-// Le chemin est relatif au Cargo.toml de la LIBRAIRIE (src-tauri/Cargo.toml)
-// Donc on remonte d'un niveau pour trouver 'schemas/v1' à la racine du projet
+// --- EMBARQUEMENT DES SCHÉMAS ---
+// Chemin relatif au Cargo.toml de src-tauri
 static DEFAULT_SCHEMAS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../schemas/v1");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,15 +35,15 @@ pub fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
     }
 
     // 2. Déploiement automatique des schémas embarqués
-    // On ne le fait que pour la base système ou si le dossier n'existe pas
     let schemas_dest = config.db_schemas_root(space, db).join("v1");
 
     if !schemas_dest.exists() {
-        // C'est ici que la magie opère : extraction depuis la mémoire du binaire vers le disque
+        #[cfg(debug_assertions)]
         println!(
             "📦 Déploiement des schémas standards dans {:?}",
             schemas_dest
         );
+
         fs::create_dir_all(&schemas_dest)?;
         DEFAULT_SCHEMAS
             .extract(&schemas_dest)
@@ -128,6 +127,7 @@ pub fn delete_document(
     Ok(())
 }
 
+/// Écriture atomique (write -> sync -> rename)
 pub fn atomic_write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, content: C) -> Result<()> {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
@@ -135,6 +135,7 @@ pub fn atomic_write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, content: C) -> Resu
             fs::create_dir_all(parent)?;
         }
     }
+    // Fichier temporaire dans le même dossier
     let temp_path = path.with_extension("tmp");
     fs::write(&temp_path, content)?;
     fs::rename(&temp_path, path)?;
@@ -143,4 +144,45 @@ pub fn atomic_write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, content: C) -> Resu
 
 pub fn atomic_write_binary<P: AsRef<Path>>(path: P, content: &[u8]) -> Result<()> {
     atomic_write(path, content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_atomic_write() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+
+        atomic_write(&file_path, "Hello World").unwrap();
+        assert!(file_path.exists());
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "Hello World");
+    }
+
+    #[test]
+    fn test_document_lifecycle() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+
+        let doc = json!({"name": "Test"});
+
+        // Write
+        write_document(&config, "s1", "d1", "c1", "doc1", &doc).unwrap();
+
+        // Read
+        let read = read_document(&config, "s1", "d1", "c1", "doc1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(read["name"], "Test");
+
+        // Delete
+        delete_document(&config, "s1", "d1", "c1", "doc1").unwrap();
+        let deleted = read_document(&config, "s1", "d1", "c1", "doc1").unwrap();
+        assert!(deleted.is_none());
+    }
 }

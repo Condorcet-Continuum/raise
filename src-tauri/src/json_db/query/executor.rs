@@ -182,3 +182,63 @@ impl<'a> QueryEngine<'a> {
         a.to_string().cmp(&b.to_string())
     }
 }
+
+// ============================================================================
+// TESTS D'INTÉGRATION
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_full_query_execution() {
+        // 1. Setup DB
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let manager = CollectionsManager::new(&storage, "test", "db");
+        let engine = QueryEngine::new(&manager);
+
+        // 2. Insert Data
+        manager.create_collection("users", None).unwrap();
+        manager
+            .insert_raw("users", &json!({"id": "1", "age": 20, "role": "user"}))
+            .unwrap();
+        manager
+            .insert_raw("users", &json!({"id": "2", "age": 30, "role": "admin"}))
+            .unwrap();
+        manager
+            .insert_raw("users", &json!({"id": "3", "age": 40, "role": "user"}))
+            .unwrap();
+
+        // 3. Build Query: SELECT id FROM users WHERE age > 25 ORDER BY age DESC
+        let query = Query {
+            collection: "users".into(),
+            filter: Some(QueryFilter {
+                operator: FilterOperator::And,
+                conditions: vec![Condition::eq("role", json!("user"))],
+            }),
+            sort: Some(vec![SortField {
+                field: "age".into(),
+                order: SortOrder::Desc,
+            }]),
+            limit: None,
+            offset: None,
+            projection: Some(Projection::Include(vec!["id".into()])),
+        };
+
+        // 4. Execute
+        let result = engine.execute_query(query).await.unwrap();
+
+        // 5. Verify
+        assert_eq!(result.total_count, 2); // id 1 and 3 match "user"
+        assert_eq!(result.documents[0]["id"], "3"); // Age 40 (Desc)
+        assert_eq!(result.documents[1]["id"], "1"); // Age 20
+        assert!(result.documents[0].get("age").is_none()); // Projection exclut age
+    }
+}

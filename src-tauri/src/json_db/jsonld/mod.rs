@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/json_db/jsonld/mod.rs
+
 //! Gestion des contextes JSON-LD pour données liées
 //!
 //! Ce module fournit des fonctions pour :
@@ -12,9 +14,6 @@ use std::collections::HashMap;
 pub mod context;
 pub mod processor;
 pub mod vocabulary;
-
-#[cfg(test)]
-mod tests; // Assurez-vous que le fichier tests.rs existe
 
 // Re-exports pour l'usage externe
 pub use self::context::{ArcadiaContext, ArcadiaLayer, ContextManager};

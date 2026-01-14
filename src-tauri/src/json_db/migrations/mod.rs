@@ -1,9 +1,13 @@
+// FICHIER : src-tauri/src/json_db/migrations/mod.rs
+
 //! Système de migrations de schémas
 
 pub mod migrator;
 pub mod version;
 
 use serde::{Deserialize, Serialize};
+
+pub use migrator::Migrator;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Migration {
@@ -16,6 +20,7 @@ pub struct Migration {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")] // Utilisation d'un tag pour le polymorphisme JSON
 pub enum MigrationStep {
     CreateCollection {
         name: String,
@@ -46,4 +51,28 @@ pub enum MigrationStep {
         collection: String,
         name: String,
     },
+}
+
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_migration_step_serialization() {
+        let step = MigrationStep::AddField {
+            collection: "users".to_string(),
+            field: "active".to_string(),
+            default: Some(json!(true)),
+        };
+
+        let serialized = serde_json::to_string(&step).unwrap();
+        // Vérifie la présence du tag "type" ajouté par #[serde(tag = "type")]
+        assert!(serialized.contains("\"type\":\"AddField\""));
+        assert!(serialized.contains("\"field\":\"active\""));
+    }
 }

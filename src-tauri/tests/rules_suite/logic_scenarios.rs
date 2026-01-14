@@ -1,4 +1,6 @@
-use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider}; // <-- Import NoOp
+// FICHIER : src-tauri/tests/rules_suite/logic_scenarios.rs
+
+use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider};
 use serde_json::json;
 
 #[test]
@@ -20,23 +22,30 @@ fn test_complex_boolean_logic() {
         ),
     ]);
 
-    let provider = NoOpDataProvider; // <-- Création provider vide
+    let provider = NoOpDataProvider;
 
     let ctx1 = json!({ "age": 16, "status": "member", "role": "user" });
+    // CORRECTION : .into_owned()
     assert_eq!(
-        Evaluator::evaluate(&rule, &ctx1, &provider).unwrap(),
+        Evaluator::evaluate(&rule, &ctx1, &provider)
+            .unwrap()
+            .into_owned(),
         json!(false)
-    ); // <-- Ajout &provider
+    );
 
     let ctx3 = json!({ "age": 25, "status": "member", "role": "user" });
     assert_eq!(
-        Evaluator::evaluate(&rule, &ctx3, &provider).unwrap(),
+        Evaluator::evaluate(&rule, &ctx3, &provider)
+            .unwrap()
+            .into_owned(),
         json!(true)
     );
 
     let ctx4 = json!({ "age": 10, "status": "guest", "role": "admin" });
     assert_eq!(
-        Evaluator::evaluate(&rule, &ctx4, &provider).unwrap(),
+        Evaluator::evaluate(&rule, &ctx4, &provider)
+            .unwrap()
+            .into_owned(),
         json!(true)
     );
 }
@@ -50,6 +59,8 @@ fn test_math_precedence() {
 
     let provider = NoOpDataProvider;
     let ctx = json!({ "price": 100.0, "cost": 75.0 });
+
     let res = Evaluator::evaluate(&rule, &ctx, &provider).unwrap();
-    assert_eq!(res, 0.25);
+    // CORRECTION : Comparaison typée
+    assert_eq!(res.as_f64(), Some(0.25));
 }

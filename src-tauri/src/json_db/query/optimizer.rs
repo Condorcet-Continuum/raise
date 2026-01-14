@@ -1,13 +1,8 @@
 // FICHIER : src-tauri/src/json_db/query/optimizer.rs
 
 //! Optimiseur de requêtes pour améliorer les performances
-//!
-//! Ce module contient la logique d'optimisation des requêtes :
-//! - Réorganisation des conditions de filtre (sélectivité)
-//! - Simplification des filtres redondants
-//! - Optimisation de la pagination
 
-use super::{ComparisonOperator, Condition, FilterOperator, Query, QueryFilter};
+use super::{ComparisonOperator, Condition, Query, QueryFilter};
 use anyhow::Result;
 
 /// Optimiseur de requêtes
@@ -70,12 +65,6 @@ impl QueryOptimizer {
 
         // Déduplication basique
         simplified.conditions = self.deduplicate_conditions(&simplified.conditions);
-
-        // Si on a un AND avec une seule condition, c'est optimal, rien à faire de spécial ici
-        // mais on garde la logique pour d'éventuelles simplifications futures (ex: nested AND)
-        if simplified.conditions.len() == 1 && matches!(simplified.operator, FilterOperator::And) {
-            // (Logique placeholder pour éviter warning unused import si on étendait pas)
-        }
 
         // Si filtre vide, on retourne un vecteur vide
         if simplified.conditions.is_empty() {
@@ -155,38 +144,11 @@ impl QueryOptimizer {
 
         Ok(query)
     }
-
-    /// Analyse purement informative (pour logs ou debug)
-    pub fn analyze_query(&self, query: &Query) -> QueryAnalysis {
-        let mut analysis = QueryAnalysis::default();
-
-        if let Some(ref filter) = query.filter {
-            analysis.filter_complexity = filter.conditions.len();
-            // Estimation grossière
-            analysis.estimated_selectivity = if filter.conditions.is_empty() {
-                1.0
-            } else {
-                0.5
-            };
-        }
-
-        if let Some(ref sort) = query.sort {
-            analysis.sort_fields_count = sort.len();
-        }
-
-        analysis.has_pagination = query.limit.is_some() || query.offset.is_some();
-        analysis
-    }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct QueryAnalysis {
-    pub filter_complexity: usize,
-    pub estimated_selectivity: f64,
-    pub sort_fields_count: usize,
-    pub has_pagination: bool,
-    pub optimization_hints: Vec<String>,
-}
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -202,13 +164,13 @@ mod tests {
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
             conditions: vec![
-                // Coûteux (Contains)
+                // Coûteux (Contains -> score 50)
                 Condition {
                     field: "bio".into(),
                     operator: ComparisonOperator::Contains,
                     value: json!("developer"),
                 },
-                // Rapide (Eq)
+                // Rapide (Eq -> score 1)
                 Condition {
                     field: "status".into(),
                     operator: ComparisonOperator::Eq,

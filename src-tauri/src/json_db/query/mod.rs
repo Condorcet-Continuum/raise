@@ -19,7 +19,7 @@ pub struct Query {
     pub sort: Option<Vec<SortField>>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
-    /// Liste des champs à inclure. Si None ou vide -> SELECT *
+    /// Liste des champs à inclure/exclure. Si None -> SELECT *
     pub projection: Option<Projection>,
 }
 
@@ -36,8 +36,7 @@ impl Query {
     }
 }
 
-// Nouvelle Enum pour gérer proprement les projections (SELECT a, b)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Projection {
     Include(Vec<String>),
     Exclude(Vec<String>),
@@ -49,7 +48,7 @@ pub struct QueryFilter {
     pub conditions: Vec<Condition>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum FilterOperator {
     And,
     Or,
@@ -64,7 +63,6 @@ pub struct Condition {
 }
 
 impl Condition {
-    // Helper indispensable pour le parser et les tests
     pub fn eq(field: impl Into<String>, value: Value) -> Self {
         Self {
             field: field.into(),
@@ -74,7 +72,7 @@ impl Condition {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ComparisonOperator {
     Eq,
     Ne,
@@ -96,7 +94,7 @@ pub struct SortField {
     pub order: SortOrder,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SortOrder {
     Asc,
     Desc,
@@ -108,4 +106,34 @@ pub struct QueryResult {
     pub total_count: u64,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
+}
+
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_query_serialization() {
+        let query = Query {
+            collection: "users".into(),
+            filter: Some(QueryFilter {
+                operator: FilterOperator::And,
+                conditions: vec![Condition::eq("age", json!(18))],
+            }),
+            sort: None,
+            limit: Some(10),
+            offset: None,
+            projection: Some(Projection::Include(vec!["name".into()])),
+        };
+
+        let json = serde_json::to_string(&query).unwrap();
+        assert!(json.contains("\"users\""));
+        assert!(json.contains("\"age\""));
+        assert!(json.contains("\"Include\""));
+    }
 }

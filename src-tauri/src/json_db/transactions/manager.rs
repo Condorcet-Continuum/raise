@@ -39,6 +39,7 @@ impl<'a> TransactionManager<'a> {
         let col_mgr = CollectionsManager::new(&storage, &self.space, &self.db);
         let query_engine = QueryEngine::new(&col_mgr);
 
+        #[cfg(debug_assertions)]
         println!("⚙️  [Manager] Préparation intelligente de la transaction...");
 
         for req in requests {
@@ -50,7 +51,6 @@ impl<'a> TransactionManager<'a> {
                 } => {
                     let final_id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                    // Injection préliminaire (sera confirmée par apply_transaction)
                     if let Some(obj) = document.as_object_mut() {
                         obj.insert("id".to_string(), Value::String(final_id.clone()));
                     }
@@ -242,8 +242,6 @@ impl<'a> TransactionManager<'a> {
                 } => {
                     let mut final_doc = document.clone();
 
-                    // CORRECTION CRITIQUE : Assurance que l'ID est dans le corps du document
-                    // Cela évite l'erreur "Document sans ID" dans IndexManager
                     if let Some(obj) = final_doc.as_object_mut() {
                         if !obj.contains_key("id") {
                             obj.insert("id".to_string(), Value::String(id.clone()));
@@ -281,7 +279,6 @@ impl<'a> TransactionManager<'a> {
 
                     json_merge(&mut final_doc, document.clone());
 
-                    // S'assurer que l'ID n'a pas été perdu ou corrompu par le merge
                     if let Some(obj) = final_doc.as_object_mut() {
                         if !obj.contains_key("id") {
                             obj.insert("id".to_string(), Value::String(id.clone()));
@@ -308,7 +305,7 @@ impl<'a> TransactionManager<'a> {
                         collection,
                         id,
                     )?;
-                    idx.remove_document(collection, &serde_json::Value::Null)?; // Idéalement faudrait lire l'ancien doc avant pour désindexer proprement
+                    idx.remove_document(collection, &serde_json::Value::Null)?;
                     self.update_index_entry(&mut system_index, collection, id, true)?;
                 }
             }
@@ -417,5 +414,73 @@ fn json_merge(a: &mut Value, b: Value) {
             }
         }
         (a, b) => *a = b,
+    }
+}
+
+// ============================================================================
+// TESTS D'INTÉGRATION
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_transaction_commit_success() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig {
+            data_root: dir.path().to_path_buf(),
+        };
+        let space = "test_space";
+        let db = "test_db";
+
+        fs::create_dir_all(config.db_root(space, db).join("users")).unwrap();
+
+        let tm = TransactionManager::new(&config, space, db);
+
+        let doc = json!({"name": "Alice", "age": 30});
+        let id = "user1";
+
+        let res = tm.execute(|tx| {
+            tx.add_insert("users", id, doc.clone());
+            Ok(())
+        });
+
+        assert!(res.is_ok());
+
+        let doc_path = config
+            .db_collection_path(space, db, "users")
+            .join("user1.json");
+        assert!(doc_path.exists());
+    }
+
+    #[test]
+    fn test_transaction_rollback_on_error() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig {
+            data_root: dir.path().to_path_buf(),
+        };
+        let space = "test_space";
+        let db = "test_db";
+
+        fs::create_dir_all(config.db_root(space, db).join("users")).unwrap();
+
+        let tm = TransactionManager::new(&config, space, db);
+
+        let res = tm.execute(|tx| {
+            tx.add_insert("users", "user2", json!({"name": "Bob"}));
+            Err(anyhow::anyhow!("Oups")) // Erreur simulée
+        });
+
+        assert!(res.is_err());
+
+        let doc_path = config
+            .db_collection_path(space, db, "users")
+            .join("user2.json");
+        // Le fichier ne doit PAS exister car le rollback doit nettoyer
+        // (Dans notre implémentation simple, si ça échoue avant d'écrire, rien n'est écrit.
+        // Si ça échoue après, le WAL reste. Ici le test vérifie surtout que le flow d'erreur est géré)
+        assert!(!doc_path.exists());
     }
 }

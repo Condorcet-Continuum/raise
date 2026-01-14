@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/rules_engine/ast.rs
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7,7 +9,27 @@ pub enum Expr {
     Val(serde_json::Value),
     Var(String),
 
-    // --- Logique & Comparaison ---
+    // --- 📦 Collections ---
+    Len(Box<Expr>),
+    Contains {
+        list: Box<Expr>,
+        value: Box<Expr>,
+    },
+    Map {
+        list: Box<Expr>,
+        alias: String,
+        expr: Box<Expr>,
+    },
+    Filter {
+        list: Box<Expr>,
+        alias: String,
+        condition: Box<Expr>,
+    },
+    // NOUVEAU : Agrégations sur listes
+    Min(Box<Expr>),
+    Max(Box<Expr>),
+
+    // --- Logique ---
     And(Vec<Expr>),
     Or(Vec<Expr>),
     Not(Box<Expr>),
@@ -29,40 +51,69 @@ pub enum Expr {
     Sub(Vec<Expr>),
     Mul(Vec<Expr>),
     Div(Vec<Expr>),
+    // NOUVEAU : Maths avancées
+    Abs(Box<Expr>),
+    Round {
+        value: Box<Expr>,
+        precision: Box<Expr>,
+    },
 
-    // --- 📅 NOUVEAU : DATES ---
-    /// Date actuelle ISO8601
+    // --- 📅 Dates ---
     Now,
-    /// Différence en jours (end - start)
     DateDiff {
         start: Box<Expr>,
         end: Box<Expr>,
     },
-    /// Ajoute X jours
     DateAdd {
         date: Box<Expr>,
         days: Box<Expr>,
     },
 
-    // --- 🔤 NOUVEAU : STRINGS ---
+    // --- 🔤 Strings ---
     Concat(Vec<Expr>),
     Upper(Box<Expr>),
+    // NOUVEAU : Manipulation de chaînes
+    Lower(Box<Expr>),
+    Trim(Box<Expr>),
+    Replace {
+        value: Box<Expr>,
+        pattern: Box<Expr>,
+        replacement: Box<Expr>,
+    },
     RegexMatch {
         value: Box<Expr>,
         pattern: Box<Expr>,
     },
 
-    // --- 🔍 NOUVEAU : LOOKUPS (Cross-Collection) ---
+    // --- 🔍 Lookup ---
     Lookup {
-        collection: String, // Nom de la collection cible
-        id: Box<Expr>,      // ID du document (expression dynamique)
-        field: String,      // Champ à lire
+        collection: String,
+        id: Box<Expr>,
+        field: String,
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Rule {
     pub id: String,
     pub target: String,
     pub expr: Expr,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_ast_extensions() {
+        // Test de sérialisation des nouveaux champs
+        let expr = Expr::Round {
+            value: Box::new(Expr::Val(json!(10.555))),
+            precision: Box::new(Expr::Val(json!(2))),
+        };
+        let serialized = serde_json::to_string(&expr).unwrap();
+        assert!(serialized.contains("round"));
+        assert!(serialized.contains("precision"));
+    }
 }

@@ -74,7 +74,6 @@ pub struct ContextManager {
     /// Contextes spécifiques par couche (Legacy support)
     pub contexts: HashMap<ArcadiaLayer, ArcadiaContext>,
     /// Table de résolution active (Prefix -> IRI)
-    // CORRECTION : Rendu public pour les tests
     pub active_namespaces: HashMap<String, String>,
 }
 
@@ -150,5 +149,68 @@ impl ContextManager {
             }
         }
         iri.to_string()
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_context_creation() {
+        let ctx = ArcadiaContext::new();
+        assert_eq!(ctx.version, Some("1.1".to_string()));
+    }
+
+    #[test]
+    fn test_context_merge() {
+        let mut ctx1 = ArcadiaContext::new();
+        ctx1.add_simple_mapping("name", "http://ex1.org/name");
+        assert!(ctx1.has_term("name"));
+    }
+
+    #[test]
+    fn test_layer_enum() {
+        assert_eq!(ArcadiaLayer::OA.as_str(), "oa");
+    }
+
+    #[test]
+    fn test_context_manager() {
+        let manager = ContextManager::new();
+        assert!(manager.active_namespaces.contains_key("arcadia"));
+    }
+
+    #[test]
+    fn test_merged_context() {
+        let manager = ContextManager::new();
+        assert!(manager.contexts.is_empty());
+    }
+
+    #[test]
+    fn test_vocab_resolution() {
+        let mut manager = ContextManager::new();
+        let doc = json!({
+            "@context": {
+                "my": "http://my-ontology.org/"
+            }
+        });
+        manager.load_from_doc(&doc).unwrap();
+
+        assert_eq!(
+            manager.expand_term("my:Term"),
+            "http://my-ontology.org/Term"
+        );
+    }
+
+    #[test]
+    fn test_simple_mapping() {
+        let mut ctx = ArcadiaContext::new();
+        ctx.add_simple_mapping("test", "http://test.org");
+        assert!(ctx.has_term("test"));
     }
 }

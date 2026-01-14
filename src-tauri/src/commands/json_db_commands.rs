@@ -2,7 +2,7 @@
 
 use crate::json_db::collections::manager::{self, CollectionsManager};
 use crate::json_db::query::{Query, QueryEngine, QueryResult};
-use crate::json_db::schema::SchemaRegistry; // <--- AJOUTÉ
+use crate::json_db::schema::SchemaRegistry;
 use crate::json_db::storage::{file_storage, StorageEngine};
 use serde_json::{json, Value};
 use tauri::{command, State};
@@ -24,10 +24,7 @@ pub async fn jsondb_create_db(
     space: String,
     db: String,
 ) -> Result<(), String> {
-    // 1. Création physique + Schémas
     file_storage::create_db(&storage.config, &space, &db).map_err(|e| e.to_string())?;
-
-    // 2. Initialisation logique (Manager)
     let manager = mgr(&storage, &space, &db)?;
     manager.init_db().map_err(|e| e.to_string())
 }
@@ -90,7 +87,7 @@ pub async fn jsondb_create_index(
     db: String,
     collection: String,
     field: String,
-    kind: String, // "hash", "btree", "text"
+    kind: String,
 ) -> Result<(), String> {
     let manager = mgr(&storage, &space, &db)?;
     manager
@@ -112,7 +109,7 @@ pub async fn jsondb_drop_index(
         .map_err(|e| e.to_string())
 }
 
-// --- MOTEUR DE RÈGLES (NOUVEAU) ---
+// --- MOTEUR DE RÈGLES (CORRIGÉ) ---
 
 /// Simule l'application des règles métier sur un document brouillon
 /// sans le sauvegarder en base. Idéal pour le feedback UI temps réel.
@@ -149,18 +146,18 @@ pub async fn jsondb_evaluate_draft(
     };
 
     if schema_uri.is_empty() {
-        // Pas de schéma, on retourne le doc tel quel
         return Ok(doc);
     }
 
     // 3. Exécuter le moteur de règles (GenRules)
+    // CORRECTION : Instanciation du manager requise par la nouvelle signature
+    let manager = mgr(&storage, &space, &db)?;
+
     manager::apply_business_rules(
-        &storage.config,
-        &space,
-        &db,
+        &manager, // Passé le manager au lieu de la config/space/db
         &collection,
         &mut doc,
-        None, // Pas d'ancien document (c'est une simulation stateless)
+        None,
         &registry,
         &schema_uri,
     )
@@ -279,15 +276,12 @@ pub async fn jsondb_init_demo_rules(
     let mgr = mgr(&storage, &space, &db)?;
     mgr.init_db().map_err(|e| e.to_string())?;
 
-    // 1. Créer le User de test
     mgr.create_collection("users", None)
         .map_err(|e| e.to_string())?;
     let user_doc = json!({ "id": "u_dev", "name": "Alice Dev", "tjm": 500.0 });
     mgr.insert_raw("users", &user_doc)
         .map_err(|e| e.to_string())?;
 
-    // 2. Écrire le schéma INVOICES avec les X_RULES sur le disque
-    // C'est l'étape critique : écrire le fichier physique pour que le Manager le trouve.
     let schema_content = json!({
         "type": "object",
         "properties": {
@@ -329,7 +323,6 @@ pub async fn jsondb_init_demo_rules(
         ]
     });
 
-    // On force l'écriture du fichier schema dans v1/invoices/default.json
     let schema_path = storage
         .config
         .db_schemas_root(&space, &db)
@@ -343,7 +336,6 @@ pub async fn jsondb_init_demo_rules(
     )
     .map_err(|e| e.to_string())?;
 
-    // 3. Créer la collection invoices liée à ce schéma
     let schema_uri = format!("db://{}/{}/schemas/v1/invoices/default.json", space, db);
     mgr.create_collection("invoices", Some(schema_uri))
         .map_err(|e| e.to_string())?;
@@ -360,10 +352,6 @@ pub async fn jsondb_init_model_rules(
     let mgr = mgr(&storage, &space, &db)?;
     mgr.init_db().map_err(|e| e.to_string())?;
 
-    // 1. Définition du Schéma pour une 'LogicalFunction'
-    // Règles :
-    // - R1: full_path = parent_pkg + "::" + name
-    // - R2: compliance = Si name commence par "LF_" et majuscules -> "OK" Sinon "ERROR"
     let schema_content = json!({
         "type": "object",
         "properties": {
@@ -404,8 +392,6 @@ pub async fn jsondb_init_model_rules(
         ]
     });
 
-    // 2. Écriture sur disque (v1/la/functions.json)
-    // On simule une structure propre à Arcadia (Logical Architecture)
     let schema_path = storage
         .config
         .db_schemas_root(&space, &db)
@@ -419,10 +405,7 @@ pub async fn jsondb_init_model_rules(
     )
     .map_err(|e| e.to_string())?;
 
-    // 3. Création de la collection associée
     let schema_uri = format!("db://{}/{}/schemas/v1/la/functions.json", space, db);
-
-    // On ignore l'erreur si la collection existe déjà
     let _ = mgr.create_collection("logical_functions", Some(schema_uri));
 
     Ok(())

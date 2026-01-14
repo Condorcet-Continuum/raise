@@ -1,6 +1,7 @@
 // FICHIER : src-tauri/src/json_db/storage/mod.rs
 
 pub mod cache;
+pub mod compression;
 pub mod file_storage;
 
 use anyhow::Result;
@@ -31,13 +32,11 @@ impl JsonDbConfig {
     }
 
     pub fn db_collection_path(&self, space: &str, db: &str, collection: &str) -> PathBuf {
-        // CORRECTION PRÉCÉDENTE MAINTENUE : Ajout de "collections"
         self.db_root(space, db).join("collections").join(collection)
     }
 
     pub fn db_schemas_root(&self, space: &str, _db: &str) -> PathBuf {
-        // CORRECTION : Centralisation absolue dans _system
-        // On ignore l'argument `_db` pour forcer le chemin vers la base système
+        // Centralisation absolue dans _system/schemas
         self.db_root(space, "_system").join("schemas")
     }
 }
@@ -66,9 +65,13 @@ impl StorageEngine {
         id: &str,
         doc: &Value,
     ) -> Result<()> {
+        // 1. Écriture disque (Persistance)
         file_storage::write_document(&self.config, space, db, collection, id, doc)?;
+
+        // 2. Mise à jour cache (Performance)
         let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
         self.cache.put(cache_key, doc.clone());
+
         Ok(())
     }
 
@@ -80,13 +83,20 @@ impl StorageEngine {
         id: &str,
     ) -> Result<Option<Value>> {
         let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
+
+        // 1. Vérification cache
         if let Some(doc) = self.cache.get(&cache_key) {
             return Ok(Some(doc));
         }
+
+        // 2. Lecture disque
         let doc_opt = file_storage::read_document(&self.config, space, db, collection, id)?;
+
+        // 3. Peuplement cache
         if let Some(doc) = &doc_opt {
             self.cache.put(cache_key, doc.clone());
         }
+
         Ok(doc_opt)
     }
 
@@ -95,5 +105,31 @@ impl StorageEngine {
         let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
         self.cache.remove(&cache_key);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_storage_engine_cache_hit() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let engine = StorageEngine::new(config);
+
+        let doc = json!({"val": 42});
+
+        // Écriture
+        engine.write_document("s", "d", "c", "1", &doc).unwrap();
+
+        // Vérifions que c'est dans le cache
+        assert!(engine.cache.get(&"s/d/c/1".to_string()).is_some());
+
+        // Lecture (doit venir du cache - on pourrait supprimer le fichier pour le prouver)
+        let read = engine.read_document("s", "d", "c", "1").unwrap().unwrap();
+        assert_eq!(read["val"], 42);
     }
 }

@@ -3,8 +3,8 @@
 use crate::json_db::indexes::IndexManager;
 use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
-use crate::json_db::storage::{file_storage, JsonDbConfig, StorageEngine};
-use crate::rules_engine::{DataProvider, EvalError, Evaluator, Rule, RuleStore};
+use crate::json_db::storage::{file_storage, StorageEngine};
+use crate::rules_engine::{EvalError, Evaluator, Rule, RuleStore};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
@@ -13,8 +13,8 @@ use std::collections::HashSet;
 use std::fs;
 use uuid::Uuid;
 
-// Import du module bas niveau pour les opérations I/O
 use super::collection;
+use super::data_provider::CachedDataProvider;
 
 #[derive(Debug)]
 pub struct CollectionsManager<'a> {
@@ -37,35 +37,29 @@ impl<'a> CollectionsManager<'a> {
         self.ensure_system_index()
     }
 
-    // --- MÉTHODES DE LECTURE (Standardisées via collection.rs) ---
+    // --- MÉTHODES DE LECTURE ---
 
-    /// Récupère un document unique par son ID.
-    /// Renvoie Ok(None) si le document n'existe pas.
     pub fn get_document(&self, collection: &str, id: &str) -> Result<Option<Value>> {
-        // Délégation au module 'collection' qui gère les chemins physiques
         match collection::read_document(&self.storage.config, &self.space, &self.db, collection, id)
         {
             Ok(doc) => Ok(Some(doc)),
-            Err(_) => Ok(None), // Gestion silencieuse de l'absence pour l'hydratation
+            Err(_) => Ok(None),
         }
     }
 
-    /// Alias pour compatibilité
     pub fn get(&self, collection: &str, id: &str) -> Result<Option<Value>> {
         self.get_document(collection, id)
     }
 
-    /// Liste tous les documents d'une collection.
     pub fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
         collection::list_documents(&self.storage.config, &self.space, &self.db, collection)
     }
 
-    /// Liste les noms des collections disponibles.
     pub fn list_collections(&self) -> Result<Vec<String>> {
         collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db)
     }
 
-    // --- GESTION INDEX SYSTÈME (_system.json) ---
+    // --- GESTION INDEX SYSTÈME ---
 
     pub fn ensure_system_index(&self) -> Result<()> {
         let sys_path = self
@@ -127,20 +121,11 @@ impl<'a> CollectionsManager<'a> {
         };
 
         if let Some(uri) = found_uri {
-            match SchemaValidator::compile_with_registry(&uri, &reg) {
-                Ok(validator) => {
-                    if let Err(e) = validator.compute_then_validate(doc) {
-                        return Err(anyhow!("Index système invalide: {}", e));
-                    }
-                }
-                Err(e) => {
-                    return Err(anyhow!("Schéma système corrompu ({}): {}", uri, e));
+            if let Ok(validator) = SchemaValidator::compile_with_registry(&uri, &reg) {
+                if let Err(e) = validator.compute_then_validate(doc) {
+                    return Err(anyhow!("Index système invalide: {}", e));
                 }
             }
-        } else {
-            // Mode dégradé si schéma introuvable
-            #[cfg(debug_assertions)]
-            eprintln!("⚠️ Warning: Index schema not found: {}", expected_uri);
         }
 
         fs::write(&sys_path, serde_json::to_string_pretty(doc)?)?;
@@ -184,7 +169,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    // --- GESTION DES INDEXES SECONDAIRES ---
+    // --- INDEXES SECONDAIRES ---
 
     pub fn create_index(&self, collection: &str, field: &str, kind: &str) -> Result<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
@@ -433,16 +418,7 @@ impl<'a> CollectionsManager<'a> {
                 }
                 let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)?;
 
-                if let Err(e) = apply_business_rules(
-                    &self.storage.config,
-                    &self.space,
-                    &self.db,
-                    collection,
-                    doc,
-                    None,
-                    &reg,
-                    &uri,
-                ) {
+                if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, &uri) {
                     eprintln!("⚠️ Erreur règles métier (non bloquant): {}", e);
                 }
 
@@ -483,47 +459,37 @@ impl<'a> CollectionsManager<'a> {
     }
 }
 
-// --- HELPER RULES ENGINE ---
-
-struct DbDataProvider<'a> {
-    cfg: &'a JsonDbConfig,
-    space: &'a str,
-    db: &'a str,
-}
-
-impl<'a> DataProvider for DbDataProvider<'a> {
-    fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<Value> {
-        // CORRECTION: Utilisation de collection::read_document
-        if let Ok(doc) = collection::read_document(self.cfg, self.space, self.db, collection, id) {
-            let ptr = if field.starts_with('/') {
-                field.to_string()
-            } else {
-                format!("/{}", field.replace('.', "/"))
-            };
-            return doc.pointer(&ptr).cloned();
-        }
-        None
-    }
-}
+// --- RULES ENGINE PIPELINE ---
 
 #[allow(clippy::too_many_arguments)]
 pub fn apply_business_rules(
-    cfg: &JsonDbConfig,
-    space: &str,
-    db: &str,
+    manager: &CollectionsManager,
     collection_name: &str,
     doc: &mut Value,
     old_doc: Option<&Value>,
     registry: &SchemaRegistry,
     schema_uri: &str,
 ) -> Result<()> {
-    let mut store = RuleStore::new();
+    let mut store = RuleStore::new(manager);
 
+    // ETAPE 1 : Charger toutes les règles existantes (cross-collection)
+    if let Err(e) = store.sync_from_db() {
+        eprintln!(
+            "⚠️ Warning: Impossible de charger les règles système: {}",
+            e
+        );
+    }
+
+    // ETAPE 2 : Mettre à jour avec les règles du schéma courant
     if let Some(schema) = registry.get_by_uri(schema_uri) {
         if let Some(rules_array) = schema.get("x_rules").and_then(|v| v.as_array()) {
             for (index, rule_val) in rules_array.iter().enumerate() {
                 match serde_json::from_value::<Rule>(rule_val.clone()) {
-                    Ok(rule) => store.register_rule(collection_name, rule),
+                    Ok(rule) => {
+                        if let Err(e) = store.register_rule(collection_name, rule) {
+                            eprintln!("⚠️ Erreur enregistrement règle (index {}): {}", index, e);
+                        }
+                    }
                     Err(e) => {
                         eprintln!("⚠️ Règle invalide dans le schéma (index {}): {}", index, e);
                     }
@@ -532,7 +498,9 @@ pub fn apply_business_rules(
         }
     }
 
-    let provider = DbDataProvider { cfg, space, db };
+    // ETAPE 3 : Création du DataProvider Optimisé avec Cache
+    // Il vivra le temps de cette fonction (donc de la transaction)
+    let provider = CachedDataProvider::new(&manager.storage.config, &manager.space, &manager.db);
 
     let mut current_changes = compute_diff(doc, old_doc);
     let mut passes = 0;
@@ -550,7 +518,8 @@ pub fn apply_business_rules(
         for rule in rules {
             match Evaluator::evaluate(&rule.expr, doc, &provider) {
                 Ok(result) => {
-                    if set_value_by_path(doc, &rule.target, result) {
+                    // On convertit le Cow en Value (Owned) avant l'insertion
+                    if set_value_by_path(doc, &rule.target, result.into_owned()) {
                         next_changes.insert(rule.target.clone());
                     }
                 }
@@ -648,38 +617,32 @@ fn set_value_by_path(doc: &mut Value, path: &str, value: Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine}; // Imports corrects
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use std::fs;
     use tempfile::tempdir;
 
     #[test]
     fn test_manager_get_document_integration() {
-        // 1. Setup
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
 
-        // CORRECTION : Instanciation propre de la config et du moteur
         let config = JsonDbConfig::new(root.clone());
         let storage = StorageEngine::new(config);
 
         let manager = CollectionsManager::new(&storage, "space_test", "db_test");
 
-        // 2. Création manuelle d'un fichier (Simulation DB)
-        // Chemin: root/space_test/db_test/collections/users/user_123.json
         let col_path = root.join("space_test/db_test/collections/users");
         fs::create_dir_all(&col_path).unwrap();
 
         let doc_content = r#"{ "id": "user_123", "name": "Test User" }"#;
         fs::write(col_path.join("user_123.json"), doc_content).unwrap();
 
-        // 3. Test de récupération
         let result = manager.get_document("users", "user_123").unwrap();
 
         assert!(result.is_some(), "Le document devrait être trouvé");
         let doc = result.unwrap();
         assert_eq!(doc["name"], "Test User");
 
-        // 4. Test document inexistant
         let missing = manager.get_document("users", "ghost").unwrap();
         assert!(
             missing.is_none(),

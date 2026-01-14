@@ -8,7 +8,6 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
-// Structure interne pour lire _meta.json
 #[derive(Debug, Serialize, Deserialize)]
 struct CollectionMeta {
     #[serde(default)]
@@ -32,9 +31,7 @@ impl<'a> IndexManager<'a> {
         }
     }
 
-    /// Crée un nouvel index (Mise à jour de _meta.json + Backfill)
     pub fn create_index(&mut self, collection: &str, field: &str, kind_str: &str) -> Result<()> {
-        // 1. Validation du type
         let kind = match kind_str.to_lowercase().as_str() {
             "hash" => IndexType::Hash,
             "btree" => IndexType::BTree,
@@ -42,7 +39,6 @@ impl<'a> IndexManager<'a> {
             _ => return Err(anyhow!("Type d'index inconnu: {}", kind_str)),
         };
 
-        // 2. Construction de la définition
         let field_path = if field.starts_with('/') {
             field.to_string()
         } else {
@@ -56,31 +52,22 @@ impl<'a> IndexManager<'a> {
             unique: false,
         };
 
-        // 3. Mise à jour de _meta.json via la fonction statique (DRY)
         add_index_definition(self.storage, &self.space, &self.db, collection, def.clone())?;
-
-        // 4. Backfill (Reconstruction)
         self.rebuild_index(collection, &def)?;
-
         Ok(())
     }
 
-    /// Supprime un index existant
     pub fn drop_index(&mut self, collection: &str, field: &str) -> Result<()> {
         let meta_path = self.get_meta_path(collection);
         if !meta_path.exists() {
-            return Err(anyhow!("Collection introuvable ou sans métadonnées"));
+            return Err(anyhow!("Collection introuvable"));
         }
 
         let mut meta = self.load_meta(&meta_path)?;
-
         if let Some(pos) = meta.indexes.iter().position(|i| i.name == field) {
             let removed = meta.indexes.remove(pos);
-
-            // Sauvegarde Meta
             fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
 
-            // Suppression Physique
             let index_filename = match removed.index_type {
                 IndexType::Hash => format!("{}.hash.idx", removed.name),
                 IndexType::BTree => format!("{}.btree.idx", removed.name),
@@ -98,27 +85,18 @@ impl<'a> IndexManager<'a> {
                 fs::remove_file(index_path)?;
             }
         } else {
-            return Err(anyhow!("Index introuvable pour le champ '{}'", field));
+            return Err(anyhow!("Index introuvable: {}", field));
         }
-
         Ok(())
     }
 
-    /// Reconstruit un index en parcourant tous les documents
     fn rebuild_index(&self, collection: &str, def: &IndexDefinition) -> Result<()> {
         let col_path = self
             .storage
             .config
             .db_collection_path(&self.space, &self.db, collection);
         let indexes_dir = col_path.join("_indexes");
-        if !indexes_dir.exists() {
-            fs::create_dir_all(&indexes_dir)?;
-        }
-
-        println!(
-            "🔄 Reconstruction de l'index {} sur {}...",
-            def.name, def.field_path
-        );
+        fs::create_dir_all(&indexes_dir)?;
 
         for entry in fs::read_dir(&col_path)? {
             let entry = entry?;
@@ -141,25 +119,20 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    /// Indexe un document (ajout/mise à jour)
     pub fn index_document(&mut self, collection: &str, new_doc: &Value) -> Result<()> {
         let doc_id = new_doc
             .get("id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Document sans ID"))?;
-
+            .ok_or(anyhow!("ID manquant"))?;
         let indexes = self.load_indexes(collection)?;
 
-        // Création du dossier _indexes si nécessaire
         if !indexes.is_empty() {
-            let indexes_dir = self
+            let idx_dir = self
                 .storage
                 .config
                 .db_collection_path(&self.space, &self.db, collection)
                 .join("_indexes");
-            if !indexes_dir.exists() {
-                fs::create_dir_all(indexes_dir)?;
-            }
+            fs::create_dir_all(idx_dir)?;
         }
 
         for def in indexes {
@@ -168,32 +141,24 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    /// Retire un document des index
     pub fn remove_document(&mut self, collection: &str, old_doc: &Value) -> Result<()> {
-        if old_doc.is_null() {
-            return Ok(());
-        }
         let doc_id = old_doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
         if doc_id.is_empty() {
             return Ok(());
         }
 
-        let indexes = self.load_indexes(collection)?;
-        for def in indexes {
+        for def in self.load_indexes(collection)? {
             self.dispatch_update(collection, &def, doc_id, Some(old_doc), None)?;
         }
         Ok(())
     }
-
-    // --- Helpers Privés ---
 
     fn load_indexes(&self, collection: &str) -> Result<Vec<IndexDefinition>> {
         let meta_path = self.get_meta_path(collection);
         if !meta_path.exists() {
             return Ok(Vec::new());
         }
-        let meta = self.load_meta(&meta_path)?;
-        Ok(meta.indexes)
+        Ok(self.load_meta(&meta_path)?.indexes)
     }
 
     fn get_meta_path(&self, collection: &str) -> PathBuf {
@@ -204,58 +169,30 @@ impl<'a> IndexManager<'a> {
     }
 
     fn load_meta(&self, path: &PathBuf) -> Result<CollectionMeta> {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("Lecture meta impossible : {:?}", path))?;
-        serde_json::from_str(&content).map_err(|e| anyhow!("Erreur parsing _meta.json: {}", e))
+        let content = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&content)?)
     }
 
     fn dispatch_update(
         &self,
-        collection: &str,
+        col: &str,
         def: &IndexDefinition,
-        doc_id: &str,
+        id: &str,
         old: Option<&Value>,
         new: Option<&Value>,
     ) -> Result<()> {
+        let cfg = &self.storage.config;
+        let s = &self.space;
+        let d = &self.db;
         match def.index_type {
-            IndexType::Hash => hash::update_hash_index(
-                &self.storage.config,
-                &self.space,
-                &self.db,
-                collection,
-                def,
-                doc_id,
-                old,
-                new,
-            ),
-            IndexType::BTree => btree::update_btree_index(
-                &self.storage.config,
-                &self.space,
-                &self.db,
-                collection,
-                def,
-                doc_id,
-                old,
-                new,
-            ),
-            IndexType::Text => text::update_text_index(
-                &self.storage.config,
-                &self.space,
-                &self.db,
-                collection,
-                def,
-                doc_id,
-                old,
-                new,
-            ),
+            IndexType::Hash => hash::update_hash_index(cfg, s, d, col, def, id, old, new),
+            IndexType::BTree => btree::update_btree_index(cfg, s, d, col, def, id, old, new),
+            IndexType::Text => text::update_text_index(cfg, s, d, col, def, id, old, new),
         }
         .with_context(|| format!("Erreur mise à jour index '{}'", def.name))
     }
-} // <--- C'est l'accolade qui manquait probablement !
+}
 
-// --- FONCTION STATIQUE (HORS IMPL) ---
-
-/// Helper pour ajouter un index à une collection (mise à jour de _meta.json)
 pub fn add_index_definition(
     storage: &StorageEngine,
     space: &str,
@@ -267,7 +204,6 @@ pub fn add_index_definition(
         .config
         .db_collection_path(space, db, collection)
         .join("_meta.json");
-
     let mut meta: CollectionMeta = if meta_path.exists() {
         serde_json::from_str(&fs::read_to_string(&meta_path)?)?
     } else {
@@ -277,14 +213,45 @@ pub fn add_index_definition(
         }
     };
 
-    // Éviter les doublons de nom
-    if meta.indexes.iter().any(|i| i.name == def.name) {
-        return Ok(());
+    if !meta.indexes.iter().any(|i| i.name == def.name) {
+        meta.indexes.push(def);
+        fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
     }
-
-    meta.indexes.push(def);
-
-    fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
-
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json_db::storage::JsonDbConfig;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_manager_lifecycle() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let mut mgr = IndexManager::new(&storage, "s", "d");
+
+        // Setup collection
+        let col_path = dir.path().join("s/d/collections/users");
+        fs::create_dir_all(&col_path).unwrap();
+
+        // 1. Create Index (should create _meta.json)
+        mgr.create_index("users", "email", "hash").unwrap();
+        assert!(col_path.join("_meta.json").exists());
+
+        // 2. Index Document
+        let doc = json!({ "id": "u1", "email": "a@a.com" });
+        mgr.index_document("users", &doc).unwrap();
+
+        // 3. Verify Index File
+        let idx_path = col_path.join("_indexes/email.hash.idx");
+        assert!(idx_path.exists());
+
+        // 4. Drop Index
+        mgr.drop_index("users", "email").unwrap();
+        assert!(!idx_path.exists());
+    }
 }

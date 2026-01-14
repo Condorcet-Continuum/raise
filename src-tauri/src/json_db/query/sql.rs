@@ -29,7 +29,7 @@ pub fn parse_sql(sql: &str) -> Result<Query> {
 }
 
 fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
-    let limit = None; // Désactivé temporairement (compatibilité versions sqlparser)
+    let limit = None;
     let offset = None;
 
     let sort = if let Some(order_by_struct) = &sql_query.order_by {
@@ -135,35 +135,17 @@ fn translate_order_by(expr: &OrderByExpr) -> Result<SortField> {
 /// Traduit une expression SQL (WHERE clause) en QueryFilter
 fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
     match expr {
-        // 1. Gestion des parenthèses
         Expr::Nested(inner) => translate_expr(inner),
-
-        // 2. Gestion des Opérateurs Binaires
         Expr::BinaryOp { left, op, right } => match op {
-            // --- LOGIQUE (AND / OR) ---
             BinaryOperator::And => {
                 let l = translate_expr(left)?;
                 let r = translate_expr(right)?;
-                // Fusion des conditions si l'opérateur est identique
-                if matches!(l.operator, FilterOperator::And)
-                    && matches!(r.operator, FilterOperator::And)
-                {
-                    let mut conds = l.conditions;
-                    conds.extend(r.conditions);
-                    Ok(QueryFilter {
-                        operator: FilterOperator::And,
-                        conditions: conds,
-                    })
-                } else {
-                    // TODO: Gérer l'imbrication complexe (AND contenant des OR).
-                    // Pour l'instant, on aplatit au mieux.
-                    let mut conds = l.conditions;
-                    conds.extend(r.conditions);
-                    Ok(QueryFilter {
-                        operator: FilterOperator::And,
-                        conditions: conds,
-                    })
-                }
+                let mut conds = l.conditions;
+                conds.extend(r.conditions);
+                Ok(QueryFilter {
+                    operator: FilterOperator::And,
+                    conditions: conds,
+                })
             }
             BinaryOperator::Or => {
                 let l = translate_expr(left)?;
@@ -175,13 +157,9 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                     conditions: conds,
                 })
             }
-
-            // --- COMPARAISON (>, <, =, !=) ---
             _ => {
-                // C'est ici que ça plantait : on ne cherche un nom de champ QUE si c'est une comparaison
                 let field = expr_to_field_name(left)?;
                 let value = expr_to_value(right)?;
-
                 let operator = match op {
                     BinaryOperator::Eq => ComparisonOperator::Eq,
                     BinaryOperator::NotEq => ComparisonOperator::Ne,
@@ -191,9 +169,8 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                     BinaryOperator::LtEq => ComparisonOperator::Lte,
                     _ => ComparisonOperator::Eq,
                 };
-
                 Ok(QueryFilter {
-                    operator: FilterOperator::And, // Un filtre atomique est un AND de 1 condition
+                    operator: FilterOperator::And,
                     conditions: vec![Condition {
                         field,
                         operator,
@@ -202,8 +179,6 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                 })
             }
         },
-
-        // 3. Gestion LIKE
         Expr::Like { expr, pattern, .. } => {
             let field = expr_to_field_name(expr)?;
             let value = expr_to_value(pattern)?;
@@ -216,7 +191,6 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                 }],
             })
         }
-
         _ => bail!("Expression SQL non supportée : {:?}", expr),
     }
 }
@@ -238,10 +212,7 @@ fn expr_to_field_name(expr: &Expr) -> Result<String> {
 
 fn expr_to_value(expr: &Expr) -> Result<Value> {
     match expr {
-        // ValueWithSpan wrapper dans les versions récentes de sqlparser
         Expr::Value(value_with_span) => sql_value_to_json(&value_with_span.value),
-
-        // Support des nombres négatifs (-10)
         Expr::UnaryOp {
             op: sqlparser::ast::UnaryOperator::Minus,
             expr: inner,
@@ -257,20 +228,7 @@ fn expr_to_value(expr: &Expr) -> Result<Value> {
             }
             _ => bail!("Négation impossible sur non-nombre"),
         },
-        _ => bail!("Valeur littérale simple attendue (pas d'expression complexe)"),
-    }
-}
-
-#[allow(dead_code)]
-fn expr_to_usize(expr: &Expr) -> Result<usize> {
-    match expr {
-        Expr::Value(value_with_span) => match &value_with_span.value {
-            SqlValue::Number(n, _) => n
-                .parse::<usize>()
-                .map_err(|e| anyhow::anyhow!("Erreur parsing: {}", e)),
-            _ => bail!("Nombre attendu"),
-        },
-        _ => bail!("Expression simple attendue"),
+        _ => bail!("Valeur littérale simple attendue"),
     }
 }
 
@@ -289,5 +247,42 @@ fn sql_value_to_json(val: &SqlValue) -> Result<Value> {
         SqlValue::SingleQuotedString(s) => Ok(Value::from(s.clone())),
         SqlValue::Boolean(b) => Ok(Value::from(*b)),
         _ => Ok(Value::Null),
+    }
+}
+
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_simple_select() {
+        let q = parse_sql("SELECT name FROM users WHERE age > 18").unwrap();
+        assert_eq!(q.collection, "users");
+
+        // Vérification du filtre
+        let filter = q.filter.unwrap();
+        assert_eq!(filter.conditions.len(), 1);
+        assert_eq!(filter.conditions[0].field, "age");
+        assert!(matches!(
+            filter.conditions[0].operator,
+            ComparisonOperator::Gt
+        ));
+
+        // Vérification de la projection
+        match q.projection.unwrap() {
+            Projection::Include(fields) => assert_eq!(fields[0], "name"),
+            _ => panic!("Projection failed"),
+        }
+    }
+
+    #[test]
+    fn test_parse_and_logic() {
+        let q = parse_sql("SELECT * FROM t WHERE a = 1 AND b = 2").unwrap();
+        let filter = q.filter.unwrap();
+        assert_eq!(filter.conditions.len(), 2);
     }
 }

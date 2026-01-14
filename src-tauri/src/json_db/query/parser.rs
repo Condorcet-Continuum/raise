@@ -34,7 +34,6 @@ pub struct QueryBuilder {
 
 impl QueryBuilder {
     pub fn new(collection: impl Into<String>) -> Self {
-        // Correction de type : conversion explicite
         let col_str: String = collection.into();
         Self {
             query: Query::new(&col_str),
@@ -59,7 +58,6 @@ impl QueryBuilder {
     }
 
     pub fn select(mut self, fields: Vec<String>) -> Result<Self> {
-        // Utilisation correcte de parse_projection
         self.query.projection = Some(parse_projection(&fields)?);
         Ok(self)
     }
@@ -153,4 +151,49 @@ pub fn parse_filter_from_json(value: &Value) -> Result<QueryFilter> {
         operator: op,
         conditions,
     })
+}
+
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_projection() {
+        let p = parse_projection(&["name".into(), "age".into()]).unwrap();
+        match p {
+            Projection::Include(v) => assert_eq!(v.len(), 2),
+            _ => panic!("Should be Include"),
+        }
+
+        let p_ex = parse_projection(&["-password".into()]).unwrap();
+        match p_ex {
+            Projection::Exclude(v) => assert_eq!(v[0], "password"),
+            _ => panic!("Should be Exclude"),
+        }
+    }
+
+    #[test]
+    fn test_query_builder() {
+        let q = QueryBuilder::new("users")
+            .where_eq("active", json!(true))
+            .select(vec!["username".into()])
+            .unwrap()
+            .build();
+
+        assert_eq!(q.collection, "users");
+        assert!(q.filter.is_some());
+        assert!(q.projection.is_some());
+    }
+
+    #[test]
+    fn test_parse_sort() {
+        let s = parse_sort_specs(&["+age".into(), "name:desc".into()]).unwrap();
+        assert_eq!(s[0].order, SortOrder::Asc);
+        assert_eq!(s[1].order, SortOrder::Desc);
+    }
 }

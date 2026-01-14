@@ -1,9 +1,10 @@
+// FICHIER : src-tauri/src/json_db/migrations/migrator.rs
+
 use super::version::MigrationVersion;
 use super::{Migration, MigrationStep};
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
 
-// ✅ CORRECTION : On retire 'anyhow' qui n'était pas utilisé, on garde juste 'Result'
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -179,6 +180,10 @@ impl<'a> Migrator<'a> {
     }
 }
 
+// ============================================================================
+// TESTS D'INTÉGRATION
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,7 +192,7 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    // ✅ CETTE FONCTION DOIT ÊTRE ICI (au niveau du module)
+    // Helper pour créer l'environnement de test isolé
     fn create_test_env() -> (StorageEngine, tempfile::TempDir) {
         let temp_dir = tempdir().expect("Impossible de créer dossier temp DB");
         let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
@@ -198,7 +203,7 @@ mod tests {
     #[test]
     fn test_migration_lifecycle() {
         // 1. SETUP
-        let (storage, _dir) = create_test_env(); // Elle est maintenant accessible
+        let (storage, _dir) = create_test_env();
         let space = "test_space";
         let db = "test_db";
         let migrator = Migrator::new(&storage, space, db);
@@ -210,8 +215,7 @@ mod tests {
             description: "Init Users".to_string(),
             up: vec![MigrationStep::CreateCollection {
                 name: "users".to_string(),
-                // ✅ CORRECTION : On met 'null' pour ne pas déclencher le validateur
-                // car le fichier "db://dummy/schema" n'existe pas vraiment.
+                // 'null' pour ne pas déclencher la validation de schéma (fichier inexistant)
                 schema: json!(null),
             }],
             down: vec![],
@@ -222,16 +226,13 @@ mod tests {
             .run_migrations(vec![m1.clone()])
             .expect("Migration 1 failed");
 
-        // Vérification : La collection "users" doit être visible publiquement
+        // Vérification : La collection "users" doit être visible
         let cols = migrator.manager.list_collections().unwrap();
         assert!(cols.contains(&"users".to_string()));
 
-        // Vérification : _migrations existe (via list_all car c'est une collection système privée)
+        // Vérification : _migrations existe
         let mig_docs = migrator.manager.list_all("_migrations");
-        assert!(
-            mig_docs.is_ok(),
-            "La collection _migrations devrait exister"
-        );
+        assert!(mig_docs.is_ok());
 
         // Insertion d'un document "legacy"
         let user_doc = json!({
@@ -272,7 +273,6 @@ mod tests {
 
     #[test]
     fn test_rename_field() {
-        // Cette fonction a aussi besoin de create_test_env
         let (storage, _dir) = create_test_env();
         let migrator = Migrator::new(&storage, "space", "db");
 

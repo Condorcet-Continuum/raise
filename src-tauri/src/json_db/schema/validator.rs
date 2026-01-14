@@ -57,7 +57,7 @@ fn validate_node(
             .ok_or_else(|| anyhow!("Ref schema not found: {}", file_uri))?;
 
         let target_schema = if let Some(frag) = fragment {
-            let pointer = frag.replace("#", "");
+            let pointer = frag.replace('#', "");
             target_root
                 .pointer(&pointer)
                 .ok_or_else(|| anyhow!("Pointer {} not found in {}", pointer, file_uri))?
@@ -218,7 +218,7 @@ fn resolve_path_uri(base: &str, target_path: &str) -> String {
     format!(
         "{}{}",
         prefix,
-        normalized.to_string_lossy().replace("\\", "/")
+        normalized.to_string_lossy().replace('\\', "/")
     )
 }
 
@@ -239,4 +239,68 @@ fn normalize_path(path: &Path) -> PathBuf {
         result.push(c);
     }
     result
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_simple_validation() {
+        let mut reg = SchemaRegistry::new();
+        let schema = json!({
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+                "name": { "type": "string" },
+                "age": { "type": "integer" }
+            }
+        });
+        reg.register("db://test/schema".to_string(), schema);
+
+        let validator = SchemaValidator::compile_with_registry("db://test/schema", &reg).unwrap();
+
+        // Valid
+        assert!(validator
+            .validate(&json!({"name": "Alice", "age": 30}))
+            .is_ok());
+
+        // Invalid (missing required)
+        assert!(validator.validate(&json!({"age": 30})).is_err());
+
+        // Invalid (wrong type)
+        assert!(validator
+            .validate(&json!({"name": "Alice", "age": "trente"}))
+            .is_err());
+    }
+
+    #[test]
+    fn test_pattern_properties() {
+        let mut reg = SchemaRegistry::new();
+        let schema = json!({
+            "type": "object",
+            "patternProperties": {
+                "^x_": { "type": "string" }
+            },
+            "additionalProperties": false
+        });
+        reg.register("db://test/pattern".to_string(), schema);
+        let v = SchemaValidator::compile_with_registry("db://test/pattern", &reg).unwrap();
+
+        assert!(v.validate(&json!({"x_factor": "yes"})).is_ok());
+        assert!(v.validate(&json!({"y_factor": "no"})).is_err()); // Forbidden by additionalProperties: false
+    }
+
+    #[test]
+    fn test_resolve_path() {
+        let base = "db://space/db/schemas/v1/folder/file.json";
+        let target = "../other/ref.json";
+        let res = resolve_path_uri(base, target);
+        assert_eq!(res, "db://space/db/schemas/v1/other/ref.json");
+    }
 }
