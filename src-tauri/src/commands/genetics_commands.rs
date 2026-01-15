@@ -139,31 +139,40 @@ pub async fn run_architecture_optimization(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::genetics::dto::{ComponentDto, FunctionDto};
+    // L'import est correct ici
+    use crate::genetics::dto::{ComponentInfo, DataFlowInfo, FunctionInfo};
 
-    #[tokio::test]
-    async fn test_architecture_optimization_command_logic() {
-        // Note: Ce test ne peut pas utiliser une vraie Window Tauri sans setup complexe,
-        // mais on teste ici la logique de préparation des données.
-        let request = OptimizationRequest {
-            functions: vec![FunctionDto {
-                id: "f1".into(),
-                load: 10.0,
-            }],
-            components: vec![ComponentDto {
-                id: "c1".into(),
-                capacity: 100.0,
-            }],
-            flows: vec![],
-            constraints: None,
-            population_size: 10,
-            max_generations: 2,
+    #[test]
+    fn test_map_params() {
+        let params = OptimizationRequest {
+            population_size: 100,
+            max_generations: 50,
             mutation_rate: 0.1,
             crossover_rate: 0.8,
+
+            // CORRECTION 1 : Remplacer FunctionDto par FunctionInfo
+            functions: vec![FunctionInfo {
+                id: "f1".to_string(),
+                load: 10.0,
+            }],
+
+            // CORRECTION 2 : Remplacer ComponentDto par ComponentInfo
+            components: vec![ComponentInfo {
+                id: "c1".to_string(),
+                capacity: 100.0,
+            }],
+
+            flows: vec![DataFlowInfo {
+                source_id: "f1".to_string(),
+                target_id: "f1".to_string(),
+                volume: 10.0,
+            }],
+
+            constraints: None,
         };
 
-        // La logique ici simule l'appel de la commande
-        assert_eq!(request.functions.len(), 1);
-        assert_eq!(request.components.len(), 1);
+        // Vérifications simples
+        assert_eq!(params.functions.len(), 1);
+        assert_eq!(params.components.len(), 1);
     }
 }
