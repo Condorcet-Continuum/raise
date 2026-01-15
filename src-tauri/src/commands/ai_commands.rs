@@ -11,41 +11,70 @@ use crate::ai::agents::{
 use crate::ai::llm::client::LlmClient;
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::storage::StorageEngine;
-use tokio::sync::Mutex; // Async Mutex
+use tokio::sync::Mutex as AsyncMutex; // Alias pour éviter les conflits
 
 // Import pour le Moteur Natif
 use crate::ai::llm::NativeLlmState;
 
+// --- NOUVEAUX IMPORTS (Deep Learning) ---
+use crate::ai::deep_learning::{
+    models::sequence_net::SequenceNet, serialization, trainer::Trainer,
+};
+use candle_core::{DType, Device, Tensor};
+use candle_nn::{VarBuilder, VarMap};
+use std::sync::Mutex as SyncMutex; // Mutex standard pour le DL (Sync)
+
 use std::env;
 use std::path::PathBuf;
-use std::sync::Arc; // Standard Arc
+use std::sync::Arc;
 use tauri::{command, State};
 
-// --- DÉFINITION DE L'ÉTAT GLOBAL (PROPRIÉTÉ PARTAGÉE) ---
-// Type = Un Mutex qui contient (peut-être) un Pointeur Partagé vers un Mutex qui contient l'Orchestrateur
-pub struct AiState(pub Mutex<Option<Arc<Mutex<AiOrchestrator>>>>);
+// --- 1. ÉTAT GLOBAL EXISTANT (INTACT) ---
+// On ne touche pas à cette structure pour ne pas casser main.rs
+pub struct AiState(pub AsyncMutex<Option<Arc<AsyncMutex<AiOrchestrator>>>>);
 
 impl AiState {
-    pub fn new(orch: Option<Arc<Mutex<AiOrchestrator>>>) -> Self {
-        Self(Mutex::new(orch))
+    pub fn new(orch: Option<Arc<AsyncMutex<AiOrchestrator>>>) -> Self {
+        Self(AsyncMutex::new(orch))
     }
 }
 
+// --- 2. NOUVEL ÉTAT POUR LE DEEP LEARNING (SÉPARÉ) ---
+// Gère le modèle neuronal de manière isolée
+pub struct DlState {
+    pub model: SyncMutex<Option<SequenceNet>>,
+    pub varmap: SyncMutex<Option<VarMap>>,
+}
+
+impl DlState {
+    pub fn new() -> Self {
+        Self {
+            model: SyncMutex::new(None),
+            varmap: SyncMutex::new(None),
+        }
+    }
+}
+
+// CORRECTION CLIPPY : Implémentation de Default
+impl Default for DlState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// --- COMMANDES EXISTANTES ---
+
 #[command]
 pub async fn ai_reset(ai_state: State<'_, AiState>) -> Result<(), String> {
-    // 1. On verrouille le conteneur principal
     let guard = ai_state.0.lock().await;
 
-    // 2. Si l'IA est initialisée, on accède au pointeur partagé
     if let Some(shared_orch) = &*guard {
-        // 3. On verrouille l'orchestrateur lui-même
         let mut orchestrator = shared_orch.lock().await;
         orchestrator.clear_history().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
-// [NOUVEAU] Commande pour apprendre un document (RAG)
 #[command]
 pub async fn ai_learn_text(
     ai_state: State<'_, AiState>,
@@ -56,7 +85,6 @@ pub async fn ai_learn_text(
 
     if let Some(shared_orch) = &*guard {
         let mut orchestrator = shared_orch.lock().await;
-        // Appel à la méthode learn_document de l'orchestrateur
         let chunks_count = orchestrator
             .learn_document(&content, &source)
             .await
@@ -71,7 +99,6 @@ pub async fn ai_learn_text(
     }
 }
 
-/// Commande principale : Retourne un AgentResult structuré
 #[command]
 pub async fn ai_chat(
     storage: State<'_, StorageEngine>,
@@ -94,9 +121,6 @@ pub async fn ai_chat(
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap().join("dataset"));
 
-    // Note : On recrée un client ici pour le classifier d'intentions.
-    // Idéalement, l'Orchestrateur pourrait exposer son propre classifier,
-    // mais on garde cette séparation pour l'instant (Agents vs Orchestrateur).
     let client = LlmClient::new(&local_url, &gemini_key, model_name.clone());
 
     // 2. Classification
@@ -112,7 +136,6 @@ pub async fn ai_chat(
 
     // 3. Routage
     let result = match intent {
-        // --- ROUTAGE VERS LES AGENTS SPÉCIALISÉS (CRUD ARCADIA) ---
         EngineeringIntent::DefineBusinessUseCase { .. } => {
             BusinessAgent::new().process(&ctx, &intent).await
         }
@@ -140,12 +163,10 @@ pub async fn ai_chat(
         }
         EngineeringIntent::GenerateCode { .. } => SoftwareAgent::new().process(&ctx, &intent).await,
 
-        // --- ROUTAGE VERS L'ORCHESTRATEUR (RAG / CONVERSATION) ---
         EngineeringIntent::Unknown | EngineeringIntent::Chat => {
             let guard = ai_state.0.lock().await;
 
             if let Some(shared_orch) = &*guard {
-                // On verrouille l'instance partagée pour lui parler
                 let mut orchestrator = shared_orch.lock().await;
                 match orchestrator.ask(&user_input).await {
                     Ok(response_text) => Ok(Some(AgentResult::text(response_text))),
@@ -161,7 +182,6 @@ pub async fn ai_chat(
         _ => Ok(Some(AgentResult::text("Commande non gérée.".to_string()))),
     };
 
-    // 4. Conversion finale
     match result {
         Ok(Some(res)) => Ok(res),
         Ok(None) => Ok(AgentResult::text("Aucune action effectuée.".to_string())),
@@ -169,7 +189,6 @@ pub async fn ai_chat(
     }
 }
 
-// --- COMMANDE NATIVE (Llama 3.2 1B) ---
 #[command]
 pub async fn ask_native_llm(
     state: State<'_, NativeLlmState>,
@@ -192,4 +211,126 @@ pub async fn ask_native_llm(
                 .to_string(),
         )
     }
+}
+
+// --- NOUVELLES COMMANDES DEEP LEARNING (Utilisent DlState) ---
+
+#[command]
+pub fn init_dl_model(
+    state: State<'_, DlState>,
+    input_dim: usize,
+    hidden_dim: usize,
+    output_dim: usize,
+) -> Result<String, String> {
+    let device = Device::Cpu;
+
+    let varmap = VarMap::new();
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+
+    let model =
+        SequenceNet::new(input_dim, hidden_dim, output_dim, vb).map_err(|e| e.to_string())?;
+
+    let mut model_guard = state.model.lock().unwrap();
+    let mut varmap_guard = state.varmap.lock().unwrap();
+
+    *model_guard = Some(model);
+    *varmap_guard = Some(varmap);
+
+    Ok("Modèle Deep Learning initialisé.".to_string())
+}
+
+#[command]
+pub fn run_dl_prediction(
+    state: State<'_, DlState>,
+    input_sequence: Vec<f32>,
+) -> Result<Vec<f32>, String> {
+    let model_guard = state.model.lock().unwrap();
+
+    if let Some(model) = &*model_guard {
+        let device = Device::Cpu;
+        let input_dim = input_sequence.len();
+
+        // On crée un tenseur [1, 1, InputDim] pour une prédiction unitaire
+        let input_tensor = Tensor::from_vec(input_sequence, (1, 1, input_dim), &device)
+            .map_err(|e| e.to_string())?;
+
+        let output = model.forward(&input_tensor).map_err(|e| e.to_string())?;
+
+        let result_vec = output
+            .flatten_all()
+            .map_err(|e| e.to_string())?
+            .to_vec1::<f32>()
+            .map_err(|e| e.to_string())?;
+
+        Ok(result_vec)
+    } else {
+        Err("Aucun modèle DL chargé.".to_string())
+    }
+}
+
+#[command]
+pub fn train_dl_step(
+    state: State<'_, DlState>,
+    input_sequence: Vec<f32>,
+    target_class: u32,
+) -> Result<f64, String> {
+    let model_guard = state.model.lock().unwrap();
+    let varmap_guard = state.varmap.lock().unwrap();
+
+    if let (Some(model), Some(varmap)) = (&*model_guard, &*varmap_guard) {
+        let device = Device::Cpu;
+        let input_dim = input_sequence.len();
+
+        let input_tensor = Tensor::from_vec(input_sequence, (1, 1, input_dim), &device)
+            .map_err(|e| e.to_string())?;
+
+        let target_tensor =
+            Tensor::from_vec(vec![target_class], (1, 1), &device).map_err(|e| e.to_string())?;
+
+        let trainer = Trainer::new(varmap, 0.01);
+
+        let loss = trainer
+            .train_step(model, &input_tensor, &target_tensor)
+            .map_err(|e| e.to_string())?;
+
+        Ok(loss)
+    } else {
+        Err("Modèle DL non chargé ou non entraînable.".to_string())
+    }
+}
+
+#[command]
+pub fn save_dl_model(state: State<'_, DlState>, path: String) -> Result<String, String> {
+    let varmap_guard = state.varmap.lock().unwrap();
+
+    if let Some(varmap) = &*varmap_guard {
+        let path_buf = PathBuf::from(path);
+        serialization::save_model(varmap, &path_buf).map_err(|e| e.to_string())?;
+        Ok("Sauvegarde DL réussie.".to_string())
+    } else {
+        Err("Pas de modèle DL à sauvegarder.".to_string())
+    }
+}
+
+#[command]
+pub fn load_dl_model(
+    state: State<'_, DlState>,
+    path: String,
+    input_dim: usize,
+    hidden_dim: usize,
+    output_dim: usize,
+) -> Result<String, String> {
+    let device = Device::Cpu;
+    let path_buf = PathBuf::from(path);
+
+    let model = serialization::load_model(&path_buf, input_dim, hidden_dim, output_dim, &device)
+        .map_err(|e| e.to_string())?;
+
+    let mut model_guard = state.model.lock().unwrap();
+    let mut varmap_guard = state.varmap.lock().unwrap();
+
+    *model_guard = Some(model);
+    *varmap_guard = None; // En mode inférence après chargement fichier (pas de varmap mutable)
+
+    Ok("Modèle DL chargé.".to_string())
 }

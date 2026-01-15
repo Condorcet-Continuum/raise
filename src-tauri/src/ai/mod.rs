@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod assurance;
 pub mod context;
+pub mod deep_learning;
 pub mod llm;
 pub mod memory;
 pub mod nlp;

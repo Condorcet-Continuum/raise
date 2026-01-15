@@ -25,6 +25,8 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
     { id: 'assurance', label: 'Qualité & XAI', icon: '🛡️' },
 
     { id: 'ai', label: 'MBAIE (AI Engineering)', icon: '🤖' },
+    { id: 'deep-learning', label: 'Deep Learning (RNN)', icon: '🕸️' },
+
     { id: 'blockchain', label: 'Blockchain', icon: '🔗' },
     { id: 'cognitive-tester', label: 'Testeur WASM', icon: '🧪' },
     { id: 'admin-db', label: 'Base de Données', icon: '🗄️' },

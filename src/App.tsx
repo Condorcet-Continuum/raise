@@ -32,6 +32,8 @@ import DashboardView from '@/components/dashboard/DashboardView';
 // On importe le composant depuis features
 import GovernanceConsole from '@/features/governance/GovernanceConsole';
 
+import { DeepLearningPanel } from '@/components/DeepLearning/DeepLearningPanel';
+
 // --- TYPAGE STRICT ---
 interface SystemInfo {
   app_version: string;
@@ -94,6 +96,10 @@ export default function App() {
         return <RulesEngineDashboard />;
       case 'blockchain':
         return <BlockchainView />;
+
+      case 'deep-learning':
+        return <DeepLearningPanel />;
+
       case 'dashboard':
       default:
         return <DashboardView sysInfo={sysInfo} onNavigate={setCurrentPage} />;

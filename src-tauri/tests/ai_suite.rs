@@ -37,3 +37,7 @@ mod data_agent_tests;
 // TRANSVERSE : Exigences, Tests & IVVQ
 #[path = "ai_suite/transverse_agent_tests.rs"]
 mod transverse_agent_tests;
+
+// TRANSVERSE : Exigences, Tests & IVVQ
+#[path = "ai_suite/deep_learning_tests.rs"]
+mod deep_learning_tests;

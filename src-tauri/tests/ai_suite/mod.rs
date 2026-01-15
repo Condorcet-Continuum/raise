@@ -10,6 +10,7 @@ use std::sync::Once;
 
 pub mod business_agent_tests;
 pub mod data_agent_tests;
+pub mod deep_learning_tests;
 pub mod epbs_agent_tests;
 pub mod hardware_agent_tests;
 pub mod llm_tests;

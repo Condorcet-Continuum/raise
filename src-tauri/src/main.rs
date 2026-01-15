@@ -43,6 +43,8 @@ use raise::ai::orchestrator::AiOrchestrator;
 use raise::graph_store::GraphStore;
 use raise::model_engine::loader::ModelLoader;
 
+use raise::commands::ai_commands::DlState;
+
 fn main() {
     // [MODIFICATION] Chargement explicite du .env au démarrage
     // Essentiel pour que l'Orchestrateur (RAG) voie "VECTOR_STORE_PROVIDER" et "ENABLE_GRAPH_VECTORS"
@@ -103,6 +105,7 @@ fn main() {
             // Initialisation "vide" pour le démarrage
             app.manage(AsyncMutex::new(WorkflowStore::default()));
             app.manage(AiState::new(None));
+            app.manage(DlState::new());
 
             let app_handle = app.handle();
             raise::blockchain::ensure_innernet_state(app_handle, "default");
@@ -207,6 +210,11 @@ fn main() {
             ai_commands::ai_reset,
             ai_commands::ask_native_llm,
             ai_commands::ai_learn_text,
+            ai_commands::init_dl_model,
+            ai_commands::run_dl_prediction,
+            ai_commands::train_dl_step,
+            ai_commands::save_dl_model,
+            ai_commands::load_dl_model,
             dataset::ai_export_dataset,
             // Commandes Cognitives (Plugins)
             cognitive_commands::cognitive_load_plugin,
@@ -227,6 +235,7 @@ fn main() {
             // Commandes Génétiques
             genetics_commands::run_architecture_optimization,
             genetics_commands::debug_genetics_ping,
+            // Commandes Générateur de code
             codegen_commands::generate_source_code,
             // Commandes Traçabilité
             traceability_commands::analyze_impact,
