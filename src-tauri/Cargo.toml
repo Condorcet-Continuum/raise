@@ -55,6 +55,11 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 rand = "0.9.2"
 
+# --- Algorithme Génétique ---
+rayon = "1.10"       # Pour le parallélisme (par_iter)
+rand_distr = "0.5.1" # Pour la distribution Gaussienne (Mutation)
+
+
 # --- MOTEUR IA & NLP  ---
 reqwest = { version = "0.13.1", features = ["json", "blocking", "multipart"] }
 text-splitter = "0.29.0"

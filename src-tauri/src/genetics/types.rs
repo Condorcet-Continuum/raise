@@ -1,59 +1,56 @@
-// src-tauri/src/genetics/types.rs
-
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-/// Structure représentant le résultat d'une évaluation complexe.
-/// Compatible NSGA-II (Multi-Objective).
+/// Structure représentant la performance d'un individu.
+/// Conçue pour l'optimisation multi-objectifs (NSGA-II).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Fitness {
-    /// Les valeurs des objectifs (ex: [minimiser latence, minimiser coût]).
-    /// Par convention ici : Plus c'est haut, mieux c'est (Maximisation).
-    /// Si vous voulez minimiser, inversez le signe dans l'Evaluator.
+    /// Les valeurs des objectifs (ex: [latence, -coût]).
+    /// Convention : On cherche toujours à MAXIMISER ces valeurs.
+    /// (Pour minimiser un coût, il suffit de renvoyer une valeur négative ou d'inverser dans l'évaluateur).
     pub values: Vec<f32>,
-    
+
     /// Score de violation de contrainte (0.0 = valide, >0.0 = invalide).
-    /// Utilisé pour pénaliser les solutions infaisables sans les jeter.
+    /// Permet de guider l'évolution vers des solutions valides.
     pub constraint_violation: f32,
 
-    // --- Champs spécifiques NSGA-II (calculés après évaluation) ---
-    
-    /// Rang de dominance (0 = Front de Pareto optimal).
+    // --- Métadonnées NSGA-II (calculées post-évaluation) ---
+    /// Rang de dominance (0 = Front de Pareto optimal, 1 = Front suivant, etc.).
     #[serde(skip)]
     pub rank: usize,
-    
-    /// Distance de crowding (pour maintenir la diversité sur le front).
+
+    /// Distance de crowding (pour maintenir la diversité sur le front de Pareto).
     #[serde(skip)]
     pub crowding_distance: f32,
 }
 
 impl Fitness {
+    /// Crée une nouvelle fitness brute (avant calcul de rang).
     pub fn new(values: Vec<f32>, constraint_violation: f32) -> Self {
         Self {
             values,
             constraint_violation,
-            rank: 0,
+            rank: usize::MAX, // Non classé par défaut
             crowding_distance: 0.0,
         }
     }
 
     /// Retourne true si self domine other.
-    /// Une solution A domine B si elle est au moins aussi bonne partout
-    /// et strictement meilleure sur au moins un critère.
+    /// A domine B si A est au moins aussi bon que B partout et strictement meilleur sur au moins un critère.
     pub fn dominates(&self, other: &Fitness) -> bool {
-        // Priorité aux contraintes : une solution valide domine toujours une invalide
+        // 1. Priorité absolue à la validité (Constraint Handling)
         if self.constraint_violation < other.constraint_violation {
-            return true;
+            return true; // Self est plus valide (ou valide tout court)
         }
         if self.constraint_violation > other.constraint_violation {
             return false;
         }
 
-        // Si contraintes égales (ou nulles), on compare les objectifs
+        // 2. Si contraintes égales, on compare les objectifs (Pareto)
         let mut at_least_one_better = false;
         for (a, b) in self.values.iter().zip(other.values.iter()) {
             if a < b {
-                return false; // Pire sur un critère -> ne domine pas
+                return false; // Pire sur un critère -> ne peut pas dominer
             }
             if a > b {
                 at_least_one_better = true;
@@ -74,7 +71,7 @@ impl Default for Fitness {
     }
 }
 
-/// Un individu dans la population.
+/// Un individu dans la population : un génome + sa performance.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Individual<G> {
     pub genome: G,
@@ -90,11 +87,17 @@ impl<G> Individual<G> {
     }
 }
 
-/// La population complète.
+/// La population complète pour une génération donnée.
 #[derive(Clone, Debug)]
 pub struct Population<G> {
     pub individuals: Vec<Individual<G>>,
     pub generation: usize,
+}
+
+impl<G> Default for Population<G> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<G> Population<G> {
@@ -116,6 +119,35 @@ impl<G> Population<G> {
     pub fn add(&mut self, individual: Individual<G>) {
         self.individuals.push(individual);
     }
+
+    /// Retourne les n meilleurs individus (Élitisme simple basé sur le rang).
+    /// Suppose que les rangs ont été calculés.
+    pub fn get_elites(&self, count: usize) -> Vec<Individual<G>>
+    where
+        G: Clone,
+    {
+        let mut sorted_indices: Vec<usize> = (0..self.individuals.len()).collect();
+
+        // Tri : Petit rang d'abord (meilleur), puis Grande distance (plus diversifié)
+        sorted_indices.sort_by(|&a, &b| {
+            let fit_a = self.individuals[a].fitness.as_ref().unwrap();
+            let fit_b = self.individuals[b].fitness.as_ref().unwrap();
+
+            match fit_a.rank.cmp(&fit_b.rank) {
+                Ordering::Equal => fit_b
+                    .crowding_distance
+                    .partial_cmp(&fit_a.crowding_distance)
+                    .unwrap_or(Ordering::Equal),
+                other => other,
+            }
+        });
+
+        sorted_indices
+            .iter()
+            .take(count)
+            .map(|&idx| self.individuals[idx].clone())
+            .collect()
+    }
 }
 
 // --- Tests Unitaires ---
@@ -124,29 +156,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dominance_logic() {
-        // Maximize objectives
-        let a = Fitness::new(vec![10.0, 10.0], 0.0);
-        let b = Fitness::new(vec![5.0, 5.0], 0.0);
-        let c = Fitness::new(vec![10.0, 5.0], 0.0);
-        let d = Fitness::new(vec![12.0, 2.0], 0.0);
+    fn test_fitness_dominance_logic() {
+        // Cas 1 : Objectifs purs (Maximisation)
+        let sol_a = Fitness::new(vec![10.0, 10.0], 0.0);
+        let sol_b = Fitness::new(vec![5.0, 5.0], 0.0);
+        let sol_pareto = Fitness::new(vec![12.0, 2.0], 0.0); // Meilleur obj1, pire obj2
 
-        assert!(a.dominates(&b), "A (10,10) doit dominer B (5,5)");
-        assert!(a.dominates(&c), "A (10,10) doit dominer C (10,5)");
-        assert!(!b.dominates(&a), "B ne doit pas dominer A");
-        
-        // A (10,10) vs D (12, 2) -> Aucun ne domine l'autre (Pareto)
-        assert!(!a.dominates(&d), "A ne domine pas D car D est meilleur sur obj 1");
-        assert!(!d.dominates(&a), "D ne domine pas A car A est meilleur sur obj 2");
+        assert!(sol_a.dominates(&sol_b), "A(10,10) doit dominer B(5,5)");
+        assert!(!sol_b.dominates(&sol_a), "B ne doit pas dominer A");
+
+        // A et Pareto sont non-dominés l'un par l'autre
+        assert!(
+            !sol_a.dominates(&sol_pareto),
+            "A ne domine pas Pareto (12 > 10)"
+        );
+        assert!(
+            !sol_pareto.dominates(&sol_a),
+            "Pareto ne domine pas A (10 > 2)"
+        );
     }
 
     #[test]
-    fn test_constraints_dominance() {
-        let valid = Fitness::new(vec![1.0], 0.0);
-        let invalid_small = Fitness::new(vec![100.0], 1.0); // Gros score mais invalide
-        let invalid_big = Fitness::new(vec![100.0], 5.0);   // Encore plus invalide
+    fn test_constraint_handling() {
+        let valid = Fitness::new(vec![10.0], 0.0);
+        let invalid_slight = Fitness::new(vec![100.0], 1.0); // Score élevé mais invalide
+        let invalid_severe = Fitness::new(vec![100.0], 10.0);
 
-        assert!(valid.dominates(&invalid_small), "Valide doit toujours dominer invalide");
-        assert!(invalid_small.dominates(&invalid_big), "Moins invalide domine plus invalide");
+        assert!(
+            valid.dominates(&invalid_slight),
+            "Valide domine toujours invalide"
+        );
+        assert!(
+            invalid_slight.dominates(&invalid_severe),
+            "Moins invalide domine plus invalide"
+        );
     }
 }

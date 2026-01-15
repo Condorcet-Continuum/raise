@@ -1,10 +1,8 @@
-// src-tauri/src/genetics/traits.rs
-
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use super::types::Fitness;
 
 /// Le trait Genome définit la structure manipulable par l'AG.
+/// Doit être sérialisable pour le stockage et le passage Frontend/Backend.
 pub trait Genome: Clone + Send + Sync + Debug + Serialize + for<'de> Deserialize<'de> {
     /// Génère un individu aléatoire (initialisation)
     fn random() -> Self;
@@ -14,26 +12,25 @@ pub trait Genome: Clone + Send + Sync + Debug + Serialize + for<'de> Deserialize
 
     /// Croise deux génomes pour en produire un nouveau
     fn crossover(&self, other: &Self) -> Self;
-    
-    /// (Optionnel) Distance génétique entre deux génomes (pour la diversité)
+
+    /// (Optionnel) Distance génétique entre deux génomes.
+    /// Utile pour la "Fitness Sharing" ou pour mesurer la diversité.
     fn distance(&self, _other: &Self) -> f32 {
         0.0
     }
 }
 
-/// Le trait Evaluator fait le lien avec le métier.
-/// Il retourne désormais un vecteur d'objectifs.
+/// Le trait Evaluator fait le lien avec le métier (Arcadia, Règles, etc.).
 pub trait Evaluator<G: Genome>: Send + Sync {
-    /// Nom des objectifs (pour l'affichage/debug)
-    /// Ex: ["Performance", "-Coût"]
+    /// Retourne les noms des objectifs pour l'affichage (ex: ["Performance", "Coût"]).
     fn objective_names(&self) -> Vec<String>;
 
-    /// Calcule les scores. 
-    /// Retourne (valeurs_objectifs, violation_contraintes).
+    /// Calcule les scores.
+    /// Retourne : (Vec<valeurs_objectifs>, score_violation_contraintes).
     fn evaluate(&self, genome: &G) -> (Vec<f32>, f32);
 
-    /// Vérification rapide de validité (Hard Constraints structurelles).
-    /// Si false, on peut assigner une pénalité max sans calculer evaluate().
+    /// Vérification rapide structurelle (Hard Constraints).
+    /// Si false, on peut court-circuiter evaluate() avec une pénalité maximale.
     fn is_valid(&self, _genome: &G) -> bool {
         true
     }
@@ -44,29 +41,42 @@ pub trait Evaluator<G: Genome>: Send + Sync {
 mod tests {
     use super::*;
 
+    // Mock minimal pour valider la compilation et l'usage des traits
     #[derive(Clone, Debug, Serialize, Deserialize)]
-    struct MockGenome(f32);
+    struct MockGenome(i32);
 
     impl Genome for MockGenome {
-        fn random() -> Self { MockGenome(0.0) }
-        fn mutate(&mut self, _rate: f32) { self.0 += 1.0; }
-        fn crossover(&self, other: &Self) -> Self { MockGenome((self.0 + other.0)/2.0) }
+        fn random() -> Self {
+            MockGenome(42)
+        }
+        fn mutate(&mut self, _rate: f32) {
+            self.0 += 1;
+        }
+        fn crossover(&self, other: &Self) -> Self {
+            MockGenome((self.0 + other.0) / 2)
+        }
     }
 
-    struct MockEvaluator;
-    impl Evaluator<MockGenome> for MockEvaluator {
-        fn objective_names(&self) -> Vec<String> { vec!["Obj1".into()] }
-        fn evaluate(&self, genome: &MockGenome) -> (Vec<f32>, f32) {
-            (vec![genome.0], 0.0)
+    struct MockEval;
+    impl Evaluator<MockGenome> for MockEval {
+        fn objective_names(&self) -> Vec<String> {
+            vec!["TestObj".into()]
+        }
+        fn evaluate(&self, g: &MockGenome) -> (Vec<f32>, f32) {
+            (vec![g.0 as f32], 0.0)
         }
     }
 
     #[test]
-    fn test_traits_integration() {
+    fn test_trait_interaction() {
         let mut g = MockGenome::random();
+        assert_eq!(g.0, 42);
         g.mutate(0.1);
-        let eval = MockEvaluator;
-        let (scores, _) = eval.evaluate(&g);
-        assert_eq!(scores[0], 1.0);
+        assert_eq!(g.0, 43);
+
+        let eval = MockEval;
+        let (res, violation) = eval.evaluate(&g);
+        assert_eq!(res[0], 43.0);
+        assert_eq!(violation, 0.0);
     }
 }

@@ -224,9 +224,11 @@ fn main() {
             blockchain_commands::vpn_add_peer,
             blockchain_commands::vpn_ping_peer,
             blockchain_commands::vpn_check_installation,
-            // Commandes Métier
-            genetics_commands::run_genetic_optimization,
+            // Commandes Génétiques
+            genetics_commands::run_architecture_optimization,
+            genetics_commands::debug_genetics_ping,
             codegen_commands::generate_source_code,
+            // Commandes Traçabilité
             traceability_commands::analyze_impact,
             traceability_commands::run_compliance_audit,
             traceability_commands::get_traceability_matrix,

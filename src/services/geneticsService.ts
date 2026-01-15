@@ -1,31 +1,60 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
 
-export interface GeneticsParams {
+export interface FunctionInfo {
+  id: string;
+  load: number;
+}
+export interface ComponentInfo {
+  id: string;
+  capacity: number;
+}
+export interface DataFlowInfo {
+  source_id: string;
+  target_id: string;
+  volume: number;
+}
+
+export interface OptimizationRequest {
   population_size: number;
-  generations: number;
+  max_generations: number;
   mutation_rate: number;
+  crossover_rate: number;
+  functions: FunctionInfo[];
+  components: ComponentInfo[];
+  flows: DataFlowInfo[];
+}
+
+export interface OptimizationProgress {
+  generation: number;
+  best_fitness: number[];
+  diversity: number;
 }
 
 export interface OptimizationResult {
-  best_score: number;
   duration_ms: number;
-  improvement_log: number[];
-  best_candidate_id: string;
+  pareto_front: {
+    fitness: number[];
+    constraint_violation: number;
+    allocation: [string, string][];
+  }[];
 }
 
 class GeneticsService {
-  // Correction : 'model' typé en 'unknown' au lieu de 'any'
-  async runOptimization(params: GeneticsParams, model: unknown): Promise<OptimizationResult> {
+  async runArchitectureOptimization(
+    params: OptimizationRequest,
+    onProgress?: (progress: OptimizationProgress) => void,
+  ): Promise<OptimizationResult> {
+    let unlistenProgress: UnlistenFn | undefined;
     try {
-      // Les clés de params sont transmises telles quelles au backend Rust
-      return await invoke<OptimizationResult>('run_genetic_optimization', {
-        params,
-        model,
-      });
-    } catch (error: unknown) {
-      // Correction : Typage explicite de l'erreur
-      console.error('❌ Erreur génétique:', error);
-      throw error;
+      if (onProgress) {
+        unlistenProgress = await listen<OptimizationProgress>('genetics://progress', (event) =>
+          onProgress(event.payload),
+        );
+      }
+      return await invoke<OptimizationResult>('run_architecture_optimization', { params });
+    } finally {
+      if (unlistenProgress) unlistenProgress();
     }
   }
 }

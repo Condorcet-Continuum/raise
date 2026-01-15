@@ -1,297 +1,451 @@
-import { useState } from 'react';
-import { geneticsService, GeneticsParams, OptimizationResult } from '@/services/geneticsService';
-import { useModelStore } from '@/store/model-store';
+import { useState, useMemo } from 'react';
+import { useGenetics } from '@/hooks/useGenetics';
+import ArchitectureViewer from './ArchitectureViewer';
+import { OptimizationRequest } from '@/services/geneticsService';
 
 export default function GeneticsDashboard() {
-  const currentProject = useModelStore((state) => state.project);
+  const { runOptimization, loading, progress, history, result, canRun, stats } = useGenetics();
 
-  // Paramètres de simulation
-  const [params, setParams] = useState<GeneticsParams>({
+  const [useDemo, setUseDemo] = useState(false);
+  const [params, setParams] = useState({
     population_size: 100,
-    generations: 50,
-    mutation_rate: 0.5,
+    max_generations: 50,
+    mutation_rate: 0.1,
+    crossover_rate: 0.8,
   });
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<OptimizationResult | null>(null);
+  // CONTEXTE : Flux et Charges pour le Viewer
+  const [lastContext, setLastContext] = useState<{
+    flows: { source: string; target: string; volume: number }[];
+    loads: Record<string, number>;
+    caps: Record<string, number>;
+  } | null>(null);
 
-  const handleRun = async () => {
-    setLoading(true);
-    setResult(null);
-    try {
-      const res = await geneticsService.runOptimization(params, currentProject || {});
-      setResult(res);
-    } catch (e) {
-      alert("Erreur lors de l'optimisation : " + e);
-    } finally {
-      setLoading(false);
-    }
+  // --- GÉNÉRATEUR DE DONNÉES LOCAL ---
+  const generateDemoData = (): OptimizationRequest => {
+    const funcs = Array.from({ length: 25 }, (_, i) => ({
+      id: `F${i}`,
+      load: Math.floor(Math.random() * 20) + 5,
+    }));
+    const comps = Array.from({ length: 5 }, (_, i) => ({ id: `CPU_${i}`, capacity: 100 }));
+    const flows = Array.from({ length: 40 }, () => ({
+      source_id: `F${Math.floor(Math.random() * 25)}`,
+      target_id: `F${Math.floor(Math.random() * 25)}`,
+      volume: Math.floor(Math.random() * 50) + 10,
+    })).filter((f) => f.source_id !== f.target_id);
+
+    return { ...params, functions: funcs, components: comps, flows: flows };
   };
 
-  // --- STYLES AVEC VARIABLES CSS ---
-  const styles = {
+  const handleRun = async () => {
+    let requestData: OptimizationRequest | undefined;
+
+    if (useDemo) {
+      const demoData = generateDemoData();
+      requestData = demoData;
+
+      const loadsMap: Record<string, number> = {};
+      demoData.functions.forEach((f) => (loadsMap[f.id] = f.load));
+      const capsMap: Record<string, number> = {};
+      demoData.components.forEach((c) => (capsMap[c.id] = c.capacity));
+
+      setLastContext({
+        flows: demoData.flows.map((f) => ({
+          source: f.source_id,
+          target: f.target_id,
+          volume: f.volume,
+        })),
+        loads: loadsMap,
+        caps: capsMap,
+      });
+    } else {
+      // En mode réel, on initialise vide pour l'instant (TODO: connecter au store)
+      setLastContext({ flows: [], loads: {}, caps: {} });
+    }
+
+    await runOptimization(params, requestData);
+  };
+
+  // Styles CSS
+  const styles: Record<string, React.CSSProperties> = {
     container: {
-      padding: 'var(--spacing-4)',
-      color: 'var(--text-main)',
-      fontFamily: 'var(--font-family)',
-      height: '100%',
-      overflowY: 'auto' as const,
+      padding: '20px',
       backgroundColor: 'var(--bg-app)',
+      color: 'var(--text-main)',
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
     },
     header: {
-      marginBottom: 'var(--spacing-4)',
+      marginBottom: '20px',
       borderBottom: '1px solid var(--border-color)',
-      paddingBottom: 'var(--spacing-4)',
+      paddingBottom: '15px',
+      flexShrink: 0,
     },
     grid: {
       display: 'grid',
-      gridTemplateColumns: '300px 1fr',
-      gap: 'var(--spacing-4)',
+      gridTemplateColumns: '320px 1fr',
+      gap: '20px',
+      flex: 1,
+      minHeight: 0,
+      overflow: 'hidden',
     },
-    panel: {
+    leftPanel: {
       backgroundColor: 'var(--bg-panel)',
-      padding: 'var(--spacing-4)',
-      borderRadius: 'var(--radius-lg)',
+      padding: '20px',
+      borderRadius: '12px',
       border: '1px solid var(--border-color)',
-      boxShadow: 'var(--shadow-sm)',
+      overflowY: 'auto',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '20px',
+      maxHeight: '100%',
     },
+    rightPanel: {
+      backgroundColor: 'var(--bg-panel)',
+      padding: '20px',
+      borderRadius: '12px',
+      border: '1px solid var(--border-color)',
+      overflowY: 'auto',
+      position: 'relative',
+      maxHeight: '100%',
+    },
+    inputGroup: { display: 'flex', flexDirection: 'column', gap: '6px' },
     label: {
-      display: 'block',
-      marginBottom: 'var(--spacing-2)',
-      fontSize: 'var(--font-size-sm)',
+      display: 'flex',
+      justifyContent: 'space-between',
+      fontSize: '12px',
       color: 'var(--text-muted)',
-      fontWeight: 'var(--font-weight-medium)',
     },
-    inputGroup: { marginBottom: 'var(--spacing-4)' },
-    range: {
-      width: '100%',
-      accentColor: 'var(--color-accent)', // Utilise la couleur d'accent (Violet)
+    val: { color: 'var(--color-accent)', fontWeight: 'bold' },
+    range: { width: '100%', cursor: 'pointer', accentColor: 'var(--color-accent)' },
+    demoToggle: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      fontSize: '12px',
+      padding: '12px',
+      backgroundColor: 'rgba(255,255,255,0.05)',
+      borderRadius: '8px',
       cursor: 'pointer',
-    },
-    valueDisplay: {
-      float: 'right' as const,
-      color: 'var(--color-accent)',
-      fontWeight: 'bold',
-      fontFamily: 'var(--font-family-mono)',
+      border: '1px solid var(--border-color)',
     },
     btn: {
       width: '100%',
-      padding: '12px',
-      // Gradient dynamique utilisant les variables
-      background: 'linear-gradient(90deg, var(--color-accent), var(--color-primary))',
-      color: '#ffffff',
+      padding: '14px',
+      marginTop: 'auto',
+      background: canRun || useDemo ? 'var(--color-accent)' : '#444',
+      color: '#fff',
       border: 'none',
-      borderRadius: 'var(--radius-md)',
-      fontWeight: 'var(--font-weight-bold)',
-      cursor: loading ? 'not-allowed' : 'pointer',
-      opacity: loading ? 0.7 : 1,
-      transition: 'var(--transition-fast)',
-      boxShadow: 'var(--shadow-md)',
+      borderRadius: '8px',
+      cursor: canRun || useDemo ? 'pointer' : 'not-allowed',
+      fontWeight: 'bold',
     },
-    statBox: {
-      background: 'var(--bg-app)',
-      padding: 'var(--spacing-4)',
-      borderRadius: 'var(--radius-md)',
-      flex: 1,
-      border: '1px solid var(--border-color)',
+    chartArea: {
+      position: 'relative',
+      height: '320px',
+      borderLeft: '2px solid var(--text-muted)',
+      borderBottom: '2px solid var(--text-muted)',
+      margin: '20px 20px 50px 60px',
+      backgroundColor: 'rgba(255,255,255,0.02)',
     },
-    chartContainer: {
+    point: {
+      position: 'absolute',
+      width: '14px',
+      height: '14px',
+      borderRadius: '50%',
+      cursor: 'pointer',
+      transform: 'translate(-50%, 50%)',
+      border: '2px solid #333',
+      transition: 'all 0.3s',
+    },
+    convergence: {
       display: 'flex',
       alignItems: 'flex-end',
-      gap: '4px',
-      height: '200px',
-      borderBottom: '1px solid var(--border-color)',
-      paddingBottom: 'var(--spacing-2)',
-      marginTop: 'var(--spacing-4)',
+      gap: '2px',
+      height: '60px',
+      borderBottom: '1px solid #444',
+      marginBottom: '30px',
+      backgroundColor: 'rgba(0,0,0,0.2)',
+      padding: '5px',
     },
+    table: { width: '100%', borderCollapse: 'collapse', fontSize: '12px', marginTop: '10px' },
+    th: {
+      textAlign: 'left',
+      padding: '8px',
+      borderBottom: '1px solid #444',
+      color: 'var(--text-muted)',
+    },
+    td: { padding: '8px', borderBottom: '1px solid #333' },
   };
 
-  // Fonction pour générer les barres du graphique dynamiquement
-  const getBarHeight = (val: number) => ({
-    height: `${Math.min(val, 100)}%`,
-    width: '100%',
-    backgroundColor: 'var(--color-accent)',
-    opacity: 0.8,
-    borderRadius: '2px 2px 0 0',
-    transition: 'height 0.5s ease',
-  });
+  const maxCostHistory = useMemo(() => {
+    if (history.length === 0) return 1;
+    return Math.max(...history.map((h) => Math.abs(h.best_fitness[0])));
+  }, [history]);
+
+  const renderPareto = () => {
+    if (!result || result.pareto_front.length === 0) {
+      return (
+        <div
+          style={{
+            ...styles.chartArea,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--text-muted)',
+          }}
+        >
+          {loading ? 'Calcul...' : 'En attente...'}
+        </div>
+      );
+    }
+    const costs = result.pareto_front.map((s) => ({
+      c: Math.abs(s.fitness[0]),
+      b: Math.abs(s.fitness[1]),
+    }));
+    const maxC = Math.max(...costs.map((x) => x.c), 1.0) * 1.1;
+    const maxB = Math.max(...costs.map((x) => x.b), 1.0) * 1.1;
+
+    return (
+      <div style={styles.chartArea}>
+        <div
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '-60px',
+            transform: 'rotate(-90deg) translateX(50%)',
+            width: '300px',
+            textAlign: 'center',
+            fontSize: '11px',
+            color: 'var(--text-muted)',
+          }}
+        >
+          ↑ Déséquilibre
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '-35px',
+            width: '100%',
+            textAlign: 'center',
+            fontSize: '11px',
+            color: 'var(--text-muted)',
+          }}
+        >
+          Couplage →
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: '100%',
+            height: '100%',
+            backgroundImage:
+              'linear-gradient(#444 1px, transparent 1px), linear-gradient(90deg, #444 1px, transparent 1px)',
+            backgroundSize: '40px 40px',
+            opacity: 0.1,
+            pointerEvents: 'none',
+          }}
+        ></div>
+        {costs.map((item, i) => {
+          const xPos = (item.c / maxC) * 100;
+          const yPos = (item.b / maxB) * 100;
+          const isSel = selectedIdx === i;
+          return (
+            <div
+              key={i}
+              onClick={() => setSelectedIdx(i)}
+              style={{
+                ...styles.point,
+                left: `${xPos}%`,
+                bottom: `${yPos}%`,
+                backgroundColor: isSel ? 'var(--color-accent)' : '#ef4444',
+                zIndex: isSel ? 20 : 10,
+                transform: `translate(-50%, 50%) scale(${isSel ? 1.5 : 1})`,
+                boxShadow: isSel ? '0 0 15px var(--color-accent)' : 'none',
+              }}
+              title={`Sol ${i + 1}`}
+            />
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div style={styles.container}>
       <header style={styles.header}>
-        <h2 style={{ margin: 0, color: 'var(--color-accent)' }}>Optimisation Génétique</h2>
-        <p style={{ color: 'var(--text-muted)', margin: '4px 0 0' }}>
-          Exploration de l'espace de conception par sélection naturelle simulée.
+        <h2 style={{ color: 'var(--color-accent)', margin: 0 }}>Optimisation NSGA-II</h2>
+        <p style={{ fontSize: '12px', opacity: 0.7, marginTop: '5px' }}>
+          {useDemo
+            ? 'Mode Simulation'
+            : `${stats.functionsCount} Fonctions • ${stats.componentsCount} Composants`}
         </p>
       </header>
-
       <div style={styles.grid}>
-        {/* --- PANNEAU DE CONTRÔLE --- */}
-        <div style={styles.panel}>
-          <h3 style={{ marginTop: 0, fontSize: 'var(--font-size-lg)' }}>Paramètres</h3>
-
+        <div style={styles.leftPanel}>
+          <label style={styles.demoToggle}>
+            <input
+              type="checkbox"
+              checked={useDemo}
+              onChange={(e) => setUseDemo(e.target.checked)}
+            />{' '}
+            <span>🧪 Mode Démo</span>
+          </label>
+          <hr
+            style={{
+              border: 'none',
+              borderTop: '1px solid var(--border-color)',
+              width: '100%',
+              margin: '0',
+            }}
+          />
           <div style={styles.inputGroup}>
             <label style={styles.label}>
-              Taille Population <span style={styles.valueDisplay}>{params.population_size}</span>
+              Population <span style={styles.val}>{params.population_size}</span>
             </label>
             <input
               type="range"
-              min="10"
-              max="1000"
-              step="10"
+              min="20"
+              max="500"
+              step="20"
               style={styles.range}
               value={params.population_size}
               onChange={(e) => setParams({ ...params, population_size: +e.target.value })}
             />
           </div>
-
           <div style={styles.inputGroup}>
             <label style={styles.label}>
-              Générations <span style={styles.valueDisplay}>{params.generations}</span>
+              Générations <span style={styles.val}>{params.max_generations}</span>
             </label>
             <input
               type="range"
               min="10"
-              max="500"
+              max="200"
               step="10"
               style={styles.range}
-              value={params.generations}
-              onChange={(e) => setParams({ ...params, generations: +e.target.value })}
+              value={params.max_generations}
+              onChange={(e) => setParams({ ...params, max_generations: +e.target.value })}
             />
           </div>
-
           <div style={styles.inputGroup}>
             <label style={styles.label}>
-              Taux Mutation <span style={styles.valueDisplay}>{params.mutation_rate}</span>
+              Mutation <span style={styles.val}>{params.mutation_rate}</span>
             </label>
             <input
               type="range"
-              min="0.1"
-              max="1.0"
-              step="0.1"
+              min="0"
+              max="0.5"
+              step="0.01"
               style={styles.range}
               value={params.mutation_rate}
               onChange={(e) => setParams({ ...params, mutation_rate: +e.target.value })}
             />
           </div>
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>
+              Crossover <span style={styles.val}>{params.crossover_rate}</span>
+            </label>
+            <input
+              type="range"
+              min="0.5"
+              max="1.0"
+              step="0.05"
+              style={styles.range}
+              value={params.crossover_rate}
+              onChange={(e) => setParams({ ...params, crossover_rate: +e.target.value })}
+            />
+          </div>
 
-          <button style={styles.btn} onClick={handleRun} disabled={loading}>
-            {loading ? '🧬 Évolution...' : "Lancer l'Optimisation"}
+          <button
+            style={styles.btn}
+            onClick={handleRun}
+            disabled={loading || (!canRun && !useDemo)}
+          >
+            {/* CORRECTION : Utilisation de la variable progress ici */}
+            {loading ? `Calcul (Gen ${progress?.generation || 0})...` : 'Lancer'}
           </button>
         </div>
 
-        {/* --- PANNEAU RÉSULTATS --- */}
-        <div style={styles.panel}>
-          <h3 style={{ marginTop: 0, fontSize: 'var(--font-size-lg)' }}>Convergence</h3>
+        <div style={styles.rightPanel}>
+          <h4
+            style={{
+              margin: '0 0 15px 0',
+              fontSize: '14px',
+              borderBottom: '1px solid #333',
+              paddingBottom: '10px',
+            }}
+          >
+            Convergence & Front de Pareto
+          </h4>
+          <div style={styles.convergence}>
+            {history.map((h, i) => {
+              const val = Math.abs(h.best_fitness[0]);
+              const hPerc = (val / maxCostHistory) * 100;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    flex: 1,
+                    backgroundColor: 'var(--color-accent)',
+                    opacity: 0.6,
+                    height: `${Math.max(5, hPerc)}%`,
+                    borderRadius: '2px 2px 0 0',
+                  }}
+                />
+              );
+            })}
+          </div>
+          {renderPareto()}
 
-          {!result && !loading && (
-            <div
-              style={{
-                color: 'var(--text-muted)',
-                fontStyle: 'italic',
-                marginTop: 'var(--spacing-8)',
-                textAlign: 'center',
-                padding: 'var(--spacing-8)',
-                border: '2px dashed var(--border-color)',
-                borderRadius: 'var(--radius-md)',
-              }}
-            >
-              Configurez les paramètres et lancez l'algorithme pour voir les résultats.
-            </div>
-          )}
-
-          {loading && (
-            <div style={{ textAlign: 'center', marginTop: 'var(--spacing-8)' }}>
-              <div
-                style={{
-                  fontSize: '2.5rem',
-                  marginBottom: 'var(--spacing-4)',
-                  animation: 'pulse 1s infinite',
-                }}
-              >
-                🧬
-              </div>
-              <p style={{ color: 'var(--text-muted)' }}>Calcul des générations en cours...</p>
-            </div>
-          )}
-
-          {result && (
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 'var(--spacing-4)',
-                  marginBottom: 'var(--spacing-4)',
-                }}
-              >
-                <div style={styles.statBox}>
-                  <div
-                    style={{
-                      fontSize: 'var(--font-size-xs)',
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    Meilleur Score
-                  </div>
-                  <div
-                    style={{ fontSize: '1.5em', fontWeight: 'bold', color: 'var(--color-success)' }}
-                  >
-                    {result.best_score}%
-                  </div>
-                </div>
-                <div style={styles.statBox}>
-                  <div
-                    style={{
-                      fontSize: 'var(--font-size-xs)',
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    Durée
-                  </div>
-                  <div
-                    style={{ fontSize: '1.5em', fontWeight: 'bold', color: 'var(--color-info)' }}
-                  >
-                    {result.duration_ms} ms
-                  </div>
-                </div>
-                <div style={styles.statBox}>
-                  <div
-                    style={{
-                      fontSize: 'var(--font-size-xs)',
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    Candidat ID
-                  </div>
-                  <div
-                    style={{ fontSize: '1.2em', fontWeight: 'bold', color: 'var(--color-accent)' }}
-                  >
-                    {result.best_candidate_id}
-                  </div>
-                </div>
-              </div>
-
-              <h4
-                style={{
-                  margin: 'var(--spacing-4) 0 var(--spacing-2) 0',
-                  color: 'var(--text-main)',
-                }}
-              >
-                Historique de Convergence
+          {selectedIdx !== null && result && (
+            <div style={{ marginTop: '20px' }}>
+              <h4 style={{ margin: '0 0 15px 0', color: 'var(--color-accent)', fontSize: '16px' }}>
+                📐 Solution #{selectedIdx + 1}
               </h4>
 
-              {/* Graphique */}
-              <div style={styles.chartContainer}>
-                {result.improvement_log.map((val, idx) => (
-                  <div
-                    key={idx}
-                    style={getBarHeight(val)}
-                    title={`Gen ${idx}: ${val.toFixed(1)}%`}
-                  />
-                ))}
+              <ArchitectureViewer
+                allocation={result.pareto_front[selectedIdx].allocation}
+                flows={lastContext?.flows || []}
+                functionLoads={lastContext?.loads || {}}
+                componentCapacities={lastContext?.caps || {}}
+              />
+
+              <div
+                style={{
+                  marginTop: '20px',
+                  padding: '15px',
+                  backgroundColor: 'rgba(0,0,0,0.2)',
+                  borderRadius: '8px',
+                }}
+              >
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>Détails Liste</h4>
+                <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                  <table style={styles.table}>
+                    <thead>
+                      <tr>
+                        <th style={styles.th}>Fonction</th>
+                        <th style={styles.th}>Alloc.</th>
+                        <th style={styles.th}>Composant</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.pareto_front[selectedIdx].allocation.map(([f, c], i) => (
+                        <tr key={i}>
+                          <td style={styles.td}>
+                            <span style={{ fontWeight: 'bold' }}>{f}</span>
+                          </td>
+                          {/* CORRECTION : Fusion des attributs style */}
+                          <td style={{ ...styles.td, color: 'var(--text-muted)' }}>➜</td>
+                          <td style={{ ...styles.td, color: 'var(--color-primary)' }}>{c}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}

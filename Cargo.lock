@@ -6490,6 +6490,8 @@ dependencies = [
  "qdrant-client",
  "quick-xml 0.39.0",
  "rand 0.9.2",
+ "rand_distr",
+ "rayon",
  "regex",
  "reqwest 0.13.1",
  "serde",
