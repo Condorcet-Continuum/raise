@@ -53,7 +53,7 @@ fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
 
     match &*sql_query.body {
         SetExpr::Select(select) => translate_select(select, limit, offset, sort),
-        _ => bail!("Syntaxe de requête non supportée (pas de UNION, VALUES, etc.)"),
+        _ => bail!("Syntaxe de requête non supportée"),
     }
 }
 
@@ -64,7 +64,7 @@ fn translate_select(
     sort: Option<Vec<SortField>>,
 ) -> Result<Query> {
     if select.from.len() != 1 {
-        bail!("SELECT doit cibler exactement une collection (pas de JOIN supporté)");
+        bail!("SELECT doit cibler exactement une collection");
     }
 
     let collection = match &select.from[0].relation {
@@ -132,7 +132,6 @@ fn translate_order_by(expr: &OrderByExpr) -> Result<SortField> {
     Ok(SortField { field, order })
 }
 
-/// Traduit une expression SQL (WHERE clause) en QueryFilter
 fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
     match expr {
         Expr::Nested(inner) => translate_expr(inner),
@@ -160,33 +159,30 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
             _ => {
                 let field = expr_to_field_name(left)?;
                 let value = expr_to_value(right)?;
-                let operator = match op {
-                    BinaryOperator::Eq => ComparisonOperator::Eq,
-                    BinaryOperator::NotEq => ComparisonOperator::Ne,
-                    BinaryOperator::Gt => ComparisonOperator::Gt,
-                    BinaryOperator::GtEq => ComparisonOperator::Gte,
-                    BinaryOperator::Lt => ComparisonOperator::Lt,
-                    BinaryOperator::LtEq => ComparisonOperator::Lte,
-                    _ => ComparisonOperator::Eq,
+                let condition = match op {
+                    BinaryOperator::Eq => Condition::eq(field, value),
+                    BinaryOperator::NotEq => Condition::ne(field, value),
+                    BinaryOperator::Gt => Condition::gt(field, value),
+                    BinaryOperator::GtEq => Condition::gte(field, value),
+                    BinaryOperator::Lt => Condition::lt(field, value),
+                    BinaryOperator::LtEq => Condition::lte(field, value),
+                    _ => Condition::eq(field, value), // Fallback
                 };
                 Ok(QueryFilter {
                     operator: FilterOperator::And,
-                    conditions: vec![Condition {
-                        field,
-                        operator,
-                        value,
-                    }],
+                    conditions: vec![condition],
                 })
             }
         },
         Expr::Like { expr, pattern, .. } => {
             let field = expr_to_field_name(expr)?;
             let value = expr_to_value(pattern)?;
+            // Mappe SQL LIKE vers Condition::like (ou contains selon implémentation)
             Ok(QueryFilter {
                 operator: FilterOperator::And,
                 conditions: vec![Condition {
                     field,
-                    operator: ComparisonOperator::Contains,
+                    operator: ComparisonOperator::Like,
                     value,
                 }],
             })
@@ -203,10 +199,7 @@ fn expr_to_field_name(expr: &Expr) -> Result<String> {
             .map(|i| i.value.clone())
             .collect::<Vec<_>>()
             .join(".")),
-        _ => bail!(
-            "Champ attendu (identifiant simple ou composé), obtenu : {:?}",
-            expr
-        ),
+        _ => bail!("Identifiant attendu, obtenu : {:?}", expr),
     }
 }
 
@@ -223,7 +216,7 @@ fn expr_to_value(expr: &Expr) -> Result<Value> {
                 } else if let Some(i) = n.as_i64() {
                     Ok(Value::from(-i))
                 } else {
-                    bail!("Négation impossible sur ce type")
+                    bail!("Négation impossible")
                 }
             }
             _ => bail!("Négation impossible sur non-nombre"),

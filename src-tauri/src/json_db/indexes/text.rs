@@ -4,11 +4,10 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-use super::driver;
-use super::{paths, IndexDefinition};
+use super::{driver, paths, IndexDefinition};
 use crate::json_db::storage::JsonDbConfig;
 
-/// Tokenizer simple : minuscules, alphanumérique seulement
+/// Découpe un texte en tokens normalisés (minuscules, alphanumériques)
 fn tokenize(text: &str) -> HashSet<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -30,10 +29,11 @@ pub fn update_text_index(
 ) -> Result<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
 
+    // On charge manuellement car la logique de mise à jour est spécifique (Multi-clés par document)
     let mut index: HashMap<String, Vec<String>> = driver::load(&path)?;
     let mut changed = false;
 
-    // Suppression anciens tokens
+    // Suppression des anciens tokens
     if let Some(doc) = old_doc {
         if let Some(val) = doc.pointer(&def.field_path).and_then(|v| v.as_str()) {
             for token in tokenize(val) {
@@ -43,7 +43,7 @@ pub fn update_text_index(
                         changed = true;
                     }
                 }
-                // Cleanup
+                // Nettoyage des clés vides
                 if index.get(&token).is_some_and(|ids| ids.is_empty()) {
                     index.remove(&token);
                 }
@@ -51,7 +51,7 @@ pub fn update_text_index(
         }
     }
 
-    // Ajout nouveaux tokens
+    // Ajout des nouveaux tokens
     if let Some(doc) = new_doc {
         if let Some(val) = doc.pointer(&def.field_path).and_then(|v| v.as_str()) {
             for token in tokenize(val) {
@@ -71,6 +71,25 @@ pub fn update_text_index(
     Ok(())
 }
 
+/// Recherche simple de mot-clé (Token exact).
+/// Note : Pour une recherche "phrase entière", il faudrait une intersection des résultats de chaque token.
+pub fn search_text_index(
+    cfg: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    collection: &str,
+    def: &IndexDefinition,
+    query: &str,
+) -> Result<Vec<String>> {
+    let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
+
+    // Normalisation de la requête pour matcher les tokens stockés
+    let token = query.to_lowercase();
+
+    // Utilisation du driver générique (Hashmap est la structure sous-jacente)
+    driver::search::<HashMap<String, Vec<String>>>(&path, &token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,20 +97,17 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_text_tokenization() {
-        let tokens = tokenize("Hello, World! 123");
-        assert!(tokens.contains("hello"));
-        assert!(tokens.contains("world"));
-        assert!(tokens.contains("123"));
-        assert!(!tokens.contains(","));
+    fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
+        let dir = tempdir().unwrap();
+        let cfg = JsonDbConfig::new(dir.path().to_path_buf());
+        (dir, cfg)
     }
 
     #[test]
-    fn test_text_index_update() {
-        let dir = tempdir().unwrap();
-        let cfg = JsonDbConfig::new(dir.path().to_path_buf());
-        std::fs::create_dir_all(dir.path().join("s/d/collections/c/_indexes")).unwrap();
+    fn test_text_lifecycle() {
+        let (dir, cfg) = setup_env();
+        let idx_dir = dir.path().join("s/d/collections/c/_indexes");
+        std::fs::create_dir_all(&idx_dir).unwrap();
 
         let def = IndexDefinition {
             name: "bio".into(),
@@ -100,25 +116,22 @@ mod tests {
             unique: false,
         };
 
-        // Insert doc
-        update_text_index(
-            &cfg,
-            "s",
-            "d",
-            "c",
-            &def,
-            "1",
-            None,
-            Some(&json!({"bio": "Rust dev"})),
-        )
-        .unwrap();
+        // 1. Insertion "Rust is great" -> Tokens: [rust, is, great]
+        let doc = json!({ "bio": "Rust is great" });
+        update_text_index(&cfg, "s", "d", "c", &def, "u1", None, Some(&doc)).unwrap();
 
-        let path = paths::index_path(&cfg, "s", "d", "c", "bio", IndexType::Text);
-        let index: HashMap<String, Vec<String>> = driver::load(&path).unwrap();
+        // 2. Recherche "RUST" (Doit marcher grâce à la normalisation)
+        let results = search_text_index(&cfg, "s", "d", "c", &def, "RUST").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], "u1");
 
-        // "rust" doit pointer vers "1"
-        assert!(index.get("rust").unwrap().contains(&"1".to_string()));
-        // "dev" doit pointer vers "1"
-        assert!(index.get("dev").unwrap().contains(&"1".to_string()));
+        // 3. Recherche mot partiel (Ne marche pas avec ce tokenizer simple, "gre" != "great")
+        let partial = search_text_index(&cfg, "s", "d", "c", &def, "gre").unwrap();
+        assert!(partial.is_empty());
+
+        // 4. Suppression
+        update_text_index(&cfg, "s", "d", "c", &def, "u1", Some(&doc), None).unwrap();
+        let deleted = search_text_index(&cfg, "s", "d", "c", &def, "rust").unwrap();
+        assert!(deleted.is_empty());
     }
 }

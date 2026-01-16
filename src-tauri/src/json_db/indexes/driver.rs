@@ -2,7 +2,6 @@
 
 use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Serialize};
-use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
@@ -108,6 +107,10 @@ pub fn load<T: IndexMap>(path: &Path) -> Result<T> {
         return Ok(T::default());
     }
     let content = fs::read(path).with_context(|| format!("Lecture index {}", path.display()))?;
+    // Gestion robuste: si le fichier est vide, on renvoie un index vide
+    if content.is_empty() {
+        return Ok(T::default());
+    }
     let (records, _): (Vec<IndexRecord>, usize) =
         bincode::serde::decode_from_slice(&content, bincode::config::standard())
             .with_context(|| format!("Désérialisation Bincode index {}", path.display()))?;
@@ -120,12 +123,18 @@ pub fn save<T: IndexMap>(path: &Path, index: &T) -> Result<()> {
     atomic_write_binary(path, &encoded)
 }
 
+// AJOUT CRITIQUE : Fonction de recherche générique
+pub fn search<T: IndexMap>(path: &Path, key: &str) -> Result<Vec<String>> {
+    let index: T = load(path)?;
+    Ok(index.get_doc_ids(key).cloned().unwrap_or_default())
+}
+
 pub fn update<T: IndexMap>(
     path: &Path,
     def: &IndexDefinition,
     doc_id: &str,
-    old_doc: Option<&Value>,
-    new_doc: Option<&Value>,
+    old_doc: Option<&serde_json::Value>,
+    new_doc: Option<&serde_json::Value>,
 ) -> Result<()> {
     let mut index: T = load(path)?;
     let mut changed = false;
@@ -174,11 +183,10 @@ mod tests {
 
     #[test]
     fn test_driver_map_logic() {
-        // Test de la logique Hashmap sans I/O
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
         map.insert_record("alice".into(), "1".into());
         map.insert_record("bob".into(), "2".into());
-        map.insert_record("alice".into(), "3".into()); // Doublon de clé
+        map.insert_record("alice".into(), "3".into()); // Doublon
 
         assert_eq!(map.get_doc_ids("alice").unwrap().len(), 2);
 
@@ -188,16 +196,25 @@ mod tests {
     }
 
     #[test]
-    fn test_driver_io_roundtrip() {
+    fn test_driver_io_roundtrip_and_search() {
         let file = NamedTempFile::new().unwrap();
         let path = file.path();
 
+        // 1. Save
         let mut index: HashMap<String, Vec<String>> = HashMap::new();
         index.insert_record("key1".into(), "doc1".into());
-
         save(path, &index).unwrap();
 
+        // 2. Load
         let loaded: HashMap<String, Vec<String>> = load(path).unwrap();
         assert_eq!(loaded.get_doc_ids("key1").unwrap()[0], "doc1");
+
+        // 3. Search (New functionality)
+        let results = search::<HashMap<String, Vec<String>>>(path, "key1").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], "doc1");
+
+        let empty = search::<HashMap<String, Vec<String>>>(path, "missing").unwrap();
+        assert!(empty.is_empty());
     }
 }

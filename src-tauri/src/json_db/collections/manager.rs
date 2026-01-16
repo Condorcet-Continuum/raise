@@ -8,6 +8,7 @@ use crate::rules_engine::{EvalError, Evaluator, Rule, RuleStore};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+use rayon::prelude::*; // Ajout pour le parallélisme
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
@@ -49,6 +50,31 @@ impl<'a> CollectionsManager<'a> {
 
     pub fn get(&self, collection: &str, id: &str) -> Result<Option<Value>> {
         self.get_document(collection, id)
+    }
+
+    /// Récupère plusieurs documents par leurs IDs en parallèle.
+    /// Optimisation pour les requêtes indexées.
+    /// Mode : STRICT INTEGRITY -> Panique si un fichier indexé est manquant.
+    pub fn read_many(&self, collection: &str, ids: &[String]) -> Result<Vec<Value>> {
+        // Utilisation de Rayon pour paralléliser les lectures I/O
+        let results: Result<Vec<Value>> = ids
+            .par_iter()
+            .map(|id| {
+                // Lecture unitaire
+                let doc_opt = self.get_document(collection, id)
+                    .with_context(|| format!("Erreur I/O lors de la lecture de l'ID {}", id))?;
+                // Vérification d'intégrité stricte (Option B)
+                match doc_opt {
+                    Some(doc) => Ok(doc),
+                    None => Err(anyhow!(
+                        "DATABASE CORRUPTION: L'index pointe vers l'ID '{}' mais le fichier est introuvable dans '{}'", 
+                        id, collection
+                    )),
+                }
+            })
+            .collect();
+
+        results
     }
 
     pub fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
@@ -618,35 +644,77 @@ fn set_value_by_path(doc: &mut Value, path: &str, value: Value) -> bool {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use std::fs;
     use tempfile::tempdir;
+
+    fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        (dir, config)
+    }
 
     #[test]
     fn test_manager_get_document_integration() {
-        let dir = tempdir().unwrap();
-        let root = dir.path().to_path_buf();
-
-        let config = JsonDbConfig::new(root.clone());
+        let (_dir, config) = setup_env();
         let storage = StorageEngine::new(config);
-
         let manager = CollectionsManager::new(&storage, "space_test", "db_test");
 
-        let col_path = root.join("space_test/db_test/collections/users");
-        fs::create_dir_all(&col_path).unwrap();
-
-        let doc_content = r#"{ "id": "user_123", "name": "Test User" }"#;
-        fs::write(col_path.join("user_123.json"), doc_content).unwrap();
+        // Utilisation de insert_raw pour créer la collection et le doc
+        let doc = json!({ "id": "user_123", "name": "Test User" });
+        manager.insert_raw("users", &doc).unwrap();
 
         let result = manager.get_document("users", "user_123").unwrap();
-
-        assert!(result.is_some(), "Le document devrait être trouvé");
-        let doc = result.unwrap();
-        assert_eq!(doc["name"], "Test User");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap()["name"], "Test User");
 
         let missing = manager.get_document("users", "ghost").unwrap();
-        assert!(
-            missing.is_none(),
-            "Le document fantôme ne devrait pas exister"
-        );
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_read_many_parallel() {
+        let (_dir, config) = setup_env();
+        let storage = StorageEngine::new(config);
+        let manager = CollectionsManager::new(&storage, "space_test", "db_test");
+
+        // Création de 100 documents
+        for i in 0..100 {
+            let doc = json!({ "id": i.to_string(), "val": i });
+            manager.insert_raw("items", &doc).unwrap();
+        }
+
+        // Lecture parallèle de 10 items dispersés
+        let ids: Vec<String> = vec!["10", "20", "50", "80", "99"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let results = manager.read_many("items", &ids).unwrap();
+
+        assert_eq!(results.len(), 5);
+        // Vérification qu'on a bien récupéré les bons IDs
+        for res in results {
+            let id = res["id"].as_str().unwrap();
+            assert!(ids.contains(&id.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_read_many_strict_integrity() {
+        let (_dir, config) = setup_env();
+        let storage = StorageEngine::new(config);
+        let manager = CollectionsManager::new(&storage, "space_test", "db_test");
+
+        manager
+            .insert_raw("items", &json!({ "id": "1", "val": "A" }))
+            .unwrap();
+
+        // Requête avec un ID qui n'existe pas -> Doit échouer en mode strict
+        let ids = vec!["1".to_string(), "999".to_string()];
+        let result = manager.read_many("items", &ids);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("DATABASE CORRUPTION"));
     }
 }

@@ -30,7 +30,7 @@ flowchart TD
         Engine -->|1. List All| Storage[(CollectionsManager)]
         Storage -->|Raw Docs| Engine
 
-        Engine -->|2. Filter| Filter{Filtrage}
+        Engine -->|2. Filter| Filter{Filtrage Avancé}
         Filter -- Match --> Sort{Tri}
         Filter -- No Match --> Discard(🗑️)
 
@@ -47,27 +47,28 @@ flowchart TD
 
 ### 1. Parsing SQL (`sql.rs`)
 
-Le module utilise `sqlparser` pour supporter une syntaxe SQL familière :
+Le module utilise `sqlparser` pour supporter une syntaxe SQL familière, étendue pour le NoSQL :
 
 - **Projections** : `SELECT name, address.city` (support des chemins imbriqués).
-- **Filtres** : `WHERE age >= 18 AND (role = 'admin' OR status = 'active')`.
+- **Filtres** : `WHERE age >= 18 AND role IN ('admin', 'editor')`.
 - **Tri** : `ORDER BY created_at DESC`.
-- **Types** : Gestion transparente des types JSON (String, Number, Boolean, Null).
+- **Pattern Matching** : `WHERE name LIKE 'A%'` (Commence par A).
 
 ### 2. Optimiseur de Requêtes (`optimizer.rs`)
 
-Avant l'exécution, l'`Optimizer` analyse la requête pour améliorer les performances :
+Avant l'exécution, l'`Optimizer` analyse la requête pour améliorer les performances en réordonnant les conditions selon leur coût estimé (Sélectivité) :
 
-- **Réordonnancement (Sélectivité)** : Les conditions sont triées par coût estimé. Une égalité simple (`=`) est vérifiée avant une expression régulière ou un `LIKE`. Cela permet d'éliminer les candidats non valides le plus tôt possible ("Fail Fast").
+- **Réordonnancement (Sélectivité)** : Les conditions "légères" (ex: `status = 'active'`) sont vérifiées avant les opérations coûteuses (ex: `bio CONTAINS 'dev'`).
 - **Simplification** : Déduplication des conditions redondantes.
-- **Pagination** : Plafonnement automatique des limites excessives pour protéger la mémoire RAM.
+- **Pagination** : Plafonnement automatique des limites excessives.
 
 ### 3. Exécution (`executor.rs`)
 
-Le moteur applique la logique sur les documents en mémoire :
+Le moteur applique la logique sur les documents en mémoire avec un support étendu des opérateurs :
 
-- **Filtrage** : Évaluation récursive de l'arbre logique (`AND`/`OR`/`NOT`).
-- **Comparaison** : Comparaison robuste des valeurs JSON (ex: `null` est toujours inférieur aux autres valeurs).
+- **Comparaison** : `Eq` (`=`), `Ne` (`!=`), `Gt` (`>`), `Lt` (`<`).
+- **Collections** : `In` (présence dans une liste), `Contains` (tableau contient valeur).
+- **Texte** : `StartsWith`, `EndsWith`, `Like`, `Matches` (Regex).
 - **Projection** : Reconstitution d'objets JSON contenant uniquement les champs demandés (`SELECT`).
 
 ---
@@ -79,8 +80,8 @@ Le moteur applique la logique sur les documents en mémoire :
 ```rust
 use crate::json_db::query::{sql::parse_sql, QueryEngine};
 
-// 1. Définir la requête
-let sql = "SELECT id, name FROM users WHERE role = 'admin' AND age > 25 ORDER BY name ASC";
+// 1. Définir la requête (Supporte LIKE et IN)
+let sql = "SELECT id, name FROM users WHERE role IN ('admin', 'editor') AND name LIKE 'S%' ORDER BY name ASC";
 
 // 2. Parser
 let query = parse_sql(sql)?;
@@ -89,20 +90,22 @@ let query = parse_sql(sql)?;
 let engine = QueryEngine::new(&manager);
 let result = engine.execute_query(query).await?;
 
-println!("Trouvé {} admins", result.total_count);
+println!("Trouvé {} utilisateurs", result.total_count);
 
 ```
 
 ### Option B : QueryBuilder (Recommandé pour le Code Rust)
 
 ```rust
-use crate::json_db::query::parser::QueryBuilder;
+use crate::json_db::query::{parser::QueryBuilder, Condition};
+use serde_json::json;
 
-// Construction fluide et typée
-let query = QueryBuilder::new("users")
-    .where_eq("status", json!("active"))
-    .select(vec!["email".to_string()])
-    .unwrap()
+// Construction fluide et typée avec les nouveaux helpers
+let query = QueryBuilder::new("products")
+    .where_cond(Condition::starts_with("sku", json!("PROD-")))
+    .where_cond(Condition::r#in("category", json!(["electronics", "books"])))
+    .sort("price", SortOrder::Asc)
+    .limit(10)
     .build();
 
 let result = engine.execute_query(query).await?;
@@ -113,21 +116,21 @@ let result = engine.execute_query(query).await?;
 
 ## 📂 Structure des Fichiers
 
-| Fichier            | Rôle                                                                            |
-| ------------------ | ------------------------------------------------------------------------------- |
-| **`mod.rs`**       | Définitions des structures de données (`Query`, `Condition`, `Operator`).       |
-| **`sql.rs`**       | Traducteur de l'AST `sqlparser` vers notre structure `Query` interne.           |
-| **`parser.rs`**    | Utilitaires pour le parsing JSON et implémentation du `QueryBuilder`.           |
-| **`optimizer.rs`** | Logique d'heuristique pour réorganiser les filtres.                             |
-| **`executor.rs`**  | Moteur principal : boucle sur les données, applique les filtres et projections. |
+| Fichier            | Rôle                                                                              |
+| ------------------ | --------------------------------------------------------------------------------- |
+| **`mod.rs`**       | Définitions des structures (`Query`, `Condition`) et des Helpers (`gt`, `in`...). |
+| **`sql.rs`**       | Traducteur de l'AST `sqlparser` vers notre structure `Query` interne.             |
+| **`parser.rs`**    | Utilitaires pour le parsing JSON et implémentation du `QueryBuilder`.             |
+| **`optimizer.rs`** | Logique d'heuristique pour réorganiser les filtres (Sélectivité).                 |
+| **`executor.rs`**  | Moteur principal : itération, filtrage (tous opérateurs), tri et pagination.      |
 
 ---
 
 ## ⚠️ Limitations Actuelles
 
-1. **Full Scan (Performance)** : Actuellement, le moteur charge **tous** les documents de la collection en mémoire (`manager.list_all`) avant d'appliquer les filtres. Il n'exploite pas encore les index (`json_db/indexes`) pour accélérer la lecture initiale. C'est la prochaine optimisation majeure prévue.
-2. **Jointures** : Pas de support pour `JOIN`. Le modèle NoSQL privilégie la dénormalisation ou les requêtes applicatives multiples.
-3. **Agrégations** : Les fonctions `COUNT()`, `SUM()`, `GROUP BY` ne sont pas encore supportées.
+1. **Full Scan (Performance)** : Le moteur charge actuellement tous les documents (`manager.list_all`) avant de filtrer. L'intégration prochaine avec les index (`json_db/indexes`) permettra de ne charger que les IDs pertinents.
+2. **Jointures** : Pas de support pour `JOIN`. Le modèle NoSQL privilégie la dénormalisation.
+3. **Agrégations** : Les fonctions `COUNT()`, `SUM()` ne sont pas encore supportées (sauf count total).
 
 ```
 

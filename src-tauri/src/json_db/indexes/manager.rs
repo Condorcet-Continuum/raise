@@ -90,6 +90,38 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
+    // --- RECHERCHE (NOUVEAU) ---
+
+    pub fn has_index(&self, collection: &str, field: &str) -> bool {
+        if let Ok(indexes) = self.load_indexes(collection) {
+            return indexes.iter().any(|i| i.name == field);
+        }
+        false
+    }
+
+    pub fn search(&self, collection: &str, field: &str, value: &Value) -> Result<Vec<String>> {
+        let indexes = self.load_indexes(collection)?;
+        let def = indexes
+            .iter()
+            .find(|i| i.name == field)
+            .ok_or_else(|| anyhow!("Index introuvable sur le champ '{}'", field))?;
+
+        let cfg = &self.storage.config;
+        let s = &self.space;
+        let d = &self.db;
+
+        match def.index_type {
+            IndexType::Hash => hash::search_hash_index(cfg, s, d, collection, def, value),
+            IndexType::BTree => btree::search_btree_index(cfg, s, d, collection, def, value),
+            IndexType::Text => {
+                let query_str = value.as_str().unwrap_or("").to_string();
+                text::search_text_index(cfg, s, d, collection, def, &query_str)
+            }
+        }
+    }
+
+    // --- MAINTENANCE ---
+
     fn rebuild_index(&self, collection: &str, def: &IndexDefinition) -> Result<()> {
         let col_path = self
             .storage
@@ -238,7 +270,7 @@ mod tests {
         let col_path = dir.path().join("s/d/collections/users");
         fs::create_dir_all(&col_path).unwrap();
 
-        // 1. Create Index (should create _meta.json)
+        // 1. Create Index
         mgr.create_index("users", "email", "hash").unwrap();
         assert!(col_path.join("_meta.json").exists());
 
@@ -253,5 +285,33 @@ mod tests {
         // 4. Drop Index
         mgr.drop_index("users", "email").unwrap();
         assert!(!idx_path.exists());
+    }
+
+    #[test]
+    fn test_manager_search_flow() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let mut mgr = IndexManager::new(&storage, "s", "d");
+
+        let col_path = dir.path().join("s/d/collections/products");
+        fs::create_dir_all(&col_path).unwrap();
+
+        mgr.create_index("products", "category", "hash").unwrap();
+
+        let p1 = json!({ "id": "p1", "category": "book" });
+        let p2 = json!({ "id": "p2", "category": "food" });
+
+        mgr.index_document("products", &p1).unwrap();
+        mgr.index_document("products", &p2).unwrap();
+
+        // Check has_index
+        assert!(mgr.has_index("products", "category"));
+        assert!(!mgr.has_index("products", "price"));
+
+        // Search
+        let results = mgr.search("products", "category", &json!("book")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], "p1");
     }
 }

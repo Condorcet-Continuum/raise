@@ -1,8 +1,5 @@
 // FICHIER : src-tauri/src/json_db/indexes/mod.rs
 
-use serde::{Deserialize, Serialize};
-
-// Modules d'implémentation
 pub mod btree;
 pub mod driver;
 pub mod hash;
@@ -10,47 +7,70 @@ pub mod manager;
 pub mod paths;
 pub mod text;
 
+use serde::{Deserialize, Serialize};
+
 pub use manager::IndexManager;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")] // <--- CORRECTION IMPORTANTE ICI
 pub enum IndexType {
-    BTree,
+    /// Index exact (HashMap). Idéal pour les IDs, emails, codes uniques.
     Hash,
+
+    /// Index ordonné (BTree). Idéal pour les dates, nombres, tris (Range).
+    BTree,
+
+    /// Index de recherche textuelle (Inverted Index). Pour la recherche de mots-clés.
     Text,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexDefinition {
     pub name: String,
-    /// Pointeur JSON vers le champ (ex: "/email")
     pub field_path: String,
     pub index_type: IndexType,
     pub unique: bool,
 }
 
-/// Structure de stockage sur disque d'une entrée d'index
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexRecord {
-    // On stocke la clé sous forme de String brute pour éviter les soucis de polymorphisme Bincode
     pub key: String,
     pub document_id: String,
 }
 
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn test_index_def_serialization() {
+    fn test_index_type_serialization() {
+        // Vérifie que les enums sont sérialisés en minuscule ("hash" et pas "Hash")
+        let t1 = IndexType::Hash;
+        assert_eq!(serde_json::to_value(t1).unwrap(), json!("hash")); // Corrigé
+
+        let t2 = IndexType::BTree;
+        assert_eq!(serde_json::to_value(t2).unwrap(), json!("btree")); // Corrigé
+    }
+
+    #[test]
+    fn test_index_definition_structure() {
         let def = IndexDefinition {
-            name: "email".into(),
-            field_path: "/contact/email".into(),
+            name: "email".to_string(),
+            field_path: "/contact/email".to_string(),
             index_type: IndexType::Hash,
             unique: true,
         };
+
         let json = serde_json::to_string(&def).unwrap();
+        // On vérifie que le json contient bien "hash" en minuscule
         assert!(json.contains("\"hash\""));
-        assert!(json.contains("\"/contact/email\""));
+
+        let loaded: IndexDefinition = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.index_type, IndexType::Hash);
     }
 }

@@ -19,7 +19,27 @@ pub fn update_hash_index(
     new_doc: Option<&Value>,
 ) -> Result<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
+    // On spécifie le type concret HashMap pour le driver générique
     driver::update::<HashMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc)
+}
+
+/// Recherche des IDs de documents correspondant exactement à une valeur.
+pub fn search_hash_index(
+    cfg: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    collection: &str,
+    def: &IndexDefinition,
+    value: &Value,
+) -> Result<Vec<String>> {
+    let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
+
+    // IMPORTANT : La clé stockée dans l'index est la représentation stringifiée du JSON.
+    // Ex: Si value est string "admin", key sera "\"admin\"" (avec les guillemets).
+    // Cela garantit la cohérence avec la méthode update() qui utilise .to_string() sur le Value.
+    let key = value.to_string();
+
+    driver::search::<HashMap<String, Vec<String>>>(&path, &key)
 }
 
 #[cfg(test)]
@@ -29,11 +49,16 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_hash_update() {
+    fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
         let cfg = JsonDbConfig::new(dir.path().to_path_buf());
-        // Création structure dossiers
+        (dir, cfg)
+    }
+
+    #[test]
+    fn test_hash_lifecycle() {
+        let (dir, cfg) = setup_env();
+        // Création structure dossiers nécessaire pour le test
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
         std::fs::create_dir_all(&idx_dir).unwrap();
 
@@ -44,14 +69,25 @@ mod tests {
             unique: true,
         };
 
+        // 1. Insertion
         let doc = json!({ "email": "test@mail.com" });
+        update_hash_index(&cfg, "s", "d", "c", &def, "doc1", None, Some(&doc)).unwrap();
 
-        // Insertion
-        update_hash_index(&cfg, "s", "d", "c", &def, "1", None, Some(&doc)).unwrap();
+        // 2. Recherche (Succès)
+        // Note: On passe la Value brute, la fonction se charge de la sérialiser en clé
+        let results =
+            search_hash_index(&cfg, "s", "d", "c", &def, &json!("test@mail.com")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], "doc1");
 
-        // Vérification lecture
-        let path = paths::index_path(&cfg, "s", "d", "c", "email", IndexType::Hash);
-        let index: HashMap<String, Vec<String>> = driver::load(&path).unwrap();
-        assert!(index.contains_key("\"test@mail.com\"")); // Note: les clés sont stringifiées par serde_json
+        // 3. Recherche (Echec)
+        let empty = search_hash_index(&cfg, "s", "d", "c", &def, &json!("other@mail.com")).unwrap();
+        assert!(empty.is_empty());
+
+        // 4. Suppression (Mise à jour vers None)
+        update_hash_index(&cfg, "s", "d", "c", &def, "doc1", Some(&doc), None).unwrap();
+        let deleted =
+            search_hash_index(&cfg, "s", "d", "c", &def, &json!("test@mail.com")).unwrap();
+        assert!(deleted.is_empty());
     }
 }

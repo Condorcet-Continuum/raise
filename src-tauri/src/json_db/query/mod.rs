@@ -19,7 +19,6 @@ pub struct Query {
     pub sort: Option<Vec<SortField>>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
-    /// Liste des champs à inclure/exclure. Si None -> SELECT *
     pub projection: Option<Projection>,
 }
 
@@ -55,20 +54,65 @@ pub enum FilterOperator {
     Not,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Condition {
     pub field: String,
     pub operator: ComparisonOperator,
     pub value: Value,
 }
 
+// --- IMPLÉMENTATION DES HELPERS (CORRECTION) ---
 impl Condition {
-    pub fn eq(field: impl Into<String>, value: Value) -> Self {
+    pub fn new(field: impl Into<String>, operator: ComparisonOperator, value: Value) -> Self {
         Self {
             field: field.into(),
-            operator: ComparisonOperator::Eq,
+            operator,
             value,
         }
+    }
+
+    pub fn eq(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::Eq, value)
+    }
+
+    pub fn ne(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::Ne, value)
+    }
+
+    pub fn gt(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::Gt, value)
+    }
+
+    pub fn gte(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::Gte, value)
+    }
+
+    pub fn lt(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::Lt, value)
+    }
+
+    pub fn lte(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::Lte, value)
+    }
+
+    pub fn contains(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::Contains, value)
+    }
+
+    pub fn starts_with(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::StartsWith, value)
+    }
+
+    pub fn ends_with(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::EndsWith, value)
+    }
+
+    pub fn r#in(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::In, value)
+    }
+
+    pub fn matches(field: impl Into<String>, value: Value) -> Self {
+        Self::new(field, ComparisonOperator::Matches, value)
     }
 }
 
@@ -84,8 +128,8 @@ pub enum ComparisonOperator {
     Contains,
     StartsWith,
     EndsWith,
-    Matches,
-    Like,
+    Matches, // Regex
+    Like,    // SQL Like
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +162,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn test_condition_helpers() {
+        let c = Condition::gt("age", json!(18));
+        assert_eq!(c.operator, ComparisonOperator::Gt);
+        assert_eq!(c.field, "age");
+    }
+
+    #[test]
     fn test_query_serialization() {
         let query = Query {
             collection: "users".into(),
@@ -131,9 +182,9 @@ mod tests {
             projection: Some(Projection::Include(vec!["name".into()])),
         };
 
-        let json = serde_json::to_string(&query).unwrap();
-        assert!(json.contains("\"users\""));
-        assert!(json.contains("\"age\""));
-        assert!(json.contains("\"Include\""));
+        let json_str = serde_json::to_string(&query).unwrap();
+        assert!(json_str.contains("\"users\""));
+        assert!(json_str.contains("\"age\""));
+        assert!(json_str.contains("\"Include\""));
     }
 }
