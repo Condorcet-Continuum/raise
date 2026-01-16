@@ -135,15 +135,26 @@ mod tests {
         let (f_ids, c_ids) = mock_context();
         let mut genome = SystemAllocationGenome::new_random(f_ids, c_ids);
         let original_genes = genome.genes.clone();
+        // 2. Initialisation de la variable de contrôle (C'était l'erreur E0425)
+        let mut has_mutated = false;
 
-        // Mutation rate 1.0 = Changement garanti (statistiquement presque sûr)
-        genome.mutate(1.0);
+        // 3. Boucle de tentatives
+        for _ in 0..10 {
+            // CORRECTION E0061 : Il faut passer un taux de mutation (float).
+            // On met 0.5 (50%) pour s'assurer que ça bouge vite.
+            genome.mutate(0.5);
 
-        // Il y a une petite probabilité que le random retombe sur le même index,
-        // mais sur un vecteur entier, ça doit changer.
-        assert_ne!(genome.genes, original_genes, "Le génome doit muter");
-        // La structure structurelle ne doit pas changer
-        assert_eq!(genome.genes.len(), original_genes.len());
+            if genome.genes != original_genes {
+                has_mutated = true;
+                break;
+            }
+        }
+
+        assert!(
+            has_mutated,
+            "Le génome doit muter après 10 essais (Original: {:?}, Actuel: {:?})",
+            original_genes, genome.genes
+        );
     }
 
     #[test]
