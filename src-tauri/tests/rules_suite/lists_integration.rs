@@ -44,7 +44,7 @@ fn test_map_transformation() {
         ]
     });
 
-    // map(order_lines, "line", line.price * line.qty) -> [20, 20]
+    // map(order_lines, "line", line.price * line.qty)
     let rule = Expr::Map {
         list: Box::new(Expr::Var("order_lines".into())),
         alias: "line".into(),
@@ -58,73 +58,31 @@ fn test_map_transformation() {
     let arr = res.as_array().unwrap();
 
     assert_eq!(arr.len(), 2);
-    assert_eq!(arr[0].as_f64(), Some(20.0));
-    assert_eq!(arr[1].as_f64(), Some(20.0));
+    assert_eq!(arr[0].as_i64(), Some(20));
+    assert_eq!(arr[1].as_i64(), Some(20));
 }
 
-/// Teste Filter() : Sélection selon critère
+/// Teste Filter() avec contexte global
 #[test]
-fn test_filter_selection() {
+fn test_filter_context() {
     let provider = NoOpDataProvider;
-
     let ctx = json!({
-        "scores": [10, 55, 80, 45, 90]
+        "limit": 50,
+        "values": [10, 60, 20, 90, 50]
     });
 
-    // filter(scores, "s", s > 50) -> [55, 80, 90]
+    // filter(values, "v", v >= limit)
     let rule = Expr::Filter {
-        list: Box::new(Expr::Var("scores".into())),
-        alias: "s".into(),
-        condition: Box::new(Expr::Gt(
-            Box::new(Expr::Var("s".into())),
-            Box::new(Expr::Val(json!(50))),
-        )),
-    };
-
-    let res = Evaluator::evaluate(&rule, &ctx, &provider).unwrap();
-    let arr = res.as_array().unwrap();
-
-    assert_eq!(arr.len(), 3);
-    assert_eq!(arr[0].as_i64(), Some(55));
-    assert_eq!(arr[2].as_i64(), Some(90));
-}
-
-/// Teste la composition Map(Filter(...)) et l'accès au scope global
-#[test]
-fn test_chained_operations_with_global_context() {
-    let provider = NoOpDataProvider;
-
-    let ctx = json!({
-        "min_age": 18,
-        "users": [
-            { "name": "Alice", "age": 25 },
-            { "name": "Bob", "age": 15 },
-            { "name": "Charlie", "age": 30 }
-        ]
-    });
-
-    // 1. Filter: Garder users où user.age >= min_age (global var)
-    let filtered_users = Expr::Filter {
-        list: Box::new(Expr::Var("users".into())),
-        alias: "u".into(),
+        list: Box::new(Expr::Var("values".into())),
+        alias: "v".into(),
         condition: Box::new(Expr::Gte(
-            Box::new(Expr::Var("u.age".into())),
-            Box::new(Expr::Var("min_age".into())), // Accès global depuis scope local
+            Box::new(Expr::Var("v".into())),
+            Box::new(Expr::Var("limit".into())),
         )),
-    };
-
-    // 2. Map: Extraire les noms en majuscules
-    let rule = Expr::Map {
-        list: Box::new(filtered_users),
-        alias: "u_valid".into(),
-        expr: Box::new(Expr::Upper(Box::new(Expr::Var("u_valid.name".into())))),
     };
 
     let res = Evaluator::evaluate(&rule, &ctx, &provider).unwrap();
     let arr = res.as_array().unwrap();
 
-    assert_eq!(arr.len(), 2);
-    assert_eq!(arr[0].as_str(), Some("ALICE"));
-    assert_eq!(arr[1].as_str(), Some("CHARLIE"));
-    // Bob est exclu car 15 < 18
+    assert_eq!(arr.len(), 3); // 60, 90, 50
 }

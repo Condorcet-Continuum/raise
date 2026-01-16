@@ -1,7 +1,65 @@
 // FICHIER : src-tauri/tests/rules_suite/logic_scenarios.rs
 
-use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider};
+use raise::rules_engine::ast::Expr;
+use raise::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
 use serde_json::json;
+
+#[test]
+fn test_complex_access_control() {
+    // Scénario : L'utilisateur a accès SI :
+    // (status == "member" ET role == "admin")
+
+    let rule = Expr::And(vec![
+        // CORRECTION : Eq prend maintenant un vecteur
+        Expr::Eq(vec![
+            Expr::Var("status".to_string()),
+            Expr::Val(json!("member")),
+        ]),
+        Expr::Eq(vec![
+            Expr::Var("role".to_string()),
+            Expr::Val(json!("admin")),
+        ]),
+    ]);
+
+    let provider = NoOpDataProvider;
+
+    // Cas 1 : Succès
+    let ctx_admin = json!({
+        "status": "member",
+        "role": "admin"
+    });
+    let result_ok = Evaluator::evaluate(&rule, &ctx_admin, &provider).expect("Evaluation failed");
+    assert_eq!(result_ok.as_bool(), Some(true));
+
+    // Cas 2 : Echec (Mauvais statut)
+    let ctx_guest = json!({
+        "status": "guest",
+        "role": "admin"
+    });
+    let result_fail = Evaluator::evaluate(&rule, &ctx_guest, &provider).expect("Evaluation failed");
+    assert_eq!(result_fail.as_bool(), Some(false));
+}
+
+#[test]
+fn test_nested_logic_with_values() {
+    // Scénario : (A > 10) OU (B == 0)
+    let rule = Expr::Or(vec![
+        // Gt reste binaire (Box, Box) car défini ainsi dans ast.rs
+        Expr::Gt(
+            Box::new(Expr::Var("a".to_string())),
+            Box::new(Expr::Val(json!(10))),
+        ),
+        // Eq est n-aire (Vec)
+        Expr::Eq(vec![Expr::Var("b".to_string()), Expr::Val(json!(0))]),
+    ]);
+
+    let provider = NoOpDataProvider;
+
+    // a=5, b=0 -> True (grâce au OR)
+    let ctx = json!({ "a": 5, "b": 0 });
+    let res = Evaluator::evaluate(&rule, &ctx, &provider).unwrap();
+    assert_eq!(res.as_bool(), Some(true));
+}
 
 #[test]
 fn test_complex_boolean_logic() {
@@ -11,21 +69,14 @@ fn test_complex_boolean_logic() {
                 Box::new(Expr::Var("age".into())),
                 Box::new(Expr::Val(json!(18))),
             ),
-            Expr::Eq(
-                Box::new(Expr::Var("status".into())),
-                Box::new(Expr::Val(json!("member"))),
-            ),
+            Expr::Eq(vec![Expr::Var("status".into()), Expr::Val(json!("member"))]),
         ]),
-        Expr::Eq(
-            Box::new(Expr::Var("role".into())),
-            Box::new(Expr::Val(json!("admin"))),
-        ),
+        Expr::Eq(vec![Expr::Var("role".into()), Expr::Val(json!("admin"))]),
     ]);
 
     let provider = NoOpDataProvider;
 
     let ctx1 = json!({ "age": 16, "status": "member", "role": "user" });
-    // CORRECTION : .into_owned()
     assert_eq!(
         Evaluator::evaluate(&rule, &ctx1, &provider)
             .unwrap()
@@ -52,15 +103,19 @@ fn test_complex_boolean_logic() {
 
 #[test]
 fn test_math_precedence() {
+    // (price - cost) / price
     let rule = Expr::Div(vec![
         Expr::Sub(vec![Expr::Var("price".into()), Expr::Var("cost".into())]),
         Expr::Var("price".into()),
     ]);
 
-    let provider = NoOpDataProvider;
     let ctx = json!({ "price": 100.0, "cost": 75.0 });
+    let provider = NoOpDataProvider;
 
-    let res = Evaluator::evaluate(&rule, &ctx, &provider).unwrap();
-    // CORRECTION : Comparaison typée
-    assert_eq!(res.as_f64(), Some(0.25));
+    assert_eq!(
+        Evaluator::evaluate(&rule, &ctx, &provider)
+            .unwrap()
+            .as_f64(),
+        Some(0.25)
+    );
 }

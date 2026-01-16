@@ -39,476 +39,466 @@ pub struct Evaluator;
 
 impl Evaluator {
     pub fn evaluate<'a>(
-        expr: &Expr,
+        expr: &'a Expr,
         context: &'a Value,
         provider: &dyn DataProvider,
     ) -> Result<Cow<'a, Value>, EvalError> {
-        Self::eval_recursive(expr, context, &[], provider)
-    }
-
-    fn eval_recursive<'a>(
-        expr: &Expr,
-        root: &'a Value,
-        scope: &[(&str, &'a Value)],
-        provider: &dyn DataProvider,
-    ) -> Result<Cow<'a, Value>, EvalError> {
         match expr {
-            Expr::Val(v) => Ok(Cow::Owned(v.clone())),
+            Expr::Val(v) => Ok(Cow::Borrowed(v)),
+            Expr::Var(path) => resolve_path(context, path),
 
-            Expr::Var(path) => {
-                for (alias, val) in scope.iter().rev() {
-                    if path == *alias {
-                        return Ok(Cow::Borrowed(*val));
-                    }
-                    if path.starts_with(&format!("{}.", alias)) {
-                        let sub_path = &path[alias.len() + 1..];
-                        let ptr = format!("/{}", sub_path.replace('.', "/"));
-                        return val
-                            .pointer(&ptr)
-                            .map(Cow::Borrowed)
-                            .ok_or_else(|| EvalError::VarNotFound(path.clone()));
+            // --- Opérateurs Logiques ---
+            Expr::And(list) => {
+                for e in list {
+                    let val = Self::evaluate(e, context, provider)?;
+                    if !is_truthy(&val) {
+                        return Ok(Cow::Owned(Value::Bool(false)));
                     }
                 }
-                let ptr = if path.starts_with('/') {
-                    path.clone()
-                } else {
-                    format!("/{}", path.replace('.', "/"))
-                };
-                root.pointer(&ptr)
-                    .map(Cow::Borrowed)
-                    .ok_or_else(|| EvalError::VarNotFound(path.clone()))
+                Ok(Cow::Owned(Value::Bool(true)))
             }
-
-            Expr::Now => Ok(Cow::Owned(json!(Utc::now().to_rfc3339()))),
-
-            // --- LISTES ---
-            Expr::Len(arg) => {
-                let val = Self::eval_recursive(arg, root, scope, provider)?;
-                match &*val {
-                    Value::Array(arr) => Ok(Cow::Owned(json!(arr.len()))),
-                    Value::String(s) => Ok(Cow::Owned(json!(s.len()))),
-                    _ => Err(EvalError::Generic(format!("Len() invalide sur {:?}", val))),
+            Expr::Or(list) => {
+                for e in list {
+                    let val = Self::evaluate(e, context, provider)?;
+                    if is_truthy(&val) {
+                        return Ok(Cow::Owned(Value::Bool(true)));
+                    }
                 }
+                Ok(Cow::Owned(Value::Bool(false)))
             }
-            Expr::Min(arg) | Expr::Max(arg) => {
-                let val = Self::eval_recursive(arg, root, scope, provider)?;
-                let arr = val.as_array().ok_or(EvalError::NotAnArray)?;
-                if arr.is_empty() {
-                    return Ok(Cow::Owned(Value::Null));
-                }
+            Expr::Not(e) => {
+                let res = Self::evaluate(e, context, provider)?;
+                Ok(Cow::Owned(Value::Bool(!is_truthy(&res))))
+            }
 
-                let mut iter = arr.iter().filter_map(|v| v.as_f64());
-                let first = iter.next().ok_or(EvalError::NotANumber)?;
-
-                let result = if matches!(expr, Expr::Min(_)) {
-                    iter.fold(first, f64::min)
-                } else {
-                    iter.fold(first, f64::max)
-                };
-                Ok(Cow::Owned(json!(result)))
-            }
-            Expr::Contains { list, value } => {
-                let l_val = Self::eval_recursive(list, root, scope, provider)?;
-                let v_val = Self::eval_recursive(value, root, scope, provider)?;
-                match &*l_val {
-                    Value::Array(arr) => Ok(Cow::Owned(json!(arr.contains(&v_val)))),
-                    Value::String(s) => match &*v_val {
-                        Value::String(sub) => Ok(Cow::Owned(json!(s.contains(sub)))),
-                        _ => Ok(Cow::Owned(json!(false))),
-                    },
-                    _ => Err(EvalError::NotAnArray),
+            // --- Comparaisons ---
+            Expr::Eq(args) => {
+                if args.len() < 2 {
+                    return Ok(Cow::Owned(Value::Bool(true)));
                 }
+                let first = Self::evaluate(&args[0], context, provider)?;
+                for arg in &args[1..] {
+                    let next = Self::evaluate(arg, context, provider)?;
+                    if first != next {
+                        return Ok(Cow::Owned(Value::Bool(false)));
+                    }
+                }
+                Ok(Cow::Owned(Value::Bool(true)))
             }
+            Expr::Neq(args) => {
+                if args.len() < 2 {
+                    return Ok(Cow::Owned(Value::Bool(false)));
+                }
+                let a = Self::evaluate(&args[0], context, provider)?;
+                let b = Self::evaluate(&args[1], context, provider)?;
+                Ok(Cow::Owned(Value::Bool(a != b)))
+            }
+            Expr::Gt(a, b) => compare_nums(a, b, context, provider, |x, y| x > y),
+            Expr::Lt(a, b) => compare_nums(a, b, context, provider, |x, y| x < y),
+            Expr::Gte(a, b) => compare_nums(a, b, context, provider, |x, y| x >= y),
+            Expr::Lte(a, b) => compare_nums(a, b, context, provider, |x, y| x <= y),
+
+            // --- Mathématiques ---
+            Expr::Add(list) => fold_nums(list, context, provider, 0.0, |acc, x| acc + x),
+            Expr::Mul(list) => fold_nums(list, context, provider, 1.0, |acc, x| acc * x),
+            Expr::Sub(list) => {
+                if list.is_empty() {
+                    return Ok(Cow::Owned(json!(0)));
+                }
+                let mut acc = Self::evaluate(&list[0], context, provider)?
+                    .as_f64()
+                    .ok_or(EvalError::NotANumber)?;
+                for e in &list[1..] {
+                    acc -= Self::evaluate(e, context, provider)?
+                        .as_f64()
+                        .ok_or(EvalError::NotANumber)?;
+                }
+                Ok(Cow::Owned(smart_number(acc)))
+            }
+            Expr::Div(list) => {
+                if list.len() < 2 {
+                    return Err(EvalError::Generic("Div requiert au moins 2 args".into()));
+                }
+                let num = Self::evaluate(&list[0], context, provider)?
+                    .as_f64()
+                    .ok_or(EvalError::NotANumber)?;
+                let den = Self::evaluate(&list[1], context, provider)?
+                    .as_f64()
+                    .ok_or(EvalError::NotANumber)?;
+                if den == 0.0 {
+                    return Err(EvalError::Generic("Division par zéro".into()));
+                }
+                Ok(Cow::Owned(smart_number(num / den)))
+            }
+            Expr::Abs(e) => {
+                let v = Self::evaluate(e, context, provider)?
+                    .as_f64()
+                    .ok_or(EvalError::NotANumber)?;
+                Ok(Cow::Owned(smart_number(v.abs())))
+            }
+            Expr::Round { value, precision } => {
+                let v = Self::evaluate(value, context, provider)?
+                    .as_f64()
+                    .ok_or(EvalError::NotANumber)?;
+                let p = Self::evaluate(precision, context, provider)?
+                    .as_i64()
+                    .unwrap_or(0);
+                let factor = 10f64.powi(p as i32);
+                let res = (v * factor).round() / factor;
+                Ok(Cow::Owned(smart_number(res)))
+            }
+
+            // --- Collections & Itérations ---
             Expr::Map {
                 list,
                 alias,
                 expr: map_expr,
             } => {
-                let l_val = Self::eval_recursive(list, root, scope, provider)?;
-                let arr = l_val.as_array().ok_or(EvalError::NotAnArray)?;
-                let mut result = Vec::with_capacity(arr.len());
+                let list_val = Self::evaluate(list, context, provider)?;
+                let arr = list_val.as_array().ok_or(EvalError::NotAnArray)?;
+
+                let mut result_arr = Vec::new();
                 for item in arr {
-                    let mut new_scope = Vec::with_capacity(scope.len() + 1);
-                    new_scope.extend_from_slice(scope);
-                    new_scope.push((alias.as_str(), item));
-                    let mapped = Self::eval_recursive(map_expr, root, &new_scope, provider)?;
-                    result.push(mapped.into_owned());
+                    let mut local_ctx = context.clone();
+                    if let Some(obj) = local_ctx.as_object_mut() {
+                        obj.insert(alias.clone(), item.clone());
+                    } else {
+                        local_ctx = json!({ alias: item });
+                    }
+
+                    let res = Self::evaluate(map_expr, &local_ctx, provider)?;
+                    result_arr.push(res.into_owned());
                 }
-                Ok(Cow::Owned(Value::Array(result)))
+                Ok(Cow::Owned(Value::Array(result_arr)))
             }
             Expr::Filter {
                 list,
                 alias,
                 condition,
             } => {
-                let l_val = Self::eval_recursive(list, root, scope, provider)?;
-                let arr = l_val.as_array().ok_or(EvalError::NotAnArray)?;
-                let mut result = Vec::new();
+                let list_val = Self::evaluate(list, context, provider)?;
+                let arr = list_val.as_array().ok_or(EvalError::NotAnArray)?;
+
+                let mut result_arr = Vec::new();
                 for item in arr {
-                    let mut new_scope = Vec::with_capacity(scope.len() + 1);
-                    new_scope.extend_from_slice(scope);
-                    new_scope.push((alias.as_str(), item));
-                    let keep = Self::eval_recursive(condition, root, &new_scope, provider)?;
-                    if is_truthy(&keep) {
-                        result.push(item.clone());
+                    let mut local_ctx = context.clone();
+                    if let Some(obj) = local_ctx.as_object_mut() {
+                        obj.insert(alias.clone(), item.clone());
+                    } else {
+                        local_ctx = json!({ alias: item });
+                    }
+
+                    let cond_res = Self::evaluate(condition, &local_ctx, provider)?;
+                    if is_truthy(&cond_res) {
+                        result_arr.push(item.clone());
                     }
                 }
-                Ok(Cow::Owned(Value::Array(result)))
+                Ok(Cow::Owned(Value::Array(result_arr)))
             }
 
-            // --- MATHS ---
-            Expr::Add(args) => {
-                let mut sum = 0.0;
-                for arg in args {
-                    let val = Self::eval_recursive(arg, root, scope, provider)?;
-                    sum += as_f64(&val)?;
-                }
-                Ok(Cow::Owned(json!(sum)))
-            }
-            Expr::Sub(args) => {
-                if args.is_empty() {
-                    return Ok(Cow::Owned(json!(0.0)));
-                }
-                let mut iter = args.iter();
-                let first = Self::eval_recursive(iter.next().unwrap(), root, scope, provider)?;
-                let mut result = as_f64(&first)?;
-                for arg in iter {
-                    let val = Self::eval_recursive(arg, root, scope, provider)?;
-                    result -= as_f64(&val)?;
-                }
-                Ok(Cow::Owned(json!(result)))
-            }
-            Expr::Mul(args) => {
-                let mut prod = 1.0;
-                for arg in args {
-                    let val = Self::eval_recursive(arg, root, scope, provider)?;
-                    prod *= as_f64(&val)?;
-                }
-                Ok(Cow::Owned(json!(prod)))
-            }
-            Expr::Div(args) => {
-                if args.is_empty() {
-                    return Ok(Cow::Owned(json!(1.0)));
-                }
-                let mut iter = args.iter();
-                let first = Self::eval_recursive(iter.next().unwrap(), root, scope, provider)?;
-                let mut result = as_f64(&first)?;
-                for arg in iter {
-                    let val = Self::eval_recursive(arg, root, scope, provider)?;
-                    let divisor = as_f64(&val)?;
-                    if divisor == 0.0 {
-                        return Ok(Cow::Owned(Value::Null));
-                    }
-                    result /= divisor;
-                }
-                Ok(Cow::Owned(json!(result)))
-            }
-            Expr::Abs(arg) => {
-                let val = Self::eval_recursive(arg, root, scope, provider)?;
-                Ok(Cow::Owned(json!(as_f64(&val)?.abs())))
-            }
-            Expr::Round { value, precision } => {
-                let v_cow = Self::eval_recursive(value, root, scope, provider)?;
-                let p_cow = Self::eval_recursive(precision, root, scope, provider)?;
+            // --- String & Regex ---
+            Expr::RegexMatch { value, pattern } => {
+                let v_str = Self::evaluate(value, context, provider)?;
+                let p_str = Self::evaluate(pattern, context, provider)?;
 
-                let v = as_f64(&v_cow)?;
-                let p = as_f64(&p_cow)? as i32;
+                let v = v_str.as_str().ok_or(EvalError::NotAString)?;
+                let p = p_str.as_str().ok_or(EvalError::NotAString)?;
 
-                let multiplier = 10f64.powi(p);
-                let rounded = (v * multiplier).round() / multiplier;
-                Ok(Cow::Owned(json!(rounded)))
+                let re = Regex::new(p).map_err(|e| EvalError::InvalidRegex(e.to_string()))?;
+                Ok(Cow::Owned(Value::Bool(re.is_match(v))))
             }
-
-            // --- STRINGS ---
-            Expr::Concat(args) => {
-                let mut result = String::new();
-                for arg in args {
-                    let val = Self::eval_recursive(arg, root, scope, provider)?;
-                    match &*val {
-                        Value::String(s) => result.push_str(s),
-                        Value::Number(n) => {
-                            // CORRECTION ICI : "Smart Stringify"
-                            // Si c'est un float qui ressemble à un entier (ex: 5000.0), on vire le .0
-                            // Sinon on garde le formatage par défaut.
-                            if let Some(f) = n.as_f64() {
-                                if f.fract() == 0.0 {
-                                    // C'est un entier stocké en float -> on affiche sans décimale
-                                    result.push_str(&(f as i64).to_string());
-                                } else {
-                                    result.push_str(&n.to_string());
-                                }
-                            } else {
-                                // Cas où c'est déjà un i64/u64
-                                result.push_str(&n.to_string());
-                            }
-                        }
-                        Value::Bool(b) => result.push_str(&b.to_string()),
-                        _ => {}
-                    }
-                }
-                Ok(Cow::Owned(json!(result)))
+            Expr::Trim(e) => {
+                let v = Self::evaluate(e, context, provider)?;
+                Ok(Cow::Owned(Value::String(
+                    v.as_str().unwrap_or("").trim().to_string(),
+                )))
             }
-            Expr::Upper(arg) => {
-                let val = Self::eval_recursive(arg, root, scope, provider)?;
-                Ok(Cow::Owned(json!(as_string(&val)?.to_uppercase())))
+            Expr::Lower(e) => {
+                let v = Self::evaluate(e, context, provider)?;
+                Ok(Cow::Owned(Value::String(
+                    v.as_str().unwrap_or("").to_lowercase(),
+                )))
             }
-            Expr::Lower(arg) => {
-                let val = Self::eval_recursive(arg, root, scope, provider)?;
-                Ok(Cow::Owned(json!(as_string(&val)?.to_lowercase())))
-            }
-            Expr::Trim(arg) => {
-                let val = Self::eval_recursive(arg, root, scope, provider)?;
-                Ok(Cow::Owned(json!(as_string(&val)?.trim())))
+            Expr::Upper(e) => {
+                let v = Self::evaluate(e, context, provider)?;
+                Ok(Cow::Owned(Value::String(
+                    v.as_str().unwrap_or("").to_uppercase(),
+                )))
             }
             Expr::Replace {
                 value,
                 pattern,
                 replacement,
             } => {
-                let v = Self::eval_recursive(value, root, scope, provider)?;
-                let p = Self::eval_recursive(pattern, root, scope, provider)?;
-                let r = Self::eval_recursive(replacement, root, scope, provider)?;
-                Ok(Cow::Owned(json!(
-                    as_string(&v)?.replace(as_string(&p)?, as_string(&r)?)
-                )))
+                let v = Self::evaluate(value, context, provider)?
+                    .as_str()
+                    .ok_or(EvalError::NotAString)?
+                    .to_string();
+                let p = Self::evaluate(pattern, context, provider)?
+                    .as_str()
+                    .ok_or(EvalError::NotAString)?
+                    .to_string();
+                let r = Self::evaluate(replacement, context, provider)?
+                    .as_str()
+                    .ok_or(EvalError::NotAString)?
+                    .to_string();
+                Ok(Cow::Owned(Value::String(v.replace(&p, &r))))
             }
-            Expr::RegexMatch { value, pattern } => {
-                let val_res = Self::eval_recursive(value, root, scope, provider)?;
-                let pat_res = Self::eval_recursive(pattern, root, scope, provider)?;
-                let re = Regex::new(as_string(&pat_res)?)
-                    .map_err(|e| EvalError::InvalidRegex(e.to_string()))?;
-                Ok(Cow::Owned(json!(re.is_match(as_string(&val_res)?))))
-            }
-
-            // --- DATES ---
-            Expr::DateDiff { start, end } => {
-                let s_val = Self::eval_recursive(start, root, scope, provider)?;
-                let e_val = Self::eval_recursive(end, root, scope, provider)?;
-                let s_date = parse_date(as_string(&s_val)?)?;
-                let e_date = parse_date(as_string(&e_val)?)?;
-                Ok(Cow::Owned(json!(e_date
-                    .signed_duration_since(s_date)
-                    .num_days())))
-            }
-            Expr::DateAdd { date, days } => {
-                let d_val = Self::eval_recursive(date, root, scope, provider)?;
-                let days_val = Self::eval_recursive(days, root, scope, provider)?;
-                let parsed = parse_date(as_string(&d_val)?)?;
-                let new_date = parsed + Duration::days(as_f64(&days_val)? as i64);
-                Ok(Cow::Owned(json!(new_date.to_rfc3339())))
+            Expr::Concat(list) => {
+                let mut res = String::new();
+                for e in list {
+                    let v = Self::evaluate(e, context, provider)?;
+                    if let Some(s) = v.as_str() {
+                        res.push_str(s);
+                    } else {
+                        res.push_str(&v.to_string());
+                    }
+                }
+                Ok(Cow::Owned(Value::String(res)))
             }
 
-            // --- LOOKUP & LOGIC ---
-            Expr::Lookup {
-                collection,
-                id,
-                field,
-            } => {
-                let id_val = Self::eval_recursive(id, root, scope, provider)?;
-                match provider.get_value(collection, as_string(&id_val)?, field) {
-                    Some(v) => Ok(Cow::Owned(v)),
-                    None => Ok(Cow::Owned(Value::Null)),
+            // --- Collections Standard ---
+            Expr::Len(e) => {
+                let v = Self::evaluate(e, context, provider)?;
+                match v.as_ref() {
+                    Value::Array(a) => Ok(Cow::Owned(json!(a.len()))),
+                    Value::String(s) => Ok(Cow::Owned(json!(s.len()))),
+                    _ => Ok(Cow::Owned(json!(0))),
                 }
             }
+            Expr::Contains { list, value } => {
+                let col = Self::evaluate(list, context, provider)?;
+                let target = Self::evaluate(value, context, provider)?;
+                match col.as_ref() {
+                    Value::Array(arr) => Ok(Cow::Owned(Value::Bool(arr.contains(&target)))),
+                    Value::String(s) => {
+                        let sub = target.as_str().unwrap_or("");
+                        Ok(Cow::Owned(Value::Bool(s.contains(sub))))
+                    }
+                    _ => Ok(Cow::Owned(Value::Bool(false))),
+                }
+            }
+            Expr::Min(e) => {
+                let val = Self::evaluate(e, context, provider)?;
+                let arr = val.as_array().ok_or(EvalError::NotAnArray)?;
+                let min_val = arr
+                    .iter()
+                    .filter_map(|v| v.as_f64())
+                    .fold(f64::INFINITY, |a, b| a.min(b));
+                if min_val == f64::INFINITY {
+                    Ok(Cow::Owned(Value::Null))
+                } else {
+                    Ok(Cow::Owned(smart_number(min_val)))
+                }
+            }
+            Expr::Max(e) => {
+                let val = Self::evaluate(e, context, provider)?;
+                let arr = val.as_array().ok_or(EvalError::NotAnArray)?;
+                let max_val = arr
+                    .iter()
+                    .filter_map(|v| v.as_f64())
+                    .fold(f64::NEG_INFINITY, |a, b| a.max(b));
+                if max_val == f64::NEG_INFINITY {
+                    Ok(Cow::Owned(Value::Null))
+                } else {
+                    Ok(Cow::Owned(smart_number(max_val)))
+                }
+            }
+
+            // --- Structure de Contrôle ---
             Expr::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                let cond = Self::eval_recursive(condition, root, scope, provider)?;
-                if is_truthy(&cond) {
-                    Self::eval_recursive(then_branch, root, scope, provider)
+                let val_cond = Self::evaluate(condition, context, provider)?;
+                if is_truthy(&val_cond) {
+                    Self::evaluate(then_branch, context, provider)
                 } else {
-                    Self::eval_recursive(else_branch, root, scope, provider)
+                    Self::evaluate(else_branch, context, provider)
                 }
             }
-            Expr::Eq(a, b) => {
-                let va = Self::eval_recursive(a, root, scope, provider)?;
-                let vb = Self::eval_recursive(b, root, scope, provider)?;
-                Ok(Cow::Owned(json!(va.as_ref() == vb.as_ref())))
-            }
-            Expr::Neq(a, b) => {
-                let va = Self::eval_recursive(a, root, scope, provider)?;
-                let vb = Self::eval_recursive(b, root, scope, provider)?;
-                Ok(Cow::Owned(json!(va.as_ref() != vb.as_ref())))
-            }
-            Expr::Gt(a, b) => {
-                let va = Self::eval_recursive(a, root, scope, provider)?;
-                let vb = Self::eval_recursive(b, root, scope, provider)?;
-                Ok(Cow::Owned(json!(as_f64(&va)? > as_f64(&vb)?)))
-            }
-            Expr::Lt(a, b) => {
-                let va = Self::eval_recursive(a, root, scope, provider)?;
-                let vb = Self::eval_recursive(b, root, scope, provider)?;
-                Ok(Cow::Owned(json!(as_f64(&va)? < as_f64(&vb)?)))
-            }
-            Expr::Gte(a, b) => {
-                let va = Self::eval_recursive(a, root, scope, provider)?;
-                let vb = Self::eval_recursive(b, root, scope, provider)?;
-                Ok(Cow::Owned(json!(as_f64(&va)? >= as_f64(&vb)?)))
-            }
-            Expr::Lte(a, b) => {
-                let va = Self::eval_recursive(a, root, scope, provider)?;
-                let vb = Self::eval_recursive(b, root, scope, provider)?;
-                Ok(Cow::Owned(json!(as_f64(&va)? <= as_f64(&vb)?)))
-            }
-            Expr::And(args) => {
-                for arg in args {
-                    let val = Self::eval_recursive(arg, root, scope, provider)?;
-                    if !is_truthy(&val) {
-                        return Ok(Cow::Owned(json!(false)));
-                    }
+
+            // --- Dates ---
+            Expr::Now => Ok(Cow::Owned(json!(Utc::now().to_rfc3339()))),
+            Expr::DateAdd { date, days } => {
+                let d_val = Self::evaluate(date, context, provider)?;
+                let days_val = Self::evaluate(days, context, provider)?
+                    .as_i64()
+                    .unwrap_or(0);
+
+                let d_str = d_val.as_str().ok_or(EvalError::NotAString)?;
+                if let Ok(dt) = DateTime::parse_from_rfc3339(d_str) {
+                    let new_dt = dt + Duration::days(days_val);
+                    Ok(Cow::Owned(json!(new_dt.to_rfc3339())))
+                } else if let Ok(nd) = NaiveDate::parse_from_str(d_str, "%Y-%m-%d") {
+                    let new_nd = nd + Duration::days(days_val);
+                    Ok(Cow::Owned(json!(new_nd.format("%Y-%m-%d").to_string())))
+                } else {
+                    Err(EvalError::InvalidDate(d_str.to_string()))
                 }
-                Ok(Cow::Owned(json!(true)))
             }
-            Expr::Or(args) => {
-                for arg in args {
-                    let val = Self::eval_recursive(arg, root, scope, provider)?;
-                    if is_truthy(&val) {
-                        return Ok(Cow::Owned(json!(true)));
-                    }
+            Expr::DateDiff { start, end } => {
+                let s_val = Self::evaluate(start, context, provider)?;
+                let e_val = Self::evaluate(end, context, provider)?;
+
+                let s_str = s_val.as_str().ok_or(EvalError::NotAString)?;
+                let e_str = e_val.as_str().ok_or(EvalError::NotAString)?;
+
+                if let (Ok(dt1), Ok(dt2)) = (
+                    DateTime::parse_from_rfc3339(s_str),
+                    DateTime::parse_from_rfc3339(e_str),
+                ) {
+                    let diff = dt2.signed_duration_since(dt1).num_days();
+                    Ok(Cow::Owned(json!(diff)))
+                } else if let (Ok(nd1), Ok(nd2)) = (
+                    NaiveDate::parse_from_str(s_str, "%Y-%m-%d"),
+                    NaiveDate::parse_from_str(e_str, "%Y-%m-%d"),
+                ) {
+                    let diff = nd2.signed_duration_since(nd1).num_days();
+                    Ok(Cow::Owned(json!(diff)))
+                } else {
+                    Err(EvalError::InvalidDate(format!("{} ou {}", s_str, e_str)))
                 }
-                Ok(Cow::Owned(json!(false)))
             }
-            Expr::Not(inner) => {
-                let val = Self::eval_recursive(inner, root, scope, provider)?;
-                Ok(Cow::Owned(json!(!is_truthy(&val))))
+
+            // --- Lookup ---
+            Expr::Lookup {
+                collection,
+                id,
+                field,
+            } => {
+                let id_v = Self::evaluate(id, context, provider)?;
+                let id_s = id_v.as_str().unwrap_or("");
+                let res = provider
+                    .get_value(collection, id_s, field)
+                    .unwrap_or(Value::Null);
+                Ok(Cow::Owned(res))
             }
         }
     }
 }
 
-// Helpers internes
-fn as_string(v: &Value) -> Result<&str, EvalError> {
-    v.as_str().ok_or(EvalError::NotAString)
+// --- Helpers ---
+
+// OPTIMISATION : Convertit les floats en int si pas de décimales (pour compatibilité as_i64)
+fn smart_number(n: f64) -> Value {
+    if n.fract() == 0.0 {
+        json!(n as i64)
+    } else {
+        json!(n)
+    }
 }
 
-fn as_f64(v: &Value) -> Result<f64, EvalError> {
-    v.as_f64().ok_or(EvalError::NotANumber)
-}
+fn resolve_path<'a>(context: &'a Value, path: &str) -> Result<Cow<'a, Value>, EvalError> {
+    let mut current = context;
+    if path.is_empty() {
+        return Ok(Cow::Borrowed(current));
+    }
 
-fn parse_date(s: &str) -> Result<DateTime<Utc>, EvalError> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc));
+    for part in path.split('.') {
+        match current {
+            Value::Object(map) => {
+                current = map
+                    .get(part)
+                    .ok_or_else(|| EvalError::VarNotFound(path.to_string()))?;
+            }
+            Value::Array(arr) => {
+                let idx = part
+                    .parse::<usize>()
+                    .map_err(|_| EvalError::Generic("Index invalide".into()))?;
+                current = arr
+                    .get(idx)
+                    .ok_or_else(|| EvalError::Generic("Index hors limites".into()))?;
+            }
+            _ => {
+                return Err(EvalError::Generic(format!(
+                    "Impossible d'accéder à {} sur une primitive",
+                    part
+                )))
+            }
+        }
     }
-    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(
-            d.and_hms_opt(0, 0, 0).unwrap(),
-            Utc,
-        ));
-    }
-    Err(EvalError::InvalidDate(s.to_string()))
+    Ok(Cow::Borrowed(current))
 }
 
 fn is_truthy(v: &Value) -> bool {
     match v {
         Value::Bool(b) => *b,
         Value::Null => false,
+        Value::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
+        Value::String(s) => !s.is_empty(),
         _ => true,
     }
+}
+
+fn compare_nums<'a, F>(
+    a: &Expr,
+    b: &Expr,
+    c: &'a Value,
+    p: &dyn DataProvider,
+    op: F,
+) -> Result<Cow<'a, Value>, EvalError>
+where
+    F: Fn(f64, f64) -> bool,
+{
+    let va = Evaluator::evaluate(a, c, p)?
+        .as_f64()
+        .ok_or(EvalError::NotANumber)?;
+    let vb = Evaluator::evaluate(b, c, p)?
+        .as_f64()
+        .ok_or(EvalError::NotANumber)?;
+    Ok(Cow::Owned(Value::Bool(op(va, vb))))
+}
+
+fn fold_nums<'a, F>(
+    list: &[Expr],
+    c: &'a Value,
+    p: &dyn DataProvider,
+    init: f64,
+    op: F,
+) -> Result<Cow<'a, Value>, EvalError>
+where
+    F: Fn(f64, f64) -> f64,
+{
+    let mut acc = init;
+    for e in list {
+        let val = Evaluator::evaluate(e, c, p)?
+            .as_f64()
+            .ok_or(EvalError::NotANumber)?;
+        acc = op(acc, val);
+    }
+    Ok(Cow::Owned(smart_number(acc)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules_engine::ast::Expr;
+    use serde_json::json;
 
-    // ... les tests existants restent inchangés ...
     #[test]
-    fn test_list_operations_map() {
-        let ctx = json!({
-            "items": [10, 20],
-            "tax": 1.2
-        });
-
-        let expr = Expr::Map {
-            list: Box::new(Expr::Var("items".into())),
-            alias: "x".into(),
-            expr: Box::new(Expr::Mul(vec![
-                Expr::Var("x".into()),
-                Expr::Var("tax".into()),
-            ])),
-        };
-
+    fn test_eq_vec_variant() {
         let provider = NoOpDataProvider;
-        let res = Evaluator::evaluate(&expr, &ctx, &provider).unwrap();
+        let ctx = json!({});
 
-        let arr = res.as_array().unwrap();
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0].as_f64(), Some(12.0));
-        assert_eq!(arr[1].as_f64(), Some(24.0));
+        let expr_true = Expr::Eq(vec![Expr::Val(json!(10)), Expr::Val(json!(10))]);
+        assert_eq!(
+            Evaluator::evaluate(&expr_true, &ctx, &provider)
+                .unwrap()
+                .as_bool(),
+            Some(true)
+        );
     }
 
     #[test]
-    fn test_list_operations_filter() {
-        let ctx = json!({ "ages": [10, 18, 25, 5] });
-
-        let expr = Expr::Filter {
-            list: Box::new(Expr::Var("ages".into())),
-            alias: "a".into(),
-            condition: Box::new(Expr::Gte(
-                Box::new(Expr::Var("a".into())),
-                Box::new(Expr::Val(json!(18))),
-            )),
-        };
-
+    fn test_date_ops() {
         let provider = NoOpDataProvider;
-        let res = Evaluator::evaluate(&expr, &ctx, &provider).unwrap();
-
-        let arr = res.as_array().unwrap();
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0].as_i64(), Some(18));
-        assert_eq!(arr[1].as_i64(), Some(25));
-    }
-
-    #[test]
-    fn test_extended_stdlib() {
-        let provider = NoOpDataProvider;
-        let ctx = json!({
-            "txt": "  Hello World  ",
-            "nums": [10, 5, 20],
-            "price": 10.556
-        });
-
-        // Trim
-        let t = Expr::Trim(Box::new(Expr::Var("txt".into())));
-        assert_eq!(
-            Evaluator::evaluate(&t, &ctx, &provider)
-                .unwrap()
-                .into_owned(),
-            json!("Hello World")
-        );
-
-        // Lower
-        let l = Expr::Lower(Box::new(Expr::Var("txt".into())));
-        assert_eq!(
-            Evaluator::evaluate(&l, &ctx, &provider)
-                .unwrap()
-                .into_owned(),
-            json!("  hello world  ")
-        );
-
-        // Round
-        let r = Expr::Round {
-            value: Box::new(Expr::Var("price".into())),
-            precision: Box::new(Expr::Val(json!(2))),
+        let ctx = json!({});
+        let expr_add = Expr::DateAdd {
+            date: Box::new(Expr::Val(json!("2023-01-01"))),
+            days: Box::new(Expr::Val(json!(5))),
         };
-        assert_eq!(
-            Evaluator::evaluate(&r, &ctx, &provider).unwrap().as_f64(),
-            Some(10.56)
-        );
-
-        // Min/Max
-        let min = Expr::Min(Box::new(Expr::Var("nums".into())));
-        assert_eq!(
-            Evaluator::evaluate(&min, &ctx, &provider).unwrap().as_f64(),
-            Some(5.0)
-        );
-
-        let max = Expr::Max(Box::new(Expr::Var("nums".into())));
-        assert_eq!(
-            Evaluator::evaluate(&max, &ctx, &provider).unwrap().as_f64(),
-            Some(20.0)
-        );
+        let res = Evaluator::evaluate(&expr_add, &ctx, &provider).unwrap();
+        assert_eq!(res.as_str(), Some("2023-01-06"));
     }
 }

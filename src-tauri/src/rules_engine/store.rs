@@ -117,6 +117,7 @@ mod tests {
     #[test]
     fn test_store_idempotency() {
         let dir = tempdir().unwrap();
+        // CORRECTION : new() au lieu de struct init direct
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "test_space", "test_db");
@@ -128,16 +129,13 @@ mod tests {
             id: "r1".into(),
             target: "t".into(),
             expr: Expr::Val(json!(1)),
+            // CORRECTION : Ajout des champs optionnels pour compiler
+            description: None,
+            severity: None,
         };
 
         // Premier enregistrement : Doit écrire
         store.register_rule("col", rule.clone()).unwrap();
-        let docs_pass_1 = manager.list_all("_system_rules").unwrap();
-        // CORRECTION : préfixe _ pour éviter le warning
-        let _mtime_1 = docs_pass_1[0]["updatedAt"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
 
         // Deuxième enregistrement identique : Ne doit PAS écrire
         store.register_rule("col", rule.clone()).unwrap();
@@ -150,9 +148,17 @@ mod tests {
             id: "r1".into(),
             target: "t".into(),
             expr: Expr::Val(json!(2)),
+            // CORRECTION : Ajout des champs optionnels
+            description: Some("Modifiée".into()),
+            severity: None,
         };
         store.register_rule("col", rule_mod).unwrap();
         let docs_pass_3 = manager.list_all("_system_rules").unwrap();
         assert_eq!(docs_pass_3.len(), 1);
+
+        // Vérif que la valeur a bien changé
+        let content = &docs_pass_3[0];
+        // Note: l'expression est sérialisée, on vérifie juste que c'est pris en compte
+        assert!(content.to_string().contains("\"val\":2"));
     }
 }

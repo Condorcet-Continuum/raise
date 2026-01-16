@@ -5,6 +5,7 @@ pub mod ast;
 pub mod evaluator;
 pub mod store;
 
+// Exports publics
 pub use analyzer::Analyzer;
 pub use ast::{Expr, Rule};
 pub use evaluator::{DataProvider, EvalError, Evaluator, NoOpDataProvider};
@@ -15,67 +16,50 @@ mod tests {
     use super::*;
     use crate::rules_engine::ast::Expr;
     use serde_json::json;
-    // Imports nécessaires pour le mock DB
+
+    // Imports nécessaires pour les tests d'intégration du Store
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use std::collections::HashSet;
     use tempfile::tempdir;
 
     #[test]
     fn test_rete_light_workflow() {
+        // 1. Définition de la règle : (qty * price)
         let rule_expr = Expr::Mul(vec![
             Expr::Var("item.qty".to_string()),
             Expr::Var("item.price".to_string()),
         ]);
 
-        let dependencies = Analyzer::get_dependencies(&rule_expr);
-        assert!(dependencies.contains("item.qty"));
-        assert!(dependencies.contains("item.price"));
+        // CORRECTION E0063 : Ajout des champs description et severity
+        let _r1 = Rule {
+            id: "calc_total".to_string(),
+            target: "total".to_string(),
+            expr: rule_expr.clone(),
+            description: None,
+            severity: None,
+        };
 
+        // 2. Analyse statique
+        // CORRECTION E0624/E0308 : Utilisation de l'API publique get_dependencies
+        let deps = Analyzer::get_dependencies(&rule_expr);
+
+        assert!(deps.contains("item.qty"));
+        assert!(deps.contains("item.price"));
+
+        // 3. Evaluation
         let context = json!({
             "item": { "qty": 5, "price": 10.5 }
         });
-
         let provider = NoOpDataProvider;
-        let result = Evaluator::evaluate(&rule_expr, &context, &provider);
 
-        match result {
-            // CORRECTION : On utilise .as_f64() sur le Cow<Value>
-            Ok(val) => assert_eq!(val.as_f64(), Some(52.5)),
-            Err(e) => panic!("Erreur : {}", e),
-        }
-    }
-
-    #[test]
-    fn test_rule_store_indexing() {
-        use std::collections::HashSet;
-
-        // SETUP MOCK DB (Le RuleStore a besoin d'un manager pour la persistance)
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test_space", "test_db");
-        manager.init_db().unwrap();
-
-        let mut store = RuleStore::new(&manager);
-
-        let r1 = Rule {
-            id: "calc_total".into(),
-            target: "total".into(),
-            expr: Expr::Mul(vec![Expr::Var("qty".into()), Expr::Var("price".into())]),
-        };
-
-        store.register_rule("users", r1).unwrap();
-
-        let mut changes = HashSet::new();
-        changes.insert("qty".to_string());
-
-        let impacted = store.get_impacted_rules("users", &changes);
-        assert_eq!(impacted.len(), 1);
-        assert_eq!(impacted[0].id, "calc_total");
+        let result = Evaluator::evaluate(&rule_expr, &context, &provider).unwrap();
+        assert_eq!(result.as_f64(), Some(52.5));
     }
 
     #[test]
     fn test_logic_and_comparison() {
+        // Règle : Si age >= 18 alors "Majeur" sinon "Mineur"
         let rule = Expr::If {
             condition: Box::new(Expr::Gte(
                 Box::new(Expr::Var("age".to_string())),
@@ -89,18 +73,60 @@ mod tests {
         let ctx_adult = json!({ "age": 25 });
         let provider = NoOpDataProvider;
 
-        // CORRECTION : .into_owned() pour comparer avec json!()
+        // Test Mineur
         assert_eq!(
             Evaluator::evaluate(&rule, &ctx_kid, &provider)
                 .unwrap()
                 .into_owned(),
             json!("Mineur")
         );
+
+        // Test Majeur
         assert_eq!(
             Evaluator::evaluate(&rule, &ctx_adult, &provider)
                 .unwrap()
                 .into_owned(),
             json!("Majeur")
         );
+    }
+
+    #[test]
+    fn test_rule_store_indexing() {
+        // Setup de l'environnement DB temporaire
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let manager = CollectionsManager::new(&storage, "test_space", "test_db");
+        manager.init_db().unwrap();
+
+        let mut store = RuleStore::new(&manager);
+
+        // Règle : dépend de "qty"
+        let rule = Rule {
+            id: "calc_total".into(),
+            target: "total".into(),
+            expr: Expr::Mul(vec![Expr::Var("qty".into()), Expr::Var("price".into())]),
+            description: None,
+            severity: None,
+        };
+
+        // Enregistrement
+        store.register_rule("invoices", rule).unwrap();
+
+        // Simulation changement sur "qty"
+        let mut changes = HashSet::new();
+        changes.insert("qty".to_string());
+
+        // Vérification : La règle doit être récupérée
+        let impacted = store.get_impacted_rules("invoices", &changes);
+        assert_eq!(impacted.len(), 1);
+        assert_eq!(impacted[0].id, "calc_total");
+
+        // Simulation changement sur "other" (non utilisé)
+        let mut changes_irrelevant = HashSet::new();
+        changes_irrelevant.insert("other_field".to_string());
+
+        let impacted_none = store.get_impacted_rules("invoices", &changes_irrelevant);
+        assert!(impacted_none.is_empty());
     }
 }

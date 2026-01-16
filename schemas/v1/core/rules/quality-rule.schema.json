@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raise.local/schemas/v1/core/rules/quality-rule.schema.json",
+  "title": "Quality Rule Definition",
+  "description": "Définit une règle de validation dynamique appliquée sur le modèle Arcadia via le Rules Engine.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Identifiant unique de la règle (ex: RULE_NAMING_01)"
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "severity": { "type": "string", "enum": ["INFO", "WARNING", "ERROR"] },
+        "author": { "type": "string" }
+      },
+      "required": ["description", "severity"]
+    },
+    "target": {
+      "type": "string",
+      "description": "Selecteur JSON Pointer ou Alias vers la collection cible dans ProjectModel",
+      "enum": [
+        "oa.actors",
+        "oa.activities",
+        "oa.capabilities",
+        "sa.components",
+        "sa.functions",
+        "sa.exchanges",
+        "la.components",
+        "la.functions",
+        "la.interfaces",
+        "pa.components",
+        "pa.functions",
+        "pa.links",
+        "epbs.configuration_items",
+        "data.classes"
+      ]
+    },
+    "expr": { "$ref": "#/$defs/astExpression" }
+  },
+  "required": ["id", "target", "expr"],
+
+  "$defs": {
+    "astExpression": {
+      "description": "Représentation JSON de l'enum Expr de Rust (AST)",
+      "oneOf": [
+        {
+          "title": "Primitive: Valeur",
+          "description": "Une valeur constante (String, Number, Bool)",
+          "type": "object",
+          "properties": { "val": {} },
+          "required": ["val"],
+          "additionalProperties": false
+        },
+        {
+          "title": "Primitive: Variable",
+          "description": "Accès à une propriété d'un ArcadiaElement (ex: 'name', 'properties.mass')",
+          "type": "object",
+          "properties": { "var": { "type": "string" } },
+          "required": ["var"],
+          "additionalProperties": false
+        },
+        {
+          "title": "Opérateurs Logiques (And, Or, Not)",
+          "type": "object",
+          "properties": {
+            "and": { "$ref": "#/$defs/multiOp" },
+            "or": { "$ref": "#/$defs/multiOp" },
+            "not": { "$ref": "#/$defs/astExpression" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "title": "Comparaisons (Eq, Gt, Lt...)",
+          "type": "object",
+          "properties": {
+            "eq": { "$ref": "#/$defs/binaryOp" },
+            "neq": { "$ref": "#/$defs/binaryOp" },
+            "gt": { "$ref": "#/$defs/binaryOp" },
+            "lt": { "$ref": "#/$defs/binaryOp" },
+            "gte": { "$ref": "#/$defs/binaryOp" },
+            "lte": { "$ref": "#/$defs/binaryOp" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "title": "Fonctions Spécifiques Modèle",
+          "type": "object",
+          "properties": {
+            "len": { "$ref": "#/$defs/astExpression" },
+            "contains": {
+              "type": "object",
+              "properties": {
+                "list": { "$ref": "#/$defs/astExpression" },
+                "value": { "$ref": "#/$defs/astExpression" }
+              },
+              "required": ["list", "value"]
+            },
+            "regex_match": {
+              "type": "object",
+              "properties": {
+                "value": { "$ref": "#/$defs/astExpression" },
+                "pattern": { "$ref": "#/$defs/astExpression" }
+              },
+              "required": ["value", "pattern"]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "binaryOp": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/astExpression" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "multiOp": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/astExpression" }
+    }
+  }
+}

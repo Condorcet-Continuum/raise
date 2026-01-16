@@ -17,7 +17,8 @@ use tokio::sync::Mutex as AsyncMutex;
 use raise::ai::training::dataset;
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
-    json_db_commands, model_commands, traceability_commands, utils_commands, workflow_commands,
+    json_db_commands, model_commands, rules_commands, traceability_commands, utils_commands,
+    workflow_commands,
 };
 
 // --- IMPORT IA NATIF ---
@@ -203,8 +204,11 @@ fn main() {
             json_db_commands::jsondb_execute_sql,
             json_db_commands::jsondb_evaluate_draft,
             json_db_commands::jsondb_init_demo_rules,
-            // Commandes Modèle
+            // Modteur de Modèle
             model_commands::load_project_model,
+            // Moteur de Règles ---
+            rules_commands::dry_run_rule,
+            rules_commands::validate_model,
             // Commandes IA (Utilisant l'Orchestrateur via AiState)
             ai_commands::ai_chat,
             ai_commands::ai_reset,

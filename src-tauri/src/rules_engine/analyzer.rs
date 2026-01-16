@@ -42,31 +42,57 @@ impl Analyzer {
                 new_scope.push(alias.clone());
                 Self::visit(expr, deps, &new_scope);
             }
-            Expr::Len(e) | Expr::Min(e) | Expr::Max(e) => Self::visit(e, deps, scope),
-            Expr::Contains { list, value } => {
+
+            // Opérateurs Unaires (Box<Expr>)
+            Expr::Len(e)
+            | Expr::Min(e)
+            | Expr::Max(e)
+            | Expr::Abs(e)
+            | Expr::Not(e)
+            | Expr::Trim(e)
+            | Expr::Lower(e)
+            | Expr::Upper(e) => {
+                Self::visit(e, deps, scope);
+            }
+
+            // CORRECTION E0023 : Opérateurs N-aires (Vec<Expr>)
+            // On traite Eq/Neq comme des listes, tout comme And/Or
+            Expr::And(list)
+            | Expr::Or(list)
+            | Expr::Add(list)
+            | Expr::Sub(list)
+            | Expr::Mul(list)
+            | Expr::Div(list)
+            | Expr::Concat(list)
+            | Expr::Eq(list)
+            | Expr::Neq(list) => {
+                for sub_expr in list {
+                    Self::visit(sub_expr, deps, scope);
+                }
+            }
+
+            // Opérateurs Binaires spécifiques (Struct variants ou Tuples)
+            Expr::Contains { list, value }
+            | Expr::RegexMatch {
+                value: list, // Mapping astucieux : value -> list pour reusing la variable
+                pattern: value,
+            }
+            | Expr::Gt(list, value)
+            | Expr::Lt(list, value)
+            | Expr::Gte(list, value)
+            | Expr::Lte(list, value)
+            | Expr::DateDiff {
+                start: list,
+                end: value,
+            }
+            | Expr::DateAdd {
+                date: list,
+                days: value,
+            } => {
                 Self::visit(list, deps, scope);
                 Self::visit(value, deps, scope);
             }
 
-            // Listes génériques
-            Expr::And(l)
-            | Expr::Or(l)
-            | Expr::Add(l)
-            | Expr::Sub(l)
-            | Expr::Mul(l)
-            | Expr::Div(l)
-            | Expr::Concat(l) => {
-                for item in l {
-                    Self::visit(item, deps, scope);
-                }
-            }
-
-            // Unaires
-            Expr::Not(e) | Expr::Upper(e) | Expr::Lower(e) | Expr::Trim(e) | Expr::Abs(e) => {
-                Self::visit(e, deps, scope)
-            }
-
-            // Structures complexes
             Expr::If {
                 condition,
                 then_branch,
@@ -76,10 +102,7 @@ impl Analyzer {
                 Self::visit(then_branch, deps, scope);
                 Self::visit(else_branch, deps, scope);
             }
-            Expr::Round { value, precision } => {
-                Self::visit(value, deps, scope);
-                Self::visit(precision, deps, scope);
-            }
+
             Expr::Replace {
                 value,
                 pattern,
@@ -90,68 +113,22 @@ impl Analyzer {
                 Self::visit(replacement, deps, scope);
             }
 
-            // Binaires standards
-            Expr::Eq(a, b)
-            | Expr::Neq(a, b)
-            | Expr::Gt(a, b)
-            | Expr::Lt(a, b)
-            | Expr::Gte(a, b)
-            | Expr::Lte(a, b)
-            | Expr::DateDiff { start: a, end: b }
-            | Expr::DateAdd { date: a, days: b }
-            | Expr::RegexMatch {
-                value: a,
-                pattern: b,
-            } => {
-                Self::visit(a, deps, scope);
-                Self::visit(b, deps, scope);
+            Expr::Round { value, precision } => {
+                Self::visit(value, deps, scope);
+                Self::visit(precision, deps, scope);
             }
 
-            Expr::Lookup { id, .. } => {
-                Self::visit(id, deps, scope);
-            }
+            Expr::Lookup { id, .. } => Self::visit(id, deps, scope),
         }
     }
 
     fn check_depth(expr: &Expr, current: usize, max: usize) -> Result<(), String> {
         if current > max {
-            return Err(format!("Expression too deep (max {})", max));
+            return Err(format!("Profondeur maximale dépassée ({})", max));
         }
+
         match expr {
-            Expr::Val(_) | Expr::Now | Expr::Var(_) => Ok(()),
-
-            Expr::And(l)
-            | Expr::Or(l)
-            | Expr::Add(l)
-            | Expr::Sub(l)
-            | Expr::Mul(l)
-            | Expr::Div(l)
-            | Expr::Concat(l) => {
-                for item in l {
-                    Self::check_depth(item, current + 1, max)?;
-                }
-                Ok(())
-            }
-
-            // Mises à jour des variantes unaires
-            Expr::Not(e)
-            | Expr::Upper(e)
-            | Expr::Lower(e)
-            | Expr::Trim(e)
-            | Expr::Abs(e)
-            | Expr::Len(e)
-            | Expr::Min(e)
-            | Expr::Max(e) => Self::check_depth(e, current + 1, max),
-
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                Self::check_depth(condition, current + 1, max)?;
-                Self::check_depth(then_branch, current + 1, max)?;
-                Self::check_depth(else_branch, current + 1, max)
-            }
+            Expr::Val(_) | Expr::Var(_) | Expr::Now => Ok(()),
 
             Expr::Map { list, expr, .. }
             | Expr::Filter {
@@ -163,19 +140,29 @@ impl Analyzer {
                 Self::check_depth(expr, current + 1, max)
             }
 
-            Expr::Round { value, precision } => {
-                Self::check_depth(value, current + 1, max)?;
-                Self::check_depth(precision, current + 1, max)
-            }
+            Expr::Len(e)
+            | Expr::Min(e)
+            | Expr::Max(e)
+            | Expr::Abs(e)
+            | Expr::Not(e)
+            | Expr::Trim(e)
+            | Expr::Lower(e)
+            | Expr::Upper(e) => Self::check_depth(e, current + 1, max),
 
-            Expr::Replace {
-                value,
-                pattern,
-                replacement,
-            } => {
-                Self::check_depth(value, current + 1, max)?;
-                Self::check_depth(pattern, current + 1, max)?;
-                Self::check_depth(replacement, current + 1, max)
+            // CORRECTION E0023 : Traitement des listes pour Eq/Neq
+            Expr::And(list)
+            | Expr::Or(list)
+            | Expr::Add(list)
+            | Expr::Sub(list)
+            | Expr::Mul(list)
+            | Expr::Div(list)
+            | Expr::Concat(list)
+            | Expr::Eq(list)
+            | Expr::Neq(list) => {
+                for sub in list {
+                    Self::check_depth(sub, current + 1, max)?;
+                }
+                Ok(())
             }
 
             Expr::Contains { list, value }
@@ -183,8 +170,6 @@ impl Analyzer {
                 value: list,
                 pattern: value,
             }
-            | Expr::Eq(list, value)
-            | Expr::Neq(list, value)
             | Expr::Gt(list, value)
             | Expr::Lt(list, value)
             | Expr::Gte(list, value)
@@ -199,6 +184,31 @@ impl Analyzer {
             } => {
                 Self::check_depth(list, current + 1, max)?;
                 Self::check_depth(value, current + 1, max)
+            }
+
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                Self::check_depth(condition, current + 1, max)?;
+                Self::check_depth(then_branch, current + 1, max)?;
+                Self::check_depth(else_branch, current + 1, max)
+            }
+
+            Expr::Replace {
+                value,
+                pattern,
+                replacement,
+            } => {
+                Self::check_depth(value, current + 1, max)?;
+                Self::check_depth(pattern, current + 1, max)?;
+                Self::check_depth(replacement, current + 1, max)
+            }
+
+            Expr::Round { value, precision } => {
+                Self::check_depth(value, current + 1, max)?;
+                Self::check_depth(precision, current + 1, max)
             }
 
             Expr::Lookup { id, .. } => Self::check_depth(id, current + 1, max),
@@ -222,8 +232,19 @@ mod tests {
             ])))),
             precision: Box::new(Expr::Val(json!(2))),
         };
-        // Depth: Round(1) -> Abs(2) -> Sub(3)
+        // Depth: Round (0) -> Abs (1) -> Sub (2) -> Val (3)
         assert!(Analyzer::validate_depth(&expr, 5).is_ok());
         assert!(Analyzer::validate_depth(&expr, 2).is_err());
+    }
+
+    #[test]
+    fn test_dependencies_eq() {
+        // Test que l'analyseur trouve les variables dans un Eq(Vec)
+        // Expr: Eq([Var("a"), Var("b")])
+        let expr = Expr::Eq(vec![Expr::Var("a".to_string()), Expr::Var("b".to_string())]);
+
+        let deps = Analyzer::get_dependencies(&expr);
+        assert!(deps.contains("a"));
+        assert!(deps.contains("b"));
     }
 }

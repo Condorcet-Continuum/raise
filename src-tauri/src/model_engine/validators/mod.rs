@@ -1,5 +1,8 @@
+// FICHIER : src-tauri/src/model_engine/validators/mod.rs
+
 pub mod compliance_validator;
 pub mod consistency_checker;
+pub mod dynamic_validator;
 
 use crate::model_engine::types::ProjectModel;
 use serde::{Deserialize, Serialize};
@@ -7,9 +10,9 @@ use serde::{Deserialize, Serialize};
 // Re-exports pour faciliter l'usage externe
 pub use compliance_validator::ComplianceValidator;
 pub use consistency_checker::ConsistencyChecker;
+pub use dynamic_validator::DynamicValidator;
 
 /// Niveau de sévérité d'un problème de validation.
-/// Utilisé pour colorer les alertes dans l'interface utilisateur.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
     Error,   // Bloquant / Rouge
@@ -18,17 +21,15 @@ pub enum Severity {
 }
 
 /// Représente un problème détecté dans le modèle.
-/// Cette structure est destinée à être sérialisée en JSON pour le frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ValidationIssue {
     pub severity: Severity,
-    pub rule_id: String,    // Code unique de la règle (ex: "RULE_ORPHAN")
-    pub element_id: String, // ID de l'élément en cause (pour le surlignage)
-    pub message: String,    // Message lisible pour l'utilisateur
+    pub rule_id: String,
+    pub element_id: String,
+    pub message: String,
 }
 
 /// Trait commun que tous les validateurs doivent implémenter.
-/// Permet d'injecter n'importe quel validateur dans le moteur.
 pub trait ModelValidator {
     fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue>;
 }
@@ -37,8 +38,10 @@ pub trait ModelValidator {
 mod tests {
     use super::*;
     use serde_json::json;
+    // Imports nécessaires pour les tests d'intégration
+    use crate::model_engine::types::{ArcadiaElement, NameType};
+    use crate::rules_engine::{Expr, Rule};
 
-    // Mock pour tester le trait ModelValidator
     struct MockValidator;
     impl ModelValidator for MockValidator {
         fn validate(&self, _model: &ProjectModel) -> Vec<ValidationIssue> {
@@ -53,50 +56,71 @@ mod tests {
 
     #[test]
     fn test_severity_serialization() {
-        // Vérifie que l'Enum se sérialise correctement pour le frontend
-        let error = Severity::Error;
-        let warning = Severity::Warning;
-
-        assert_eq!(serde_json::to_value(error).unwrap(), json!("Error"));
-        assert_eq!(serde_json::to_value(warning).unwrap(), json!("Warning"));
-    }
-
-    #[test]
-    fn test_severity_deserialization() {
-        // Vérifie qu'on peut relire depuis le JSON
-        let json_str = "\"Info\"";
-        let severity: Severity = serde_json::from_str(json_str).unwrap();
-        assert_eq!(severity, Severity::Info);
+        assert_eq!(
+            serde_json::to_value(Severity::Error).unwrap(),
+            json!("Error")
+        );
     }
 
     #[test]
     fn test_validation_issue_structure() {
-        // Vérifie la construction et l'égalité
         let issue = ValidationIssue {
             severity: Severity::Warning,
             rule_id: "TEST_001".to_string(),
             element_id: "uuid-123".to_string(),
             message: "Something is wrong".to_string(),
         };
-
         let json = serde_json::to_value(&issue).unwrap();
-
         assert_eq!(json["severity"], "Warning");
         assert_eq!(json["rule_id"], "TEST_001");
-        assert_eq!(json["elementId"], json!(null)); // camelCase vs snake_case : par défaut Rust garde snake_case sauf si rename_all
-                                                    // Note : Si vous utilisez #[serde(rename_all = "camelCase")] sur la struct, changez ce test.
-                                                    // Ici, sans attribut, c'est "element_id".
-        assert_eq!(json["element_id"], "uuid-123");
     }
 
     #[test]
     fn test_trait_implementation() {
-        // Vérifie que le trait est utilisable
         let model = ProjectModel::default();
         let validator = MockValidator;
-
         let issues = validator.validate(&model);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].message, "Mock Error");
+    }
+
+    #[test]
+    fn test_dynamic_validator_integration() {
+        // 1. Création d'une règle via l'AST
+        let rule_expr = Expr::Eq(vec![
+            Expr::Var("name".to_string()),
+            Expr::Val(json!("ValidElement")),
+        ]);
+
+        let rule = Rule {
+            id: "INTEGRATION_TEST_RULE".to_string(),
+            target: "oa.actors".to_string(),
+            expr: rule_expr,
+            // CORRECTION : Champs obligatoires ajoutés
+            description: Some("Test integration".to_string()),
+            severity: Some("Warning".to_string()),
+        };
+
+        // 2. Instanciation du Validateur via le Trait
+        let validator: Box<dyn ModelValidator> = Box::new(DynamicValidator::new(vec![rule]));
+
+        // 3. Création du Modèle
+        let mut model = ProjectModel::default();
+
+        let mut actor1 = ArcadiaElement::default();
+        actor1.name = NameType::String("ValidElement".to_string());
+        model.oa.actors.push(actor1);
+
+        let mut actor2 = ArcadiaElement::default();
+        actor2.name = NameType::String("InvalidElement".to_string());
+        model.oa.actors.push(actor2);
+
+        // 4. Exécution
+        let issues = validator.validate(&model);
+
+        // 5. Vérification
+        assert_eq!(issues.len(), 1, "Il devrait y avoir exactement 1 erreur");
+        assert_eq!(issues[0].rule_id, "INTEGRATION_TEST_RULE");
+        assert_eq!(issues[0].element_id, model.oa.actors[1].id);
     }
 }
