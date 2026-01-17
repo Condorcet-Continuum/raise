@@ -5,15 +5,18 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::StorageEngine;
 use serde_json::json;
 
-#[test]
-fn query_get_article_by_id() {
-    let env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter les appels .await
+async fn query_get_article_by_id() {
+    // CORRECTION E0277 : Ces helpers sont synchrones dans cette suite de tests
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, &env.space, &env.db);
 
     let storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&storage, &env.space, &env.db);
 
+    // CORRECTION E0599 : Méthode asynchrone, ajout de .await avant .expect()
     mgr.create_collection("articles", None)
+        .await
         .expect("create collection");
 
     let doc = json!({
@@ -26,6 +29,7 @@ fn query_get_article_by_id() {
 
     let inserted = mgr
         .insert_with_schema("articles", doc)
+        .await
         .expect("insert article failed");
 
     let id = inserted
@@ -33,8 +37,10 @@ fn query_get_article_by_id() {
         .and_then(|v| v.as_str())
         .expect("id manquant");
 
+    // CORRECTION E0599 : get() est désormais asynchrone
     let fetched = mgr
         .get("articles", id)
+        .await
         .expect("get failed")
         .expect("document non trouvé");
 
@@ -43,15 +49,15 @@ fn query_get_article_by_id() {
     assert_eq!(fetched.get("title").unwrap(), "Titre Obligatoire");
 }
 
-#[test]
-fn query_find_one_article_by_handle() {
-    let env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn query_find_one_article_by_handle() {
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, &env.space, &env.db);
 
     let storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&storage, &env.space, &env.db);
 
-    mgr.create_collection("articles", None).unwrap();
+    mgr.create_collection("articles", None).await.unwrap();
 
     let doc1 = json!({
         "handle": "a1",
@@ -68,10 +74,15 @@ fn query_find_one_article_by_handle() {
         "status": "published"
     });
 
-    mgr.insert_with_schema("articles", doc1).expect("insert");
-    mgr.insert_with_schema("articles", doc2).expect("insert");
+    mgr.insert_with_schema("articles", doc1)
+        .await
+        .expect("insert");
+    mgr.insert_with_schema("articles", doc2)
+        .await
+        .expect("insert");
 
-    let all = mgr.list_all("articles").unwrap();
+    // CORRECTION E0599 : list_all() est désormais asynchrone
+    let all = mgr.list_all("articles").await.unwrap();
     let found = all
         .into_iter()
         .find(|d| d.get("handle").and_then(|s| s.as_str()) == Some("a2"));
@@ -80,15 +91,15 @@ fn query_find_one_article_by_handle() {
     assert_eq!(found.unwrap().get("status").unwrap(), "published");
 }
 
-#[test]
-fn query_find_many_with_sort_and_limit_simulated() {
-    let env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn query_find_many_with_sort_and_limit_simulated() {
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, &env.space, &env.db);
 
     let storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&storage, &env.space, &env.db);
 
-    mgr.create_collection("articles", None).unwrap();
+    mgr.create_collection("articles", None).await.unwrap();
 
     for i in 0..5 {
         let doc = json!({
@@ -97,11 +108,13 @@ fn query_find_many_with_sort_and_limit_simulated() {
             "displayName": format!("Article {}", i),
             "title": format!("Titre {}", i),
             "status": "published"
-            // SUPPRESSION : Pas de champ x_... inutile ici car le schéma est strict
         });
-        mgr.insert_with_schema("articles", doc).expect("insert");
+        // CORRECTION E0599 : .await nécessaire dans la boucle d'insertion
+        mgr.insert_with_schema("articles", doc)
+            .await
+            .expect("insert");
     }
 
-    let all = mgr.list_all("articles").unwrap();
+    let all = mgr.list_all("articles").await.unwrap();
     assert_eq!(all.len(), 5);
 }

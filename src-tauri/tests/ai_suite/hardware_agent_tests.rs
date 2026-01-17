@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/ai_suite/hardware_agent_tests.rs
+
 use crate::common::init_ai_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{hardware_agent::HardwareAgent, Agent, AgentContext};
@@ -8,7 +10,10 @@ use std::sync::Arc;
 #[ignore]
 async fn test_hardware_agent_handles_both_electronics_and_infra() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
+
+    // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone suite à la migration
+    // vers le moteur de stockage asynchrone. On doit l'attendre pour obtenir l'environnement.
+    let env = init_ai_test_env().await;
 
     // Config Standard
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();

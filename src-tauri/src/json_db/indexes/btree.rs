@@ -8,7 +8,7 @@ use super::{driver, paths, IndexDefinition};
 use crate::json_db::storage::JsonDbConfig;
 
 #[allow(clippy::too_many_arguments)]
-pub fn update_btree_index(
+pub async fn update_btree_index(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
@@ -19,13 +19,14 @@ pub fn update_btree_index(
     new_doc: Option<&Value>,
 ) -> Result<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
-    driver::update::<BTreeMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc)
+    // Appel au driver qui doit être async
+    driver::update::<BTreeMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
 }
 
 /// Recherche exacte via l'index BTree.
 /// Note: La structure BTree permettra à l'avenir des recherches par plage (Range Search)
 /// mais pour l'instant nous exposons une recherche exacte standard.
-pub fn search_btree_index(
+pub async fn search_btree_index(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
@@ -35,7 +36,8 @@ pub fn search_btree_index(
 ) -> Result<Vec<String>> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     let key = value.to_string();
-    driver::search::<BTreeMap<String, Vec<String>>>(&path, &key)
+    // Appel au driver qui doit être async
+    driver::search::<BTreeMap<String, Vec<String>>>(&path, &key).await
 }
 
 #[cfg(test)]
@@ -44,6 +46,7 @@ mod tests {
     use crate::json_db::indexes::IndexType;
     use serde_json::json;
     use tempfile::tempdir;
+    use tokio::fs;
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -51,11 +54,11 @@ mod tests {
         (dir, cfg)
     }
 
-    #[test]
-    fn test_btree_lifecycle() {
+    #[tokio::test] // Migration vers tokio test
+    async fn test_btree_lifecycle() {
         let (dir, cfg) = setup_env();
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
-        std::fs::create_dir_all(&idx_dir).unwrap();
+        fs::create_dir_all(&idx_dir).await.unwrap();
 
         let def = IndexDefinition {
             name: "age".into(),
@@ -64,24 +67,34 @@ mod tests {
             unique: false,
         };
 
-        // 1. Insertion
+        // 1. Insertion (Async)
         let doc1 = json!({ "age": 30 });
-        update_btree_index(&cfg, "s", "d", "c", &def, "u1", None, Some(&doc1)).unwrap();
+        update_btree_index(&cfg, "s", "d", "c", &def, "u1", None, Some(&doc1))
+            .await
+            .unwrap();
 
         let doc2 = json!({ "age": 25 });
-        update_btree_index(&cfg, "s", "d", "c", &def, "u2", None, Some(&doc2)).unwrap();
+        update_btree_index(&cfg, "s", "d", "c", &def, "u2", None, Some(&doc2))
+            .await
+            .unwrap();
 
-        // 2. Recherche Exacte
-        let results = search_btree_index(&cfg, "s", "d", "c", &def, &json!(30)).unwrap();
+        // 2. Recherche Exacte (Async)
+        let results = search_btree_index(&cfg, "s", "d", "c", &def, &json!(30))
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "u1");
 
-        let results_25 = search_btree_index(&cfg, "s", "d", "c", &def, &json!(25)).unwrap();
+        let results_25 = search_btree_index(&cfg, "s", "d", "c", &def, &json!(25))
+            .await
+            .unwrap();
         assert_eq!(results_25.len(), 1);
         assert_eq!(results_25[0], "u2");
 
-        // 3. Recherche vide
-        let results_empty = search_btree_index(&cfg, "s", "d", "c", &def, &json!(99)).unwrap();
+        // 3. Recherche vide (Async)
+        let results_empty = search_btree_index(&cfg, "s", "d", "c", &def, &json!(99))
+            .await
+            .unwrap();
         assert!(results_empty.is_empty());
     }
 }

@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/ai_suite/business_agent_tests.rs
+
 use crate::common::init_ai_test_env;
 // On importe uniquement ce dont on a besoin
 use raise::ai::agents::intent_classifier::EngineeringIntent;
@@ -9,7 +11,9 @@ use std::sync::Arc;
 #[ignore]
 async fn test_business_agent_generates_oa_entities() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
+
+    // CORRECTION E0609 : init_ai_test_env() est désormais async, on doit l'attendre
+    let env = init_ai_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     let local_url =

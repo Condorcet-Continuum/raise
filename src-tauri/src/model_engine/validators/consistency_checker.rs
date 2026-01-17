@@ -1,5 +1,8 @@
+// FICHIER : src-tauri/src/model_engine/validators/consistency_checker.rs
+
 use super::{ModelValidator, Severity, ValidationIssue};
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
+use async_trait::async_trait; // Requis pour l'implémentation du trait
 
 /// Validateur de cohérence technique.
 #[derive(Default)]
@@ -68,8 +71,10 @@ impl ConsistencyChecker {
 }
 
 // Implémentation du contrat standard pour le moteur
+#[async_trait]
 impl ModelValidator for ConsistencyChecker {
-    fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue> {
+    /// CORRECTION : Signature asynchrone strictement alignée sur le trait
+    async fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue> {
         let mut all_issues = Vec::new();
 
         // Helper pour parcourir une liste
@@ -123,6 +128,7 @@ mod tests {
             kind: kind.to_string(),
             description: None, // CORRECTION : Initialisation du champ manquant
             properties: HashMap::new(),
+            ..Default::default()
         }
     }
 
@@ -157,8 +163,8 @@ mod tests {
         assert_eq!(issues[0].rule_id, "NAMING_001");
     }
 
-    #[test]
-    fn test_full_model_validation() {
+    #[tokio::test] // CORRECTION : Passage en test asynchrone
+    async fn test_full_model_validation() {
         let checker = ConsistencyChecker::new();
         let mut model = ProjectModel::default();
 
@@ -166,7 +172,8 @@ mod tests {
         let bad_el = create_dummy_element("UUID-Bad", "", "SystemFunction");
         model.sa.functions.push(bad_el);
 
-        let issues = checker.validate(&model);
+        // CORRECTION : Appel asynchrone (.await)
+        let issues = checker.validate(&model).await;
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].rule_id, "SYS_002");
     }

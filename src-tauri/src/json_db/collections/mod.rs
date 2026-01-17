@@ -32,20 +32,25 @@ fn collection_from_schema_rel(schema_rel: &str) -> String {
 
 // --- API Publique (Facade) ---
 
-pub fn create_collection(
+pub async fn create_collection(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
     collection: &str,
 ) -> Result<()> {
-    collection::create_collection_if_missing(cfg, space, db, collection)
+    collection::create_collection_if_missing(cfg, space, db, collection).await
 }
 
-pub fn drop_collection(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str) -> Result<()> {
-    collection::drop_collection(cfg, space, db, collection)
+pub async fn drop_collection(
+    cfg: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    collection: &str,
+) -> Result<()> {
+    collection::drop_collection(cfg, space, db, collection).await
 }
 
-pub fn insert_with_schema(
+pub async fn insert_with_schema(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
@@ -61,7 +66,9 @@ pub fn insert_with_schema(
     let storage = StorageEngine::new(cfg.clone());
     let manager = CollectionsManager::new(&storage, space, db);
 
+    // Migration async : ajout de .await
     manager::apply_business_rules(&manager, &collection_name, &mut doc, None, &reg, &root_uri)
+        .await
         .context("Rules Engine Execution")?;
 
     validator.compute_then_validate(&mut doc)?;
@@ -71,11 +78,11 @@ pub fn insert_with_schema(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Document ID manquant"))?;
 
-    collection::update_document(cfg, space, db, &collection_name, id, &doc)?;
+    collection::update_document(cfg, space, db, &collection_name, id, &doc).await?;
     Ok(doc)
 }
 
-pub fn insert_raw(
+pub async fn insert_raw(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
@@ -87,10 +94,10 @@ pub fn insert_raw(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Document sans ID"))?;
 
-    collection::create_document(cfg, space, db, collection, id, doc)
+    collection::create_document(cfg, space, db, collection, id, doc).await
 }
 
-pub fn update_with_schema(
+pub async fn update_with_schema(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
@@ -109,11 +116,11 @@ pub fn update_with_schema(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Document ID manquant"))?;
 
-    collection::update_document(cfg, space, db, &collection_name, id, &doc)?;
+    collection::update_document(cfg, space, db, &collection_name, id, &doc).await?;
     Ok(doc)
 }
 
-pub fn update_raw(
+pub async fn update_raw(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
@@ -125,28 +132,45 @@ pub fn update_raw(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Document ID manquant"))?;
 
-    collection::update_document(cfg, space, db, collection, id, doc)
+    collection::update_document(cfg, space, db, collection, id, doc).await
 }
 
-pub fn get(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str, id: &str) -> Result<Value> {
-    collection::read_document(cfg, space, db, collection, id)
+pub async fn get(
+    cfg: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    collection: &str,
+    id: &str,
+) -> Result<Value> {
+    collection::read_document(cfg, space, db, collection, id).await
 }
 
-pub fn delete(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str, id: &str) -> Result<()> {
-    collection::delete_document(cfg, space, db, collection, id)
+pub async fn delete(
+    cfg: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    collection: &str,
+    id: &str,
+) -> Result<()> {
+    collection::delete_document(cfg, space, db, collection, id).await
 }
 
-pub fn list_ids(
+pub async fn list_ids(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
     collection: &str,
 ) -> Result<Vec<String>> {
-    collection::list_document_ids(cfg, space, db, collection)
+    collection::list_document_ids(cfg, space, db, collection).await
 }
 
-pub fn list_all(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str) -> Result<Vec<Value>> {
-    collection::list_documents(cfg, space, db, collection)
+pub async fn list_all(
+    cfg: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    collection: &str,
+) -> Result<Vec<Value>> {
+    collection::list_documents(cfg, space, db, collection).await
 }
 
 pub fn db_root_path(cfg: &JsonDbConfig, space: &str, db: &str) -> PathBuf {

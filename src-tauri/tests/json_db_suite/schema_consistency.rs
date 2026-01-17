@@ -7,13 +7,14 @@ use serde_json::{json, Value};
 use std::fs;
 use walkdir::WalkDir;
 
-#[test]
-fn test_structural_integrity_json_schema() {
-    let env = init_test_env();
+#[tokio::test]
+async fn test_structural_integrity_json_schema() {
+    let env = init_test_env().await;
     let cfg = &env.cfg;
 
     let schemas_root = cfg.db_schemas_root(TEST_SPACE, TEST_DB).join("v1");
 
+    // Le chargement du registre à partir des fichiers est synchrone
     let registry = SchemaRegistry::from_db(cfg, TEST_SPACE, TEST_DB)
         .expect("Impossible de charger le registre des schémas");
 
@@ -57,10 +58,9 @@ fn test_structural_integrity_json_schema() {
     }
 }
 
-// ... (Le reste du fichier reste inchangé : test_semantic_consistency_json_ld, etc.) ...
-#[test]
-fn test_semantic_consistency_json_ld() {
-    let _env = init_test_env();
+#[tokio::test]
+async fn test_semantic_consistency_json_ld() {
+    let _env = init_test_env().await;
 
     let processor = JsonLdProcessor::new();
     let vocab_registry = VocabularyRegistry::new();
@@ -94,6 +94,7 @@ fn test_semantic_consistency_json_ld() {
             "name": "Test Semantic"
         });
 
+        // L'expansion JSON-LD et l'accès au vocabulaire sont synchrones
         let expanded = processor.expand(&doc);
         let type_uri = processor.get_type(&expanded);
 
@@ -123,9 +124,9 @@ fn test_semantic_consistency_json_ld() {
     }
 }
 
-#[test]
-fn test_detect_actor_duality() {
-    let env = init_test_env();
+#[tokio::test]
+async fn test_detect_actor_duality() {
+    let env = init_test_env().await;
     let cfg = &env.cfg;
     let schemas_root = cfg.db_schemas_root(TEST_SPACE, TEST_DB).join("v1");
 

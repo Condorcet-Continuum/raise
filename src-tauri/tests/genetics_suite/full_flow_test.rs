@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/genetics_suite/full_flow_test.rs
+
 use raise::genetics::bridge::GeneticsAdapter;
 use raise::genetics::engine::GeneticConfig;
 use raise::genetics::evaluators::architecture::ArchitectureEvaluator;
@@ -11,22 +13,44 @@ use raise::model_engine::loader::ModelLoader;
 use serde_json::json;
 use tempfile::tempdir;
 
-#[test]
-fn test_arcadia_to_genetics_pipeline() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_arcadia_to_genetics_pipeline() {
     let dir = tempdir().unwrap();
     let config_db = JsonDbConfig::new(dir.path().to_path_buf());
     let storage = StorageEngine::new(config_db);
     let manager = CollectionsManager::new(&storage, "test_workspace", "arcadia_db");
 
-    manager.insert_raw("la", &json!({
-        "id": "lf_nav_01", "name": "Navigation", "type": "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json", "properties": { "complexity": 45.0 }
-    })).unwrap();
-    manager.insert_raw("la", &json!({
-        "id": "lc_cpu_01", "name": "CPU", "type": "https://raise.local/schemas/v1/arcadia/la/logical-component.schema.json", "properties": { "capacity": 100.0 }
-    })).unwrap();
+    // CORRECTION E0599 : Ajout de .await car insert_raw est désormais asynchrone
+    manager
+        .insert_raw(
+            "la",
+            &json!({
+                "id": "lf_nav_01",
+                "name": "Navigation",
+                "type": "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json",
+                "properties": { "complexity": 45.0 }
+            }),
+        )
+        .await
+        .unwrap();
+
+    manager
+        .insert_raw(
+            "la",
+            &json!({
+                "id": "lc_cpu_01",
+                "name": "CPU",
+                "type": "https://raise.local/schemas/v1/arcadia/la/logical-component.schema.json",
+                "properties": { "capacity": 100.0 }
+            }),
+        )
+        .await
+        .unwrap();
 
     let loader = ModelLoader::new_with_manager(manager);
-    let project_model = loader.load_full_model().expect("Erreur chargement");
+
+    // CORRECTION E0599 : Ajout de .await car load_full_model renvoie une Future
+    let project_model = loader.load_full_model().await.expect("Erreur chargement");
 
     // Extraction des IDs réels pour le génome
     let function_ids: Vec<String> = project_model

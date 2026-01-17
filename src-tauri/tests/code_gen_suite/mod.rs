@@ -23,7 +23,9 @@ pub struct AiTestEnv {
     pub _tmp_dir: tempfile::TempDir,
 }
 
-pub fn init_ai_test_env() -> AiTestEnv {
+/// Initialise l'environnement de test pour la suite de génération de code.
+/// CORRECTION : Passage en async pour supporter l'initialisation asynchrone de la DB.
+pub async fn init_ai_test_env() -> AiTestEnv {
     INIT.call_once(|| {
         dotenvy::dotenv().ok();
         let _ = tracing_subscriber::fmt()
@@ -68,8 +70,11 @@ pub fn init_ai_test_env() -> AiTestEnv {
     let storage = StorageEngine::new(config);
     let mgr = CollectionsManager::new(&storage, &space, &db);
 
-    // Génère _system.json avec ID et Dates valides
-    mgr.init_db().expect("❌ init_db failed in code_gen_suite");
+    // CORRECTION : init_db() est désormais asynchrone.
+    // On doit utiliser .await avant d'appeler .expect().
+    mgr.init_db()
+        .await
+        .expect("❌ init_db failed in code_gen_suite");
 
     // --- CLIENT IA ---
     let gemini_key = env::var("RAISE_GEMINI_KEY").unwrap_or_default();
@@ -80,11 +85,7 @@ pub fn init_ai_test_env() -> AiTestEnv {
     let client = LlmClient::new(&local_url, &gemini_key, model_name);
 
     AiTestEnv {
-        storage, // Note: storage a été déplacé dans mgr, on doit le cloner ou le reconstruire si nécessaire
-        // Ici on a consommé 'storage' dans 'mgr', mais 'mgr' ne le possède pas (il l'emprunte).
-        // Ah non, CollectionsManager prend une référence !
-        // Mais StorageEngine::new consomme 'config'.
-        // -> On va reconstruire 'storage' proprement.
+        storage,
         client,
         _space: space,
         _db: db,

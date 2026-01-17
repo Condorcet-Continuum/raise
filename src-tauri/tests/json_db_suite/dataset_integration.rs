@@ -5,9 +5,11 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::StorageEngine;
 use std::fs;
 
-#[test]
-fn debug_import_exchange_item() {
-    let env = init_test_env();
+#[tokio::test] // On garde tokio pour les appels asynchrones au manager
+async fn debug_import_exchange_item() {
+    // CORRECTION E0277 : Le compilateur indique que ces helpers sont synchrones.
+    // On retire donc le .await sur init_test_env et ensure_db_exists.
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, &env.space, &env.db);
 
     let refreshed_storage = StorageEngine::new(env.cfg.clone());
@@ -39,10 +41,12 @@ fn debug_import_exchange_item() {
         );
     }
 
+    // Le CollectionsManager est asynchrone, on conserve donc les .await ici.
     mgr.create_collection("exchange-items", Some(db_schema_uri))
+        .await
         .expect("create collection");
 
-    match mgr.insert_with_schema("exchange-items", json_doc) {
+    match mgr.insert_with_schema("exchange-items", json_doc).await {
         Ok(res) => {
             assert!(res.get("id").is_some());
         }

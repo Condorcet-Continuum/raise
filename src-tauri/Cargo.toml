@@ -28,6 +28,7 @@ regex = "1.10"
 # --- Asynchrone & Runtime ---
 tokio = { version = "1.0", features = ["full"] }
 async-trait = "0.1"
+lru = "0.16.3"
 
 # --- Utilitaires Système & Fichiers ---
 anyhow = "1.0"
@@ -37,6 +38,8 @@ walkdir = "2"
 pathdiff = "0.2"
 url = "2.5"
 tempfile = "3.10"
+zstd = "0.13"
+
 
 wasmtime = "40.0.0" # --- Plugins & Runtime WASM  ---
 
@@ -90,6 +93,8 @@ ed25519-dalek = { version = "2.1", features = [
 ] } # Pour la signature
 sha2 = "0.10" # Pour le hash du mandat
 hex = "0.4" # Pour manipuler les signatures en string
+futures = "0.3.31"
+async-recursion = "1.1.1"
 
 # --- Dépendances de développement (Pour les tests) ---
 [dev-dependencies]

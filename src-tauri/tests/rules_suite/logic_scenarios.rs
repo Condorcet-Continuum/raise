@@ -4,8 +4,8 @@ use raise::rules_engine::ast::Expr;
 use raise::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
 use serde_json::json;
 
-#[test]
-fn test_complex_access_control() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_complex_access_control() {
     // Scénario : L'utilisateur a accès SI :
     // (status == "member" ET role == "admin")
 
@@ -28,7 +28,10 @@ fn test_complex_access_control() {
         "status": "member",
         "role": "admin"
     });
-    let result_ok = Evaluator::evaluate(&rule, &ctx_admin, &provider).expect("Evaluation failed");
+    // CORRECTION E0599 : Ajout de .await car l'évaluateur est asynchrone
+    let result_ok = Evaluator::evaluate(&rule, &ctx_admin, &provider)
+        .await
+        .expect("Evaluation failed");
     assert_eq!(result_ok.as_bool(), Some(true));
 
     // Cas 2 : Echec (Mauvais statut)
@@ -36,12 +39,15 @@ fn test_complex_access_control() {
         "status": "guest",
         "role": "admin"
     });
-    let result_fail = Evaluator::evaluate(&rule, &ctx_guest, &provider).expect("Evaluation failed");
+    // CORRECTION E0599 : Ajout de .await
+    let result_fail = Evaluator::evaluate(&rule, &ctx_guest, &provider)
+        .await
+        .expect("Evaluation failed");
     assert_eq!(result_fail.as_bool(), Some(false));
 }
 
-#[test]
-fn test_nested_logic_with_values() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_nested_logic_with_values() {
     // Scénario : (A > 10) OU (B == 0)
     let rule = Expr::Or(vec![
         // Gt reste binaire (Box, Box) car défini ainsi dans ast.rs
@@ -57,12 +63,13 @@ fn test_nested_logic_with_values() {
 
     // a=5, b=0 -> True (grâce au OR)
     let ctx = json!({ "a": 5, "b": 0 });
-    let res = Evaluator::evaluate(&rule, &ctx, &provider).unwrap();
+    // CORRECTION E0599 : Ajout de .await
+    let res = Evaluator::evaluate(&rule, &ctx, &provider).await.unwrap();
     assert_eq!(res.as_bool(), Some(true));
 }
 
-#[test]
-fn test_complex_boolean_logic() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_complex_boolean_logic() {
     let rule = Expr::Or(vec![
         Expr::And(vec![
             Expr::Gt(
@@ -78,7 +85,9 @@ fn test_complex_boolean_logic() {
 
     let ctx1 = json!({ "age": 16, "status": "member", "role": "user" });
     assert_eq!(
+        // CORRECTION E0599 : Ajout de .await
         Evaluator::evaluate(&rule, &ctx1, &provider)
+            .await
             .unwrap()
             .into_owned(),
         json!(false)
@@ -86,7 +95,9 @@ fn test_complex_boolean_logic() {
 
     let ctx3 = json!({ "age": 25, "status": "member", "role": "user" });
     assert_eq!(
+        // CORRECTION E0599 : Ajout de .await
         Evaluator::evaluate(&rule, &ctx3, &provider)
+            .await
             .unwrap()
             .into_owned(),
         json!(true)
@@ -94,15 +105,17 @@ fn test_complex_boolean_logic() {
 
     let ctx4 = json!({ "age": 10, "status": "guest", "role": "admin" });
     assert_eq!(
+        // CORRECTION E0599 : Ajout de .await
         Evaluator::evaluate(&rule, &ctx4, &provider)
+            .await
             .unwrap()
             .into_owned(),
         json!(true)
     );
 }
 
-#[test]
-fn test_math_precedence() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_math_precedence() {
     // (price - cost) / price
     let rule = Expr::Div(vec![
         Expr::Sub(vec![Expr::Var("price".into()), Expr::Var("cost".into())]),
@@ -113,7 +126,9 @@ fn test_math_precedence() {
     let provider = NoOpDataProvider;
 
     assert_eq!(
+        // CORRECTION E0599 : Ajout de .await
         Evaluator::evaluate(&rule, &ctx, &provider)
+            .await
             .unwrap()
             .as_f64(),
         Some(0.25)

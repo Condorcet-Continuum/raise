@@ -5,21 +5,24 @@ use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMod
 use std::fs;
 
 // --- AJOUTS CORRECTS ---
-use raise::json_db::collections::manager::CollectionsManager; // <--- Ici raise:: au lieu de crate::
+use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use serde_json::json;
 use serde_json::Value;
 // -----------------------
 
-#[test]
-fn db_lifecycle_minimal() {
-    let env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn db_lifecycle_minimal() {
+    let env = init_test_env().await;
     let cfg = &env.cfg;
     let space = TEST_SPACE;
     let db = TEST_DB;
 
     // CREATE
-    create_db(cfg, space, db).expect("create_db doit réussir");
+    // CORRECTION E0599 : create_db est asynchrone, ajout de .await
+    create_db(cfg, space, db)
+        .await
+        .expect("create_db doit réussir");
 
     let db_root = cfg.db_root(space, db);
     assert!(db_root.is_dir(), "db root doit exister physiquement");
@@ -30,10 +33,14 @@ fn db_lifecycle_minimal() {
     assert!(schemas_path.exists(), "le dossier schemas doit exister");
 
     // OPEN
+    // Note : open_db reste synchrone dans cette suite
     open_db(cfg, space, db).expect("open_db doit réussir");
 
     // DROP (Soft)
-    drop_db(cfg, space, db, DropMode::Soft).expect("drop_db soft doit réussir");
+    // CORRECTION E0599 : drop_db est asynchrone, ajout de .await
+    drop_db(cfg, space, db, DropMode::Soft)
+        .await
+        .expect("drop_db soft doit réussir");
     assert!(
         !db_root.exists(),
         "après soft drop, le dossier original ne doit plus exister"
@@ -56,10 +63,14 @@ fn db_lifecycle_minimal() {
     );
 
     // Re-crée puis DROP (Hard)
-    create_db(cfg, space, db).expect("recreate_db doit réussir");
+    create_db(cfg, space, db)
+        .await
+        .expect("recreate_db doit réussir");
     assert!(db_root.exists());
 
-    drop_db(cfg, space, db, DropMode::Hard).expect("drop_db hard doit réussir");
+    drop_db(cfg, space, db, DropMode::Hard)
+        .await
+        .expect("drop_db hard doit réussir");
 
     assert!(
         !db_root.exists(),
@@ -67,9 +78,9 @@ fn db_lifecycle_minimal() {
     );
 }
 
-#[test]
-fn db_lifecycle_create_open_drop() {
-    let test_env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn db_lifecycle_create_open_drop() {
+    let test_env = init_test_env().await;
     let cfg = &test_env.cfg;
     let space = "un2";
     let db = "_system_lifecycle_test";
@@ -81,23 +92,25 @@ fn db_lifecycle_create_open_drop() {
     }
 
     // 1. Création
-    create_db(cfg, space, db).expect("create");
+    create_db(cfg, space, db).await.expect("create");
 
-    // 2. Ouverture
-    // Note: open_db ne retourne rien dans l'implémentation actuelle (Result<()>),
-    // donc on vérifie juste que ça ne plante pas.
+    // 2. Ouverture (Sync)
     open_db(cfg, space, db).expect("open");
 
     // 3. Soft drop
-    drop_db(cfg, space, db, DropMode::Soft).expect("soft drop");
+    drop_db(cfg, space, db, DropMode::Soft)
+        .await
+        .expect("soft drop");
 
-    // 4. Hard drop (idempotent sur dossier inexistant ou déplacé)
-    drop_db(cfg, space, db, DropMode::Hard).expect("hard drop");
+    // 4. Hard drop
+    drop_db(cfg, space, db, DropMode::Hard)
+        .await
+        .expect("hard drop");
 }
 
-#[test]
-fn test_collection_drop_cleans_system_index() {
-    let env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_collection_drop_cleans_system_index() {
+    let env = init_test_env().await;
     let cfg = &env.cfg;
     let space = TEST_SPACE;
     let db = TEST_DB;
@@ -107,7 +120,9 @@ fn test_collection_drop_cleans_system_index() {
     let collection = "temp_collection_to_drop";
 
     // 1. Création de la collection
+    // CORRECTION E0599 : create_collection est asynchrone
     mgr.create_collection(collection, None)
+        .await
         .expect("create collection failed");
 
     // 2. Vérification : Elle doit exister physiquement
@@ -127,7 +142,9 @@ fn test_collection_drop_cleans_system_index() {
     );
 
     // 4. Suppression (Drop)
+    // CORRECTION E0599 : drop_collection est asynchrone
     mgr.drop_collection(collection)
+        .await
         .expect("drop collection failed");
 
     // 5. Vérification : Elle ne doit plus exister physiquement
@@ -149,16 +166,15 @@ fn test_collection_drop_cleans_system_index() {
     );
 }
 
-#[test]
-fn test_system_index_strict_conformance() {
-    // 1. Initialisation
-    let env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_system_index_strict_conformance() {
+    // 1. Initialisation (Sync)
+    let env = init_test_env().await;
     let cfg = &env.cfg;
     let space = TEST_SPACE;
     let db = TEST_DB;
 
     // --- DIAGNOSTIC DU SCHÉMA COPIÉ ---
-    // On vérifie ce qui a été réellement copié dans le dossier temporaire du test
     let schema_path = cfg
         .db_schemas_root(space, db)
         .join("v1/db/index.schema.json");
@@ -170,10 +186,9 @@ fn test_system_index_strict_conformance() {
 
     let schema_content = fs::read_to_string(&schema_path).expect("Lecture schéma échouée");
 
-    // On vérifie la présence de la clé magique qui active x_compute
     if !schema_content.contains("base.schema.json") {
         println!("🔥 CONTENU DU SCHÉMA INCORRECT :\n{}", schema_content);
-        panic!("❌ Le fichier index.schema.json copié est OBSOLÈTE ! Il manque le 'allOf' vers base.schema.json. Vérifiez vos dossiers sources (schemas/v1).");
+        panic!("❌ Le fichier index.schema.json copié est OBSOLÈTE ! Il manque le 'allOf' vers base.schema.json.");
     }
     // ----------------------------------
 
@@ -193,7 +208,7 @@ fn test_system_index_strict_conformance() {
             "📄 Contenu de _system.json généré :\n{}",
             serde_json::to_string_pretty(&doc).unwrap()
         );
-        panic!("❌ L'index système N'A PAS d'ID. Le moteur x_compute n'a pas fonctionné malgré un schéma présent.");
+        panic!("❌ L'index système N'A PAS d'ID.");
     }
 
     assert!(doc.get("createdAt").is_some(), "Manque createdAt");

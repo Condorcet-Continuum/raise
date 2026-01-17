@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/ai_suite/data_agent_tests.rs
+
 use crate::common::init_ai_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{data_agent::DataAgent, Agent, AgentContext};
@@ -8,7 +10,10 @@ use std::sync::Arc;
 #[ignore]
 async fn test_data_agent_creates_class_and_enum() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
+
+    // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone dans ai_suite/mod.rs.
+    // On doit l'attendre pour récupérer l'environnement de test concret.
+    let env = init_ai_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     let local_url =

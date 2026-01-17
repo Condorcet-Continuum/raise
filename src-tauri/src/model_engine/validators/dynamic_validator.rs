@@ -4,7 +4,8 @@ use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 use crate::model_engine::validators::{ModelValidator, Severity, ValidationIssue};
 use crate::rules_engine::ast::Rule;
 use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
-use serde_json::Value;
+use async_trait::async_trait;
+use serde_json::Value; // Requis pour l'alignement avec le trait
 
 /// Validateur capable d'appliquer des règles dynamiques (AST) définies dans des fichiers JSON.
 pub struct DynamicValidator {
@@ -64,8 +65,10 @@ impl DynamicValidator {
     }
 }
 
+#[async_trait]
 impl ModelValidator for DynamicValidator {
-    fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue> {
+    // CORRECTION E0195 : Signature strictement identique au trait
+    async fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
         // Le provider NoOp est suffisant car nous injectons l'élément complet comme contexte
         let provider = NoOpDataProvider;
@@ -86,19 +89,25 @@ impl ModelValidator for DynamicValidator {
                     };
 
                     // 2. Évaluation de la règle
-                    // Convention : L'expression AST décrit la condition de VALIDITÉ.
-                    // Si result == false => Violation.
-                    match Evaluator::evaluate(&rule.expr, &context_value, &provider) {
+                    // L'appel est asynchrone (.await) car l'Evaluator est async
+                    match Evaluator::evaluate(&rule.expr, &context_value, &provider).await {
                         Ok(result_cow) => {
                             let is_valid = match result_cow.as_ref() {
                                 Value::Bool(b) => *b,
-                                Value::Null => false, // Null est considéré comme échec (ex: champ manquant)
-                                _ => true, // Les autres valeurs sont considérées "truthy"
+                                Value::Null => false, // Null est considéré comme échec
+                                _ => true,
                             };
 
                             if !is_valid {
+                                // CORRECTION E0308 : Mapping explicite Option<String> -> Severity Enum
+                                let severity = match rule.severity.as_deref() {
+                                    Some("info") | Some("Info") => Severity::Info,
+                                    Some("warning") | Some("Warning") => Severity::Warning,
+                                    _ => Severity::Error,
+                                };
+
                                 issues.push(ValidationIssue {
-                                    severity: Severity::Warning, // Par défaut Warning
+                                    severity,
                                     rule_id: rule.id.clone(),
                                     element_id: element.id.clone(),
                                     message: format!(
@@ -142,8 +151,8 @@ mod tests {
         el
     }
 
-    #[test]
-    fn test_dynamic_validator_naming_regex() {
+    #[tokio::test] // CORRECTION : Test asynchrone
+    async fn test_dynamic_validator_naming_regex() {
         let rule_expr = Expr::RegexMatch {
             value: Box::new(Expr::Var("name".to_string())),
             pattern: Box::new(Expr::Val(json!("^SA_"))),
@@ -153,19 +162,18 @@ mod tests {
             id: "CHECK_PREFIX".to_string(),
             target: "sa.components".to_string(),
             expr: rule_expr,
-            // CORRECTION : Ajout des champs manquants
             description: None,
-            severity: None,
+            severity: Some("WARNING".to_string()),
         };
 
         let validator = DynamicValidator::new(vec![rule]);
         let mut model = ProjectModel::default();
 
-        // Création des éléments avec 2 arguments (nom, propriétés)
         model.sa.components.push(create_element("SA_System", None));
         model.sa.components.push(create_element("Bad_System", None));
 
-        let issues = validator.validate(&model);
+        // Appel .await
+        let issues = validator.validate(&model).await;
 
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].element_id, model.sa.components[1].id);

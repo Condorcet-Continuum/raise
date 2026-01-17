@@ -8,10 +8,9 @@ use crate::rules_engine::{EvalError, Evaluator, Rule, RuleStore};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use rayon::prelude::*; // Ajout pour le parallélisme
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::fs;
+use tokio::fs;
 use uuid::Uuid;
 
 use super::collection;
@@ -33,61 +32,55 @@ impl<'a> CollectionsManager<'a> {
         }
     }
 
-    pub fn init_db(&self) -> Result<()> {
-        file_storage::create_db(&self.storage.config, &self.space, &self.db)?;
-        self.ensure_system_index()
+    pub async fn init_db(&self) -> Result<()> {
+        file_storage::create_db(&self.storage.config, &self.space, &self.db).await?;
+        self.ensure_system_index().await
     }
 
     // --- MÉTHODES DE LECTURE ---
 
-    pub fn get_document(&self, collection: &str, id: &str) -> Result<Option<Value>> {
-        match collection::read_document(&self.storage.config, &self.space, &self.db, collection, id)
-        {
-            Ok(doc) => Ok(Some(doc)),
-            Err(_) => Ok(None),
+    pub async fn get_document(&self, collection: &str, id: &str) -> Result<Option<Value>> {
+        self.storage
+            .read_document(&self.space, &self.db, collection, id)
+            .await
+    }
+
+    pub async fn get(&self, collection: &str, id: &str) -> Result<Option<Value>> {
+        self.get_document(collection, id).await
+    }
+
+    pub async fn read_many(&self, collection: &str, ids: &[String]) -> Result<Vec<Value>> {
+        let mut docs = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            let doc_opt = self
+                .get_document(collection, id)
+                .await
+                .with_context(|| format!("Erreur I/O lors de la lecture de l'ID {}", id))?;
+
+            match doc_opt {
+                Some(doc) => docs.push(doc),
+                None => return Err(anyhow!(
+                    "DATABASE CORRUPTION: L'index pointe vers l'ID '{}' mais le fichier est introuvable dans '{}'", 
+                    id, collection
+                )),
+            }
         }
+
+        Ok(docs)
     }
 
-    pub fn get(&self, collection: &str, id: &str) -> Result<Option<Value>> {
-        self.get_document(collection, id)
+    pub async fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
+        collection::list_documents(&self.storage.config, &self.space, &self.db, collection).await
     }
 
-    /// Récupère plusieurs documents par leurs IDs en parallèle.
-    /// Optimisation pour les requêtes indexées.
-    /// Mode : STRICT INTEGRITY -> Panique si un fichier indexé est manquant.
-    pub fn read_many(&self, collection: &str, ids: &[String]) -> Result<Vec<Value>> {
-        // Utilisation de Rayon pour paralléliser les lectures I/O
-        let results: Result<Vec<Value>> = ids
-            .par_iter()
-            .map(|id| {
-                // Lecture unitaire
-                let doc_opt = self.get_document(collection, id)
-                    .with_context(|| format!("Erreur I/O lors de la lecture de l'ID {}", id))?;
-                // Vérification d'intégrité stricte (Option B)
-                match doc_opt {
-                    Some(doc) => Ok(doc),
-                    None => Err(anyhow!(
-                        "DATABASE CORRUPTION: L'index pointe vers l'ID '{}' mais le fichier est introuvable dans '{}'", 
-                        id, collection
-                    )),
-                }
-            })
-            .collect();
-
-        results
-    }
-
-    pub fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
-        collection::list_documents(&self.storage.config, &self.space, &self.db, collection)
-    }
-
-    pub fn list_collections(&self) -> Result<Vec<String>> {
-        collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db)
+    pub async fn list_collections(&self) -> Result<Vec<String>> {
+        collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db).await
     }
 
     // --- GESTION INDEX SYSTÈME ---
 
-    pub fn ensure_system_index(&self) -> Result<()> {
+    pub async fn ensure_system_index(&self) -> Result<()> {
         let sys_path = self
             .storage
             .config
@@ -95,7 +88,7 @@ impl<'a> CollectionsManager<'a> {
             .join("_system.json");
 
         let mut system_doc = if sys_path.exists() {
-            serde_json::from_str(&fs::read_to_string(&sys_path)?)?
+            serde_json::from_str(&fs::read_to_string(&sys_path).await?)?
         } else {
             json!({
                 "space": self.space,
@@ -105,10 +98,10 @@ impl<'a> CollectionsManager<'a> {
             })
         };
 
-        self.save_system_index(&mut system_doc)
+        self.save_system_index(&mut system_doc).await
     }
 
-    fn save_system_index(&self, doc: &mut Value) -> Result<()> {
+    async fn save_system_index(&self, doc: &mut Value) -> Result<()> {
         let sys_path = self
             .storage
             .config
@@ -154,21 +147,23 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        fs::write(&sys_path, serde_json::to_string_pretty(doc)?)?;
+        fs::write(&sys_path, serde_json::to_string_pretty(doc)?).await?;
         Ok(())
     }
 
     // --- GESTION DES COLLECTIONS ---
 
-    pub fn create_collection(&self, name: &str, schema_uri: Option<String>) -> Result<()> {
+    pub async fn create_collection(&self, name: &str, schema_uri: Option<String>) -> Result<()> {
         if !self.storage.config.db_root(&self.space, &self.db).exists() {
-            self.init_db()?;
+            self.init_db().await?;
         }
 
         let final_schema_uri = if let Some(uri) = schema_uri {
             uri
         } else {
-            self.resolve_schema_from_index(name).unwrap_or_default()
+            self.resolve_schema_from_index(name)
+                .await
+                .unwrap_or_default()
         };
 
         let col_path = self
@@ -176,40 +171,41 @@ impl<'a> CollectionsManager<'a> {
             .config
             .db_collection_path(&self.space, &self.db, name);
         if !col_path.exists() {
-            fs::create_dir_all(&col_path)?;
+            fs::create_dir_all(&col_path).await?;
         }
 
         let meta = json!({ "schema": final_schema_uri, "indexes": [] });
         let meta_path = col_path.join("_meta.json");
         if !meta_path.exists() {
-            fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
+            fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
         }
 
-        self.update_system_index_collection(name, &final_schema_uri)?;
+        self.update_system_index_collection(name, &final_schema_uri)
+            .await?;
         Ok(())
     }
 
-    pub fn drop_collection(&self, name: &str) -> Result<()> {
-        collection::drop_collection(&self.storage.config, &self.space, &self.db, name)?;
-        self.remove_collection_from_system_index(name)?;
+    pub async fn drop_collection(&self, name: &str) -> Result<()> {
+        collection::drop_collection(&self.storage.config, &self.space, &self.db, name).await?;
+        self.remove_collection_from_system_index(name).await?;
         Ok(())
     }
 
     // --- INDEXES SECONDAIRES ---
 
-    pub fn create_index(&self, collection: &str, field: &str, kind: &str) -> Result<()> {
+    pub async fn create_index(&self, collection: &str, field: &str, kind: &str) -> Result<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-        idx_mgr.create_index(collection, field, kind)
+        idx_mgr.create_index(collection, field, kind).await
     }
 
-    pub fn drop_index(&self, collection: &str, field: &str) -> Result<()> {
+    pub async fn drop_index(&self, collection: &str, field: &str) -> Result<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-        idx_mgr.drop_index(collection, field)
+        idx_mgr.drop_index(collection, field).await
     }
 
     // --- HELPER INDEX SYSTÈME ---
 
-    fn resolve_schema_from_index(&self, col_name: &str) -> Result<String> {
+    async fn resolve_schema_from_index(&self, col_name: &str) -> Result<String> {
         let sys_path = self
             .storage
             .config
@@ -218,7 +214,7 @@ impl<'a> CollectionsManager<'a> {
         if !sys_path.exists() {
             return Err(anyhow!("Index _system.json introuvable"));
         }
-        let content = fs::read_to_string(&sys_path)?;
+        let content = fs::read_to_string(&sys_path).await?;
         let sys_json: Value = serde_json::from_str(&content)?;
         let ptr = format!("/collections/{}/schema", col_name);
         let raw_path = sys_json
@@ -236,14 +232,14 @@ impl<'a> CollectionsManager<'a> {
         ))
     }
 
-    fn update_system_index_collection(&self, col_name: &str, schema_uri: &str) -> Result<()> {
+    async fn update_system_index_collection(&self, col_name: &str, schema_uri: &str) -> Result<()> {
         let sys_path = self
             .storage
             .config
             .db_root(&self.space, &self.db)
             .join("_system.json");
         let mut system_doc = if sys_path.exists() {
-            serde_json::from_str(&fs::read_to_string(&sys_path)?)?
+            serde_json::from_str(&fs::read_to_string(&sys_path).await?)?
         } else {
             json!({ "space": self.space, "database": self.db, "version": 1, "collections": {} })
         };
@@ -262,11 +258,11 @@ impl<'a> CollectionsManager<'a> {
                 json!({ "schema": schema_uri, "items": existing_items }),
             );
         }
-        self.save_system_index(&mut system_doc)?;
+        self.save_system_index(&mut system_doc).await?;
         Ok(())
     }
 
-    fn remove_collection_from_system_index(&self, col_name: &str) -> Result<()> {
+    async fn remove_collection_from_system_index(&self, col_name: &str) -> Result<()> {
         let sys_path = self
             .storage
             .config
@@ -275,7 +271,7 @@ impl<'a> CollectionsManager<'a> {
         if !sys_path.exists() {
             return Ok(());
         }
-        let content = fs::read_to_string(&sys_path)?;
+        let content = fs::read_to_string(&sys_path).await?;
         let mut system_doc: Value = serde_json::from_str(&content)?;
         let mut changed = false;
         if let Some(cols) = system_doc
@@ -287,19 +283,19 @@ impl<'a> CollectionsManager<'a> {
             }
         }
         if changed {
-            self.save_system_index(&mut system_doc)?;
+            self.save_system_index(&mut system_doc).await?;
         }
         Ok(())
     }
 
-    fn add_item_to_index(&self, col_name: &str, id: &str) -> Result<()> {
+    async fn add_item_to_index(&self, col_name: &str, id: &str) -> Result<()> {
         let sys_path = self
             .storage
             .config
             .db_root(&self.space, &self.db)
             .join("_system.json");
         let mut system_doc = if sys_path.exists() {
-            serde_json::from_str(&fs::read_to_string(&sys_path)?)?
+            serde_json::from_str(&fs::read_to_string(&sys_path).await?)?
         } else {
             json!({ "space": self.space, "database": self.db, "version": 1, "collections": {} })
         };
@@ -313,6 +309,7 @@ impl<'a> CollectionsManager<'a> {
             if !cols.contains_key(col_name) {
                 let schema_guess = self
                     .resolve_schema_from_index(col_name)
+                    .await
                     .ok()
                     .unwrap_or_default();
                 cols.insert(
@@ -334,13 +331,13 @@ impl<'a> CollectionsManager<'a> {
                 }
             }
         }
-        self.save_system_index(&mut system_doc)?;
+        self.save_system_index(&mut system_doc).await?;
         Ok(())
     }
 
     // --- ÉCRITURE ET MISE À JOUR ---
 
-    pub fn insert_raw(&self, collection: &str, doc: &Value) -> Result<()> {
+    pub async fn insert_raw(&self, collection: &str, doc: &Value) -> Result<()> {
         let id = doc
             .get("id")
             .and_then(|v| v.as_str())
@@ -355,58 +352,66 @@ impl<'a> CollectionsManager<'a> {
                 .get("$schema")
                 .and_then(|s| s.as_str())
                 .map(|s| s.to_string());
-            self.create_collection(collection, schema_hint)?;
+            self.create_collection(collection, schema_hint).await?;
         }
         self.storage
-            .write_document(&self.space, &self.db, collection, id, doc)?;
-        self.add_item_to_index(collection, id)?;
+            .write_document(&self.space, &self.db, collection, id, doc)
+            .await?;
+        self.add_item_to_index(collection, id).await?;
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-        if let Err(_e) = idx_mgr.index_document(collection, doc) {
+        if let Err(_e) = idx_mgr.index_document(collection, doc).await {
             #[cfg(debug_assertions)]
             eprintln!("⚠️ Indexation secondaire échouée: {}", _e);
         }
         Ok(())
     }
 
-    pub fn insert_with_schema(&self, collection: &str, mut doc: Value) -> Result<Value> {
-        self.prepare_document(collection, &mut doc)?;
-        self.insert_raw(collection, &doc)?;
+    pub async fn insert_with_schema(&self, collection: &str, mut doc: Value) -> Result<Value> {
+        self.prepare_document(collection, &mut doc).await?;
+        self.insert_raw(collection, &doc).await?;
         Ok(doc)
     }
 
-    pub fn update_document(&self, collection: &str, id: &str, mut doc: Value) -> Result<Value> {
-        let old_doc = self.get_document(collection, id)?;
+    pub async fn update_document(
+        &self,
+        collection: &str,
+        id: &str,
+        mut doc: Value,
+    ) -> Result<Value> {
+        let old_doc = self.get_document(collection, id).await?;
         if old_doc.is_none() {
             return Err(anyhow!("Document introuvable"));
         }
         if let Some(obj) = doc.as_object_mut() {
             obj.insert("id".to_string(), Value::String(id.to_string()));
         }
-        self.prepare_document(collection, &mut doc)?;
+        self.prepare_document(collection, &mut doc).await?;
 
         self.storage
-            .write_document(&self.space, &self.db, collection, id, &doc)?;
+            .write_document(&self.space, &self.db, collection, id, &doc)
+            .await?;
 
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         if let Some(old) = old_doc {
-            let _ = idx_mgr.remove_document(collection, &old);
+            let _ = idx_mgr.remove_document(collection, &old).await;
         }
-        let _ = idx_mgr.index_document(collection, &doc);
+        let _ = idx_mgr.index_document(collection, &doc).await;
         Ok(doc)
     }
 
-    pub fn delete_document(&self, collection: &str, id: &str) -> Result<bool> {
-        let old_doc = self.get_document(collection, id)?;
+    pub async fn delete_document(&self, collection: &str, id: &str) -> Result<bool> {
+        let old_doc = self.get_document(collection, id).await?;
         self.storage
-            .delete_document(&self.space, &self.db, collection, id)?;
+            .delete_document(&self.space, &self.db, collection, id)
+            .await?;
         if let Some(doc) = old_doc {
             let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-            let _ = idx_mgr.remove_document(collection, &doc);
+            let _ = idx_mgr.remove_document(collection, &doc).await;
         }
         Ok(true)
     }
 
-    fn prepare_document(&self, collection: &str, doc: &mut Value) -> Result<()> {
+    async fn prepare_document(&self, collection: &str, doc: &mut Value) -> Result<()> {
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("id") {
                 obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
@@ -426,7 +431,7 @@ impl<'a> CollectionsManager<'a> {
             .db_collection_path(&self.space, &self.db, collection)
             .join("_meta.json");
         let schema_uri = if meta_path.exists() {
-            let content = fs::read_to_string(&meta_path)?;
+            let content = fs::read_to_string(&meta_path).await?;
             let meta: Value = serde_json::from_str(&content)?;
             meta.get("schema")
                 .and_then(|v| v.as_str())
@@ -444,7 +449,8 @@ impl<'a> CollectionsManager<'a> {
                 }
                 let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)?;
 
-                if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, &uri) {
+                if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, &uri).await
+                {
                     eprintln!("⚠️ Erreur règles métier (non bloquant): {}", e);
                 }
 
@@ -488,8 +494,8 @@ impl<'a> CollectionsManager<'a> {
 // --- RULES ENGINE PIPELINE ---
 
 #[allow(clippy::too_many_arguments)]
-pub fn apply_business_rules(
-    manager: &CollectionsManager,
+pub async fn apply_business_rules(
+    manager: &CollectionsManager<'_>,
     collection_name: &str,
     doc: &mut Value,
     old_doc: Option<&Value>,
@@ -498,21 +504,19 @@ pub fn apply_business_rules(
 ) -> Result<()> {
     let mut store = RuleStore::new(manager);
 
-    // ETAPE 1 : Charger toutes les règles existantes (cross-collection)
-    if let Err(e) = store.sync_from_db() {
+    if let Err(e) = store.sync_from_db().await {
         eprintln!(
             "⚠️ Warning: Impossible de charger les règles système: {}",
             e
         );
     }
 
-    // ETAPE 2 : Mettre à jour avec les règles du schéma courant
     if let Some(schema) = registry.get_by_uri(schema_uri) {
         if let Some(rules_array) = schema.get("x_rules").and_then(|v| v.as_array()) {
             for (index, rule_val) in rules_array.iter().enumerate() {
                 match serde_json::from_value::<Rule>(rule_val.clone()) {
                     Ok(rule) => {
-                        if let Err(e) = store.register_rule(collection_name, rule) {
+                        if let Err(e) = store.register_rule(collection_name, rule).await {
                             eprintln!("⚠️ Erreur enregistrement règle (index {}): {}", index, e);
                         }
                     }
@@ -524,8 +528,6 @@ pub fn apply_business_rules(
         }
     }
 
-    // ETAPE 3 : Création du DataProvider Optimisé avec Cache
-    // Il vivra le temps de cette fonction (donc de la transaction)
     let provider = CachedDataProvider::new(&manager.storage.config, &manager.space, &manager.db);
 
     let mut current_changes = compute_diff(doc, old_doc);
@@ -533,6 +535,7 @@ pub fn apply_business_rules(
     const MAX_PASSES: usize = 10;
 
     while !current_changes.is_empty() && passes < MAX_PASSES {
+        // CORRECTION : Pas de .await car get_impacted_rules est synchrone (lookup mémoire)
         let rules = store.get_impacted_rules(collection_name, &current_changes);
 
         if rules.is_empty() {
@@ -542,9 +545,8 @@ pub fn apply_business_rules(
         let mut next_changes = HashSet::new();
 
         for rule in rules {
-            match Evaluator::evaluate(&rule.expr, doc, &provider) {
+            match Evaluator::evaluate(&rule.expr, doc, &provider).await {
                 Ok(result) => {
-                    // On convertit le Cow en Value (Owned) avant l'insertion
                     if set_value_by_path(doc, &rule.target, result.into_owned()) {
                         next_changes.insert(rule.target.clone());
                     }
@@ -652,64 +654,63 @@ mod tests {
         (dir, config)
     }
 
-    #[test]
-    fn test_manager_get_document_integration() {
+    #[tokio::test]
+    async fn test_manager_get_document_integration() {
         let (_dir, config) = setup_env();
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "space_test", "db_test");
+        manager.init_db().await.unwrap();
 
-        // Utilisation de insert_raw pour créer la collection et le doc
         let doc = json!({ "id": "user_123", "name": "Test User" });
-        manager.insert_raw("users", &doc).unwrap();
+        manager.insert_raw("users", &doc).await.unwrap();
 
-        let result = manager.get_document("users", "user_123").unwrap();
+        let result = manager.get_document("users", "user_123").await.unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap()["name"], "Test User");
 
-        let missing = manager.get_document("users", "ghost").unwrap();
+        let missing = manager.get_document("users", "ghost").await.unwrap();
         assert!(missing.is_none());
     }
 
-    #[test]
-    fn test_read_many_parallel() {
+    #[tokio::test]
+    async fn test_read_many_parallel() {
         let (_dir, config) = setup_env();
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "space_test", "db_test");
+        manager.init_db().await.unwrap();
 
-        // Création de 100 documents
         for i in 0..100 {
             let doc = json!({ "id": i.to_string(), "val": i });
-            manager.insert_raw("items", &doc).unwrap();
+            manager.insert_raw("items", &doc).await.unwrap();
         }
 
-        // Lecture parallèle de 10 items dispersés
         let ids: Vec<String> = vec!["10", "20", "50", "80", "99"]
             .into_iter()
             .map(String::from)
             .collect();
-        let results = manager.read_many("items", &ids).unwrap();
+        let results = manager.read_many("items", &ids).await.unwrap();
 
         assert_eq!(results.len(), 5);
-        // Vérification qu'on a bien récupéré les bons IDs
         for res in results {
             let id = res["id"].as_str().unwrap();
             assert!(ids.contains(&id.to_string()));
         }
     }
 
-    #[test]
-    fn test_read_many_strict_integrity() {
+    #[tokio::test]
+    async fn test_read_many_strict_integrity() {
         let (_dir, config) = setup_env();
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "space_test", "db_test");
+        manager.init_db().await.unwrap();
 
         manager
             .insert_raw("items", &json!({ "id": "1", "val": "A" }))
+            .await
             .unwrap();
 
-        // Requête avec un ID qui n'existe pas -> Doit échouer en mode strict
         let ids = vec!["1".to_string(), "999".to_string()];
-        let result = manager.read_many("items", &ids);
+        let result = manager.read_many("items", &ids).await;
 
         assert!(result.is_err());
         assert!(result

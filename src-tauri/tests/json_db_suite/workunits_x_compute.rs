@@ -7,9 +7,10 @@ use raise::json_db::storage::StorageEngine; // Import StorageEngine
 use serde_json::json;
 use uuid::Uuid;
 
-#[test]
-fn workunit_compute_then_validate_minimal() {
-    let test_env = init_test_env();
+#[tokio::test]
+async fn workunit_compute_then_validate_minimal() {
+    // CORRECTION E0277 : init_test_env et ensure_db_exists restent synchrones dans cette suite
+    let test_env = init_test_env().await;
     let cfg = &test_env.cfg;
     let space = TEST_SPACE;
     let db = TEST_DB;
@@ -44,12 +45,13 @@ fn workunit_compute_then_validate_minimal() {
         }
     });
 
+    // La validation simple reste synchrone
     validator.validate(&doc).expect("validate workunit failed");
 }
 
-#[test]
-fn finance_compute_minimal() {
-    let env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter le moteur de règles
+async fn finance_compute_minimal() {
+    let env = init_test_env().await;
     let cfg = &env.cfg;
     let space = TEST_SPACE;
     let db = TEST_DB;
@@ -89,7 +91,7 @@ fn finance_compute_minimal() {
     let manager = CollectionsManager::new(&storage, space, db);
 
     // 2. APPEL DU NOUVEAU MOTEUR (GenRules via manager)
-    // Signature corrigée : on passe le manager au lieu des params individuels
+    // CORRECTION E0599 : apply_business_rules est désormais asynchrone car il utilise l'évaluateur asynchrone
     manager::apply_business_rules(
         &manager,
         "finance_test", // Nom collection fictif pour le test
@@ -98,6 +100,7 @@ fn finance_compute_minimal() {
         &reg,
         &root_uri,
     )
+    .await // Ajout du .await requis
     .expect("Echec du moteur de règles");
 
     // 3. VALIDATION (Vérifie que le résultat respecte le schéma)

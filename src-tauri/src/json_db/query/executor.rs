@@ -47,7 +47,7 @@ impl<'a> QueryEngine<'a> {
         let optimizer = QueryOptimizer::new();
         query = optimizer.optimize(query)?;
 
-        // --- CHARGEMENT ---
+        // --- CHARGEMENT (Modifié en Async) ---
         let mut documents = match self.find_index_candidate(&query) {
             Some((field, value)) => {
                 let clean_val = self.strip_quotes(&value);
@@ -62,12 +62,14 @@ impl<'a> QueryEngine<'a> {
                 let ids =
                     self.index_provider
                         .search(&query.collection, &clean_field, &clean_val)?;
-                self.manager.read_many(&query.collection, &ids)?
+                // Appel async au manager
+                self.manager.read_many(&query.collection, &ids).await?
             }
             None => {
                 #[cfg(debug_assertions)]
                 println!("🐢 QueryEngine: Full Scan sur {}", query.collection);
-                self.manager.list_all(&query.collection)?
+                // Appel async au manager
+                self.manager.list_all(&query.collection).await?
             }
         };
 
@@ -234,14 +236,10 @@ impl<'a> QueryEngine<'a> {
                 false
             }
 
-            // --- CORRECTION MAJEURE POUR LIKE ---
             ComparisonOperator::Like => {
-                // 1. Si la valeur doc est une String
                 if let Some(Value::String(s)) = val {
                     return self.match_like_smart(s, &clean_cond_val);
                 }
-                // 2. Si la valeur doc est un Array (ex: tags LIKE 'paris')
-                // On vérifie si UN élément matche
                 if let Some(Value::Array(arr)) = val {
                     return arr.iter().any(|item| {
                         if let Value::String(s) = item {
@@ -256,7 +254,6 @@ impl<'a> QueryEngine<'a> {
         }
     }
 
-    /// Nouvelle logique LIKE "intelligente" pour satisfaire les tests
     fn match_like_smart(&self, text: &str, pattern_val: &Value) -> bool {
         let pattern_str = match pattern_val {
             Value::String(s) => s,
@@ -266,13 +263,10 @@ impl<'a> QueryEngine<'a> {
         let text_lower = text.to_lowercase();
         let pat_lower = pattern_str.to_lowercase();
 
-        // CORRECTION Test 1 : Si pas de %, on fait un CONTAINS par défaut
-        // "Bob User" LIKE "User" -> true
         if !pat_lower.contains('%') {
             return text_lower.contains(&pat_lower);
         }
 
-        // Sinon logique standard avec wildcards
         let parts: Vec<&str> = pat_lower.split('%').collect();
         let mut current_pos = 0;
 
@@ -327,7 +321,6 @@ impl<'a> QueryEngine<'a> {
             }
         }
 
-        // Deep Scan
         if let Value::Object(map) = doc {
             for val in map.values() {
                 if val.is_object() {
@@ -545,14 +538,19 @@ mod tests {
         let (_dir, config) = setup_test_db();
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "test", "db");
+        // Setup async
+        manager.init_db().await.unwrap();
+
         let engine = QueryEngine::new(&manager);
 
-        manager.create_collection("users", None).unwrap();
+        manager.create_collection("users", None).await.unwrap();
         manager
             .insert_raw("users", &json!({"id": "1", "age": 20, "role": "user"}))
+            .await
             .unwrap();
         manager
             .insert_raw("users", &json!({"id": "2", "age": 30, "role": "admin"}))
+            .await
             .unwrap();
 
         let query = Query {
@@ -577,11 +575,15 @@ mod tests {
         let (_dir, config) = setup_test_db();
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "test", "db");
+        // Setup async
+        manager.init_db().await.unwrap();
+
         let engine = QueryEngine::new(&manager);
 
-        manager.create_collection("docs", None).unwrap();
+        manager.create_collection("docs", None).await.unwrap();
         manager
             .insert_raw("docs", &json!({"id": "1", "tags": ["rust", "code"]}))
+            .await
             .unwrap();
 
         // Test ARRAY LIKE "rust"

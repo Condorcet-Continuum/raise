@@ -28,11 +28,12 @@ impl<'a> RuleStore<'a> {
         }
     }
 
-    /// Initialise le store en chargeant les règles depuis la collection système
-    pub fn sync_from_db(&mut self) -> Result<()> {
+    /// Initialise le store en chargeant les règles depuis la collection système (Async)
+    pub async fn sync_from_db(&mut self) -> Result<()> {
         let stored_rules = self
             .db_manager
             .list_all("_system_rules")
+            .await // Migration async
             .unwrap_or_default();
 
         self.dependency_cache.clear();
@@ -46,12 +47,11 @@ impl<'a> RuleStore<'a> {
         Ok(())
     }
 
-    /// Enregistre une règle de manière idempotente
+    /// Enregistre une règle de manière idempotente (Async)
     /// Ne persiste sur le disque QUE si la règle est nouvelle ou modifiée
-    pub fn register_rule(&mut self, collection: &str, rule: Rule) -> Result<()> {
+    pub async fn register_rule(&mut self, collection: &str, rule: Rule) -> Result<()> {
         // OPTIMISATION : Vérifier si la règle existe déjà et est identique
         if let Some(existing_rule) = self.rules_cache.get(&rule.id) {
-            // Cela fonctionne maintenant grâce au derive(PartialEq) dans ast.rs
             if *existing_rule == rule {
                 return Ok(()); // Rien à faire, on économise l'I/O
             }
@@ -65,7 +65,7 @@ impl<'a> RuleStore<'a> {
             obj.insert("id".to_string(), json!(rule.id));
         }
 
-        self.db_manager.insert_raw("_system_rules", &doc)?;
+        self.db_manager.insert_raw("_system_rules", &doc).await?; // Migration async
 
         // 2. Mise à jour du cache mémoire
         self.index_rule_in_cache(rule);
@@ -114,14 +114,14 @@ mod tests {
     use crate::rules_engine::ast::Expr;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_store_idempotency() {
+    #[tokio::test] // Migration async pour les tests
+    async fn test_store_idempotency() {
         let dir = tempdir().unwrap();
-        // CORRECTION : new() au lieu de struct init direct
+        // Configuration via la méthode new() conforme
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "test_space", "test_db");
-        manager.init_db().unwrap();
+        manager.init_db().await.unwrap(); // Migration async
 
         let mut store = RuleStore::new(&manager);
 
@@ -129,18 +129,17 @@ mod tests {
             id: "r1".into(),
             target: "t".into(),
             expr: Expr::Val(json!(1)),
-            // CORRECTION : Ajout des champs optionnels pour compiler
             description: None,
             severity: None,
         };
 
-        // Premier enregistrement : Doit écrire
-        store.register_rule("col", rule.clone()).unwrap();
+        // Premier enregistrement : Doit écrire (Async)
+        store.register_rule("col", rule.clone()).await.unwrap();
 
-        // Deuxième enregistrement identique : Ne doit PAS écrire
-        store.register_rule("col", rule.clone()).unwrap();
+        // Deuxième enregistrement identique : Ne doit PAS écrire (Async)
+        store.register_rule("col", rule.clone()).await.unwrap();
 
-        let docs_pass_2 = manager.list_all("_system_rules").unwrap();
+        let docs_pass_2 = manager.list_all("_system_rules").await.unwrap(); // Migration async
         assert_eq!(docs_pass_2.len(), 1);
 
         // Si on modifie la règle
@@ -148,17 +147,15 @@ mod tests {
             id: "r1".into(),
             target: "t".into(),
             expr: Expr::Val(json!(2)),
-            // CORRECTION : Ajout des champs optionnels
             description: Some("Modifiée".into()),
             severity: None,
         };
-        store.register_rule("col", rule_mod).unwrap();
-        let docs_pass_3 = manager.list_all("_system_rules").unwrap();
+        store.register_rule("col", rule_mod).await.unwrap(); // Migration async
+        let docs_pass_3 = manager.list_all("_system_rules").await.unwrap(); // Migration async
         assert_eq!(docs_pass_3.len(), 1);
 
-        // Vérif que la valeur a bien changé
+        // Vérification de la prise en compte du changement
         let content = &docs_pass_3[0];
-        // Note: l'expression est sérialisée, on vérifie juste que c'est pris en compte
         assert!(content.to_string().contains("\"val\":2"));
     }
 }

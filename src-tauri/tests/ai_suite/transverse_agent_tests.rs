@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/ai_suite/transverse_agent_tests.rs
+
 use crate::common::init_ai_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{transverse_agent::TransverseAgent, Agent, AgentContext};
@@ -8,7 +10,10 @@ use std::sync::Arc;
 #[ignore]
 async fn test_transverse_agent_ivvq_cycle() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
+
+    // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
+    // On doit l'attendre pour obtenir l'objet AiTestEnv concret.
+    let env = init_ai_test_env().await;
 
     // Config Robuste
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
@@ -97,8 +102,7 @@ async fn test_transverse_agent_ivvq_cycle() {
                     .unwrap_or_default()
                     .to_lowercase();
 
-                // MODIFICATION ICI : On vérifie seulement la clé structurelle "steps"
-                // On retire '&& content.contains("action")' car l'IA peut renvoyer une liste vide []
+                // MODIFICATION : On vérifie seulement la clé structurelle "steps"
                 if content.contains("steps") {
                     found_proc = true;
                     println!("✅ Procédure validée : {:?}", e.file_name());
@@ -112,7 +116,7 @@ async fn test_transverse_agent_ivvq_cycle() {
         proc_dir
     );
 
-    // 3. Check Test Campaign (Ajout de sécurité ici aussi)
+    // 3. Check Test Campaign
     let camp_dir = test_root.join("un2/transverse/collections/test_campaigns");
     let mut found_camp = false;
     if camp_dir.exists() {
@@ -130,7 +134,7 @@ async fn test_transverse_agent_ivvq_cycle() {
             }
         }
     }
-    // On ne fait qu'un warning si la campagne manque (optionnel) ou un assert soft
+
     if !found_camp {
         println!(
             "⚠️ Campagne non trouvée ou JSON invalide (Path: {:?})",

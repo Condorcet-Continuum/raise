@@ -5,7 +5,8 @@ pub mod consistency_checker;
 pub mod dynamic_validator;
 
 use crate::model_engine::types::ProjectModel;
-use serde::{Deserialize, Serialize};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize}; // Import nécessaire pour le trait
 
 // Re-exports pour faciliter l'usage externe
 pub use compliance_validator::ComplianceValidator;
@@ -30,8 +31,10 @@ pub struct ValidationIssue {
 }
 
 /// Trait commun que tous les validateurs doivent implémenter.
-pub trait ModelValidator {
-    fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue>;
+#[async_trait]
+pub trait ModelValidator: Send + Sync {
+    // Signature asynchrone stricte sans lifetimes explicites
+    async fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue>;
 }
 
 #[cfg(test)]
@@ -40,11 +43,14 @@ mod tests {
     use serde_json::json;
     // Imports nécessaires pour les tests d'intégration
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::rules_engine::{Expr, Rule};
+    use crate::rules_engine::ast::{Expr, Rule};
 
     struct MockValidator;
+
+    #[async_trait]
     impl ModelValidator for MockValidator {
-        fn validate(&self, _model: &ProjectModel) -> Vec<ValidationIssue> {
+        // CORRECTION : Passage en async pour respecter le trait
+        async fn validate(&self, _model: &ProjectModel) -> Vec<ValidationIssue> {
             vec![ValidationIssue {
                 severity: Severity::Error,
                 rule_id: "MOCK_RULE".to_string(),
@@ -75,17 +81,17 @@ mod tests {
         assert_eq!(json["rule_id"], "TEST_001");
     }
 
-    #[test]
-    fn test_trait_implementation() {
+    #[tokio::test] // CORRECTION : Test asynchrone
+    async fn test_trait_implementation() {
         let model = ProjectModel::default();
         let validator = MockValidator;
-        let issues = validator.validate(&model);
+        let issues = validator.validate(&model).await; // Ajout de .await
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].message, "Mock Error");
     }
 
-    #[test]
-    fn test_dynamic_validator_integration() {
+    #[tokio::test] // CORRECTION : Test asynchrone
+    async fn test_dynamic_validator_integration() {
         // 1. Création d'une règle via l'AST
         let rule_expr = Expr::Eq(vec![
             Expr::Var("name".to_string()),
@@ -115,8 +121,8 @@ mod tests {
         actor2.name = NameType::String("InvalidElement".to_string());
         model.oa.actors.push(actor2);
 
-        // 4. Exécution
-        let issues = validator.validate(&model);
+        // 4. Exécution (Appel .await car le trait est async)
+        let issues = validator.validate(&model).await;
 
         // 5. Vérification
         assert_eq!(issues.len(), 1, "Il devrait y avoir exactement 1 erreur");

@@ -192,10 +192,7 @@ mod tests {
                     },
                 ],
             },
-            observability: Observability {
-                heartbeat_ms: 100,
-                metrics: vec![],
-            },
+            observability: Observability { heartbeat_ms: 100 },
             signature: None,
         }
     }

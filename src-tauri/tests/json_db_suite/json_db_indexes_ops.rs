@@ -6,17 +6,21 @@ use raise::json_db::storage::StorageEngine;
 use serde_json::json;
 use std::fs;
 
-#[test]
-fn test_create_and_drop_index_lifecycle() {
-    let env = init_test_env();
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_create_and_drop_index_lifecycle() {
+    // CORRECTION E0277 : Ces helpers sont synchrones dans cette suite, pas de .await ici
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, &env.space, &env.db);
 
     let storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&storage, &env.space, &env.db);
 
     let collection = "indexed_articles";
-    // On crée la collection
-    mgr.create_collection(collection, None).unwrap();
+
+    // CORRECTION E0599 : create_collection est désormais asynchrone
+    mgr.create_collection(collection, None)
+        .await
+        .expect("create_collection failed");
 
     // 1. Insertion de données (pour vérifier que l'index se remplit à la création)
     let doc = json!({
@@ -26,11 +30,17 @@ fn test_create_and_drop_index_lifecycle() {
         "title": "Test Title",
         "status": "draft"
     });
-    mgr.insert_with_schema(collection, doc).unwrap();
+
+    // CORRECTION E0599 : insert_with_schema est désormais asynchrone
+    mgr.insert_with_schema(collection, doc)
+        .await
+        .expect("insert failed");
 
     // 2. Création de l'Index (Hash sur 'handle')
     println!("🏗️ Création de l'index...");
+    // CORRECTION E0599 : Les opérations d'indexation sont passées en asynchrone
     mgr.create_index(collection, "handle", "hash")
+        .await
         .expect("create_index failed");
 
     // VÉRIFICATION 1 : _meta.json mis à jour
@@ -63,7 +73,9 @@ fn test_create_and_drop_index_lifecycle() {
 
     // 3. Suppression de l'Index
     println!("🔥 Suppression de l'index...");
+    // CORRECTION E0599 : drop_index nécessite également .await
     mgr.drop_index(collection, "handle")
+        .await
         .expect("drop_index failed");
 
     // VÉRIFICATION 3 : _meta.json nettoyé

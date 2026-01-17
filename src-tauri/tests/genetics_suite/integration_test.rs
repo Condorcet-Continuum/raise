@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/genetics_suite/integration_test.rs
+
 use raise::genetics::bridge::GeneticsAdapter;
 use raise::genetics::engine::GeneticConfig;
 use raise::genetics::evaluators::architecture::ArchitectureEvaluator;
@@ -11,8 +13,8 @@ use raise::model_engine::loader::ModelLoader;
 use serde_json::json;
 use tempfile::tempdir;
 
-#[test]
-fn test_genetics_integration_with_json_db() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_genetics_integration_with_json_db() {
     let tmp = tempdir().unwrap();
     let config_db = JsonDbConfig::new(tmp.path().to_path_buf());
     let storage = StorageEngine::new(config_db);
@@ -21,9 +23,11 @@ fn test_genetics_integration_with_json_db() {
     let lf_schema = "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json";
     let lc_schema = "https://raise.local/schemas/v1/arcadia/la/logical-component.schema.json";
 
+    // CORRECTION E0599 : Ajout de .await car insert_raw est désormais asynchrone
     manager.insert_raw("la", &json!({
         "id": "f_ctrl", "name": "Control", "type": lf_schema, "properties": { "complexity": 50.0 }
-    })).unwrap();
+    })).await.unwrap();
+
     manager
         .insert_raw(
             "la",
@@ -31,10 +35,13 @@ fn test_genetics_integration_with_json_db() {
                 "id": "c_cpu", "name": "CPU", "type": lc_schema, "properties": { "capacity": 100.0 }
             }),
         )
+        .await // CORRECTION E0599 : Ajout de .await
         .unwrap();
 
     let loader = ModelLoader::new_with_manager(manager);
-    let model = loader.load_full_model().expect("Erreur chargement");
+
+    // CORRECTION E0599 : Ajout de .await car load_full_model renvoie une Future
+    let model = loader.load_full_model().await.expect("Erreur chargement");
 
     // Extraction des IDs réels
     let function_ids: Vec<String> = model.la.functions.iter().map(|f| f.id.clone()).collect();

@@ -8,14 +8,17 @@ use raise::json_db::storage::JsonDbConfig;
 use serde_json::{json, Value};
 use std::fs;
 
-fn seed_actors_from_dataset(mgr: &CollectionsManager, cfg: &JsonDbConfig) {
+// CORRECTION : Passage en async pour supporter les appels asynchrones au manager
+async fn seed_actors_from_dataset(mgr: &CollectionsManager<'_>, cfg: &JsonDbConfig) {
     // CORRECTION : URI absolue pour le schéma
     let schema_uri = format!(
         "db://{}/{}/schemas/v1/actors/actor.schema.json",
         TEST_SPACE, TEST_DB
     );
 
+    // CORRECTION E0599 : Ajout de .await sur create_collection
     mgr.create_collection("actors", Some(schema_uri))
+        .await
         .expect("create collection actors");
 
     let actors_data = vec![
@@ -44,19 +47,22 @@ fn seed_actors_from_dataset(mgr: &CollectionsManager, cfg: &JsonDbConfig) {
 
         let loaded_doc: Value = serde_json::from_str(&content).expect("json parse");
 
-        // Insertion via schéma
+        // CORRECTION E0599 : Ajout de .await sur insert_with_schema
         mgr.insert_with_schema("actors", loaded_doc)
+            .await
             .expect("Failed to insert actor");
     }
 }
 
 #[tokio::test]
 async fn test_sql_select_by_kind() {
-    let env = init_test_env();
+    // CORRECTION E0277 : Ces helpers sont synchrones dans cette suite
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
 
-    seed_actors_from_dataset(&mgr, &env.cfg);
+    // CORRECTION : .await sur l'appel au helper désormais asynchrone
+    seed_actors_from_dataset(&mgr, &env.cfg).await;
 
     let engine = QueryEngine::new(&mgr);
     let sql = "SELECT * FROM actors WHERE kind = 'bot'";
@@ -69,10 +75,10 @@ async fn test_sql_select_by_kind() {
 
 #[tokio::test]
 async fn test_sql_numeric_comparison_x_props() {
-    let env = init_test_env();
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg);
+    seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
 
     let sql = "SELECT * FROM actors WHERE x_age >= 30";
@@ -84,10 +90,10 @@ async fn test_sql_numeric_comparison_x_props() {
 
 #[tokio::test]
 async fn test_sql_logical_and_mixed() {
-    let env = init_test_env();
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg);
+    seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
 
     let sql = "SELECT * FROM actors WHERE kind = 'human' AND x_active = true";
@@ -99,10 +105,10 @@ async fn test_sql_logical_and_mixed() {
 
 #[tokio::test]
 async fn test_sql_like_display_name() {
-    let env = init_test_env();
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg);
+    seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
 
     let sql = "SELECT * FROM actors WHERE displayName LIKE 'User'";
@@ -115,10 +121,10 @@ async fn test_sql_like_display_name() {
 
 #[tokio::test]
 async fn test_sql_order_by_x_prop() {
-    let env = init_test_env();
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg);
+    seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
 
     // SQL : On veut les 2 plus âgés.
@@ -140,10 +146,10 @@ async fn test_sql_order_by_x_prop() {
 
 #[tokio::test]
 async fn test_sql_json_array_contains() {
-    let env = init_test_env();
+    let env = init_test_env().await;
     ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg);
+    seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
 
     let sql = "SELECT * FROM actors WHERE tags LIKE 'paris'";

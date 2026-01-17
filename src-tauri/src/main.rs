@@ -9,7 +9,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
+
 use tauri::Manager;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -48,7 +48,6 @@ use raise::commands::ai_commands::DlState;
 
 fn main() {
     // [MODIFICATION] Chargement explicite du .env au démarrage
-    // Essentiel pour que l'Orchestrateur (RAG) voie "VECTOR_STORE_PROVIDER" et "ENABLE_GRAPH_VECTORS"
     dotenvy::dotenv().ok();
 
     println!("🚀 Démarrage de RAISE...");
@@ -77,9 +76,7 @@ fn main() {
             let default_space = "un2";
             let default_db = "_system";
 
-            // 3. GRAPH STORE (Base Graphe globale pour l'app)
-            // Note : Le RAG utilise son propre GraphStore interne dans un sous-dossier différent (via RagRetriever)
-            // pour éviter les conflits de verrouillage de fichiers (RocksDB).
+            // 3. GRAPH STORE
             let graph_path = db_root.join("graph_store");
             let graph_store_result =
                 tauri::async_runtime::block_on(async { GraphStore::new(graph_path).await });
@@ -92,18 +89,33 @@ fn main() {
             }
 
             // 4. MIGRATIONS
-            let _ = run_app_migrations(&storage, default_space, default_db);
+            let _ = tauri::async_runtime::block_on(run_app_migrations(
+                &storage,
+                default_space,
+                default_db,
+            ));
+            let _plugin_mgr = PluginManager::new(&storage);
+            app.manage(_plugin_mgr);
+
+            // 5. INJECTION ÉTATS
+            let _ = tauri::async_runtime::block_on(run_app_migrations(
+                &storage,
+                default_space,
+                default_db,
+            ));
             let plugin_mgr = PluginManager::new(&storage);
 
             // 5. INJECTION ÉTATS
             app.manage(config);
             app.manage(storage);
             app.manage(plugin_mgr);
+
+            // CORRECTION E0308 : Le compilateur attend std::sync::Mutex pour AppState
             app.manage(AppState {
-                model: Mutex::new(ProjectModel::default()),
+                model: std::sync::Mutex::new(ProjectModel::default()),
             });
 
-            // Initialisation "vide" pour le démarrage
+            // Pour WorkflowStore, on conserve AsyncMutex car il est géré comme un type autonome
             app.manage(AsyncMutex::new(WorkflowStore::default()));
             app.manage(AiState::new(None));
             app.manage(DlState::new());
@@ -111,14 +123,13 @@ fn main() {
             let app_handle = app.handle();
             raise::blockchain::ensure_innernet_state(app_handle, "default");
 
-            // --- CHARGEMENT IA NATIF (PATRIMOINE CONSERVÉ) ---
+            // --- CHARGEMENT IA NATIF ---
             let native_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 println!("⏳ [Background] Initialisation du moteur IA Natif (Llama 3.2 1B)...");
                 match CandleLlmEngine::new() {
                     Ok(engine) => {
                         let state = native_handle.state::<NativeLlmState>();
-                        // CORRECTION : Utilisation de unwrap() au lieu de if let pour éviter lifetime issue
                         *state.0.lock().unwrap() = Some(engine);
                         println!("✅ [Background] Moteur IA Natif prêt !");
                     }
@@ -129,14 +140,11 @@ fn main() {
             });
 
             // 6. INITIALISATION ASYNC ORCHESTRATEUR
-            // C'est ici que l'on connecte notre nouvel Orchestrateur optimisé
             let app_handle_clone = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                // [MODIFICATION] Récupération robuste des URLs
                 let llm_url =
                     env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
 
-                // Le port Qdrant est optionnel si on est en mode "surreal", mais on le garde pour la compatibilité
                 let qdrant_url = format!(
                     "http://127.0.0.1:{}",
                     env::var("PORT_QDRANT_GRPC").unwrap_or_else(|_| "6334".into())
@@ -149,27 +157,23 @@ fn main() {
 
                 let storage_state = app_handle_clone.state::<StorageEngine>();
 
-                // Chargement du modèle symbolique (Arcadia) depuis le JSON DB
                 let loader = ModelLoader::from_engine(storage_state.inner(), "un2", "_system");
+
+                // CORRECTION E0308 : Ajout de .await car load_full_model est une Future
                 let model_res = loader.load_full_model();
 
-                match model_res {
+                match model_res.await {
                     Ok(model) => {
                         println!("✅ [IA] Modèle symbolique chargé. Démarrage Orchestrateur...");
 
-                        // [MODIFICATION] Appel correspondant à la nouvelle signature de AiOrchestrator::new
-                        // L'orchestrateur va lire VECTOR_STORE_PROVIDER dans l'env pour choisir entre Qdrant/Surreal
                         match AiOrchestrator::new(model, &qdrant_url, &llm_url).await {
                             Ok(orchestrator) => {
-                                // On enveloppe dans un Arc<Mutex> pour le partage thread-safe
                                 let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
 
-                                // Injection dans le State Tauri (pour ai_commands)
                                 let ai_state = app_handle_clone.state::<AiState>();
                                 let mut guard = ai_state.0.lock().await;
                                 *guard = Some(shared_orch.clone());
 
-                                // Injection dans le Scheduler (Workflow)
                                 let wf_state =
                                     app_handle_clone.state::<AsyncMutex<WorkflowStore>>();
                                 let mut wf_store = wf_state.lock().await;
@@ -209,7 +213,7 @@ fn main() {
             // Moteur de Règles ---
             rules_commands::dry_run_rule,
             rules_commands::validate_model,
-            // Commandes IA (Utilisant l'Orchestrateur via AiState)
+            // Commandes IA
             ai_commands::ai_chat,
             ai_commands::ai_reset,
             ai_commands::ask_native_llm,
@@ -220,7 +224,7 @@ fn main() {
             ai_commands::save_dl_model,
             ai_commands::load_dl_model,
             dataset::ai_export_dataset,
-            // Commandes Cognitives (Plugins)
+            // Commandes Cognitives
             cognitive_commands::cognitive_load_plugin,
             cognitive_commands::cognitive_run_plugin,
             cognitive_commands::cognitive_list_plugins,
@@ -259,7 +263,8 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> anyhow::Result<()> {
+// CORRECTION E0277 : run_app_migrations doit être async pour utiliser .await
+async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> anyhow::Result<()> {
     let migrator = Migrator::new(storage, space, db);
     let migrations = vec![
         Migration {
@@ -295,6 +300,7 @@ fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> anyhow:
             applied_at: None,
         },
     ];
-    migrator.run_migrations(migrations)?;
+    // CORRECTION E0277 : Ajout de .await car run_migrations est asynchrone
+    migrator.run_migrations(migrations).await?;
     Ok(())
 }

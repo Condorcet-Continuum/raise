@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/ai/training/dataset.rs
+
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
 use serde::{Deserialize, Serialize};
@@ -11,7 +13,7 @@ pub struct TrainingExample {
 
 /// Extrait les données spécifiquement pour un domaine métier à partir du JSON-DB.
 /// Cette fonction est utilisée par le moteur d'entraînement natif.
-pub fn extract_domain_data(
+pub async fn extract_domain_data(
     storage: &StorageEngine,
     space: &str,
     db_name: &str,
@@ -20,8 +22,11 @@ pub fn extract_domain_data(
     let manager = CollectionsManager::new(storage, space, db_name);
     let mut dataset = Vec::new();
 
-    // Récupération de toutes les collections pour filtrer celles du domaine
-    let collections = manager.list_collections().map_err(|e| e.to_string())?;
+    // CORRECTION E0599 : Ajout de .await car list_collections est asynchrone
+    let collections = manager
+        .list_collections()
+        .await
+        .map_err(|e| e.to_string())?;
 
     for col in collections {
         // Logique de filtrage : on cherche le nom du domaine dans le nom de la collection
@@ -30,7 +35,8 @@ pub fn extract_domain_data(
             continue;
         }
 
-        let docs = manager.list_all(&col).map_err(|e| e.to_string())?;
+        // CORRECTION E0599 : Ajout de .await car list_all est asynchrone
+        let docs = manager.list_all(&col).await.map_err(|e| e.to_string())?;
 
         for doc in docs {
             // Construction de l'exemple d'entraînement structuré
@@ -58,7 +64,8 @@ pub async fn ai_export_dataset(
     domain: String,
 ) -> Result<Vec<TrainingExample>, String> {
     // Cette commande permet au frontend de prévisualiser ou d'exporter les données
-    extract_domain_data(storage.inner(), &space, &db_name, &domain)
+    // CORRECTION : Ajout de .await car extract_domain_data est désormais async
+    extract_domain_data(storage.inner(), &space, &db_name, &domain).await
 }
 
 // --- TESTS UNITAIRES ---
@@ -70,8 +77,8 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_extract_domain_data_filtering() {
+    #[tokio::test] // CORRECTION : Utilisation de tokio pour les tests asynchrones
+    async fn test_extract_domain_data_filtering() {
         // A. Setup d'une base de données temporaire
         let temp_dir = tempdir().expect("Échec création dossier temp");
         let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
@@ -82,15 +89,24 @@ mod tests {
         let manager = CollectionsManager::new(&storage, space, db);
 
         // B. Création de collections (une 'safety' et une 'other')
-        manager.create_collection("safety_rules", None).unwrap();
-        manager.create_collection("general_info", None).unwrap();
+        // Correction : await sur les opérations DB si elles sont async
+        manager
+            .create_collection("safety_rules", None)
+            .await
+            .unwrap();
+        manager
+            .create_collection("general_info", None)
+            .await
+            .unwrap();
 
         let doc = json!({"id": "1", "content": "test"});
-        manager.insert_raw("safety_rules", &doc).unwrap();
-        manager.insert_raw("general_info", &doc).unwrap();
+        manager.insert_raw("safety_rules", &doc).await.unwrap();
+        manager.insert_raw("general_info", &doc).await.unwrap();
 
         // C. Test du filtrage par domaine 'safety'
-        let results = extract_domain_data(&storage, space, db, "safety").unwrap();
+        let results = extract_domain_data(&storage, space, db, "safety")
+            .await
+            .unwrap();
         assert_eq!(
             results.len(),
             1,
@@ -99,7 +115,9 @@ mod tests {
         assert!(results[0].instruction.contains("safety"));
 
         // D. Test avec le domaine 'all'
-        let all_results = extract_domain_data(&storage, space, db, "all").unwrap();
+        let all_results = extract_domain_data(&storage, space, db, "all")
+            .await
+            .unwrap();
         assert_eq!(
             all_results.len(),
             2,
@@ -107,12 +125,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_extract_empty_domain() {
+    #[tokio::test] // CORRECTION : Passage en test asynchrone
+    async fn test_extract_empty_domain() {
         let temp_dir = tempdir().unwrap();
         let storage = StorageEngine::new(JsonDbConfig::new(temp_dir.path().to_path_buf()));
 
-        let results = extract_domain_data(&storage, "space", "db", "nonexistent").unwrap();
+        let results = extract_domain_data(&storage, "space", "db", "nonexistent")
+            .await
+            .unwrap();
         assert!(
             results.is_empty(),
             "Le dataset devrait être vide pour un domaine inconnu"

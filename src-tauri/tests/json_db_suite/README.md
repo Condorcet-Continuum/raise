@@ -66,7 +66,7 @@ Fonction d'initialisation robuste utilisée par tous les tests.
 <!-- end list -->
 
 ```rust
-let env = init_test_env();
+let env = init_test_env().await;
 // env.cfg pointe vers le dossier temporaire peuplé
 // env.storage est prêt à l'emploi
 ```

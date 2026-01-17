@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/ai_suite/deep_learning_tests.rs
+
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 use raise::ai::deep_learning::models::sequence_net::SequenceNet;
@@ -7,7 +9,7 @@ use raise::commands::ai_commands::DlState;
 use std::fs;
 use std::path::PathBuf;
 
-#[test]
+#[test] // CORRECTION : Retour au test synchrone standard
 fn test_dl_e2e_integration() -> anyhow::Result<()> {
     // 1. Initialisation de l'État Global (Simule le démarrage de l'app)
     let state = DlState::new();
@@ -26,7 +28,8 @@ fn test_dl_e2e_integration() -> anyhow::Result<()> {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
         let model = SequenceNet::new(input_dim, hidden_dim, output_dim, vb)?;
 
-        // Verrouillage et mise à jour de l'état
+        // CORRECTION E0277 : lock() renvoie un Result (std::sync::Mutex).
+        // On retire .await et on utilise .unwrap() comme suggéré par le compilateur.
         let mut model_guard = state.model.lock().unwrap();
         let mut varmap_guard = state.varmap.lock().unwrap();
         *model_guard = Some(model);

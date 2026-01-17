@@ -1,4 +1,6 @@
-use crate::common::init_ai_test_env;
+// FICHIER : src-tauri/tests/code_gen_suite/agent_tests.rs
+
+use crate::common::init_ai_test_env; // REVERSION : Retour à l'import fonctionnel depuis common
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
@@ -8,12 +10,13 @@ use std::sync::Arc;
 #[ignore]
 async fn test_software_agent_creates_component_end_to_end() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
 
-    // --- CONFIGURATION ROBUSTE (Comme ai_suite) ---
+    // CORRECTION : init_ai_test_env() est asynchrone, on l'attend pour obtenir AiTestEnv.
+    let env = init_ai_test_env().await;
+
+    // --- CONFIGURATION ROBUSTE ---
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
 
-    // Skip si pas de backend
     if !env.client.ping_local().await && api_key.is_empty() {
         println!("⚠️ SKIPPED: Pas de backend IA disponible.");
         return;
@@ -82,7 +85,7 @@ async fn test_software_agent_creates_component_end_to_end() {
 #[ignore]
 async fn test_intent_classification_integration() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
+    let env = init_ai_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     if !env.client.ping_local().await && api_key.is_empty() {
@@ -98,8 +101,7 @@ async fn test_intent_classification_integration() {
     let client = LlmClient::new(&local_url, &api_key, model_name);
     let classifier = IntentClassifier::new(client);
 
-    // --- TEST 1 : CREATION (Retour au prompt simple qui marchait) ---
-    // On enlève les instructions complexes qui embrouillaient l'IA sur le nom
+    // --- TEST 1 : CREATION ---
     let input = "Crée une fonction système nommée 'DemarrerMoteur'";
     println!("➤ Input 1: {}", input);
 
@@ -108,7 +110,6 @@ async fn test_intent_classification_integration() {
 
     match intent {
         EngineeringIntent::CreateElement { name, .. } => {
-            // On nettoie un peu au cas où l'IA garde les quotes
             let clean_name = name.replace("'", "").replace("\"", "");
             assert!(
                 clean_name.to_lowercase().contains("demarrermoteur")
@@ -120,8 +121,7 @@ async fn test_intent_classification_integration() {
         _ => panic!("Classification Type 1 échouée. Reçu: {:?}", intent),
     }
 
-    // --- TEST 2 : CODE GEN (Prompt strict pour le filename) ---
-    // Ici on insiste lourdement sur le filename car c'est souvent oublié
+    // --- TEST 2 : CODE GEN ---
     let input_code = "Génère le code Rust pour le composant Auth. IMPORTANT: Le JSON DOIT contenir le champ \"filename\": \"auth.rs\".";
     println!("➤ Input 2: {}", input_code);
 

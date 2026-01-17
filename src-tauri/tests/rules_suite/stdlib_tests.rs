@@ -3,15 +3,19 @@
 use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider};
 use serde_json::json;
 
-#[test]
-fn test_math_extensions() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_math_extensions() {
     let provider = NoOpDataProvider;
     let ctx = json!({});
 
     // Abs
     let abs = Expr::Abs(Box::new(Expr::Val(json!(-42))));
     assert_eq!(
-        Evaluator::evaluate(&abs, &ctx, &provider).unwrap().as_f64(),
+        // CORRECTION : Ajout de .await car l'évaluateur est asynchrone
+        Evaluator::evaluate(&abs, &ctx, &provider)
+            .await
+            .unwrap()
+            .as_f64(),
         Some(42.0)
     );
 
@@ -21,20 +25,26 @@ fn test_math_extensions() {
         precision: Box::new(Expr::Val(json!(2))),
     };
     assert_eq!(
-        Evaluator::evaluate(&r1, &ctx, &provider).unwrap().as_f64(),
+        // CORRECTION : Ajout de .await
+        Evaluator::evaluate(&r1, &ctx, &provider)
+            .await
+            .unwrap()
+            .as_f64(),
         Some(3.14)
     );
 }
 
-#[test]
-fn test_string_extensions() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_string_extensions() {
     let provider = NoOpDataProvider;
     let ctx = json!({ "msg": "  Bonjour Monde  " });
 
     // Trim + Lower
     let expr = Expr::Lower(Box::new(Expr::Trim(Box::new(Expr::Var("msg".into())))));
     assert_eq!(
+        // CORRECTION : Ajout de .await
         Evaluator::evaluate(&expr, &ctx, &provider)
+            .await
             .unwrap()
             .as_str(),
         Some("bonjour monde")
@@ -47,15 +57,17 @@ fn test_string_extensions() {
         replacement: Box::new(Expr::Val(json!("Raise"))),
     };
     assert_eq!(
+        // CORRECTION : Ajout de .await
         Evaluator::evaluate(&repl, &ctx, &provider)
+            .await
             .unwrap()
             .as_str(),
         Some("  Bonjour Raise  ")
     );
 }
 
-#[test]
-fn test_list_aggregations() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone
+async fn test_list_aggregations() {
     let provider = NoOpDataProvider;
     let ctx = json!({ "values": [10, 2, 50, 5] });
 
@@ -63,11 +75,19 @@ fn test_list_aggregations() {
     let max = Expr::Max(Box::new(Expr::Var("values".into())));
 
     assert_eq!(
-        Evaluator::evaluate(&min, &ctx, &provider).unwrap().as_f64(),
+        // CORRECTION : Ajout de .await
+        Evaluator::evaluate(&min, &ctx, &provider)
+            .await
+            .unwrap()
+            .as_f64(),
         Some(2.0)
     );
     assert_eq!(
-        Evaluator::evaluate(&max, &ctx, &provider).unwrap().as_f64(),
+        // CORRECTION : Ajout de .await
+        Evaluator::evaluate(&max, &ctx, &provider)
+            .await
+            .unwrap()
+            .as_f64(),
         Some(50.0)
     );
 }

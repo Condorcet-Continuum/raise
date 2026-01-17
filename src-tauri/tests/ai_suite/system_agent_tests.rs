@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/ai_suite/system_agent_tests.rs
+
 use crate::common::init_ai_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
@@ -8,7 +10,10 @@ use std::sync::Arc;
 #[ignore]
 async fn test_system_agent_creates_function_end_to_end() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
+
+    // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
+    // On doit l'attendre pour accéder aux champs client et storage.
+    let env = init_ai_test_env().await;
 
     // 1. Config Robuste (Identique aux autres agents)
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();

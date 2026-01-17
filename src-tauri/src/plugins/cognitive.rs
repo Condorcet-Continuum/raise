@@ -1,6 +1,9 @@
+// FICHIER : src-tauri/src/plugins/cognitive.rs
+
 use super::runtime::PluginContext;
 use crate::json_db::collections::manager::CollectionsManager;
 use anyhow::Result;
+use futures::executor::block_on;
 use serde_json::Value;
 use wasmtime::{Caller, Extern, Linker};
 
@@ -38,7 +41,9 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> Result<()>
                     let col = req["collection"].as_str().unwrap_or("");
                     let id = req["id"].as_str().unwrap_or("");
 
-                    match mgr.get(col, id) {
+                    // CORRECTION : mgr.get() renvoie une Future. block_on permet de récupérer
+                    // le résultat de manière synchrone pour le Linker WASM.
+                    match block_on(mgr.get(col, id)) {
                         Ok(Some(doc)) => doc.to_string(),
                         Ok(None) => String::from("null"),
                         Err(e) => format!("{{ \"error\": \"{}\" }}", e),
@@ -57,18 +62,22 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> Result<()>
         },
     )?;
 
-    // FONCTION : host_log(ptr, len)
+    // FONCTION : plugin_log(ptr, len)
     linker.func_wrap(
         "env",
-        "host_log",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| {
+        "plugin_log",
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> i32 {
             let mem = match caller.get_export("memory") {
                 Some(Extern::Memory(m)) => m,
-                _ => return,
+                _ => return -1,
             };
+
             if let Ok(msg) = read_string_from_wasm(&mut caller, &mem, ptr, len) {
                 println!("🤖 [PLUGIN LOG]: {}", msg);
             }
+
+            // CORRECTIF E0308 : On ajoute un retour explicite car la closure attend un i32
+            0
         },
     )?;
 
@@ -87,4 +96,35 @@ fn read_string_from_wasm(
         .get(ptr as usize..(ptr + len) as usize)
         .ok_or(anyhow::anyhow!("Out of bounds"))?;
     Ok(String::from_utf8(data.to_vec())?)
+}
+
+// --- TESTS UNITAIRES ---
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use tempfile::tempdir;
+    use wasmtime::Engine;
+
+    #[test]
+    fn test_register_functions_integrity() {
+        let engine = Engine::default();
+        let mut linker = Linker::new(&engine);
+
+        let temp_dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+
+        let _context = PluginContext {
+            storage,
+            space: "test_space".to_string(),
+            db: "test_db".to_string(),
+            wasi_out_buffer: Vec::new(),
+        };
+
+        // Vérification que les fonctions d'hôte s'enregistrent sans erreur
+        let result = register_host_functions(&mut linker);
+        assert!(result.is_ok());
+    }
 }

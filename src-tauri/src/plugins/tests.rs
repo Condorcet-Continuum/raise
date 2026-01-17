@@ -83,8 +83,8 @@ fn generate_spy_plugin_wasm() -> Vec<u8> {
     wasm
 }
 
-#[test]
-fn test_plugin_lifecycle_and_cognitive_bridge() {
+#[tokio::test]
+async fn test_plugin_lifecycle_and_cognitive_bridge() {
     let (manager, storage, _tmp_dir) = create_test_env();
     let space = "test_space";
     let db = "test_db";
@@ -92,14 +92,17 @@ fn test_plugin_lifecycle_and_cognitive_bridge() {
     // 1. SETUP DB
     let col_mgr =
         crate::json_db::collections::manager::CollectionsManager::new(&storage, space, db);
-    col_mgr.create_collection("secrets", None).unwrap();
 
+    col_mgr.create_collection("secrets", None).await.unwrap();
     let doc = json!({
         "id": "agent_007",
         "name": "James Bond",
         "status": "Active"
     });
-    col_mgr.insert_raw("secrets", &doc).expect("Insert failed");
+    col_mgr
+        .insert_raw("secrets", &doc)
+        .await
+        .expect("Insert failed");
 
     // 2. CREATE WASM (Génération dynamique fiable)
     let wasm_bytes = generate_spy_plugin_wasm();

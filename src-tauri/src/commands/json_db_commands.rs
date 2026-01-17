@@ -24,9 +24,11 @@ pub async fn jsondb_create_db(
     space: String,
     db: String,
 ) -> Result<(), String> {
-    file_storage::create_db(&storage.config, &space, &db).map_err(|e| e.to_string())?;
+    file_storage::create_db(&storage.config, &space, &db)
+        .await
+        .map_err(|e| e.to_string())?;
     let manager = mgr(&storage, &space, &db)?;
-    manager.init_db().map_err(|e| e.to_string())
+    manager.init_db().await.map_err(|e| e.to_string())
 }
 
 #[command]
@@ -36,6 +38,7 @@ pub async fn jsondb_drop_db(
     db: String,
 ) -> Result<(), String> {
     file_storage::drop_db(&storage.config, &space, &db, file_storage::DropMode::Hard)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -52,6 +55,7 @@ pub async fn jsondb_create_collection(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .create_collection(&collection, schema_uri)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -62,7 +66,7 @@ pub async fn jsondb_list_collections(
     db: String,
 ) -> Result<Vec<String>, String> {
     let manager = mgr(&storage, &space, &db)?;
-    manager.list_collections().map_err(|e| e.to_string())
+    manager.list_collections().await.map_err(|e| e.to_string())
 }
 
 #[command]
@@ -75,6 +79,7 @@ pub async fn jsondb_drop_collection(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .drop_collection(&collection)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -92,6 +97,7 @@ pub async fn jsondb_create_index(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .create_index(&collection, &field, &kind)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -106,6 +112,7 @@ pub async fn jsondb_drop_index(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .drop_index(&collection, &field)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -150,17 +157,17 @@ pub async fn jsondb_evaluate_draft(
     }
 
     // 3. Exécuter le moteur de règles (GenRules)
-    // CORRECTION : Instanciation du manager requise par la nouvelle signature
     let manager = mgr(&storage, &space, &db)?;
 
     manager::apply_business_rules(
-        &manager, // Passé le manager au lieu de la config/space/db
+        &manager,
         &collection,
         &mut doc,
         None,
         &registry,
         &schema_uri,
     )
+    .await // Ajout du .await pour la signature asynchrone
     .map_err(|e| format!("Erreur exécution règles: {}", e))?;
 
     Ok(doc)
@@ -179,6 +186,7 @@ pub async fn jsondb_insert_document(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .insert_with_schema(&collection, document)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -194,6 +202,7 @@ pub async fn jsondb_update_document(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .update_document(&collection, &id, document)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -208,6 +217,7 @@ pub async fn jsondb_get_document(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .get_document(&collection, &id)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -222,6 +232,7 @@ pub async fn jsondb_delete_document(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .delete_document(&collection, &id)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -235,6 +246,7 @@ pub async fn jsondb_list_all(
     let manager = mgr(&storage, &space, &db)?;
     manager
         .list_all(&collection)
+        .await
         .map_err(|e| format!("List All Failed: {}", e))
 }
 
@@ -274,12 +286,14 @@ pub async fn jsondb_init_demo_rules(
     db: String,
 ) -> Result<(), String> {
     let mgr = mgr(&storage, &space, &db)?;
-    mgr.init_db().map_err(|e| e.to_string())?;
+    mgr.init_db().await.map_err(|e| e.to_string())?;
 
     mgr.create_collection("users", None)
+        .await
         .map_err(|e| e.to_string())?;
     let user_doc = json!({ "id": "u_dev", "name": "Alice Dev", "tjm": 500.0 });
     mgr.insert_raw("users", &user_doc)
+        .await
         .map_err(|e| e.to_string())?;
 
     let schema_content = json!({
@@ -338,6 +352,7 @@ pub async fn jsondb_init_demo_rules(
 
     let schema_uri = format!("db://{}/{}/schemas/v1/invoices/default.json", space, db);
     mgr.create_collection("invoices", Some(schema_uri))
+        .await
         .map_err(|e| e.to_string())?;
 
     Ok(())
@@ -350,7 +365,7 @@ pub async fn jsondb_init_model_rules(
     db: String,
 ) -> Result<(), String> {
     let mgr = mgr(&storage, &space, &db)?;
-    mgr.init_db().map_err(|e| e.to_string())?;
+    mgr.init_db().await.map_err(|e| e.to_string())?;
 
     let schema_content = json!({
         "type": "object",
@@ -406,7 +421,9 @@ pub async fn jsondb_init_model_rules(
     .map_err(|e| e.to_string())?;
 
     let schema_uri = format!("db://{}/{}/schemas/v1/la/functions.json", space, db);
-    let _ = mgr.create_collection("logical_functions", Some(schema_uri));
+    let _ = mgr
+        .create_collection("logical_functions", Some(schema_uri))
+        .await;
 
     Ok(())
 }

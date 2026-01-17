@@ -1,10 +1,10 @@
-// src-tauri/tests/ai_suite.rs
+// FICHIER : src-tauri/tests/ai_suite.rs
 
-// Module commun (Setup, Helpers)
+// Module commun (Setup, Helpers, Environnement asynchrone)
 #[path = "ai_suite/mod.rs"]
 mod common;
 
-// Tests de connectivité LLM (Ping, Dual Mode)
+// Tests de connectivité LLM (Ping, Dual Mode, Local vs Remote)
 #[path = "ai_suite/llm_tests.rs"]
 mod llm_tests;
 
@@ -26,18 +26,18 @@ mod software_agent_tests;
 #[path = "ai_suite/hardware_agent_tests.rs"]
 mod hardware_agent_tests;
 
-// EPBS : Configuration Items
+// EPBS : Configuration Items (End Product Breakdown Structure)
 #[path = "ai_suite/epbs_agent_tests.rs"]
 mod epbs_agent_tests;
 
-// DATA : Master Data Management
+// DATA : Master Data Management & Datasets
 #[path = "ai_suite/data_agent_tests.rs"]
 mod data_agent_tests;
 
-// TRANSVERSE : Exigences, Tests & IVVQ
+// TRANSVERSE : Exigences, Procédures de Tests & IVVQ
 #[path = "ai_suite/transverse_agent_tests.rs"]
 mod transverse_agent_tests;
 
-// TRANSVERSE : Exigences, Tests & IVVQ
+// DEEP LEARNING : Entraînement local, Inférence & Sérialisation Candle
 #[path = "ai_suite/deep_learning_tests.rs"]
 mod deep_learning_tests;

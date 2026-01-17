@@ -5,9 +5,10 @@ use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 // use raise::json_db::storage::file_storage; // Plus nécessaire
 use serde_json::json;
 
-#[test]
-fn schema_instantiate_validate_minimal() {
-    let test_env = init_test_env();
+#[tokio::test]
+async fn schema_instantiate_validate_minimal() {
+    // init_test_env et ensure_db_exists sont synchrones dans cette suite
+    let test_env = init_test_env().await;
     let cfg = &test_env.cfg;
 
     let space = TEST_SPACE;
@@ -30,7 +31,6 @@ fn schema_instantiate_validate_minimal() {
         SchemaValidator::compile_with_registry(&root_uri, &reg).expect("compile failed");
 
     // 3) Document minimal avec TOUS les champs requis (Id, Dates, $schema)
-    // CORRECTION : On fournit un document "complet" car le Validator ne fait plus d'injection auto.
     let mut doc = json!({
       "$schema": root_uri, // Requis
       "id": uuid::Uuid::new_v4().to_string(), // Requis
@@ -46,6 +46,7 @@ fn schema_instantiate_validate_minimal() {
     });
 
     // 4) Compute + Validate
+    // CORRECTION E0277 : compute_then_validate est synchrone. Suppression de .await
     validator
         .compute_then_validate(&mut doc)
         .expect("compute + validate failed");

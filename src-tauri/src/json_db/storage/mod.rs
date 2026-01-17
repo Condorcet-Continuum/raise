@@ -36,7 +36,6 @@ impl JsonDbConfig {
     }
 
     pub fn db_schemas_root(&self, space: &str, _db: &str) -> PathBuf {
-        // Centralisation absolue dans _system/schemas
         self.db_root(space, "_system").join("schemas")
     }
 }
@@ -53,11 +52,13 @@ impl StorageEngine {
     pub fn new(config: JsonDbConfig) -> Self {
         Self {
             config,
+            // Utilisation d'une capacité de 1000 avec la nouvelle logique LRU
             cache: cache::Cache::new(1000, None),
         }
     }
 
-    pub fn write_document(
+    /// Écrit un document de manière asynchrone (Disque + Cache)
+    pub async fn write_document(
         &self,
         space: &str,
         db: &str,
@@ -65,17 +66,18 @@ impl StorageEngine {
         id: &str,
         doc: &Value,
     ) -> Result<()> {
-        // 1. Écriture disque (Persistance)
-        file_storage::write_document(&self.config, space, db, collection, id, doc)?;
+        // 1. Écriture disque atomique et asynchrone
+        file_storage::write_document(&self.config, space, db, collection, id, doc).await?;
 
-        // 2. Mise à jour cache (Performance)
+        // 2. Mise à jour du cache LRU (opération synchrone en RAM)
         let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
         self.cache.put(cache_key, doc.clone());
 
         Ok(())
     }
 
-    pub fn read_document(
+    /// Lit un document (Cache Hit d'abord, sinon Disque Async)
+    pub async fn read_document(
         &self,
         space: &str,
         db: &str,
@@ -84,15 +86,15 @@ impl StorageEngine {
     ) -> Result<Option<Value>> {
         let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
 
-        // 1. Vérification cache
+        // 1. Vérification du cache
         if let Some(doc) = self.cache.get(&cache_key) {
             return Ok(Some(doc));
         }
 
-        // 2. Lecture disque
-        let doc_opt = file_storage::read_document(&self.config, space, db, collection, id)?;
+        // 2. Lecture disque asynchrone
+        let doc_opt = file_storage::read_document(&self.config, space, db, collection, id).await?;
 
-        // 3. Peuplement cache
+        // 3. Mise en cache si trouvé
         if let Some(doc) = &doc_opt {
             self.cache.put(cache_key, doc.clone());
         }
@@ -100,8 +102,18 @@ impl StorageEngine {
         Ok(doc_opt)
     }
 
-    pub fn delete_document(&self, space: &str, db: &str, collection: &str, id: &str) -> Result<()> {
-        file_storage::delete_document(&self.config, space, db, collection, id)?;
+    /// Supprime un document (Disque Async + Cache)
+    pub async fn delete_document(
+        &self,
+        space: &str,
+        db: &str,
+        collection: &str,
+        id: &str,
+    ) -> Result<()> {
+        // Suppression disque
+        file_storage::delete_document(&self.config, space, db, collection, id).await?;
+
+        // Suppression cache
         let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
         self.cache.remove(&cache_key);
         Ok(())
@@ -114,22 +126,29 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_storage_engine_cache_hit() {
+    #[tokio::test]
+    async fn test_storage_engine_cache_hit() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let engine = StorageEngine::new(config);
 
         let doc = json!({"val": 42});
 
-        // Écriture
-        engine.write_document("s", "d", "c", "1", &doc).unwrap();
+        // Test écriture
+        engine
+            .write_document("s", "d", "c", "1", &doc)
+            .await
+            .unwrap();
 
-        // Vérifions que c'est dans le cache
+        // Le cache doit contenir la valeur
         assert!(engine.cache.get(&"s/d/c/1".to_string()).is_some());
 
-        // Lecture (doit venir du cache - on pourrait supprimer le fichier pour le prouver)
-        let read = engine.read_document("s", "d", "c", "1").unwrap().unwrap();
+        // Lecture (doit retourner la valeur, idéalement depuis le cache)
+        let read = engine
+            .read_document("s", "d", "c", "1")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(read["val"], 42);
     }
 }

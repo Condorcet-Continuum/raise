@@ -29,7 +29,8 @@ pub struct AiTestEnv {
     pub _tmp_dir: tempfile::TempDir,
 }
 
-pub fn init_ai_test_env() -> AiTestEnv {
+// CORRECTION E0599 : Passage en async pour pouvoir utiliser .await sur init_db()
+pub async fn init_ai_test_env() -> AiTestEnv {
     INIT.call_once(|| {
         dotenvy::dotenv().ok();
         let _ = tracing_subscriber::fmt()
@@ -80,8 +81,8 @@ pub fn init_ai_test_env() -> AiTestEnv {
     // On instancie le manager pour initialiser la base
     let mgr = CollectionsManager::new(&storage, &space, &db);
 
-    // On génère _system.json valide (avec ID, Dates, Schéma)
-    mgr.init_db().expect("❌ init_db failed in ai_suite");
+    // CORRECTION E0599 : Ajout de .await car init_db() est asynchrone
+    mgr.init_db().await.expect("❌ init_db failed in ai_suite");
 
     // 4. Client LLM
     let gemini_key = env::var("RAISE_GEMINI_KEY").unwrap_or_default();

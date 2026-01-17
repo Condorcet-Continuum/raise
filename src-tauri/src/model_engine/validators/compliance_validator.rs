@@ -1,5 +1,8 @@
+// FICHIER : src-tauri/src/model_engine/validators/compliance_validator.rs
+
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 use crate::model_engine::validators::{ModelValidator, Severity, ValidationIssue};
+use async_trait::async_trait; // Requis pour l'implémentation du trait
 
 /// Validateur de conformité méthodologique.
 /// Vérifie la qualité des données (Noms, Descriptions) et les règles de construction Arcadia.
@@ -7,8 +10,10 @@ use crate::model_engine::validators::{ModelValidator, Severity, ValidationIssue}
 #[derive(Default)]
 pub struct ComplianceValidator;
 
+#[async_trait]
 impl ModelValidator for ComplianceValidator {
-    fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue> {
+    /// CORRECTION : Passage en async pour respecter la signature du trait
+    async fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
 
         // 1. Analyse de la couche System Analysis (SA)
@@ -130,8 +135,8 @@ mod tests {
     use crate::model_engine::types::NameType;
     use std::collections::HashMap;
 
-    #[test]
-    fn test_naming_validation() {
+    #[tokio::test] // CORRECTION : Passage en test asynchrone
+    async fn test_naming_validation() {
         let mut model = ProjectModel::default();
 
         // Un composant mal nommé
@@ -141,6 +146,7 @@ mod tests {
             kind: "LogicalComponent".into(),
             description: None,
             properties: HashMap::new(),
+            ..Default::default()
         };
 
         // Un composant bien nommé
@@ -150,19 +156,15 @@ mod tests {
             kind: "LogicalComponent".into(),
             description: Some("Controls the engine".into()),
             properties: HashMap::new(),
+            ..Default::default()
         };
 
         model.la.components.push(bad_comp);
         model.la.components.push(good_comp);
 
         let validator = ComplianceValidator::new();
-        let issues = validator.validate(&model);
-
-        // On s'attend à :
-        // 1 Warning pour "Unnamed"
-        // 1 Info pour "Description manquante" sur bad_comp (si on l'a ajouté)
-        // 1 Warning pour "Pas de fonction allouée" sur bad_comp
-        // 1 Warning pour "Pas de fonction allouée" sur good_comp
+        // CORRECTION : Appel avec .await car la méthode est désormais async
+        let issues = validator.validate(&model).await;
 
         let naming_issues: Vec<_> = issues
             .iter()

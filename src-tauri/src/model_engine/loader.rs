@@ -41,10 +41,11 @@ impl<'a> ModelLoader<'a> {
 
     // --- LOGIQUE D'HYDRATATION (Pour la génération de code) ---
 
-    pub fn fetch_hydrated_element(&self, element_id: &str) -> Result<Value> {
-        // 1. Récupération de l'objet brut
+    pub async fn fetch_hydrated_element(&self, element_id: &str) -> Result<Value> {
+        // 1. Récupération de l'objet brut (Migration async)
         let mut element = self
             .find_raw_element(element_id)
+            .await
             .ok_or_else(|| anyhow::anyhow!("Élément introuvable : {}", element_id))?;
 
         // 2. Hydratation des relations clés
@@ -58,24 +59,24 @@ impl<'a> ModelLoader<'a> {
         ];
 
         for rel in relations_to_hydrate {
-            self.hydrate_relation(&mut element, rel)?;
+            self.hydrate_relation(&mut element, rel).await?;
         }
 
         Ok(element)
     }
 
-    fn find_raw_element(&self, id: &str) -> Option<Value> {
-        // Recherche dans toutes les collections probables
+    async fn find_raw_element(&self, id: &str) -> Option<Value> {
+        // Recherche dans toutes les collections probables (Migration async)
         let collections = ["la", "pa", "sa", "oa", "epbs", "data", "common"];
         for col_name in collections {
-            if let Ok(Some(doc)) = self.manager.get_document(col_name, id) {
+            if let Ok(Some(doc)) = self.manager.get_document(col_name, id).await {
                 return Some(doc);
             }
         }
         None
     }
 
-    fn hydrate_relation(&self, element: &mut Value, field: &str) -> Result<()> {
+    async fn hydrate_relation(&self, element: &mut Value, field: &str) -> Result<()> {
         let relations_opt = element.get(field).cloned();
 
         if let Some(relations) = relations_opt {
@@ -90,7 +91,7 @@ impl<'a> ModelLoader<'a> {
                     };
 
                     if let Some(tid) = target_id {
-                        if let Some(obj) = self.find_raw_element(tid) {
+                        if let Some(obj) = self.find_raw_element(tid).await {
                             hydrated_list.push(obj);
                         } else {
                             hydrated_list.push(item.clone());
@@ -101,7 +102,7 @@ impl<'a> ModelLoader<'a> {
                     element[field] = json!(hydrated_list);
                 }
             } else if let Some(s) = relations.as_str() {
-                if let Some(obj) = self.find_raw_element(s) {
+                if let Some(obj) = self.find_raw_element(s).await {
                     element[field] = obj;
                 }
             }
@@ -111,23 +112,24 @@ impl<'a> ModelLoader<'a> {
 
     // --- CHARGEMENT DU MODÈLE COMPLET ---
 
-    pub fn load_full_model(&self) -> Result<ProjectModel> {
+    pub async fn load_full_model(&self) -> Result<ProjectModel> {
         let mut model = ProjectModel {
             meta: ProjectMeta {
                 name: format!("{}/{}", self.manager.space, self.manager.db),
                 loaded_at: Utc::now().to_rfc3339(),
                 element_count: 0,
             },
-            ..Default::default() // Les autres champs (oa, sa...) prennent leur valeur par défaut
+            ..Default::default()
         };
 
-        if let Ok(collections) = self.manager.list_collections() {
+        // Migration async des listes
+        if let Ok(collections) = self.manager.list_collections().await {
             for col_name in collections {
                 if col_name.starts_with('_') {
                     continue;
                 }
 
-                if let Ok(docs) = self.manager.list_all(&col_name) {
+                if let Ok(docs) = self.manager.list_all(&col_name).await {
                     for doc in docs {
                         if let Ok(element) = self.process_document_semantically(doc) {
                             self.dispatch_element(&mut model, element);
@@ -150,7 +152,6 @@ impl<'a> ModelLoader<'a> {
         let type_uri = self.processor.get_type(&expanded).unwrap_or_default();
         let compacted = self.processor.compact(&doc);
 
-        // Gestion du Nom (String ou I18n)
         let name_val = compacted
             .get("name")
             .or_else(|| compacted.get("http://www.w3.org/2004/02/skos/core#prefLabel"))
@@ -159,13 +160,11 @@ impl<'a> ModelLoader<'a> {
 
         let name = NameType::String(name_val.to_string());
 
-        // Gestion de la Description (explicite dans types.rs maintenant)
         let description = compacted
             .get("description")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        // Propriétés additionnelles
         let obj = compacted
             .as_object()
             .ok_or(anyhow::anyhow!("Not an object"))?;
@@ -188,8 +187,6 @@ impl<'a> ModelLoader<'a> {
     fn dispatch_element(&self, model: &mut ProjectModel, el: ArcadiaElement) {
         let kind = &el.kind;
 
-        // Dispatching basé sur les URIs Arcadia
-        // Note: On pourrait utiliser ArcadiaSemantics::get_layer() ici pour simplifier
         if kind == &arcadia_types::uri(namespaces::OA, arcadia_types::OA_ACTOR) {
             model.oa.actors.push(el);
         } else if kind == &arcadia_types::uri(namespaces::OA, arcadia_types::OA_ACTIVITY) {
@@ -204,15 +201,12 @@ impl<'a> ModelLoader<'a> {
             model.pa.components.push(el);
         } else if kind == &arcadia_types::uri(namespaces::DATA, arcadia_types::DATA_CLASS) {
             model.data.classes.push(el);
-        } else {
-            // Fallback pour les types moins courants ou génériques
-            if kind.contains("Actor") {
-                model.oa.actors.push(el);
-            } else if kind.contains("Function") {
-                model.sa.functions.push(el);
-            } else if kind.contains("Component") {
-                model.la.components.push(el);
-            }
+        } else if kind.contains("Actor") {
+            model.oa.actors.push(el);
+        } else if kind.contains("Function") {
+            model.sa.functions.push(el);
+        } else if kind.contains("Component") {
+            model.la.components.push(el);
         }
     }
 }
@@ -223,14 +217,15 @@ mod tests {
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use tempfile::tempdir;
 
-    #[test]
-    fn test_fetch_hydrated_element() {
+    #[tokio::test] // Migration async
+    async fn test_fetch_hydrated_element() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "test_space", "test_db");
+        manager.init_db().await.unwrap();
 
-        // Création données
+        // Création données (Migration async)
         let comp = json!({
             "id": "COMP_A",
             "name": "Main",
@@ -238,12 +233,12 @@ mod tests {
         });
         let func = json!({ "id": "FUNC_1", "name": "Compute" });
 
-        manager.insert_raw("la", &comp).unwrap();
-        manager.insert_raw("sa", &func).unwrap();
+        manager.insert_raw("la", &comp).await.unwrap();
+        manager.insert_raw("sa", &func).await.unwrap();
 
         // Test
         let loader = ModelLoader::new_with_manager(manager);
-        let hydrated = loader.fetch_hydrated_element("COMP_A").unwrap();
+        let hydrated = loader.fetch_hydrated_element("COMP_A").await.unwrap();
 
         let allocs = hydrated["ownedFunctionalAllocation"].as_array().unwrap();
         assert_eq!(allocs[0]["name"], "Compute");

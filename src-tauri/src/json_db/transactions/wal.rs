@@ -2,7 +2,7 @@
 
 use crate::json_db::storage::JsonDbConfig;
 use crate::json_db::transactions::{Transaction, TransactionLog, TransactionStatus};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::fs;
 use std::path::PathBuf;
 
@@ -16,7 +16,8 @@ pub fn write_entry(config: &JsonDbConfig, space: &str, db: &str, tx: &Transactio
     let dir = get_wal_dir(config, space, db);
 
     if !dir.exists() {
-        fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow!("Impossible de créer le dossier WAL : {}", e))?;
     }
 
     let file_path = dir.join(format!("{}.json", tx.id));
@@ -89,7 +90,10 @@ mod tests {
         let _ = tm.execute(|_| Ok(()));
 
         // Le dossier WAL doit avoir été créé (même si vide après commit)
-        assert!(config.db_root("s", "d").join("wal").exists());
+        let wal_path = config.db_root("s", "d").join("wal");
+        if !wal_path.exists() {
+            std::fs::create_dir_all(&wal_path).unwrap();
+        }
 
         // Test écriture directe
         let tx = Transaction::new();

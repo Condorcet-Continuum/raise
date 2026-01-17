@@ -4,8 +4,8 @@ use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider};
 use serde_json::json;
 
 /// Teste la fonction Len() sur des tableaux et chaînes
-#[test]
-fn test_len_operator() {
+#[tokio::test]
+async fn test_len_operator() {
     let provider = NoOpDataProvider;
 
     let ctx = json!({
@@ -15,26 +15,30 @@ fn test_len_operator() {
 
     // Len(tags) -> 3
     let rule_arr = Expr::Len(Box::new(Expr::Var("tags".into())));
-    assert_eq!(
-        Evaluator::evaluate(&rule_arr, &ctx, &provider)
-            .unwrap()
-            .as_i64(),
-        Some(3)
-    );
+
+    // CORRECTIF : .into_owned() transforme le Cow<Value> en Value pour matcher json!(3)
+    let res_arr = Evaluator::evaluate(&rule_arr, &ctx, &provider)
+        .await
+        .expect("Evaluation failed for tags")
+        .into_owned();
+
+    assert_eq!(res_arr, json!(3), "Len(tags) devrait valoir 3");
 
     // Len(title) -> 11
     let rule_str = Expr::Len(Box::new(Expr::Var("title".into())));
-    assert_eq!(
-        Evaluator::evaluate(&rule_str, &ctx, &provider)
-            .unwrap()
-            .as_i64(),
-        Some(11)
-    );
+
+    // CORRECTIF : .into_owned() ici aussi
+    let res_str = Evaluator::evaluate(&rule_str, &ctx, &provider)
+        .await
+        .expect("Evaluation failed for title")
+        .into_owned();
+
+    assert_eq!(res_str, json!(11), "Len(title) devrait valoir 11");
 }
 
 /// Teste Map() : Transformation d'un tableau d'objets
-#[test]
-fn test_map_transformation() {
+#[tokio::test]
+async fn test_map_transformation() {
     let provider = NoOpDataProvider;
 
     let ctx = json!({
@@ -54,17 +58,18 @@ fn test_map_transformation() {
         ])),
     };
 
-    let res = Evaluator::evaluate(&rule, &ctx, &provider).unwrap();
-    let arr = res.as_array().unwrap();
+    let res = Evaluator::evaluate(&rule, &ctx, &provider).await.unwrap();
+    let arr = res.as_array().expect("Le résultat doit être un tableau");
 
     assert_eq!(arr.len(), 2);
-    assert_eq!(arr[0].as_i64(), Some(20));
-    assert_eq!(arr[1].as_i64(), Some(20));
+    // Comparaison avec référence pour éviter tout souci de type
+    assert_eq!(&arr[0], &json!(20));
+    assert_eq!(&arr[1], &json!(20));
 }
 
 /// Teste Filter() avec contexte global
-#[test]
-fn test_filter_context() {
+#[tokio::test]
+async fn test_filter_context() {
     let provider = NoOpDataProvider;
     let ctx = json!({
         "limit": 50,
@@ -81,8 +86,12 @@ fn test_filter_context() {
         )),
     };
 
-    let res = Evaluator::evaluate(&rule, &ctx, &provider).unwrap();
-    let arr = res.as_array().unwrap();
+    let res = Evaluator::evaluate(&rule, &ctx, &provider).await.unwrap();
+    let arr = res.as_array().expect("Le résultat doit être un tableau");
 
-    assert_eq!(arr.len(), 3); // 60, 90, 50
+    // 60, 90, 50 (>= 50)
+    assert_eq!(arr.len(), 3);
+    assert!(arr.contains(&json!(60)));
+    assert!(arr.contains(&json!(90)));
+    assert!(arr.contains(&json!(50)));
 }

@@ -6,8 +6,8 @@ use serde_json::json;
 use std::fs;
 use tempfile::tempdir;
 
-#[test]
-fn test_end_to_end_rules_execution() {
+#[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter les appels .await
+async fn test_end_to_end_rules_execution() {
     // 1. SETUP
     let dir = tempdir().unwrap();
     let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -16,8 +16,10 @@ fn test_end_to_end_rules_execution() {
     let db = "test_db";
     let storage = StorageEngine::new(config.clone());
 
+    // CORRECTION E0599 : init_db() est désormais asynchrone, ajout de .await
     collections::manager::CollectionsManager::new(&storage, space, db)
         .init_db()
+        .await
         .unwrap();
 
     // 2. CRÉATION DU SCHÉMA
@@ -59,7 +61,10 @@ fn test_end_to_end_rules_execution() {
     fs::write(&schema_inv_path, schema_content.to_string()).unwrap();
 
     // 3. Création collection
-    collections::create_collection(&config, space, db, "invoices").unwrap();
+    // CORRECTION E0599 : create_collection est désormais asynchrone
+    collections::create_collection(&config, space, db, "invoices")
+        .await
+        .unwrap();
 
     // 4. EXECUTION
     let invoice_input = json!({
@@ -69,9 +74,10 @@ fn test_end_to_end_rules_execution() {
         "price": 50
     });
 
-    // CORRECTION : Suppression du 'v1/' redondant
+    // CORRECTION E0599 : insert_with_schema est désormais asynchrone
     let result =
         collections::insert_with_schema(&config, space, db, "invoices/default.json", invoice_input)
+            .await
             .expect("Insert invoice failed");
 
     // 5. VALIDATIONS

@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tests/ai_suite/software_agent_tests.rs
+
 use crate::common::init_ai_test_env;
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
@@ -8,7 +10,10 @@ use std::sync::Arc;
 #[ignore]
 async fn test_software_agent_creates_component_end_to_end() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
+
+    // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
+    // On doit utiliser .await pour obtenir l'objet AiTestEnv concret.
+    let env = init_ai_test_env().await;
 
     // --- CONFIGURATION ROBUSTE (Comme code_gen_suite) ---
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
@@ -82,7 +87,9 @@ async fn test_software_agent_creates_component_end_to_end() {
 #[ignore]
 async fn test_intent_classification_integration() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env();
+
+    // CORRECTION E0609 : .await ajouté ici également.
+    let env = init_ai_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     if !env.client.ping_local().await && api_key.is_empty() {
@@ -99,7 +106,6 @@ async fn test_intent_classification_integration() {
     let classifier = IntentClassifier::new(client);
 
     // --- CORRECTION : Prompt "Anti-Markdown" ---
-    // On interdit explicitement les backslashs (\) dans le JSON pour éviter le bug "create\_element"
     let input = "Instruction: Analyse cette demande et retourne le JSON strict. \
                  IMPORTANT: Ne jamais échapper les underscores (pas de backslash '\\' avant '_'). \
                  Exemple valide: 'create_element'. Exemple invalide: 'create\\_element'. \n\

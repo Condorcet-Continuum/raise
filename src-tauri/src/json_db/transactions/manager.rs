@@ -12,7 +12,7 @@ use crate::json_db::transactions::{Operation, Transaction, TransactionRequest};
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::fs;
+use tokio::fs; // Migration vers tokio::fs
 
 pub struct TransactionManager<'a> {
     config: &'a JsonDbConfig,
@@ -120,7 +120,7 @@ impl<'a> TransactionManager<'a> {
                         std::env::var("PATH_RAISE_DATASET").unwrap_or_else(|_| ".".to_string());
                     let resolved_path = path.replace("$PATH_RAISE_DATASET", &dataset_root);
 
-                    let content = fs::read_to_string(&resolved_path).with_context(|| {
+                    let content = fs::read_to_string(&resolved_path).await.with_context(|| {
                         format!("Impossible de lire le fichier : {}", resolved_path)
                     })?;
 
@@ -150,17 +150,18 @@ impl<'a> TransactionManager<'a> {
             }
             Ok(())
         })
+        .await
     }
 
-    /// API BAS NIVEAU (Interne / Tests)
-    pub fn execute<F>(&self, op_block: F) -> Result<()>
+    /// API BAS NIVEAU (Interne / Tests) - Async
+    pub async fn execute<F>(&self, op_block: F) -> Result<()>
     where
         F: FnOnce(&mut Transaction) -> Result<()>,
     {
-        self.execute_internal(op_block)
+        self.execute_internal(op_block).await
     }
 
-    fn execute_internal<F>(&self, op_block: F) -> Result<()>
+    async fn execute_internal<F>(&self, op_block: F) -> Result<()>
     where
         F: FnOnce(&mut Transaction) -> Result<()>,
     {
@@ -195,30 +196,30 @@ impl<'a> TransactionManager<'a> {
         }
 
         // 2. EXÉCUTION ATOMIQUE
-        self.write_wal(&tx)?;
-        match self.apply_transaction(&tx) {
+        self.write_wal(&tx).await?;
+        match self.apply_transaction(&tx).await {
             Ok(_) => {
-                self.commit_wal(&tx)?;
+                self.commit_wal(&tx).await?;
                 Ok(())
             }
             Err(e) => {
-                self.rollback_wal(&tx)?;
+                self.rollback_wal(&tx).await?;
                 Err(e)
             }
         }
     }
 
-    fn write_wal(&self, tx: &Transaction) -> Result<()> {
+    async fn write_wal(&self, tx: &Transaction) -> Result<()> {
         let wal_path = self.config.db_root(&self.space, &self.db).join("wal");
         if !wal_path.exists() {
-            fs::create_dir_all(&wal_path)?;
+            fs::create_dir_all(&wal_path).await?;
         }
         let tx_file = wal_path.join(format!("{}.json", tx.id));
-        fs::write(tx_file, serde_json::to_string_pretty(tx)?)?;
+        fs::write(tx_file, serde_json::to_string_pretty(tx)?).await?;
         Ok(())
     }
 
-    fn apply_transaction(&self, tx: &Transaction) -> Result<()> {
+    async fn apply_transaction(&self, tx: &Transaction) -> Result<()> {
         let storage = StorageEngine::new(self.config.clone());
         let mut idx = IndexManager::new(&storage, &self.space, &self.db);
 
@@ -227,7 +228,7 @@ impl<'a> TransactionManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
         let mut system_index = if sys_path.exists() {
-            let c = fs::read_to_string(&sys_path)?;
+            let c = fs::read_to_string(&sys_path).await?;
             serde_json::from_str::<Value>(&c).unwrap_or(json!({ "collections": {} }))
         } else {
             json!({ "collections": {} })
@@ -248,7 +249,7 @@ impl<'a> TransactionManager<'a> {
                         }
                     }
 
-                    self.apply_schema_logic(collection, &mut final_doc)?;
+                    self.apply_schema_logic(collection, &mut final_doc).await?;
 
                     file_storage::write_document(
                         self.config,
@@ -257,8 +258,9 @@ impl<'a> TransactionManager<'a> {
                         collection,
                         id,
                         &final_doc,
-                    )?;
-                    idx.index_document(collection, &final_doc)?;
+                    )
+                    .await?;
+                    idx.index_document(collection, &final_doc).await?;
                     self.update_index_entry(&mut system_index, collection, id, false)?;
                 }
                 Operation::Update {
@@ -272,7 +274,8 @@ impl<'a> TransactionManager<'a> {
                         &self.db,
                         collection,
                         id,
-                    )?;
+                    )
+                    .await?;
                     let mut final_doc = existing_opt.ok_or_else(|| {
                         anyhow!("Update échoué : doc {}/{} introuvable", collection, id)
                     })?;
@@ -285,7 +288,7 @@ impl<'a> TransactionManager<'a> {
                         }
                     }
 
-                    self.apply_schema_logic(collection, &mut final_doc)?;
+                    self.apply_schema_logic(collection, &mut final_doc).await?;
                     file_storage::write_document(
                         self.config,
                         &self.space,
@@ -293,8 +296,9 @@ impl<'a> TransactionManager<'a> {
                         collection,
                         id,
                         &final_doc,
-                    )?;
-                    idx.index_document(collection, &final_doc)?;
+                    )
+                    .await?;
+                    idx.index_document(collection, &final_doc).await?;
                     self.update_index_entry(&mut system_index, collection, id, false)?;
                 }
                 Operation::Delete { collection, id } => {
@@ -304,23 +308,27 @@ impl<'a> TransactionManager<'a> {
                         &self.db,
                         collection,
                         id,
-                    )?;
-                    idx.remove_document(collection, &serde_json::Value::Null)?;
+                    )
+                    .await?;
+                    // On passe Null pour l'instant car remove_document demande l'ancien document
+                    // idéalement il faudrait le lire avant.
+                    idx.remove_document(collection, &serde_json::Value::Null)
+                        .await?;
                     self.update_index_entry(&mut system_index, collection, id, true)?;
                 }
             }
         }
-        fs::write(&sys_path, serde_json::to_string_pretty(&system_index)?)?;
+        fs::write(&sys_path, serde_json::to_string_pretty(&system_index)?).await?;
         Ok(())
     }
 
-    fn apply_schema_logic(&self, collection: &str, doc: &mut Value) -> Result<()> {
+    async fn apply_schema_logic(&self, collection: &str, doc: &mut Value) -> Result<()> {
         let meta_path = self
             .config
             .db_collection_path(&self.space, &self.db, collection)
             .join("_meta.json");
         let schema_uri = if meta_path.exists() {
-            let meta: Value = serde_json::from_str(&fs::read_to_string(&meta_path)?)?;
+            let meta: Value = serde_json::from_str(&fs::read_to_string(&meta_path).await?)?;
             meta.get("schema")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
@@ -389,20 +397,20 @@ impl<'a> TransactionManager<'a> {
         Ok(())
     }
 
-    fn commit_wal(&self, tx: &Transaction) -> Result<()> {
+    async fn commit_wal(&self, tx: &Transaction) -> Result<()> {
         let path = self
             .config
             .db_root(&self.space, &self.db)
             .join("wal")
             .join(format!("{}.json", tx.id));
         if path.exists() {
-            fs::remove_file(path)?;
+            fs::remove_file(path).await?;
         }
         Ok(())
     }
 
-    fn rollback_wal(&self, tx: &Transaction) -> Result<()> {
-        self.commit_wal(tx)
+    async fn rollback_wal(&self, tx: &Transaction) -> Result<()> {
+        self.commit_wal(tx).await
     }
 }
 
@@ -426,8 +434,8 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_transaction_commit_success() {
+    #[tokio::test]
+    async fn test_transaction_commit_success() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig {
             data_root: dir.path().to_path_buf(),
@@ -435,17 +443,21 @@ mod tests {
         let space = "test_space";
         let db = "test_db";
 
-        fs::create_dir_all(config.db_root(space, db).join("users")).unwrap();
+        fs::create_dir_all(config.db_root(space, db).join("users"))
+            .await
+            .unwrap();
 
         let tm = TransactionManager::new(&config, space, db);
 
         let doc = json!({"name": "Alice", "age": 30});
         let id = "user1";
 
-        let res = tm.execute(|tx| {
-            tx.add_insert("users", id, doc.clone());
-            Ok(())
-        });
+        let res = tm
+            .execute(|tx| {
+                tx.add_insert("users", id, doc.clone());
+                Ok(())
+            })
+            .await;
 
         assert!(res.is_ok());
 
@@ -455,8 +467,8 @@ mod tests {
         assert!(doc_path.exists());
     }
 
-    #[test]
-    fn test_transaction_rollback_on_error() {
+    #[tokio::test]
+    async fn test_transaction_rollback_on_error() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig {
             data_root: dir.path().to_path_buf(),
@@ -464,23 +476,24 @@ mod tests {
         let space = "test_space";
         let db = "test_db";
 
-        fs::create_dir_all(config.db_root(space, db).join("users")).unwrap();
+        fs::create_dir_all(config.db_root(space, db).join("users"))
+            .await
+            .unwrap();
 
         let tm = TransactionManager::new(&config, space, db);
 
-        let res = tm.execute(|tx| {
-            tx.add_insert("users", "user2", json!({"name": "Bob"}));
-            Err(anyhow::anyhow!("Oups")) // Erreur simulée
-        });
+        let res = tm
+            .execute(|tx| {
+                tx.add_insert("users", "user2", json!({"name": "Bob"}));
+                Err(anyhow::anyhow!("Oups")) // Erreur simulée
+            })
+            .await;
 
         assert!(res.is_err());
 
         let doc_path = config
             .db_collection_path(space, db, "users")
             .join("user2.json");
-        // Le fichier ne doit PAS exister car le rollback doit nettoyer
-        // (Dans notre implémentation simple, si ça échoue avant d'écrire, rien n'est écrit.
-        // Si ça échoue après, le WAL reste. Ici le test vérifie surtout que le flow d'erreur est géré)
         assert!(!doc_path.exists());
     }
 }

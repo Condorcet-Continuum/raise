@@ -58,7 +58,8 @@ pub struct TestEnv {
     pub _tmp_dir: tempfile::TempDir,
 }
 
-pub fn init_test_env() -> TestEnv {
+// CORRECTION E0599 : init_test_env doit devenir async pour pouvoir await init_db()
+pub async fn init_test_env() -> TestEnv {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
             .with_env_filter("info")
@@ -94,7 +95,9 @@ pub fn init_test_env() -> TestEnv {
 
     let storage = StorageEngine::new(cfg.clone());
     let mgr = CollectionsManager::new(&storage, TEST_SPACE, TEST_DB);
-    mgr.init_db().expect("init_db failed");
+
+    // CORRECTION E0599 : init_db() est asynchrone, ajout de .await
+    mgr.init_db().await.expect("init_db failed");
 
     // Mock Datasets
     let dataset_dir = data_root.join("dataset/arcadia/v1/data/exchange-items");
