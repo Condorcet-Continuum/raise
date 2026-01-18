@@ -20,8 +20,13 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(local_url: &str, gemini_key: &str, model_name: Option<String>) -> Self {
-        let raw_model = model_name.unwrap_or_else(|| "gemini-1.5-flash-latest".to_string());
-        let clean_model = raw_model.replace("models/", "");
+        let raw_model = model_name.unwrap_or_else(|| "gemini-1.5-flash".to_string());
+
+        let clean_model = raw_model
+            .trim()
+            .trim_matches('"')
+            .trim_start_matches("models/")
+            .to_string();
 
         // 1. SANITISATION URL (Localhost -> 127.0.0.1)
         // Force l'IPv4 pour éviter les conflits Docker/Rust sur localhost
@@ -77,7 +82,7 @@ impl LlmClient {
         system_prompt: &str,
         user_prompt: &str,
     ) -> Result<String, String> {
-        let max_retries = 3;
+        let max_retries = 1;
         let mut attempt = 0;
 
         loop {
@@ -223,13 +228,21 @@ impl LlmClient {
 
     // --- BACKEND: GOOGLE GEMINI ---
     async fn call_google_gemini(&self, sys: &str, user: &str) -> Result<String, String> {
+        // Retour en v1beta pour supporter vos modèles récents (2.5, 3.0, etc.)
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
             self.model_name, self.gemini_key
         );
 
-        let combined_prompt = format!("{}\n\nInstruction Utilisateur:\n{}", sys, user);
-        let body = json!({ "contents": [{ "parts": [{ "text": combined_prompt }] }] });
+        println!(
+            "[TRACE AI] Appel Gemini avec le modèle : '{}'",
+            self.model_name
+        );
+
+        let combined_prompt = format!("{}\n\nInstruction:\n{}", sys, user);
+        let body = json!({
+            "contents": [{ "parts": [{ "text": combined_prompt }] }]
+        });
 
         let res = self
             .http_client
@@ -237,27 +250,23 @@ impl LlmClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Erreur réseau : {}", e))?;
 
         let status = res.status();
         let text_response = res.text().await.unwrap_or_default();
 
         if !status.is_success() {
-            return Err(format!("Erreur Gemini Cloud: {}", text_response));
+            return Err(format!(
+                "Erreur Gemini Cloud ({}): {}",
+                status, text_response
+            ));
         }
 
         let json: Value = serde_json::from_str(&text_response).map_err(|e| e.to_string())?;
-        if let Some(candidates) = json.get("candidates") {
-            if let Some(first) = candidates.get(0) {
-                if let Some(content) = first.get("content") {
-                    if let Some(parts) = content.get("parts") {
-                        if let Some(text) = parts[0].get("text") {
-                            return Ok(text.as_str().unwrap_or("").to_string());
-                        }
-                    }
-                }
-            }
-        }
-        Err("Structure JSON Gemini inattendue".to_string())
+
+        json["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Structure de réponse inconnue".to_string())
     }
 }

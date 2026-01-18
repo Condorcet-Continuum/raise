@@ -43,9 +43,8 @@ export function useAIChat() {
         const aiMsg: ChatMessage = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          // CORRECTION MAJEURE : Le backend retourne maintenant 'content' et non 'message'
           content: response.content,
-          // Les artefacts sont optionnels dans le nouveau type, on sécurise avec || []
+          // Les artefacts sont optionnels, on sécurise avec || []
           artifacts: response.artifacts || [],
           createdAt: new Date().toISOString(),
         };
@@ -83,11 +82,26 @@ export function useAIChat() {
     }
   }, [clearStore]);
 
+  // 5. --- NOUVELLE FONCTION : FEEDBACK UTILISATEUR ---
+  // Permet à l'UI de valider une action et d'entraîner le World Model
+  const confirmLearning = useCallback(
+    async (actionIntent: 'Create' | 'Delete', entityName: string, entityKind: string) => {
+      try {
+        await aiService.confirmLearning(actionIntent, entityName, entityKind);
+        // On pourrait ajouter ici un toast ou une notification de succès
+      } catch (err) {
+        console.error("Erreur lors de l'apprentissage:", err);
+      }
+    },
+    [],
+  );
+
   return {
     messages,
     isThinking,
     error,
     sendMessage,
-    clear, // Retourne notre version "intelligente" de clear
+    clear,
+    confirmLearning, // <--- Exposée pour les composants
   };
 }

@@ -72,6 +72,8 @@ tiktoken-rs = "0.9.1"
 candle-core = { version = "0.9.1", features = [] }
 candle-nn = { version = "0.9.1", features = [] }
 candle-transformers = { version = "0.9.1", features = [] }
+safetensors = "0.7.0"
+
 
 hf-hub = "0.4.3"
 tokenizers = { version = "0.22.2", features = ["http"] }

@@ -7,3 +7,4 @@ pub mod memory;
 pub mod nlp;
 pub mod orchestrator;
 pub mod training;
+pub mod world_model;

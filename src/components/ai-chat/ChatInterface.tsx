@@ -8,8 +8,8 @@ import { IntentClassifier } from './IntentClassifier';
 import { CreatedArtifact } from '@/types/ai.types';
 
 export function ChatInterface() {
-  // Le hook utilise maintenant le nouveau aiService compatible AgentResult
-  const { messages, isThinking, error, sendMessage, clear } = useAIChat();
+  // 1. On récupère la nouvelle fonction confirmLearning
+  const { messages, isThinking, error, sendMessage, clear, confirmLearning } = useAIChat();
   const [input, setInput] = useState('');
 
   const lastMessage = messages[messages.length - 1];
@@ -99,7 +99,7 @@ export function ChatInterface() {
           <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '20%' }}>
             🤖{' '}
             <i>
-              Je suis connecté au cerveau Rust.
+              Je suis connecté au cerveau Rust (World Model Actif).
               <br />
               Posez une question contextuelle ou demandez une création.
             </i>
@@ -107,7 +107,13 @@ export function ChatInterface() {
         )}
 
         {messages.map((m) => (
-          <MessageBubble key={m.id} message={m} onGenerateCode={handleGenerateCode} />
+          <MessageBubble
+            key={m.id}
+            message={m}
+            onGenerateCode={handleGenerateCode}
+            // 2. On connecte le feedback World Model ici
+            onConfirmLearning={confirmLearning}
+          />
         ))}
 
         {isThinking && (
@@ -123,7 +129,6 @@ export function ChatInterface() {
             }}
           >
             <span>L’assistant réfléchit…</span>
-            {/* Petit loader CSS optionnel */}
             <span style={{ animation: 'pulse 1s infinite' }}>🧠</span>
           </div>
         )}

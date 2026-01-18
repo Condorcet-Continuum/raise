@@ -53,6 +53,7 @@ src-tauri/tools/trainer/*.pyc
 src-tauri/tools/trainer/results/
 src-tauri/tools/trainer/dataset.jsonl
 
+scripts/
 
 # --- LEANN Service ---
 leann/venv/

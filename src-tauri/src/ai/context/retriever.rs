@@ -13,6 +13,36 @@ impl SimpleRetriever {
         Self { model }
     }
 
+    /// Récupère un élément "racine" ou par défaut pour servir de contexte initial à la simulation.
+    /// Parcourt les couches dans l'ordre pour trouver le premier élément tangible.
+    pub fn get_root_element(&self) -> Option<ArcadiaElement> {
+        // 1. Operational Analysis (OA)
+        if let Some(el) = self.model.oa.actors.first() {
+            return Some(el.clone());
+        }
+        if let Some(el) = self.model.oa.activities.first() {
+            return Some(el.clone());
+        }
+
+        // 2. System Analysis (SA)
+        if let Some(el) = self.model.sa.components.first() {
+            return Some(el.clone());
+        }
+        if let Some(el) = self.model.sa.functions.first() {
+            return Some(el.clone());
+        }
+
+        // 3. Data
+        if let Some(el) = self.model.data.classes.first() {
+            return Some(el.clone());
+        }
+        if let Some(el) = self.model.data.exchange_items.first() {
+            return Some(el.clone());
+        }
+
+        None
+    }
+
     /// Cherche les éléments pertinents avec tolérance aux accents/casse
     pub fn retrieve_context(&self, query: &str) -> String {
         // 1. NORMALISATION DE LA REQUÊTE (via NLP)
@@ -147,5 +177,22 @@ mod tests {
         let retriever = SimpleRetriever::new(model);
         let result = retriever.retrieve_context("Rien");
         assert!(result.contains("Aucun élément spécifique"));
+    }
+
+    #[test]
+    fn test_get_root_element() {
+        let mut model = ProjectModel::default();
+        // Le modèle est vide, on s'attend à None
+        let retriever_empty = SimpleRetriever::new(model.clone());
+        assert!(retriever_empty.get_root_element().is_none());
+
+        // On ajoute un élément dans SA Components
+        model.sa.components.push(mock_el("Composant Racine"));
+        let retriever_full = SimpleRetriever::new(model);
+
+        // On s'attend à récupérer cet élément
+        let root = retriever_full.get_root_element();
+        assert!(root.is_some());
+        assert_eq!(root.unwrap().name.as_str(), "Composant Racine");
     }
 }

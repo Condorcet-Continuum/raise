@@ -223,6 +223,7 @@ fn main() {
             ai_commands::train_dl_step,
             ai_commands::save_dl_model,
             ai_commands::load_dl_model,
+            //dataset
             dataset::ai_export_dataset,
             // Commandes Cognitives
             cognitive_commands::cognitive_load_plugin,

@@ -3,11 +3,13 @@ import { ArtifactCard } from './ArtifactCard';
 
 interface MessageBubbleProps {
   message: ChatMessage;
-  // NOUVEAU : On accepte une fonction pour gérer le clic sur "Générer Code"
+  // Callback pour la génération de code
   onGenerateCode?: (language: string, artifact: CreatedArtifact) => void;
+  // Callback pour le feedback au World Model
+  onConfirmLearning?: (intent: 'Create' | 'Delete', name: string, kind: string) => void;
 }
 
-export function MessageBubble({ message, onGenerateCode }: MessageBubbleProps) {
+export function MessageBubble({ message, onGenerateCode, onConfirmLearning }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const hasArtifacts = message.artifacts && message.artifacts.length > 0;
 
@@ -44,13 +46,54 @@ export function MessageBubble({ message, onGenerateCode }: MessageBubbleProps) {
       {!isUser && hasArtifacts && (
         <div style={{ marginTop: '8px', width: '100%', minWidth: '300px' }}>
           {message.artifacts!.map((art) => (
-            <ArtifactCard
-              key={art.id}
-              artifact={art}
-              onClick={(path) => console.log('Navigation vers :', path)}
-              // C'est ici qu'on branche le tuyau !
-              onGenerateCode={onGenerateCode}
-            />
+            <div key={art.id} style={{ marginBottom: '8px' }}>
+              <ArtifactCard
+                artifact={art}
+                onClick={(path) => console.log('Navigation vers :', path)}
+                onGenerateCode={onGenerateCode}
+              />
+
+              {/* --- ZONE DE FEEDBACK WORLD MODEL --- */}
+              {onConfirmLearning && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    marginTop: '4px',
+                    padding: '4px 8px',
+                    backgroundColor: 'rgba(0, 255, 0, 0.05)',
+                    border: '1px solid rgba(0, 255, 0, 0.1)',
+                    borderRadius: '4px',
+                    fontSize: '0.7rem',
+                    color: 'var(--text-muted)',
+                  }}
+                >
+                  <span>🧠 World Model :</span>
+                  <button
+                    // CORRECTION ICI : art.type -> art.element_type
+                    onClick={() =>
+                      onConfirmLearning('Create', art.name, art.element_type || 'Unknown')
+                    }
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--color-success)',
+                      fontWeight: 'bold',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    title="Confirmer que cette action est valide pour entraîner le modèle"
+                  >
+                    ✅ Valider l'impact
+                  </button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

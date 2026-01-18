@@ -27,12 +27,45 @@ class AiService {
    */
   async chat(userInput: string): Promise<AgentResult> {
     try {
+      // Note : Tauri convertit automatiquement userInput -> user_input
       return await invoke<AgentResult>('ai_chat', {
         userInput,
       });
     } catch (error) {
       console.error('[AiService] Chat error:', error);
       throw error;
+    }
+  }
+
+  /**
+   * --- NOUVEAU ---
+   * Envoie un signal de renforcement (feedback) au World Model.
+   * Permet au cerveau d'apprendre que cette action était la bonne.
+   */
+  async confirmLearning(
+    actionIntent: 'Create' | 'Delete',
+    entityName: string,
+    entityKind: string,
+  ): Promise<string> {
+    try {
+      console.log(
+        `[AiService] 🧠 Envoi du feedback d'apprentissage : ${actionIntent} -> ${entityName}`,
+      );
+
+      // Appel vers src-tauri/src/commands/ai_commands.rs -> ai_confirm_learning
+      // IMPORTANT : On map explicitement les clés pour matcher les args Rust (snake_case)
+      const result = await invoke<string>('ai_confirm_learning', {
+        action_intent: actionIntent,
+        entity_name: entityName,
+        entity_kind: entityKind,
+      });
+
+      console.log('[AiService] ✅ Cerveau mis à jour:', result);
+      return result;
+    } catch (error) {
+      console.error('[AiService] Learning error:', error);
+      // On retourne une chaîne d'erreur pour que l'UI puisse l'afficher si besoin
+      return `Erreur d'apprentissage: ${error}`;
     }
   }
 
@@ -56,14 +89,13 @@ class AiService {
     try {
       return await invoke<AiStatus>('ai_get_system_status');
     } catch (error) {
-      // CORRECTION 2 : On utilise la variable 'error' dans le log pour éviter "unused vars"
       console.warn('[AiService] Status command not found (using mock). details:', error);
 
       return {
         llm_connected: true,
         llm_model: 'Llama-3-Local',
         context_documents: 12,
-        active_agents: ['Orchestrator'],
+        active_agents: ['Orchestrator', 'WorldModel'],
       };
     }
   }
