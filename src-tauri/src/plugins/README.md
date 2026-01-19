@@ -1,4 +1,4 @@
-# 🧠 RAISE Cognitive Plugins Module
+# 🧠 Module Plugins Cognitifs (`src-tauri/src/plugins`)
 
 > **Architecture "Use-Case Factory" & Moteur WASM**
 
@@ -8,139 +8,116 @@ Ce module implémente le cœur de l'extensibilité de RAISE. Il permet de charge
 
 ## 🏗️ Architecture Industrielle (Factory Pattern)
 
-Le système ne se contente pas d'exécuter du WASM, il gère toute la chaîne de production logicielle via une séparation stricte :
+Le système gère toute la chaîne de production logicielle via une séparation stricte :
 
-1.  **L'Usine (`src-wasm/`)** :
-
-    - C'est un **Workspace Rust autonome**.
-    - Il contient le code source des plugins (`blocks/`) et l'API partagée (`core-api/`).
-    - Il est invisible pour le projet Tauri principal (exclu du `Cargo.toml` racine).
-
-2.  **La Chaîne de Montage (`src-wasm/build.sh`)** :
-
-    - Script d'automatisation qui :
-      - 🧪 Lance les tests unitaires de chaque bloc.
-      - ⚙️ Compile le code en cible `wasm32-unknown-unknown`.
-      - 📦 Copie et renomme les artefacts finaux.
-
-3.  **Le Magasin (`wasm-modules/`)** :
-    - Dossier de destination où sont stockés les fichiers `.wasm` compilés.
-    - C'est ici que RAISE (le Host) vient piocher les plugins à charger.
+1.  **L'Usine (`src-wasm/`)** : Workspace Rust autonome contenant le code source des plugins.
+2.  **La Chaîne de Montage (`build.sh`)** : Compilation en `wasm32-unknown-unknown`.
+3.  **Le Magasin (`wasm-modules/`)** : Stockage des binaires finaux.
 
 ---
 
 ## 🌉 Architecture Runtime (Host / Guest)
 
-Une fois chargé dans l'application, le système repose sur une architecture isolée :
+Une fois chargé, le système repose sur une isolation stricte gérée par `wasmtime`.
 
-- **Host (RAISE / Tauri)** : Fournit le contexte, l'accès à la base de données (`JsonDb`), et injecte les capacités via le `Linker`.
-- **Guest (Plugin / WASM)** : Contient la logique métier. Il ne peut interagir avec le monde extérieur que via la **RAISE Core API**.
-- **Cognitive Bridge** : Le canal de communication mémoire partagée.
+```mermaid
+graph TD
+    %% Styles
+    classDef host fill:#f8fafc,stroke:#334155;
+    classDef guest fill:#fffbeb,stroke:#d97706;
 
-### Flux d'Exécution
+    subgraph HostRuntime ["🖥️ Host (RAISE / Tauri)"]
+        direction TB
+        Manager["manager.rs<br/>(Thread-Safe Store)"]
+        Engine["runtime.rs<br/>(Wasmtime Engine)"]
+        Bridge["cognitive.rs<br/>(Host Functions)"]
+        Context["PluginContext<br/>(Space/DB Isolation)"]
+    end
 
-1.  **Chargement** : `manager.rs` lit le fichier `.wasm` depuis `wasm-modules/`.
-2.  **Instanciation** : `runtime.rs` crée un environnement `wasmtime` et lie les fonctions importées.
-3.  **Bridge** : `cognitive.rs` injecte les fonctions système (`host_db_read`, `host_log`).
-4.  **Exécution** : Le plugin exécute sa logique, appelle `core::db_read(...)`, et le Host traite la demande.
+    subgraph GuestSandbox ["📦 Guest (WASM)"]
+        Logic["Logique Métier"]
+        Memory["Mémoire Linéaire"]
+    end
 
----
+    Manager -->|"Load & Lock"| Engine
+    Engine -->|"Instantiate"| Logic
+    Engine --"Inject"--> Context
 
-## 📂 Structure du Module Tauri (`src-tauri/src/plugins/`)
+    Logic --"call host_db_read(ptr, len)"--> Bridge
+    Bridge --"Read Memory"--> Memory
+    Bridge --"Query (block_on)"--> Context
 
-| Fichier            | Rôle & Responsabilité                                                                                                                |
-| :----------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
-| **`mod.rs`**       | Point d'entrée du module.                                                                                                            |
-| **`manager.rs`**   | **L'Orchestrateur**. Gère le stock des plugins chargés et déclenche leur exécution.                                                  |
-| **`runtime.rs`**   | **Le Moteur**. Encapsule `wasmtime`. Configure le `Store` et gère le contexte mémoire.                                               |
-| **`cognitive.rs`** | **Le Pont Cognitif**. Implémente les "Host Functions". Traduit les pointeurs mémoire du WASM en appels Rust natifs vers la `JsonDb`. |
-| **`tests.rs`**     | Tests d'intégration validant le chargement et le sandboxing (génération de WASM à la volée).                                         |
-
----
-
-## 👩‍💻 Guide du Développeur de Plugin
-
-Pour créer un nouveau plugin, **ne modifiez pas `src-tauri`**. Travaillez uniquement dans l'usine `src-wasm`.
-
-### 1. Création
-
-Créez un nouveau dossier dans `src-wasm/blocks/` (ex: `mon-algo`).
-
-### 2. Configuration (`Cargo.toml`)
-
-Déclarez le type de librairie et la dépendance au Core :
-
-```toml
-[package]
-name = "mon-algo"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib"] # Indispensable pour générer du .wasm
-
-[dependencies]
-raise-core-api = { path = "../../core-api" }
-serde = { workspace = true }
 ```
 
-### 3. Code (`lib.rs`)
+### Flux de Données & Sécurité
 
-Utilisez l'API haut niveau (plus besoin de `unsafe`) :
+1. **Chargement Thread-Safe** : `manager.rs` utilise un `Arc<Mutex<HashMap>>` pour gérer les accès concurrents aux plugins chargés.
+2. **Contextualisation** : Chaque plugin est instancié avec un `PluginContext` spécifique.
+
+- **Space / DB** : Le plugin est "prisonnier" d'un espace de données (ex: `test_space`). Il ne peut pas accéder aux données d'un autre tenant.
+- **StorageEngine** : Une copie thread-safe du moteur de stockage est injectée.
+
+---
+
+## 📂 Structure du Module
+
+| Fichier                      | Description Technique                                                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **`mod.rs`**                 | Exports des modules publics.                                                                                                      |
+| **`manager.rs`**             | **Orchestrateur**. Charge les fichiers `.wasm`, les stocke en mémoire et expose `run_plugin` et `list_active_plugins`.            |
+| **`runtime.rs`**             | **Moteur**. Configure `wasmtime::Store` et le `Linker`. Instancie le module et expose la fonction d'entrée `run`.                 |
+| **`cognitive.rs`**           | **Pont**. Enregistre les "Host Functions" (`host_db_read`, `plugin_log`). Gère la conversion Asynchrone/Synchrone via `block_on`. |
+| **`tests.rs`**               | **Validateurs**. Génère dynamiquement du bytecode WASM (opcodes bruts) pour tester le pont sans compilateur externe.              |
+| **`filesystem_extended.rs`** | _Placeholder_. Réservé pour les futures implémentations d'accès fichiers (WASI).                                                  |
+
+---
+
+## 🔌 API du Pont Cognitif (Host Functions)
+
+Le Guest (WASM) communique avec le Host (Rust) via des fonctions importées depuis le namespace `env`.
+
+| Fonction Host      | Signature WASM                | Comportement Technique (`cognitive.rs`)               |
+| ------------------ | ----------------------------- | ----------------------------------------------------- |
+| **`host_db_read`** | `(ptr: i32, len: i32) -> i32` | 1. Lit la requête JSON depuis la mémoire du WASM.<br> |
+
+<br>2. Exécute `CollectionsManager::get` de manière synchrone (via `block_on`).<br>
+
+<br>3. Logue le résultat (stdout) et retourne `1` (succès). |
+| **`plugin_log`** | `(ptr: i32, len: i32) -> i32` | Lit une string en mémoire et l'affiche dans la console hôte avec le préfixe `🤖 [PLUGIN LOG]`. |
+
+### Note sur l'Asynchronisme
+
+Le moteur `JsonDb` est asynchrone (`async/await`), mais WASM (dans sa version actuelle) est synchrone. Le fichier `cognitive.rs` utilise `futures::executor::block_on` pour attendre le résultat de la base de données avant de rendre la main au plugin.
+
+---
+
+## 🧪 Méthodologie de Test (Low-Level)
+
+Le fichier `tests.rs` implémente une approche originale : la **Génération de Bytecode Dynamique**.
+Plutôt que de dépendre d'un fichier `.wasm` externe compilé, le test construit manuellement le binaire octet par octet.
+
+**Exemple de génération du "Spy Plugin" :**
 
 ```rust
-use raise_core_api as core;
-
-#[no_mangle]
-pub extern "C" fn run() -> i32 {
-    core::log("🚀 Démarrage de mon algo...");
-
-    // Lecture sécurisée de la DB via le pont
-    let success = core::db_read("users", "admin");
-
-    if success {
-         core::log("✅ Donnée trouvée !");
-         1
-    } else {
-         0
-    }
-}
+// Extrait de src-tauri/src/plugins/tests.rs
+wasm.extend_from_slice(&[
+    0x41, 0x00, // i32.const 0 (ptr)
+    0x41, 0x28, // i32.const 40 (len)
+    0x10, 0x00, // call func 0 (host_db_read)
+    0x0b,       // end
+]);
 
 ```
 
-### 4. Compilation
-
-Lancez simplement le script depuis la racine du projet :
-
-```bash
-./src-wasm/build.sh
-
-```
-
-Le fichier résultant sera disponible dans `wasm-modules/mon-algo/mon-algo.wasm`.
+Cela permet de tester le **Linker** et l'accès mémoire sans risque de désynchronisation avec un fichier source externe.
 
 ---
 
-## 🔌 API du Pont Cognitif (Détails Techniques)
+## 🔮 Roadmap & Limitations Actuelles
 
-Sous le capot, `core-api` communique avec `cognitive.rs` via ces fonctions exportées par l'hôte :
-
-| Fonction Host      | Signature (WASM)              | Description                                                                                                                  |
-| ------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **`host_log`**     | `(ptr: i32, len: i32)`        | Affiche un message dans la console de logs de RAISE (`stdout`).                                                              |
-| **`host_db_read`** | `(ptr: i32, len: i32) -> i32` | Reçoit une requête JSON `{col, id}`, interroge la DB, et logue le résultat (V1). Retourne `1` si l'appel technique a réussi. |
-
----
-
-## 🔮 Roadmap / Améliorations Futures
-
-1. **Communication Bidirectionnelle (Return Values)** : Implémenter l'allocation mémoire (`malloc`) dans le Guest pour que `host_db_read` puisse écrire le contenu JSON de la réponse directement dans la mémoire du plugin (actuellement, le Host affiche juste le résultat).
-2. **Support WASI Complet** : Activer `filesystem_extended.rs` pour l'accès fichiers sécurisé.
-3. **Hot-Reloading** : Rechargement à chaud des `.wasm` modifiés.
-
-```
-
-```
+1. **Retour de Données** : Actuellement, `host_db_read` affiche le résultat mais ne l'écrit pas dans la mémoire du WASM (manque d'une fonction `malloc` exportée par le Guest).
+2. **Système de Fichiers** : `filesystem_extended.rs` est vide. L'implémentation WASI est prévue pour la V2.
+3. **Buffer de Sortie** : Le `PluginContext` contient un `wasi_out_buffer` préparé pour capturer la sortie standard, mais non encore utilisé activement.
 
 ```
 

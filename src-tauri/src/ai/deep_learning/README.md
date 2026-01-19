@@ -22,37 +22,40 @@ Le schéma ci-dessous illustre comment une donnée brute (ex: une commande utili
 ```mermaid
 graph TD
     %% Données entrantes
-    Input[Données Brutes<br/>(Texte/Logs)] --> Tokenizer[Tokenizer / Embedding]
-    Tokenizer --> TensorX[Tenseur d'Entrée<br/>(Batch, Seq, Features)]
+    Input["Données Brutes<br/>(Texte/Logs)"] --> Tokenizer["Tokenizer / Embedding"]
+    Tokenizer --> TensorX["Tenseur d'Entrée<br/>(Batch, Seq, Features)"]
 
     %% Le Module Deep Learning
-    subgraph DeepLearning [Module Deep Learning]
+    subgraph DeepLearning ["Module Deep Learning"]
         direction TB
 
         %% Modèle
-        subgraph Model [SequenceNet]
-            LSTM[Couche LSTM<br/>(Mémoire séquentielle)]
-            Head[Couche Linéaire<br/>(Décodeur)]
+        subgraph Model ["SequenceNet"]
+            LSTM["Couche LSTM<br/>(Mémoire séquentielle)"]
+            Head["Couche Linéaire<br/>(Décodeur)"]
         end
 
         %% Entraînement
-        Optimizer[Optimiseur<br/>(AdamW / SGD)]
-        LossFn[Fonction de Coût<br/>(Cross Entropy)]
+        Optimizer["Optimiseur<br/>(AdamW / SGD)"]
+        LossFn["Fonction de Coût<br/>(Cross Entropy)"]
 
         TensorX --> LSTM
-        LSTM --> Hidden[État Caché]
+        LSTM --> Hidden["État Caché"]
         Hidden --> Head
-        Head --> Logits[Logits de Sortie]
+        Head --> Logits["Logits de Sortie"]
 
         %% Boucle de feedback
-        Logits -- Comparaison avec cible --> LossFn
-        LossFn -- Gradients --> Optimizer
-        Optimizer -- Mise à jour --> LSTM & Head
+        Logits -- "Comparaison avec cible" --> LossFn
+        LossFn -- "Gradients" --> Optimizer
+
+        %% CORRECTION ICI : On sépare les liens pour éviter le bug du '&'
+        Optimizer -- "Mise à jour" --> LSTM
+        Optimizer -- "Mise à jour" --> Head
     end
 
     %% Sortie
     Logits --> Softmax
-    Softmax --> Prediction[Prédiction Finale]
+    Softmax --> Prediction["Prédiction Finale"]
 
     style DeepLearning fill:#f8f9fa,stroke:#333,stroke-dasharray: 5 5
     style Model fill:#e2e8f0,stroke:#2d3748
