@@ -6,5 +6,6 @@ pub mod llm;
 pub mod memory;
 pub mod nlp;
 pub mod orchestrator;
+pub mod protocols;
 pub mod training;
 pub mod world_model;
