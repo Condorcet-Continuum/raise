@@ -46,18 +46,17 @@ impl CapellaReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_engine::arcadia; // Import Vocabulaire
+    use crate::model_engine::types::{ArcadiaElement, NameType};
+    use std::collections::HashMap;
 
     #[test]
     fn test_element_counting() {
-        use crate::model_engine::types::{ArcadiaElement, NameType};
-        use std::collections::HashMap;
-
         let mut model = ProjectModel::default();
         let dummy = ArcadiaElement {
             id: "1".into(),
             name: NameType::default(),
-            kind: "test".into(),
-            // CORRECTION : Ajout du champ manquant
+            kind: arcadia::KIND_SA_COMPONENT.into(), // Utilisation constante
             description: None,
             properties: HashMap::new(),
         };

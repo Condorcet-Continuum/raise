@@ -1,0 +1,139 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@vocab": "https://raise.io/ontology/arcadia/epbs#",
+    "arcadia": "https://raise.io/ontology/arcadia#",
+    "oa": "https://raise.io/ontology/arcadia/oa#",
+    "sa": "https://raise.io/ontology/arcadia/sa#",
+    "la": "https://raise.io/ontology/arcadia/la#",
+    "pa": "https://raise.io/ontology/arcadia/pa#",
+    "epbs": "https://raise.io/ontology/arcadia/epbs#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "dct": "http://purl.org/dc/terms/",
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "mbse": "http://www.omg.org/spec/SysML/",
+    "id": "@id",
+    "type": "@type",
+    "EPBSPackage": "epbs:EPBSPackage",
+    "ConfigurationItem": "epbs:ConfigurationItem",
+    "ConfigurationItemPkg": "epbs:ConfigurationItemPkg",
+    "Interface": "epbs:Interface",
+    "Port": "epbs:Port",
+    "ComponentExchange": "epbs:ComponentExchange",
+    "name": {
+      "@id": "skos:prefLabel",
+      "@type": "xsd:string"
+    },
+    "description": {
+      "@id": "dct:description",
+      "@type": "xsd:string"
+    },
+    "summary": {
+      "@id": "dct:abstract",
+      "@type": "xsd:string"
+    },
+    "version": {
+      "@id": "dct:hasVersion",
+      "@type": "xsd:string"
+    },
+    "layer": {
+      "@id": "arcadia:belongsToLayer",
+      "@type": "@id"
+    },
+    "baseline": {
+      "@id": "epbs:baseline",
+      "@type": "xsd:string"
+    },
+    "status": {
+      "@id": "epbs:status",
+      "@type": "xsd:string"
+    },
+    "extends": {
+      "@id": "epbs:extends",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "includes": {
+      "@id": "epbs:includes",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "realizedBy": {
+      "@id": "arcadia:realizedBy",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "realizes": {
+      "@id": "arcadia:realizes",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "subItems": {
+      "@id": "epbs:hasSubItem",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "items": {
+      "@id": "epbs:containsItem",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "interfaces": {
+      "@id": "epbs:containsInterface",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "ports": {
+      "@id": "epbs:containsPort",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "exchanges": {
+      "@id": "epbs:containsExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "allocatedTo": {
+      "@id": "epbs:allocatedTo",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "allocatedPhysicalComponents": {
+      "@id": "epbs:allocatesPhysicalComponent",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "incomingComponentExchanges": {
+      "@id": "epbs:hasIncomingComponentExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "outgoingComponentExchanges": {
+      "@id": "epbs:hasOutgoingComponentExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "source": {
+      "@id": "epbs:exchangeSource",
+      "@type": "@id"
+    },
+    "target": {
+      "@id": "epbs:exchangeTarget",
+      "@type": "@id"
+    },
+    "exchangedItems": {
+      "@id": "epbs:exchangesItem",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "kind": {
+      "@id": "rdf:type",
+      "@type": "@vocab"
+    }
+  }
+}

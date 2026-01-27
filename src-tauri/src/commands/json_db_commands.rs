@@ -1,9 +1,10 @@
 // FICHIER : src-tauri/src/commands/json_db_commands.rs
 
 use crate::json_db::collections::manager::{self, CollectionsManager};
-use crate::json_db::query::{Query, QueryEngine, QueryResult};
+use crate::json_db::query::{sql::SqlRequest, Query, QueryEngine, QueryResult};
 use crate::json_db::schema::SchemaRegistry;
 use crate::json_db::storage::{file_storage, StorageEngine};
+use crate::json_db::transactions::manager::TransactionManager;
 use serde_json::{json, Value};
 use tauri::{command, State};
 
@@ -116,10 +117,8 @@ pub async fn jsondb_drop_index(
         .map_err(|e| e.to_string())
 }
 
-// --- MOTEUR DE RÈGLES (CORRIGÉ) ---
+// --- MOTEUR DE RÈGLES ---
 
-/// Simule l'application des règles métier sur un document brouillon
-/// sans le sauvegarder en base. Idéal pour le feedback UI temps réel.
 #[command]
 pub async fn jsondb_evaluate_draft(
     storage: State<'_, StorageEngine>,
@@ -128,11 +127,9 @@ pub async fn jsondb_evaluate_draft(
     collection: String,
     mut doc: Value,
 ) -> Result<Value, String> {
-    // 1. Charger le registre de schémas
     let registry = SchemaRegistry::from_db(&storage.config, &space, &db)
         .map_err(|e| format!("Erreur chargement registre: {}", e))?;
 
-    // 2. Trouver l'URI du schéma via _meta.json
     let meta_path = storage
         .config
         .db_collection_path(&space, &db, &collection)
@@ -156,7 +153,6 @@ pub async fn jsondb_evaluate_draft(
         return Ok(doc);
     }
 
-    // 3. Exécuter le moteur de règles (GenRules)
     let manager = mgr(&storage, &space, &db)?;
 
     manager::apply_business_rules(
@@ -167,7 +163,7 @@ pub async fn jsondb_evaluate_draft(
         &registry,
         &schema_uri,
     )
-    .await // Ajout du .await pour la signature asynchrone
+    .await
     .map_err(|e| format!("Erreur exécution règles: {}", e))?;
 
     Ok(doc)
@@ -250,7 +246,7 @@ pub async fn jsondb_list_all(
         .map_err(|e| format!("List All Failed: {}", e))
 }
 
-// --- REQUÊTES ---
+// --- REQUÊTES (MODIFIÉ POUR INSERT SQL) ---
 
 #[command]
 pub async fn jsondb_execute_query(
@@ -272,13 +268,39 @@ pub async fn jsondb_execute_sql(
     sql: String,
 ) -> Result<QueryResult, String> {
     let manager = mgr(&storage, &space, &db)?;
-    let query = crate::json_db::query::sql::parse_sql(&sql)
+
+    // Parsing SQL -> SqlRequest (Read ou Write)
+    let request = crate::json_db::query::sql::parse_sql(&sql)
         .map_err(|e| format!("SQL Parse Error: {}", e))?;
-    let engine = QueryEngine::new(&manager);
-    engine.execute_query(query).await.map_err(|e| e.to_string())
+
+    match request {
+        // CAS LECTURE (SELECT)
+        SqlRequest::Read(query) => {
+            let engine = QueryEngine::new(&manager);
+            engine.execute_query(query).await.map_err(|e| e.to_string())
+        }
+        // CAS ÉCRITURE (INSERT)
+        SqlRequest::Write(requests) => {
+            // On instancie le TransactionManager pour gérer l'atomicité
+            let tx_mgr = TransactionManager::new(&storage.config, &space, &db);
+            tx_mgr
+                .execute_smart(requests)
+                .await
+                .map_err(|e| format!("Transaction SQL Error: {}", e))?;
+
+            // Retour d'un résultat vide mais valide
+            Ok(QueryResult {
+                documents: vec![],
+                total_count: 0,
+                limit: None,
+                offset: None,
+            })
+        }
+    }
 }
 
-// --- UTILITAIRE DE DÉMO ---
+// --- UTILITAIRES DÉMO ---
+
 #[command]
 pub async fn jsondb_init_demo_rules(
     storage: State<'_, StorageEngine>,

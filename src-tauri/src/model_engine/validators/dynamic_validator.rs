@@ -1,13 +1,15 @@
 // FICHIER : src-tauri/src/model_engine/validators/dynamic_validator.rs
 
-use crate::model_engine::types::{ArcadiaElement, ProjectModel};
+use crate::model_engine::arcadia; // <-- Import Vocabulaire
+use crate::model_engine::loader::ModelLoader;
+use crate::model_engine::types::ArcadiaElement;
 use crate::model_engine::validators::{ModelValidator, Severity, ValidationIssue};
 use crate::rules_engine::ast::Rule;
-use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
+use crate::rules_engine::evaluator::Evaluator;
 use async_trait::async_trait;
-use serde_json::Value; // Requis pour l'alignement avec le trait
+use serde_json::json;
+use serde_json::Value;
 
-/// Validateur capable d'appliquer des règles dynamiques (AST) définies dans des fichiers JSON.
 pub struct DynamicValidator {
     rules: Vec<Rule>,
 }
@@ -17,112 +19,121 @@ impl DynamicValidator {
         Self { rules }
     }
 
-    /// Mappe une chaîne de caractères (ex: "sa.components") vers la collection réelle du modèle.
-    fn resolve_target<'a>(
-        &self,
-        target: &str,
-        model: &'a ProjectModel,
-    ) -> Option<&'a Vec<ArcadiaElement>> {
-        match target {
-            // Operational Analysis
-            "oa.actors" => Some(&model.oa.actors),
-            "oa.activities" => Some(&model.oa.activities),
-            "oa.capabilities" => Some(&model.oa.capabilities),
-            "oa.entities" => Some(&model.oa.entities),
-            "oa.exchanges" => Some(&model.oa.exchanges),
+    /// Vérifie si une règle s'applique à un élément donné via son type (Kind).
+    fn rule_applies_to(&self, rule_target: &str, element_kind: &str) -> bool {
+        // Normalisation : On utilise 'contains' pour supporter les URIs complètes et les noms courts
+        // Ex: "https://.../LogicalComponent" ou "LogicalComponent"
+        match rule_target {
+            // OA
+            "oa.actors" => {
+                element_kind == arcadia::KIND_OA_ACTOR || element_kind.contains("OperationalActor")
+            }
+            "oa.activities" => {
+                element_kind == arcadia::KIND_OA_ACTIVITY
+                    || element_kind.contains("OperationalActivity")
+            }
+            "oa.capabilities" => {
+                element_kind == arcadia::KIND_OA_CAPABILITY
+                    || element_kind.contains("OperationalCapability")
+            }
+            "oa.entities" => {
+                element_kind == arcadia::KIND_OA_ENTITY
+                    || element_kind.contains("OperationalEntity")
+            }
 
-            // System Analysis
-            "sa.components" => Some(&model.sa.components),
-            "sa.actors" => Some(&model.sa.actors),
-            "sa.functions" => Some(&model.sa.functions),
-            "sa.capabilities" => Some(&model.sa.capabilities),
-            "sa.exchanges" => Some(&model.sa.exchanges),
+            // SA
+            "sa.components" => {
+                element_kind == arcadia::KIND_SA_COMPONENT
+                    || element_kind.contains("SystemComponent")
+            }
+            "sa.functions" => {
+                element_kind == arcadia::KIND_SA_FUNCTION || element_kind.contains("SystemFunction")
+            }
+            "sa.actors" => {
+                element_kind == arcadia::KIND_SA_ACTOR || element_kind.contains("SystemActor")
+            }
 
-            // Logical Architecture
-            "la.components" => Some(&model.la.components),
-            "la.actors" => Some(&model.la.actors),
-            "la.functions" => Some(&model.la.functions),
-            "la.interfaces" => Some(&model.la.interfaces),
-            "la.exchanges" => Some(&model.la.exchanges),
+            // LA
+            "la.components" => {
+                element_kind == arcadia::KIND_LA_COMPONENT
+                    || element_kind.contains("LogicalComponent")
+            }
+            "la.functions" => {
+                element_kind == arcadia::KIND_LA_FUNCTION
+                    || element_kind.contains("LogicalFunction")
+            }
 
-            // Physical Architecture
-            "pa.components" => Some(&model.pa.components),
-            "pa.actors" => Some(&model.pa.actors),
-            "pa.functions" => Some(&model.pa.functions),
-            "pa.links" => Some(&model.pa.links),
-            "pa.exchanges" => Some(&model.pa.exchanges),
+            // PA
+            "pa.components" => {
+                element_kind == arcadia::KIND_PA_COMPONENT
+                    || element_kind.contains("PhysicalComponent")
+            }
 
-            // EPBS
-            "epbs.configuration_items" => Some(&model.epbs.configuration_items),
-
-            // Data
-            "data.classes" => Some(&model.data.classes),
-            "data.data_types" => Some(&model.data.data_types),
-            "data.exchange_items" => Some(&model.data.exchange_items),
-
-            _ => None,
+            // Generic
+            "all" => true,
+            _ => false, // Cible inconnue ou non mappée
         }
     }
 }
 
 #[async_trait]
 impl ModelValidator for DynamicValidator {
-    // CORRECTION E0195 : Signature strictement identique au trait
-    async fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue> {
+    // Validation Unitaire (Temps Réel)
+    async fn validate_element(
+        &self,
+        element: &ArcadiaElement,
+        loader: &ModelLoader<'_>,
+    ) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
-        // Le provider NoOp est suffisant car nous injectons l'élément complet comme contexte
-        let provider = NoOpDataProvider;
+
+        // Conversion de l'élément en JSON contextuel pour l'évaluateur
+        let mut context = json!({
+            "id": element.id,
+            "name": element.name.as_str(),
+            "kind": element.kind,
+            "description": element.description
+        });
+
+        // Fusion des propriétés dynamiques
+        if let Some(obj) = context.as_object_mut() {
+            for (k, v) in &element.properties {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
 
         for rule in &self.rules {
-            if let Some(elements) = self.resolve_target(&rule.target, model) {
-                for element in elements {
-                    // 1. Conversion de l'élément Arcadia en JSON pour l'évaluateur
-                    let context_value = match serde_json::to_value(element) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            eprintln!(
-                                "Erreur de sérialisation pour l'élément {}: {}",
-                                element.id, e
-                            );
-                            continue;
-                        }
-                    };
+            if self.rule_applies_to(&rule.target, &element.kind) {
+                // On passe 'loader' comme DataProvider pour permettre les Lookups
+                match Evaluator::evaluate(&rule.expr, &context, loader).await {
+                    Ok(result) => {
+                        let is_valid = match result.as_ref() {
+                            Value::Bool(b) => *b,
+                            Value::Null => false,
+                            _ => true,
+                        };
 
-                    // 2. Évaluation de la règle
-                    // L'appel est asynchrone (.await) car l'Evaluator est async
-                    match Evaluator::evaluate(&rule.expr, &context_value, &provider).await {
-                        Ok(result_cow) => {
-                            let is_valid = match result_cow.as_ref() {
-                                Value::Bool(b) => *b,
-                                Value::Null => false, // Null est considéré comme échec
-                                _ => true,
-                            };
-
-                            if !is_valid {
-                                // CORRECTION E0308 : Mapping explicite Option<String> -> Severity Enum
-                                let severity = match rule.severity.as_deref() {
-                                    Some("info") | Some("Info") => Severity::Info,
-                                    Some("warning") | Some("Warning") => Severity::Warning,
-                                    _ => Severity::Error,
-                                };
-
-                                issues.push(ValidationIssue {
-                                    severity,
-                                    rule_id: rule.id.clone(),
-                                    element_id: element.id.clone(),
-                                    message: format!(
-                                        "Règle non respectée : {} (Cible: {})",
-                                        rule.id, rule.target
-                                    ),
-                                });
-                            }
+                        if !is_valid {
+                            issues.push(ValidationIssue {
+                                severity: match rule.severity.as_deref() {
+                                    Some("Error") => Severity::Error,
+                                    Some("Info") => Severity::Info,
+                                    _ => Severity::Warning,
+                                },
+                                rule_id: rule.id.clone(),
+                                element_id: element.id.clone(),
+                                message: rule.description.clone().unwrap_or_else(|| {
+                                    format!("Règle '{}' non respectée", rule.id)
+                                }),
+                            });
                         }
-                        Err(e) => {
-                            eprintln!(
-                                "Erreur d'évaluation règle {} sur élément {}: {}",
-                                rule.id, element.id, e
-                            );
-                        }
+                    }
+                    Err(e) => {
+                        issues.push(ValidationIssue {
+                            severity: Severity::Info,
+                            rule_id: "EVAL_ERROR".to_string(),
+                            element_id: element.id.clone(),
+                            message: format!("Erreur d'évaluation règle {}: {}", rule.id, e),
+                        });
                     }
                 }
             }
@@ -130,52 +141,105 @@ impl ModelValidator for DynamicValidator {
 
         issues
     }
+
+    // Validation Globale (Rapport)
+    async fn validate_full(&self, loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
+        let mut all_issues = Vec::new();
+
+        if let Ok(model) = loader.load_full_model().await {
+            // Helper asynchrone pour traiter une liste
+            async fn check_list(
+                validator: &DynamicValidator,
+                elements: &[ArcadiaElement],
+                loader: &ModelLoader<'_>,
+                issues: &mut Vec<ValidationIssue>,
+            ) {
+                for el in elements {
+                    let res = validator.validate_element(el, loader).await;
+                    issues.extend(res);
+                }
+            }
+
+            // OA
+            check_list(self, &model.oa.actors, loader, &mut all_issues).await;
+            check_list(self, &model.oa.activities, loader, &mut all_issues).await;
+
+            // SA
+            check_list(self, &model.sa.components, loader, &mut all_issues).await;
+            check_list(self, &model.sa.functions, loader, &mut all_issues).await;
+
+            // LA
+            check_list(self, &model.la.components, loader, &mut all_issues).await;
+            check_list(self, &model.la.functions, loader, &mut all_issues).await;
+
+            // PA
+            check_list(self, &model.pa.components, loader, &mut all_issues).await;
+        }
+
+        all_issues
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, NameType};
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::model_engine::types::NameType;
     use crate::rules_engine::ast::Expr;
-    use serde_json::json;
+    use std::collections::HashMap;
+    use tempfile::tempdir;
 
-    // Helper pour créer un élément mocké
-    fn create_element(name: &str, properties: Option<serde_json::Value>) -> ArcadiaElement {
-        let mut el = ArcadiaElement::default();
-        el.name = NameType::String(name.to_string());
-        if let Some(props) = properties {
-            if let Some(obj) = props.as_object() {
-                el.properties = obj.clone().into_iter().collect();
-            }
-        }
-        el
+    fn setup_loader() -> (tempfile::TempDir, JsonDbConfig) {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        (dir, config)
     }
 
-    #[tokio::test] // CORRECTION : Test asynchrone
-    async fn test_dynamic_validator_naming_regex() {
-        let rule_expr = Expr::RegexMatch {
-            value: Box::new(Expr::Var("name".to_string())),
-            pattern: Box::new(Expr::Val(json!("^SA_"))),
-        };
+    #[tokio::test]
+    async fn test_dynamic_validator_integration() {
+        let (_dir, config) = setup_loader();
+        let storage = StorageEngine::new(config);
+        let loader = ModelLoader::new_with_manager(
+            crate::json_db::collections::manager::CollectionsManager::new(&storage, "t", "d"),
+        );
+
+        let rule_expr = Expr::Eq(vec![
+            Expr::Var("name".to_string()),
+            Expr::Val(json!("ValidElement")),
+        ]);
 
         let rule = Rule {
-            id: "CHECK_PREFIX".to_string(),
-            target: "sa.components".to_string(),
+            id: "TEST_RULE".to_string(),
+            target: "oa.actors".to_string(),
             expr: rule_expr,
-            description: None,
-            severity: Some("WARNING".to_string()),
+            description: Some("Nom invalide".to_string()),
+            severity: Some("Warning".to_string()),
         };
 
         let validator = DynamicValidator::new(vec![rule]);
-        let mut model = ProjectModel::default();
 
-        model.sa.components.push(create_element("SA_System", None));
-        model.sa.components.push(create_element("Bad_System", None));
+        // Utilisation constante
+        let valid_el = ArcadiaElement {
+            id: "1".into(),
+            name: NameType::String("ValidElement".into()),
+            kind: arcadia::KIND_OA_ACTOR.into(),
+            description: None,
+            properties: HashMap::new(),
+        };
 
-        // Appel .await
-        let issues = validator.validate(&model).await;
+        let invalid_el = ArcadiaElement {
+            id: "2".into(),
+            name: NameType::String("BadName".into()),
+            kind: arcadia::KIND_OA_ACTOR.into(),
+            description: None,
+            properties: HashMap::new(),
+        };
 
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].element_id, model.sa.components[1].id);
+        let issues_1 = validator.validate_element(&valid_el, &loader).await;
+        assert!(issues_1.is_empty());
+
+        let issues_2 = validator.validate_element(&invalid_el, &loader).await;
+        assert_eq!(issues_2.len(), 1);
+        assert_eq!(issues_2[0].rule_id, "TEST_RULE");
     }
 }

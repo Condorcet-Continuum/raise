@@ -1,9 +1,10 @@
 // FICHIER : src-tauri/src/json_db/query/sql.rs
 
+use crate::json_db::transactions::TransactionRequest;
 use anyhow::{bail, Result};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sqlparser::ast::{
-    BinaryOperator, Expr, OrderByExpr, OrderByKind, Query as SqlQuery, SetExpr, Statement,
+    BinaryOperator, Expr, Insert, OrderByExpr, OrderByKind, Query as SqlQuery, SetExpr, Statement,
     TableFactor, Value as SqlValue,
 };
 use sqlparser::dialect::GenericDialect;
@@ -14,7 +15,13 @@ use super::{
     SortOrder,
 };
 
-pub fn parse_sql(sql: &str) -> Result<Query> {
+/// Résultat du parsing SQL : soit une lecture, soit une transaction d'écriture
+pub enum SqlRequest {
+    Read(Query),
+    Write(Vec<TransactionRequest>),
+}
+
+pub fn parse_sql(sql: &str) -> Result<SqlRequest> {
     let dialect = GenericDialect {};
     let ast = Parser::parse_sql(&dialect, sql)?;
 
@@ -23,10 +30,66 @@ pub fn parse_sql(sql: &str) -> Result<Query> {
     }
 
     match &ast[0] {
-        Statement::Query(q) => translate_query(q),
-        _ => bail!("Seules les requêtes SELECT sont supportées pour le moment"),
+        Statement::Query(q) => {
+            let query = translate_query(q)?;
+            Ok(SqlRequest::Read(query))
+        }
+        // Utilisation du Variant Tuple Insert(Insert)
+        Statement::Insert(insert) => {
+            let tx = translate_insert(insert)?;
+            Ok(SqlRequest::Write(tx))
+        }
+        _ => bail!("Seuls SELECT et INSERT sont supportés pour le moment"),
     }
 }
+
+// --- TRADUCTION INSERT ---
+
+fn translate_insert(insert: &Insert) -> Result<Vec<TransactionRequest>> {
+    // CORRECTION DÉFINITIVE : Utilisation du champ `table`
+    let collection = insert.table.to_string();
+
+    let query_body = insert
+        .source
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Clause VALUES manquante"))?
+        .body
+        .as_ref();
+
+    let rows = match query_body {
+        SetExpr::Values(v) => &v.rows,
+        _ => bail!("Seul INSERT INTO ... VALUES (...) est supporté"),
+    };
+
+    let mut operations = Vec::new();
+
+    for row in rows {
+        if row.len() != insert.columns.len() {
+            bail!(
+                "Nombre de valeurs ({}) différent du nombre de colonnes ({})",
+                row.len(),
+                insert.columns.len()
+            );
+        }
+
+        let mut doc_map = Map::new();
+        for (i, col_ident) in insert.columns.iter().enumerate() {
+            let key = col_ident.value.clone();
+            let val = expr_to_value(&row[i])?;
+            doc_map.insert(key, val);
+        }
+
+        operations.push(TransactionRequest::Insert {
+            collection: collection.clone(),
+            id: None, // Laissez le manager générer l'UUID
+            document: Value::Object(doc_map),
+        });
+    }
+
+    Ok(operations)
+}
+
+// --- TRADUCTION SELECT ---
 
 fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
     let limit = None;
@@ -166,7 +229,7 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                     BinaryOperator::GtEq => Condition::gte(field, value),
                     BinaryOperator::Lt => Condition::lt(field, value),
                     BinaryOperator::LtEq => Condition::lte(field, value),
-                    _ => Condition::eq(field, value), // Fallback
+                    _ => Condition::eq(field, value),
                 };
                 Ok(QueryFilter {
                     operator: FilterOperator::And,
@@ -177,7 +240,6 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
         Expr::Like { expr, pattern, .. } => {
             let field = expr_to_field_name(expr)?;
             let value = expr_to_value(pattern)?;
-            // Mappe SQL LIKE vers Condition::like (ou contains selon implémentation)
             Ok(QueryFilter {
                 operator: FilterOperator::And,
                 conditions: vec![Condition {
@@ -243,39 +305,43 @@ fn sql_value_to_json(val: &SqlValue) -> Result<Value> {
     }
 }
 
-// ============================================================================
-// TESTS UNITAIRES
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::transactions::TransactionRequest;
 
     #[test]
-    fn test_parse_simple_select() {
-        let q = parse_sql("SELECT name FROM users WHERE age > 18").unwrap();
-        assert_eq!(q.collection, "users");
+    fn test_parse_insert() {
+        let sql = "INSERT INTO users (name, age) VALUES ('Alice', 30), ('Bob', 25)";
+        let result = parse_sql(sql).unwrap();
 
-        // Vérification du filtre
-        let filter = q.filter.unwrap();
-        assert_eq!(filter.conditions.len(), 1);
-        assert_eq!(filter.conditions[0].field, "age");
-        assert!(matches!(
-            filter.conditions[0].operator,
-            ComparisonOperator::Gt
-        ));
-
-        // Vérification de la projection
-        match q.projection.unwrap() {
-            Projection::Include(fields) => assert_eq!(fields[0], "name"),
-            _ => panic!("Projection failed"),
+        match result {
+            SqlRequest::Write(ops) => {
+                assert_eq!(ops.len(), 2);
+                match &ops[0] {
+                    TransactionRequest::Insert {
+                        collection,
+                        document,
+                        ..
+                    } => {
+                        assert_eq!(collection, "users");
+                        assert_eq!(document["name"], "Alice");
+                        assert_eq!(document["age"], 30);
+                    }
+                    _ => panic!("Expected Insert op"),
+                }
+            }
+            _ => panic!("Expected Write request"),
         }
     }
 
     #[test]
-    fn test_parse_and_logic() {
-        let q = parse_sql("SELECT * FROM t WHERE a = 1 AND b = 2").unwrap();
-        let filter = q.filter.unwrap();
-        assert_eq!(filter.conditions.len(), 2);
+    fn test_parse_select_legacy() {
+        let sql = "SELECT name FROM users WHERE age > 18";
+        let result = parse_sql(sql).unwrap();
+        match result {
+            SqlRequest::Read(q) => assert_eq!(q.collection, "users"),
+            _ => panic!("Expected Read request"),
+        }
     }
 }

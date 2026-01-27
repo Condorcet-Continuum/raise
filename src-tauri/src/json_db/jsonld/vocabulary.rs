@@ -1,7 +1,11 @@
 // FICHIER : src-tauri/src/json_db/jsonld/vocabulary.rs
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, OnceLock, RwLock};
 
 // --- NAMESPACES ---
 pub mod namespaces {
@@ -22,7 +26,7 @@ pub mod namespaces {
     pub const PROV: &str = "http://www.w3.org/ns/prov#";
 }
 
-// --- CONSTANTES DE TYPAGE ---
+// --- CONSTANTES DE TYPAGE (RESTAURÉES) ---
 pub mod arcadia_types {
     // OA
     pub const OA_ACTOR: &str = "OperationalActor";
@@ -88,11 +92,12 @@ pub struct Property {
 }
 
 // ============================================================================
-// DÉFINITIONS DES MODULES MÉTIERS
+// DÉFINITIONS DES MODULES MÉTIERS (Pour validation interne)
 // ============================================================================
 
 pub mod oa {
     use super::*;
+    // Ces constantes sont aussi utiles ici pour les définitions internes
     pub const OPERATIONAL_ACTIVITY: &str = "OperationalActivity";
     pub const OPERATIONAL_CAPABILITY: &str = "OperationalCapability";
     pub const OPERATIONAL_ACTOR: &str = "OperationalActor";
@@ -293,11 +298,18 @@ pub mod data {
     }
 }
 
-// --- REGISTRE PRINCIPAL ---
+// --- REGISTRE PRINCIPAL (SINGLETON DYNAMIQUE) ---
+
+static INSTANCE: OnceLock<VocabularyRegistry> = OnceLock::new();
 
 pub struct VocabularyRegistry {
     classes: HashMap<String, Class>,
     properties: HashMap<String, Property>,
+    default_context: HashMap<String, String>,
+
+    // CACHE DYNAMIQUE : Stocke les contextes chargés depuis les fichiers .jsonld
+    // Arc<RwLock> permet la mutabilité même si le registre est statique (Singleton)
+    layer_contexts: Arc<RwLock<HashMap<String, Value>>>,
 }
 
 impl Default for VocabularyRegistry {
@@ -307,13 +319,20 @@ impl Default for VocabularyRegistry {
 }
 
 impl VocabularyRegistry {
+    /// Accès global Thread-Safe au registre (créé une seule fois)
+    pub fn global() -> &'static Self {
+        INSTANCE.get_or_init(Self::new)
+    }
+
     pub fn new() -> Self {
         let mut registry = Self {
             classes: HashMap::new(),
             properties: HashMap::new(),
+            default_context: HashMap::new(),
+            layer_contexts: Arc::new(RwLock::new(HashMap::new())),
         };
 
-        // Enregistrement de tous les modules
+        // Enregistrement des définitions "hardcodées" (Validation structurelle)
         registry.register_module_oa();
         registry.register_module_sa();
         registry.register_module_la();
@@ -321,7 +340,29 @@ impl VocabularyRegistry {
         registry.register_module_epbs();
         registry.register_module_data();
 
+        // Initialisation des préfixes par défaut
+        registry.init_default_context();
+
         registry
+    }
+
+    fn init_default_context(&mut self) {
+        let mut map = HashMap::new();
+        map.insert("arcadia".to_string(), namespaces::ARCADIA.to_string());
+        map.insert("oa".to_string(), namespaces::OA.to_string());
+        map.insert("sa".to_string(), namespaces::SA.to_string());
+        map.insert("la".to_string(), namespaces::LA.to_string());
+        map.insert("pa".to_string(), namespaces::PA.to_string());
+        map.insert("epbs".to_string(), namespaces::EPBS.to_string());
+        map.insert("data".to_string(), namespaces::DATA.to_string());
+
+        map.insert("rdf".to_string(), namespaces::RDF.to_string());
+        map.insert("rdfs".to_string(), namespaces::RDFS.to_string());
+        map.insert("xsd".to_string(), namespaces::XSD.to_string());
+        map.insert("dcterms".to_string(), namespaces::DCTERMS.to_string());
+        map.insert("prov".to_string(), namespaces::PROV.to_string());
+
+        self.default_context = map;
     }
 
     fn register_module_oa(&mut self) {
@@ -363,6 +404,37 @@ impl VocabularyRegistry {
         }
     }
 
+    // --- CHARGEMENT DYNAMIQUE (.jsonld) ---
+
+    /// Charge un fichier .jsonld pour une couche donnée (ex: "oa", "sa")
+    pub fn load_layer_from_file(&self, layer: &str, path: &Path) -> Result<(), String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Impossible de lire le fichier {}: {}", path.display(), e))?;
+
+        let json: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("JSON-LD invalide dans {}: {}", path.display(), e))?;
+
+        // On extrait le bloc @context du fichier JSON-LD
+        if let Some(ctx) = json.get("@context") {
+            let mut cache = self.layer_contexts.write().map_err(|e| e.to_string())?;
+            cache.insert(layer.to_string(), ctx.clone());
+
+            #[cfg(debug_assertions)]
+            println!("✅ Ontologie chargée : {} -> {:?}", layer, path);
+        } else {
+            return Err(format!("Pas de champ @context dans {}", path.display()));
+        }
+        Ok(())
+    }
+
+    /// Récupère le contexte complet (JSON) pour une couche donnée
+    pub fn get_context_for_layer(&self, layer: &str) -> Option<Value> {
+        let cache = self.layer_contexts.read().ok()?;
+        cache.get(layer).cloned()
+    }
+
+    // --- ACCESSEURS OPTIMISÉS ---
+
     pub fn get_class(&self, iri: &str) -> Option<&Class> {
         self.classes.get(iri)
     }
@@ -371,32 +443,14 @@ impl VocabularyRegistry {
         self.classes.contains_key(iri)
     }
 
-    pub fn get_default_prefixes() -> HashMap<String, String> {
-        let mut map = HashMap::new();
-        map.insert("arcadia".to_string(), namespaces::ARCADIA.to_string());
-        map.insert("oa".to_string(), namespaces::OA.to_string());
-        map.insert("sa".to_string(), namespaces::SA.to_string());
-        map.insert("la".to_string(), namespaces::LA.to_string());
-        map.insert("pa".to_string(), namespaces::PA.to_string());
-        map.insert("epbs".to_string(), namespaces::EPBS.to_string());
-        map.insert("data".to_string(), namespaces::DATA.to_string());
-
-        map.insert("rdf".to_string(), namespaces::RDF.to_string());
-        map.insert("rdfs".to_string(), namespaces::RDFS.to_string());
-        map.insert("xsd".to_string(), namespaces::XSD.to_string());
-        map.insert("dcterms".to_string(), namespaces::DCTERMS.to_string());
-        map.insert("prov".to_string(), namespaces::PROV.to_string());
-        map
+    pub fn get_default_context(&self) -> &HashMap<String, String> {
+        &self.default_context
     }
 
     pub fn is_iri(term: &str) -> bool {
         term.starts_with("http://") || term.starts_with("https://") || term.starts_with("urn:")
     }
 }
-
-// ============================================================================
-// TESTS
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -414,15 +468,24 @@ mod tests {
     }
 
     #[test]
-    fn test_oa_properties() {
-        let properties = oa::properties();
-        assert!(!properties.is_empty());
+    fn test_singleton_consistency() {
+        let reg1 = VocabularyRegistry::global();
+        let reg2 = VocabularyRegistry::global();
+        // Vérifie que c'est bien la même adresse mémoire
+        assert!(std::ptr::eq(reg1, reg2));
     }
 
     #[test]
-    fn test_vocabulary_registry() {
-        let registry = VocabularyRegistry::new();
-        let oa_capability_iri = format!("{}{}", namespaces::OA, oa::OPERATIONAL_CAPABILITY);
-        assert!(registry.has_class(&oa_capability_iri));
+    fn test_default_context_cached() {
+        let reg = VocabularyRegistry::global();
+        let ctx = reg.get_default_context();
+        assert!(ctx.contains_key("oa"));
+        assert!(ctx.contains_key("rdf"));
+    }
+
+    #[test]
+    fn test_arcadia_types_constants_exist() {
+        assert_eq!(arcadia_types::OA_ACTOR, "OperationalActor");
+        assert_eq!(arcadia_types::SA_FUNCTION, "SystemFunction");
     }
 }

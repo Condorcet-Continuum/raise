@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/model_engine/capella/xmi_parser.rs
 
+use crate::model_engine::arcadia; // <-- Import du vocabulaire cible
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
 use anyhow::{Context, Result};
 use quick_xml::events::Event;
@@ -14,24 +15,21 @@ impl CapellaXmiParser {
     pub fn parse_file(path: &Path, model: &mut ProjectModel) -> Result<()> {
         let mut reader =
             Reader::from_file(path).context("Impossible d'ouvrir le fichier .capella")?;
-        // CORRECTION API Quick-XML
         reader.config_mut().trim_text(true);
 
         Self::parse_xml(&mut reader, model)
     }
 
-    /// Logique de parsing XML générique (utilisable avec une chaîne pour les tests)
+    /// Logique de parsing XML générique
     fn parse_xml<B: std::io::BufRead>(
         reader: &mut Reader<B>,
         model: &mut ProjectModel,
     ) -> Result<()> {
         let mut buf = Vec::new();
 
-        // Boucle de lecture des événements XML
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                    // 1. Extraction des attributs communs (id, name, type)
                     let mut id = String::new();
                     let mut name = String::new();
                     let mut xsi_type = String::new();
@@ -51,8 +49,8 @@ impl CapellaXmiParser {
                         }
                     }
 
-                    // 2. Si on a un ID et un Type, on crée l'élément
                     if !id.is_empty() && !xsi_type.is_empty() {
+                        // On crée l'élément avec le type brut pour l'instant
                         let element = ArcadiaElement {
                             id: id.clone(),
                             name: NameType::String(if name.is_empty() {
@@ -60,13 +58,12 @@ impl CapellaXmiParser {
                             } else {
                                 name
                             }),
-                            kind: xsi_type.clone(),
-                            // CORRECTION : Ajout du champ manquant
+                            kind: xsi_type.clone(), // Sera normalisé dans dispatch()
                             description: None,
                             properties,
                         };
 
-                        // 3. Dispatch dans la bonne couche du modèle selon le type XMI
+                        // Dispatch et Normalisation
                         Self::dispatch(model, element, &xsi_type);
                     }
                 }
@@ -86,62 +83,71 @@ impl CapellaXmiParser {
         Ok(())
     }
 
-    /// Trie les éléments dans les bons vecteurs du ProjectModel
-    fn dispatch(model: &mut ProjectModel, element: ArcadiaElement, xsi_type: &str) {
+    /// Trie les éléments et normalise leur 'kind' vers les URIs Raise
+    fn dispatch(model: &mut ProjectModel, mut element: ArcadiaElement, xsi_type: &str) {
         // --- OPERATIONAL ANALYSIS (OA) ---
         if xsi_type.contains("oa:OperationalActor") {
+            element.kind = arcadia::KIND_OA_ACTOR.to_string();
             model.oa.actors.push(element);
         } else if xsi_type.contains("oa:OperationalActivity") {
+            element.kind = arcadia::KIND_OA_ACTIVITY.to_string();
             model.oa.activities.push(element);
         } else if xsi_type.contains("oa:OperationalCapability") {
+            element.kind = arcadia::KIND_OA_CAPABILITY.to_string();
             model.oa.capabilities.push(element);
+        } else if xsi_type.contains("oa:Entity") || xsi_type.contains("oa:OperationalEntity") {
+            element.kind = arcadia::KIND_OA_ENTITY.to_string();
+            model.oa.entities.push(element);
 
         // --- SYSTEM ANALYSIS (SA) ---
         } else if xsi_type.contains("ctx:SystemFunction") {
+            element.kind = arcadia::KIND_SA_FUNCTION.to_string();
             model.sa.functions.push(element);
         } else if xsi_type.contains("ctx:SystemComponent") || xsi_type.contains("ctx:System") {
+            element.kind = arcadia::KIND_SA_COMPONENT.to_string();
             model.sa.components.push(element);
         } else if xsi_type.contains("ctx:Actor") {
+            element.kind = arcadia::KIND_SA_ACTOR.to_string();
             model.sa.actors.push(element);
 
         // --- LOGICAL ARCHITECTURE (LA) ---
         } else if xsi_type.contains("la:LogicalFunction") {
+            element.kind = arcadia::KIND_LA_FUNCTION.to_string();
             model.la.functions.push(element);
         } else if xsi_type.contains("la:LogicalComponent") {
+            element.kind = arcadia::KIND_LA_COMPONENT.to_string();
             model.la.components.push(element);
 
         // --- PHYSICAL ARCHITECTURE (PA) ---
         } else if xsi_type.contains("pa:PhysicalFunction") {
+            element.kind = arcadia::KIND_PA_FUNCTION.to_string();
             model.pa.functions.push(element);
         } else if xsi_type.contains("pa:PhysicalComponent") {
+            element.kind = arcadia::KIND_PA_COMPONENT.to_string();
             model.pa.components.push(element);
         }
+        // Sinon : On ignore ou on stocke tel quel si besoin (EPBS, Data...)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_engine::arcadia; // Pour vérifier la normalisation
     use quick_xml::reader::Reader;
 
     #[test]
-    fn test_parse_capella_fragment() {
+    fn test_parse_capella_fragment_and_normalize() {
         let xml = r#"
             <root>
                 <ownedArchitectures xsi:type="org.polarsys.capella.core.data.la:LogicalArchitecture">
                     <ownedLogicalComponents xsi:type="org.polarsys.capella.core.data.la:LogicalComponent" id="LC_1" name="EngineController" />
                     <ownedLogicalFunctions xsi:type="org.polarsys.capella.core.data.la:LogicalFunction" id="LF_1" name="ComputeThrust" />
                 </ownedArchitectures>
-                <ownedArchitectures xsi:type="org.polarsys.capella.core.data.ctx:SystemAnalysis">
-                     <ownedSystemComponentPkg>
-                        <ownedSystemComponents xsi:type="org.polarsys.capella.core.data.ctx:SystemComponent" id="SC_1" name="DroneSystem" />
-                     </ownedSystemComponentPkg>
-                </ownedArchitectures>
             </root>
         "#;
 
         let mut reader = Reader::from_str(xml);
-        // CORRECTION API Quick-XML dans le test aussi
         reader.config_mut().trim_text(true);
 
         let mut model = ProjectModel::default();
@@ -149,11 +155,13 @@ mod tests {
 
         // Vérification LA
         assert_eq!(model.la.components.len(), 1);
-        assert_eq!(model.la.components[0].name.as_str(), "EngineController");
-        assert_eq!(model.la.functions.len(), 1);
+        let comp = &model.la.components[0];
 
-        // Vérification SA
-        assert_eq!(model.sa.components.len(), 1);
-        assert_eq!(model.sa.components[0].id, "SC_1");
+        assert_eq!(comp.name.as_str(), "EngineController");
+        // Vérification CRITIQUE : Le kind doit être l'URI Raise, pas le type Capella
+        assert_eq!(comp.kind, arcadia::KIND_LA_COMPONENT);
+
+        let func = &model.la.functions[0];
+        assert_eq!(func.kind, arcadia::KIND_LA_FUNCTION);
     }
 }

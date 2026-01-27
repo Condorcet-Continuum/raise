@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/genetics/bridge.rs
+
 use crate::genetics::dto::AllocatedSolution;
 use crate::genetics::evaluators::architecture::ArchitectureCostModel;
 use crate::model_engine::types::ProjectModel;
@@ -209,24 +211,37 @@ impl GeneticsAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, ProjectModel};
+    use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
     use serde_json::json;
+    use std::collections::HashMap;
+
+    // Helper pour remplacer l'ancienne méthode ArcadiaElement::new()
+    fn make_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
+        ArcadiaElement {
+            id: id.to_string(),
+            name: NameType::String(name.to_string()),
+            kind: kind.to_string(),
+            description: None,
+            properties: HashMap::new(),
+        }
+    }
 
     fn create_mock_project() -> ProjectModel {
         let mut model = ProjectModel::default();
-        let mut f1 = ArcadiaElement::new("F1", "Navigation", "LogicalFunction");
+
+        let mut f1 = make_element("F1", "Navigation", "LogicalFunction");
         f1.properties.insert("complexity".into(), json!(20.0));
         model.la.functions.push(f1);
 
-        let mut f2 = ArcadiaElement::new("F2", "Radio", "LogicalFunction");
+        let mut f2 = make_element("F2", "Radio", "LogicalFunction");
         f2.properties.insert("complexity".into(), json!(10.0));
         model.la.functions.push(f2);
 
-        let mut c1 = ArcadiaElement::new("C1", "MainCPU", "PhysicalComponent");
+        let mut c1 = make_element("C1", "MainCPU", "PhysicalComponent");
         c1.properties.insert("capacity".into(), json!(100.0));
         model.pa.components.push(c1);
 
-        let mut ex = ArcadiaElement::new("E1", "DataLink", "FunctionalExchange");
+        let mut ex = make_element("E1", "DataLink", "FunctionalExchange");
         ex.properties.insert("source".into(), json!("F1"));
         ex.properties.insert("target".into(), json!("F2"));
         ex.properties.insert("volume".into(), json!(50.0));

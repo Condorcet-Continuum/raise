@@ -33,7 +33,7 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      # CORRECTION ICI : Ajout de 'clang' et 'mold' pour le linker
+      # CORRECTION : Ajout de 'clang' et 'mold' pour le linker
       - name: Install System Dependencies
         run: |
           sudo apt-get update
@@ -57,6 +57,8 @@ jobs:
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -64,18 +66,25 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      # Si src-wasm dépend du code modifié, assurez-vous qu'il est à jour, sinon on laisse tel quel.
       - name: Build WASM Core
         run: |
           cd src-wasm
           ./build.sh
 
+      # --- CORRECTIONS MAJEURES ICI : CIBLAGE DU DOSSIER SRC-TAURI ---
+      
       - name: Check Formatting
+        working-directory: src-tauri
         run: cargo fmt --all -- --check
       
       - name: Lint with Clippy
+        working-directory: src-tauri
         run: cargo clippy -- -D warnings
 
       - name: Run Headless Tests
+        working-directory: src-tauri
+        # xvfb est requis pour certains tests Tauri qui initialisent le contexte graphique
         run: xvfb-run cargo test --all-features
 
   # ------------------------------------------------------------------
@@ -93,7 +102,9 @@ jobs:
         run: cargo install cargo-cyclonedx
       
       - name: Generate Rust SBOM
-        run: cargo cyclonedx --format json --all > sbom-rust.cdx.json
+        working-directory: src-tauri
+        # On génère le fichier à la racine du workspace pour le retrouver facilement après
+        run: cargo cyclonedx --format json --all > ../sbom-rust.cdx.json
 
       - name: Generate Filesystem SBOM (Syft)
         uses: anchore/sbom-action@v0
@@ -130,7 +141,6 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      # CORRECTION ICI : Ajout de 'clang' et 'mold' aussi pour le build final
       - name: Install System Dependencies
         run: |
           sudo apt-get update
@@ -149,6 +159,8 @@ jobs:
       - name: Build WASM Core
         run: cd src-wasm && ./build.sh
 
+      # Attention : Si le frontend TypeScript casse à cause des changements backend,
+      # cette étape échouera. Pour l'instant on laisse, car nécessaire pour le bundle.
       - name: Install & Build Frontend
         run: |
           npm ci

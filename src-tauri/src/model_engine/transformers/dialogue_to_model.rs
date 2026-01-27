@@ -1,16 +1,11 @@
 // FICHIER : src-tauri/src/model_engine/transformers/dialogue_to_model.rs
 
+use crate::model_engine::arcadia; // <-- La source de vérité
 use crate::model_engine::types::{ArcadiaElement, NameType};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
-
-// URIs Arcadia (Simplifiés pour cet exemple, à synchroniser avec vocabulaire.rs)
-const URI_LOGICAL_COMPONENT: &str = "https://raise.io/ontology/arcadia/la#LogicalComponent";
-const URI_SYSTEM_FUNCTION: &str = "https://raise.io/ontology/arcadia/sa#SystemFunction";
-const URI_LOGICAL_FUNCTION: &str = "https://raise.io/ontology/arcadia/la#LogicalFunction";
-const URI_PHYSICAL_COMPONENT: &str = "https://raise.io/ontology/arcadia/pa#PhysicalComponent";
 
 /// Transformateur spécialisé pour convertir une intention IA (JSON) en Élément Arcadia
 pub struct DialogueToModelTransformer;
@@ -35,12 +30,27 @@ impl DialogueToModelTransformer {
             .and_then(|v| v.as_str())
             .unwrap_or("Logical"); // Par défaut : Architecture Logique
 
-        // 3. Résolution de l'URI Arcadia (Mapping Sémantique)
+        // 3. Résolution de l'URI Arcadia (Mapping Sémantique via constantes centralisées)
         let type_uri = match (layer_str, type_str) {
-            ("Logical", "Component") => URI_LOGICAL_COMPONENT,
-            ("Physical", "Component") => URI_PHYSICAL_COMPONENT,
-            ("System", "Function") => URI_SYSTEM_FUNCTION,
-            ("Logical", "Function") => URI_LOGICAL_FUNCTION,
+            // Logical Architecture
+            ("Logical", "Component") => arcadia::KIND_LA_COMPONENT,
+            ("Logical", "Function") => arcadia::KIND_LA_FUNCTION,
+            ("Logical", "Actor") => arcadia::KIND_LA_ACTOR,
+
+            // System Analysis
+            ("System", "Function") => arcadia::KIND_SA_FUNCTION,
+            ("System", "Component") => arcadia::KIND_SA_COMPONENT,
+            ("System", "Actor") => arcadia::KIND_SA_ACTOR,
+
+            // Physical Architecture
+            ("Physical", "Component") => arcadia::KIND_PA_COMPONENT,
+            ("Physical", "Function") => arcadia::KIND_PA_FUNCTION,
+            ("Physical", "Link") => arcadia::KIND_PA_LINK,
+
+            // Operational Analysis
+            ("Operational", "Actor") => arcadia::KIND_OA_ACTOR,
+            ("Operational", "Activity") => arcadia::KIND_OA_ACTIVITY,
+
             // Fallback ou erreur
             (l, t) => {
                 return Err(anyhow!(
@@ -54,7 +64,6 @@ impl DialogueToModelTransformer {
         // 4. Construction de l'objet Arcadia
         let properties = HashMap::new();
 
-        // CORRECTION : Extraction de la description vers le champ dédié
         let description = intent
             .get("description")
             .and_then(|v| v.as_str())
@@ -65,7 +74,7 @@ impl DialogueToModelTransformer {
             id: Uuid::new_v4().to_string(), // Génération auto de l'ID
             name: NameType::String(name_str.to_string()),
             kind: type_uri.to_string(),
-            description, // Champ ajouté
+            description,
             properties,
         })
     }
@@ -90,12 +99,10 @@ mod tests {
             .expect("Should create element");
 
         assert_eq!(element.name.as_str(), "FlightManager");
-        assert_eq!(element.kind, URI_LOGICAL_COMPONENT);
+        // Vérification avec la constante officielle
+        assert_eq!(element.kind, arcadia::KIND_LA_COMPONENT);
 
-        // Vérif Description (nouveau champ)
         assert_eq!(element.description.as_deref(), Some("Gère le vol"));
-
-        // Vérif ID généré
         assert!(!element.id.is_empty());
     }
 
@@ -110,7 +117,7 @@ mod tests {
         let element = DialogueToModelTransformer::create_element_from_intent(&intent)
             .expect("Should create element with default layer");
 
-        assert_eq!(element.kind, URI_LOGICAL_COMPONENT);
+        assert_eq!(element.kind, arcadia::KIND_LA_COMPONENT);
     }
 
     #[test]

@@ -1,0 +1,211 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@vocab": "https://raise.io/ontology/arcadia/oa#",
+    "arcadia": "https://raise.io/ontology/arcadia#",
+    "oa": "https://raise.io/ontology/arcadia/oa#",
+    "sa": "https://raise.io/ontology/arcadia/sa#",
+    "la": "https://raise.io/ontology/arcadia/la#",
+    "pa": "https://raise.io/ontology/arcadia/pa#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "dct": "http://purl.org/dc/terms/",
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "mbse": "http://www.omg.org/spec/SysML/",
+    "id": "@id",
+    "type": "@type",
+    "OAPackage": "oa:OperationalAnalysisPackage",
+    "OperationalCapability": "oa:OperationalCapability",
+    "OperationalActivity": "oa:OperationalActivity",
+    "OperationalActor": "oa:OperationalActor",
+    "OperationalEntity": "oa:OperationalEntity",
+    "OperationalProcess": "oa:OperationalProcess",
+    "OperationalExchange": "oa:OperationalExchange",
+    "OperationalRole": "oa:OperationalRole",
+    "name": {
+      "@id": "skos:prefLabel",
+      "@type": "xsd:string"
+    },
+    "description": {
+      "@id": "dct:description",
+      "@type": "xsd:string"
+    },
+    "summary": {
+      "@id": "dct:abstract",
+      "@type": "xsd:string"
+    },
+    "version": {
+      "@id": "dct:hasVersion",
+      "@type": "xsd:string"
+    },
+    "layer": {
+      "@id": "arcadia:belongsToLayer",
+      "@type": "@id"
+    },
+    "extends": {
+      "@id": "oa:extends",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "includes": {
+      "@id": "oa:includes",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "realizedBy": {
+      "@id": "arcadia:realizedBy",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "realizes": {
+      "@id": "arcadia:realizes",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "involvedActivities": {
+      "@id": "oa:involvesActivity",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "involvedActors": {
+      "@id": "oa:involvesActor",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "contributesTo": {
+      "@id": "oa:contributesToCapability",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "allocatedTo": {
+      "@id": "oa:allocatedTo",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "allocatedActivities": {
+      "@id": "oa:allocatesActivity",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "allocatedEntities": {
+      "@id": "oa:allocatesEntity",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "incomingExchanges": {
+      "@id": "oa:hasIncomingExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "outgoingExchanges": {
+      "@id": "oa:hasOutgoingExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "source": {
+      "@id": "oa:exchangeSource",
+      "@type": "@id"
+    },
+    "target": {
+      "@id": "oa:exchangeTarget",
+      "@type": "@id"
+    },
+    "exchangedItems": {
+      "@id": "oa:exchangesItem",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "subActivities": {
+      "@id": "oa:hasSubActivity",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "subEntities": {
+      "@id": "oa:hasSubEntity",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "kind": {
+      "@id": "rdf:type",
+      "@type": "@vocab"
+    },
+    "preConditions": {
+      "@id": "oa:hasPreCondition",
+      "@type": "xsd:string",
+      "@container": "@set"
+    },
+    "postConditions": {
+      "@id": "oa:hasPostCondition",
+      "@type": "xsd:string",
+      "@container": "@set"
+    },
+    "capabilities": {
+      "@id": "oa:containsCapability",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "activities": {
+      "@id": "oa:containsActivity",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "actors": {
+      "@id": "oa:containsActor",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "entities": {
+      "@id": "oa:containsEntity",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "processes": {
+      "@id": "oa:containsProcess",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "exchanges": {
+      "@id": "oa:containsExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "actor": {
+      "@id": "oa:actor",
+      "@type": "@id"
+    },
+    "role": {
+      "@id": "oa:actorRole",
+      "@type": "@vocab"
+    },
+    "playedBy": {
+      "@id": "oa:playedBy",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "activity": {
+      "@id": "oa:activity",
+      "@type": "@id"
+    },
+    "sequence": {
+      "@id": "oa:sequenceOrder",
+      "@type": "xsd:integer"
+    },
+    "scenarios": {
+      "@id": "oa:hasScenario",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "steps": {
+      "@id": "oa:hasStep",
+      "@container": "@list"
+    },
+    "condition": {
+      "@id": "oa:hasCondition",
+      "@type": "xsd:string"
+    }
+  }
+}

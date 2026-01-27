@@ -87,7 +87,9 @@ impl ContextManager {
     pub fn new() -> Self {
         Self {
             contexts: HashMap::new(),
-            active_namespaces: VocabularyRegistry::get_default_prefixes(),
+            // CORRECTION ICI : Utilisation du Singleton global pour initialiser les namespaces
+            // On clone la map de référence (rapide) au lieu de la reconstruire (lent)
+            active_namespaces: VocabularyRegistry::global().get_default_context().clone(),
         }
     }
 
@@ -120,6 +122,7 @@ impl ContextManager {
 
     /// EXPANSION : Transforme "oa:Actor" en "http://.../oa#Actor"
     pub fn expand_term(&self, term: &str) -> String {
+        // Note: VocabularyRegistry::is_iri est une fonction statique (sans self), donc appelable directement
         if VocabularyRegistry::is_iri(term) || term.starts_with('@') {
             return term.to_string();
         }
@@ -182,7 +185,9 @@ mod tests {
     #[test]
     fn test_context_manager() {
         let manager = ContextManager::new();
+        // Vérifie que les namespaces par défaut (Singleton) sont bien chargés
         assert!(manager.active_namespaces.contains_key("arcadia"));
+        assert!(manager.active_namespaces.contains_key("oa"));
     }
 
     #[test]

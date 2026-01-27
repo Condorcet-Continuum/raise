@@ -1,0 +1,205 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@vocab": "https://raise.io/ontology/arcadia/pa#",
+    "arcadia": "https://raise.io/ontology/arcadia#",
+    "oa": "https://raise.io/ontology/arcadia/oa#",
+    "sa": "https://raise.io/ontology/arcadia/sa#",
+    "la": "https://raise.io/ontology/arcadia/la#",
+    "pa": "https://raise.io/ontology/arcadia/pa#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "dct": "http://purl.org/dc/terms/",
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "mbse": "http://www.omg.org/spec/SysML/",
+    "id": "@id",
+    "type": "@type",
+    "PAPackage": "pa:PhysicalArchitecturePackage",
+    "PhysicalCapability": "pa:PhysicalCapability",
+    "PhysicalFunction": "pa:PhysicalFunction",
+    "PhysicalComponent": "pa:PhysicalComponent",
+    "PhysicalActor": "pa:PhysicalActor",
+    "PhysicalLink": "pa:PhysicalLink",
+    "ComponentExchange": "pa:ComponentExchange",
+    "Interface": "pa:Interface",
+    "Port": "pa:Port",
+    "PhysicalPort": "pa:PhysicalPort",
+    "Mode": "pa:Mode",
+    "State": "pa:State",
+    "Constraint": "pa:Constraint",
+    "name": {
+      "@id": "skos:prefLabel",
+      "@type": "xsd:string"
+    },
+    "description": {
+      "@id": "dct:description",
+      "@type": "xsd:string"
+    },
+    "summary": {
+      "@id": "dct:abstract",
+      "@type": "xsd:string"
+    },
+    "version": {
+      "@id": "dct:hasVersion",
+      "@type": "xsd:string"
+    },
+    "layer": {
+      "@id": "arcadia:belongsToLayer",
+      "@type": "@id"
+    },
+    "extends": {
+      "@id": "pa:extends",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "includes": {
+      "@id": "pa:includes",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "realizedBy": {
+      "@id": "arcadia:realizedBy",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "realizes": {
+      "@id": "arcadia:realizes",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "subFunctions": {
+      "@id": "pa:hasSubFunction",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "subComponents": {
+      "@id": "pa:hasSubComponent",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "capabilities": {
+      "@id": "pa:containsCapability",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "functions": {
+      "@id": "pa:containsFunction",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "components": {
+      "@id": "pa:containsComponent",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "actors": {
+      "@id": "pa:containsActor",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "interfaces": {
+      "@id": "pa:containsInterface",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "ports": {
+      "@id": "pa:containsPort",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "exchanges": {
+      "@id": "pa:containsExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "componentExchanges": {
+      "@id": "pa:containsComponentExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "links": {
+      "@id": "pa:containsPhysicalLink",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "allocatedFunctions": {
+      "@id": "pa:allocatesFunction",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "allocatedComponents": {
+      "@id": "pa:allocatesComponent",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "allocatedTo": {
+      "@id": "pa:allocatedTo",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "incomingComponentExchanges": {
+      "@id": "pa:hasIncomingComponentExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "outgoingComponentExchanges": {
+      "@id": "pa:hasOutgoingComponentExchange",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "incomingPhysicalLinks": {
+      "@id": "pa:hasIncomingPhysicalLink",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "outgoingPhysicalLinks": {
+      "@id": "pa:hasOutgoingPhysicalLink",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "source": {
+      "@id": "pa:connectionSource",
+      "@type": "@id"
+    },
+    "target": {
+      "@id": "pa:connectionTarget",
+      "@type": "@id"
+    },
+    "exchangedItems": {
+      "@id": "pa:exchangesItem",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "actor": {
+      "@id": "pa:actor",
+      "@type": "@id"
+    },
+    "role": {
+      "@id": "pa:actorRole",
+      "@type": "@vocab"
+    },
+    "modes": {
+      "@id": "pa:hasMode",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "states": {
+      "@id": "pa:hasState",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "constraints": {
+      "@id": "pa:hasConstraint",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "kind": {
+      "@id": "rdf:type",
+      "@type": "@vocab"
+    }
+  }
+}

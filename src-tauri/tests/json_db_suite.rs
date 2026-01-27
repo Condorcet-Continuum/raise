@@ -43,6 +43,9 @@ pub mod schema_minimal;
 #[path = "json_db_suite/workunits_x_compute.rs"]
 pub mod workunits_x_compute;
 
+#[path = "json_db_suite/integration_suite.rs"]
+pub mod integration_suite;
+
 // --- ENVIRONNEMENT DE TEST (Commun à tous) ---
 
 static INIT: Once = Once::new();

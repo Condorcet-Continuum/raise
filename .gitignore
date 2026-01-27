@@ -55,6 +55,10 @@ src-tauri/tools/trainer/dataset.jsonl
 
 scripts/
 
+temp_e2e_db/
+
+cmd/
+
 # --- LEANN Service ---
 leann/venv/
 leann/__pycache__/

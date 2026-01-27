@@ -2,7 +2,7 @@
 
 use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::query::sql::parse_sql;
+use raise::json_db::query::sql::{parse_sql, SqlRequest}; // Ajout de SqlRequest
 use raise::json_db::query::QueryEngine;
 use raise::json_db::storage::JsonDbConfig;
 use serde_json::{json, Value};
@@ -56,17 +56,22 @@ async fn seed_actors_from_dataset(mgr: &CollectionsManager<'_>, cfg: &JsonDbConf
 
 #[tokio::test]
 async fn test_sql_select_by_kind() {
-    // CORRECTION E0277 : Ces helpers sont synchrones dans cette suite
     let env = init_test_env().await;
     ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
 
-    // CORRECTION : .await sur l'appel au helper désormais asynchrone
     seed_actors_from_dataset(&mgr, &env.cfg).await;
 
     let engine = QueryEngine::new(&mgr);
     let sql = "SELECT * FROM actors WHERE kind = 'bot'";
-    let query = parse_sql(sql).expect("Parsing SQL");
+
+    // DÉBALLAGE DU SQL REQUEST
+    let request = parse_sql(sql).expect("Parsing SQL");
+    let query = match request {
+        SqlRequest::Read(q) => q,
+        _ => panic!("Expected SELECT query"),
+    };
+
     let result = engine.execute_query(query).await.expect("Exec");
 
     assert_eq!(result.documents.len(), 1);
@@ -82,7 +87,14 @@ async fn test_sql_numeric_comparison_x_props() {
     let engine = QueryEngine::new(&mgr);
 
     let sql = "SELECT * FROM actors WHERE x_age >= 30";
-    let query = parse_sql(sql).expect("Parsing SQL");
+
+    // DÉBALLAGE
+    let request = parse_sql(sql).expect("Parsing SQL");
+    let query = match request {
+        SqlRequest::Read(q) => q,
+        _ => panic!("Expected SELECT query"),
+    };
+
     let result = engine.execute_query(query).await.expect("Exec");
 
     assert_eq!(result.documents.len(), 4);
@@ -97,7 +109,14 @@ async fn test_sql_logical_and_mixed() {
     let engine = QueryEngine::new(&mgr);
 
     let sql = "SELECT * FROM actors WHERE kind = 'human' AND x_active = true";
-    let query = parse_sql(sql).expect("Parsing SQL");
+
+    // DÉBALLAGE
+    let request = parse_sql(sql).expect("Parsing SQL");
+    let query = match request {
+        SqlRequest::Read(q) => q,
+        _ => panic!("Expected SELECT query"),
+    };
+
     let result = engine.execute_query(query).await.expect("Exec");
 
     assert_eq!(result.documents.len(), 3);
@@ -112,7 +131,14 @@ async fn test_sql_like_display_name() {
     let engine = QueryEngine::new(&mgr);
 
     let sql = "SELECT * FROM actors WHERE displayName LIKE 'User'";
-    let query = parse_sql(sql).expect("Parsing SQL");
+
+    // DÉBALLAGE
+    let request = parse_sql(sql).expect("Parsing SQL");
+    let query = match request {
+        SqlRequest::Read(q) => q,
+        _ => panic!("Expected SELECT query"),
+    };
+
     let result = engine.execute_query(query).await.expect("Exec");
 
     assert_eq!(result.documents.len(), 1);
@@ -129,7 +155,14 @@ async fn test_sql_order_by_x_prop() {
 
     // SQL : On veut les 2 plus âgés.
     let sql = "SELECT * FROM actors ORDER BY x_age DESC LIMIT 2";
-    let query = parse_sql(sql).expect("Parsing SQL");
+
+    // DÉBALLAGE
+    let request = parse_sql(sql).expect("Parsing SQL");
+    let query = match request {
+        SqlRequest::Read(q) => q,
+        _ => panic!("Expected SELECT query"),
+    };
+
     let result = engine.execute_query(query).await.expect("Exec");
 
     // On vérifie que l'on a AU MOINS 2 résultats et que l'ordre est correct.
@@ -153,7 +186,14 @@ async fn test_sql_json_array_contains() {
     let engine = QueryEngine::new(&mgr);
 
     let sql = "SELECT * FROM actors WHERE tags LIKE 'paris'";
-    let query = parse_sql(sql).expect("Parsing SQL");
+
+    // DÉBALLAGE
+    let request = parse_sql(sql).expect("Parsing SQL");
+    let query = match request {
+        SqlRequest::Read(q) => q,
+        _ => panic!("Expected SELECT query"),
+    };
+
     let result = engine.execute_query(query).await.expect("Exec");
 
     assert_eq!(result.documents.len(), 2);

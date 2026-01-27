@@ -177,10 +177,13 @@ impl<'a> Migrator<'a> {
         let docs = self.manager.list_all(collection).await?;
 
         for mut doc in docs {
-            let id = doc.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+            // L'ID est déjà dans le doc, pas besoin de l'extraire pour l'update
+            // le transformer modifie le doc "en place"
 
             if transformer(&mut doc) {
-                self.manager.update_document(collection, &id, doc).await?;
+                // CORRECTION ICI : Utilisation de insert_with_schema pour ÉCRASER le document
+                // (update_document ferait un merge, ce qui empêcherait les suppressions de champs)
+                self.manager.insert_with_schema(collection, doc).await?;
             }
         }
         Ok(())

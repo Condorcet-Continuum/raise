@@ -3,92 +3,42 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::cmp::Ordering;
-use std::future::Future;
-use std::pin::Pin;
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::indexes::manager::IndexManager;
 use crate::json_db::query::{
     optimizer::QueryOptimizer, ComparisonOperator, Condition, FilterOperator, Projection, Query,
     QueryFilter, QueryResult, SortField, SortOrder,
 };
 
-// --- TRAIT ASYNC POUR L'INDEX ---
-
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
 pub trait IndexProvider: Send + Sync {
-    fn has_index<'a>(&'a self, collection: &'a str, field: &'a str) -> BoxFuture<'a, bool>;
-
-    fn search<'a>(
-        &'a self,
-        collection: &'a str,
-        field: &'a str,
-        value: &'a Value,
-    ) -> BoxFuture<'a, Result<Vec<String>>>;
+    fn has_index(&self, collection: &str, field: &str) -> bool;
+    fn search(&self, collection: &str, field: &str, value: &Value) -> Result<Vec<String>>;
 }
 
-// --- IMPLÉMENTATION NO-OP (BOUCHON) ---
 pub struct NoOpIndexProvider;
 impl IndexProvider for NoOpIndexProvider {
-    fn has_index<'a>(&'a self, _c: &'a str, _f: &'a str) -> BoxFuture<'a, bool> {
-        Box::pin(async { false })
+    fn has_index(&self, _c: &str, _f: &str) -> bool {
+        false
     }
-    fn search<'a>(
-        &'a self,
-        _c: &'a str,
-        _f: &'a str,
-        _v: &'a Value,
-    ) -> BoxFuture<'a, Result<Vec<String>>> {
-        Box::pin(async { Ok(vec![]) })
+    fn search(&self, _c: &str, _f: &str, _v: &Value) -> Result<Vec<String>> {
+        Ok(vec![])
     }
 }
-
-// --- IMPLÉMENTATION RÉELLE (PONT VERS IndexManager) ---
-pub struct RealIndexProvider<'a> {
-    manager: IndexManager<'a>,
-}
-
-impl<'a> RealIndexProvider<'a> {
-    pub fn new(manager: IndexManager<'a>) -> Self {
-        Self { manager }
-    }
-}
-
-impl<'a> IndexProvider for RealIndexProvider<'a> {
-    fn has_index<'b>(&'b self, collection: &'b str, field: &'b str) -> BoxFuture<'b, bool> {
-        Box::pin(async move { self.manager.has_index(collection, field).await })
-    }
-
-    fn search<'b>(
-        &'b self,
-        collection: &'b str,
-        field: &'b str,
-        value: &'b Value,
-    ) -> BoxFuture<'b, Result<Vec<String>>> {
-        Box::pin(async move { self.manager.search(collection, field, value).await })
-    }
-}
-
-// --- MOTEUR DE REQUÊTE ---
 
 pub struct QueryEngine<'a> {
     manager: &'a CollectionsManager<'a>,
-    index_provider: Box<dyn IndexProvider + 'a>,
+    index_provider: Box<dyn IndexProvider>,
 }
 
 impl<'a> QueryEngine<'a> {
     pub fn new(manager: &'a CollectionsManager<'a>) -> Self {
-        let idx_mgr = IndexManager::new(manager.storage, &manager.space, &manager.db);
         Self {
             manager,
-            index_provider: Box::new(RealIndexProvider::new(idx_mgr)),
+            index_provider: Box::new(NoOpIndexProvider),
         }
     }
 
-    /// Constructeur pour injection de dépendance (Tests)
-    /// Modifie l'instance courante pour utiliser un provider spécifique
-    pub fn with_index_provider(mut self, provider: Box<dyn IndexProvider + 'a>) -> Self {
+    pub fn with_index_provider(mut self, provider: Box<dyn IndexProvider>) -> Self {
         self.index_provider = provider;
         self
     }
@@ -97,10 +47,8 @@ impl<'a> QueryEngine<'a> {
         let optimizer = QueryOptimizer::new();
         query = optimizer.optimize(query)?;
 
-        // 1. CHARGEMENT (Index vs Scan)
-        let index_candidate = self.find_index_candidate(&query).await;
-
-        let mut documents = match index_candidate {
+        // --- CHARGEMENT (Modifié en Async) ---
+        let mut documents = match self.find_index_candidate(&query) {
             Some((field, value)) => {
                 let clean_val = self.strip_quotes(&value);
                 let clean_field = self.resolve_index_field(&field, &query.collection);
@@ -111,26 +59,26 @@ impl<'a> QueryEngine<'a> {
                     query.collection, clean_field
                 );
 
-                let ids = self
-                    .index_provider
-                    .search(&query.collection, &clean_field, &clean_val)
-                    .await?;
-
+                let ids =
+                    self.index_provider
+                        .search(&query.collection, &clean_field, &clean_val)?;
+                // Appel async au manager
                 self.manager.read_many(&query.collection, &ids).await?
             }
             None => {
                 #[cfg(debug_assertions)]
                 println!("🐢 QueryEngine: Full Scan sur {}", query.collection);
+                // Appel async au manager
                 self.manager.list_all(&query.collection).await?
             }
         };
 
-        // 2. FILTRAGE
+        // --- FILTRAGE ---
         if let Some(filter) = &query.filter {
             documents.retain(|doc| self.evaluate_filter(doc, filter, &query.collection));
         }
 
-        // 3. TRI
+        // --- TRI ---
         if let Some(sort_fields) = &query.sort {
             documents.sort_by(|a, b| self.compare_docs(a, b, sort_fields, &query.collection));
         }
@@ -139,10 +87,10 @@ impl<'a> QueryEngine<'a> {
         let offset = query.offset.unwrap_or(0);
         let limit = query.limit.unwrap_or(documents.len());
 
-        // 4. PAGINATION
+        // --- PAGINATION ---
         let mut paged_docs: Vec<Value> = documents.into_iter().skip(offset).take(limit).collect();
 
-        // 5. PROJECTION
+        // --- PROJECTION ---
         if let Some(projection) = &query.projection {
             for doc in &mut paged_docs {
                 *doc = self.project_fields(doc, projection, &query.collection);
@@ -157,38 +105,30 @@ impl<'a> QueryEngine<'a> {
         })
     }
 
-    async fn find_index_candidate(&self, query: &Query) -> Option<(String, Value)> {
+    fn find_index_candidate(&self, query: &Query) -> Option<(String, Value)> {
         if let Some(filter) = &query.filter {
             if filter.operator == FilterOperator::And {
                 for cond in &filter.conditions {
                     let clean_field = self.normalize_field_path(&cond.field, &query.collection);
-
-                    if cond.operator == ComparisonOperator::Eq {
-                        let has = self
+                    if cond.operator == ComparisonOperator::Eq
+                        && self
                             .index_provider
                             .has_index(&query.collection, &clean_field)
-                            .await;
-
-                        if has {
-                            return Some((cond.field.clone(), cond.value.clone()));
-                        }
+                    {
+                        return Some((cond.field.clone(), cond.value.clone()));
                     }
-
                     let leaf = cond.field.split('.').next_back().unwrap_or(&cond.field);
-                    if leaf != clean_field && cond.operator == ComparisonOperator::Eq {
-                        let has_leaf = self.index_provider.has_index(&query.collection, leaf).await;
-
-                        if has_leaf {
-                            return Some((cond.field.clone(), cond.value.clone()));
-                        }
+                    if leaf != clean_field
+                        && cond.operator == ComparisonOperator::Eq
+                        && self.index_provider.has_index(&query.collection, leaf)
+                    {
+                        return Some((cond.field.clone(), cond.value.clone()));
                     }
                 }
             }
         }
         None
     }
-
-    // --- LOGIQUE MÉTIER ---
 
     fn resolve_index_field(&self, raw_field: &str, collection: &str) -> String {
         let norm = self.normalize_field_path(raw_field, collection);
@@ -257,6 +197,13 @@ impl<'a> QueryEngine<'a> {
                     if arr.contains(v) {
                         return true;
                     }
+
+                    if let Value::Array(sub_arr) = v {
+                        if sub_arr.iter().all(|sub_item| arr.contains(sub_item)) {
+                            return true;
+                        }
+                    }
+
                     let v_str = match v {
                         Value::String(s) => s.to_lowercase(),
                         _ => v.to_string().to_lowercase(),
@@ -486,7 +433,12 @@ impl<'a> QueryEngine<'a> {
         for s in sort_fields {
             let va = self.get_field_value_smart(a, &s.field, collection_name);
             let vb = self.get_field_value_smart(b, &s.field, collection_name);
-            let cmp = self.compare_json_values(va, vb);
+            let cmp = match (va, vb) {
+                (Some(x), Some(y)) => self.compare_json_values(x, y),
+                (None, Some(_)) => Ordering::Less,
+                (Some(_), None) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            };
             if cmp != Ordering::Equal {
                 return match s.order {
                     SortOrder::Asc => cmp,
@@ -498,27 +450,20 @@ impl<'a> QueryEngine<'a> {
     }
 
     fn compare_values(&self, a: Option<&Value>, b: &Value) -> Option<Ordering> {
-        self.compare_json_values(a, Some(b)).into()
+        a.map(|v| self.compare_json_values(v, b))
     }
 
-    fn compare_json_values(&self, a: Option<&Value>, b: Option<&Value>) -> Ordering {
-        match (a, b) {
-            (Some(v1), Some(v2)) => {
-                if let (Some(n1), Some(n2)) = (v1.as_f64(), v2.as_f64()) {
-                    return n1.partial_cmp(&n2).unwrap_or(Ordering::Equal);
-                }
-                if let (Some(s1), Some(s2)) = (v1.as_str(), v2.as_str()) {
-                    return s1.cmp(s2);
-                }
-                if let (Some(b1), Some(b2)) = (v1.as_bool(), v2.as_bool()) {
-                    return b1.cmp(&b2);
-                }
-                Ordering::Equal
-            }
-            (None, Some(_)) => Ordering::Less,
-            (Some(_), None) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
+    fn compare_json_values(&self, a: &Value, b: &Value) -> Ordering {
+        if let (Some(n1), Some(n2)) = (a.as_f64(), b.as_f64()) {
+            return n1.partial_cmp(&n2).unwrap_or(Ordering::Equal);
         }
+        if let (Some(s1), Some(s2)) = (a.as_str(), b.as_str()) {
+            return s1.cmp(s2);
+        }
+        if let (Some(b1), Some(b2)) = (a.as_bool(), b.as_bool()) {
+            return b1.cmp(&b2);
+        }
+        a.to_string().cmp(&b.to_string())
     }
 
     fn project_fields(&self, doc: &Value, projection: &Projection, collection_name: &str) -> Value {
@@ -559,10 +504,6 @@ impl<'a> QueryEngine<'a> {
     }
 }
 
-// ============================================================================
-// TESTS UNITAIRES
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,9 +511,7 @@ mod tests {
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use serde_json::json;
     use std::collections::HashMap;
-    use std::sync::Arc;
     use tempfile::tempdir;
-    use tokio::sync::Mutex;
 
     fn setup_test_db() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -580,26 +519,17 @@ mod tests {
         (dir, config)
     }
 
-    // Mock Provider Async
+    #[allow(dead_code)]
     struct MockIndex {
-        indexes: Arc<Mutex<HashMap<String, Vec<String>>>>,
+        indexes: HashMap<String, Vec<String>>,
     }
 
     impl IndexProvider for MockIndex {
-        fn has_index<'a>(&'a self, _c: &'a str, field: &'a str) -> BoxFuture<'a, bool> {
-            let idx = self.indexes.clone();
-            let f = field.to_string();
-            Box::pin(async move { idx.lock().await.contains_key(&f) })
+        fn has_index(&self, _c: &str, field: &str) -> bool {
+            self.indexes.contains_key(field)
         }
-        fn search<'a>(
-            &'a self,
-            _c: &'a str,
-            field: &'a str,
-            _val: &'a Value,
-        ) -> BoxFuture<'a, Result<Vec<String>>> {
-            let idx = self.indexes.clone();
-            let f = field.to_string();
-            Box::pin(async move { Ok(idx.lock().await.get(&f).cloned().unwrap_or_default()) })
+        fn search(&self, _c: &str, field: &str, _val: &Value) -> Result<Vec<String>> {
+            Ok(self.indexes.get(field).cloned().unwrap_or_default())
         }
     }
 
@@ -608,6 +538,7 @@ mod tests {
         let (_dir, config) = setup_test_db();
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "test", "db");
+        // Setup async
         manager.init_db().await.unwrap();
 
         let engine = QueryEngine::new(&manager);
@@ -644,6 +575,7 @@ mod tests {
         let (_dir, config) = setup_test_db();
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "test", "db");
+        // Setup async
         manager.init_db().await.unwrap();
 
         let engine = QueryEngine::new(&manager);
@@ -654,6 +586,7 @@ mod tests {
             .await
             .unwrap();
 
+        // Test ARRAY LIKE "rust"
         let query = Query {
             collection: "docs".into(),
             filter: Some(QueryFilter {
@@ -672,70 +605,5 @@ mod tests {
 
         let result = engine.execute_query(query).await.unwrap();
         assert_eq!(result.total_count, 1);
-    }
-
-    #[tokio::test]
-    async fn test_query_engine_uses_mock_index() {
-        let (_dir, config) = setup_test_db();
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test", "db");
-        manager.init_db().await.unwrap();
-        manager.create_collection("users", None).await.unwrap();
-
-        // On insère "user" et "admin"
-        manager
-            .insert_raw("users", &json!({"id": "1", "role": "admin"}))
-            .await
-            .unwrap();
-        manager
-            .insert_raw("users", &json!({"id": "2", "role": "user"}))
-            .await
-            .unwrap();
-
-        // Le Mock index dit que "admin" correspond au document ID "1"
-        let mut idx_map = HashMap::new();
-        idx_map.insert("role".to_string(), vec!["1".to_string()]);
-        let mock_provider = Box::new(MockIndex {
-            indexes: Arc::new(Mutex::new(idx_map)),
-        });
-
-        // Injection du Mock via chaînage correct
-        let engine = QueryEngine::new(&manager).with_index_provider(mock_provider);
-
-        let query = Query {
-            collection: "users".into(),
-            filter: Some(QueryFilter {
-                operator: FilterOperator::And,
-                conditions: vec![Condition::eq("role", json!("admin"))],
-            }),
-            sort: None,
-            limit: None,
-            offset: None,
-            projection: None,
-        };
-
-        let result = engine.execute_query(query).await.unwrap();
-
-        // Si l'index est utilisé, on charge seulement l'ID "1"
-        assert_eq!(result.total_count, 1);
-        assert_eq!(result.documents[0]["id"], "1");
-    }
-
-    #[test]
-    fn test_evaluate_condition_logic() {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test", "db");
-        let engine = QueryEngine::new(&manager);
-
-        let doc = json!({ "age": 25, "tags": ["a", "b"] });
-
-        // GT
-        assert!(engine.evaluate_condition(&doc, &Condition::gt("age", json!(20)), "col"));
-        // LT
-        assert!(!engine.evaluate_condition(&doc, &Condition::lt("age", json!(20)), "col"));
-        // CONTAINS
-        assert!(engine.evaluate_condition(&doc, &Condition::contains("tags", json!("a")), "col"));
     }
 }

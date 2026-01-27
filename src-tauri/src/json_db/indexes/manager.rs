@@ -95,8 +95,9 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub fn has_index(&self, collection: &str, field: &str) -> bool {
-        if let Ok(indexes) = self.load_indexes_blocking(collection) {
+    /// Vérifie l'existence d'un index (Async pour éviter de bloquer sur l'I/O)
+    pub async fn has_index(&self, collection: &str, field: &str) -> bool {
+        if let Ok(indexes) = self.load_indexes(collection).await {
             return indexes.iter().any(|i| i.name == field);
         }
         false
@@ -108,7 +109,9 @@ impl<'a> IndexManager<'a> {
         field: &str,
         value: &Value,
     ) -> Result<Vec<String>> {
-        let indexes = self.load_indexes_blocking(collection)?;
+        // Chargement async des définitions d'index
+        let indexes = self.load_indexes(collection).await?;
+
         let def = indexes
             .iter()
             .find(|i| i.name == field)
@@ -202,16 +205,6 @@ impl<'a> IndexManager<'a> {
         Ok(self.load_meta(&meta_path).await?.indexes)
     }
 
-    fn load_indexes_blocking(&self, collection: &str) -> Result<Vec<IndexDefinition>> {
-        let meta_path = self.get_meta_path(collection);
-        if !meta_path.exists() {
-            return Ok(Vec::new());
-        }
-        let content = std::fs::read_to_string(meta_path)?;
-        let meta: CollectionMeta = serde_json::from_str(&content)?;
-        Ok(meta.indexes)
-    }
-
     fn get_meta_path(&self, collection: &str) -> PathBuf {
         self.storage
             .config
@@ -272,6 +265,10 @@ pub async fn add_index_definition(
     Ok(())
 }
 
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,7 +319,8 @@ mod tests {
         mgr.index_document("products", &p1).await.unwrap();
         mgr.index_document("products", &p2).await.unwrap();
 
-        assert!(mgr.has_index("products", "category"));
+        // Correction : Appel async ici aussi
+        assert!(mgr.has_index("products", "category").await);
 
         let results = mgr
             .search("products", "category", &json!("book"))

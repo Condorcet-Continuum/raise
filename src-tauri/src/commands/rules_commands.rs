@@ -1,12 +1,12 @@
 // FICHIER : src-tauri/src/commands/rules_commands.rs
 
+use crate::json_db::storage::StorageEngine;
+use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ProjectModel;
 use crate::model_engine::validators::{DynamicValidator, ModelValidator, ValidationIssue};
 use crate::rules_engine::ast::Rule;
 use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
 use serde_json::Value;
-// CORRECTION E0277 : Utilisation du Mutex de Tokio pour garantir que le MutexGuard est Send
-// et peut être conservé à travers un point d'attente .await.
 use tauri::State;
 use tokio::sync::Mutex;
 
@@ -22,7 +22,7 @@ pub struct RuleEngineState {
 pub async fn dry_run_rule(rule: Rule, context: Value) -> Result<Value, String> {
     let provider = NoOpDataProvider;
 
-    // On évalue la règle sans persistance (Correction: ajout de .await car l'Evaluator est async)
+    // On évalue la règle sans persistance
     match Evaluator::evaluate(&rule.expr, &context, &provider).await {
         Ok(cow_res) => Ok(cow_res.into_owned()),
         Err(e) => Err(format!("Erreur d'évaluation : {}", e)),
@@ -35,20 +35,35 @@ pub async fn dry_run_rule(rule: Rule, context: Value) -> Result<Value, String> {
 #[tauri::command]
 pub async fn validate_model(
     rules: Vec<Rule>,
-    state: State<'_, RuleEngineState>, // Utilisation du lifetime anonyme pour State
+    state: State<'_, RuleEngineState>,
+    storage: State<'_, StorageEngine>, // Injection du moteur de stockage
 ) -> Result<Vec<ValidationIssue>, String> {
-    // 1. Accès sécurisé au modèle en mémoire (Verrouillage asynchrone)
-    // CORRECTION E0277 : On utilise .await sur le verrou Tokio qui est compatible avec le trait Send.
-    // Contrairement à std::sync::Mutex, le verrou de Tokio ne retourne pas de Result (pas de poisoning).
-    let model_guard = state.model.lock().await;
+    // 1. Récupération du contexte (Space/DB) depuis le modèle en mémoire
+    // On a besoin de savoir "où" nous sommes pour initialiser le Loader
+    let (space, db) = {
+        let model = state.model.lock().await;
+        let parts: Vec<&str> = model.meta.name.split('/').collect();
+        if parts.len() >= 2 {
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            // Valeurs par défaut si le modèle n'est pas encore chargé
+            ("default".to_string(), "default".to_string())
+        }
+    }; // Le lock est relâché ici
 
-    // 2. Instanciation du validateur dynamique
+    // 2. Initialisation du Loader (Mode Lazy)
+    let loader = ModelLoader::new(&storage, &space, &db);
+
+    // On indexe rapidement les fichiers pour permettre les lookups
+    loader.index_project().await.map_err(|e| e.to_string())?;
+
+    // 3. Instanciation du validateur dynamique
     let validator = DynamicValidator::new(rules);
 
-    // 3. Exécution
-    // CORRECTION E0308 : La méthode validate est asynchrone (async_trait).
-    // On utilise .await pour obtenir Vec<ValidationIssue>.
-    let issues = validator.validate(&model_guard).await;
+    // 4. Exécution de la validation globale via le Loader
+    // C'est ici que la magie opère : validate_full va utiliser le loader pour
+    // charger les éléments nécessaires et exécuter les règles.
+    let issues = validator.validate_full(&loader).await;
 
     Ok(issues)
 }
@@ -58,8 +73,9 @@ mod tests {
     use super::*;
     use crate::rules_engine::ast::Expr;
     use serde_json::json;
+    use tempfile::tempdir; // Requis pour simuler le stockage
 
-    #[tokio::test] // Utilisation de tokio pour les tests asynchrones
+    #[tokio::test]
     async fn test_dry_run_rule_async() {
         let rule = Rule {
             id: "test_rule".to_string(),
@@ -91,18 +107,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_model_async() {
-        // Initialisation de l'état avec le Mutex de Tokio
-        let state = RuleEngineState {
-            model: Mutex::new(ProjectModel::default()),
-        };
+    async fn test_validate_model_integration() {
+        // Pour tester validate_model (qui utilise le loader), il faut une vraie DB temporaire
 
+        // 1. Setup DB
+        let dir = tempdir().unwrap();
+        let config = crate::json_db::storage::JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+
+        let manager = crate::json_db::collections::manager::CollectionsManager::new(
+            &storage,
+            "test_space",
+            "test_db",
+        );
+        manager.init_db().await.unwrap();
+
+        // 2. Setup Loader
+        let loader = ModelLoader::new_with_manager(manager);
+
+        // 3. Setup Validator
         let rules = vec![];
         let validator = DynamicValidator::new(rules);
 
-        // Verrouillage asynchrone dans le test
-        let model = state.model.lock().await;
-        let result = validator.validate(&model).await;
+        // 4. Exécution (On teste directement la logique interne car mocker 'State' est complexe)
+        let result = validator.validate_full(&loader).await;
         assert!(result.is_empty());
     }
 }

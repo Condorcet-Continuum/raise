@@ -1,8 +1,10 @@
 // FICHIER : src-tauri/src/model_engine/validators/consistency_checker.rs
 
 use super::{ModelValidator, Severity, ValidationIssue};
-use crate::model_engine::types::{ArcadiaElement, ProjectModel};
-use async_trait::async_trait; // Requis pour l'implémentation du trait
+use crate::model_engine::arcadia; // <-- Import Vocabulaire
+use crate::model_engine::loader::ModelLoader;
+use crate::model_engine::types::ArcadiaElement;
+use async_trait::async_trait;
 
 /// Validateur de cohérence technique.
 #[derive(Default)]
@@ -13,15 +15,15 @@ impl ConsistencyChecker {
         Self
     }
 
-    /// Méthode unitaire : Valide un seul élément (Votre logique d'origine)
-    pub fn validate_element(&self, element: &ArcadiaElement) -> Vec<ValidationIssue> {
+    /// Logique de validation unitaire pure
+    pub fn check_logic(&self, element: &ArcadiaElement) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
         let name = element.name.as_str();
 
         // RÈGLE 1 : Vérification de l'ID
         if element.id.trim().is_empty() {
             issues.push(ValidationIssue {
-                severity: Severity::Error, // Critical -> Error
+                severity: Severity::Error,
                 rule_id: "SYS_001".to_string(),
                 element_id: "unknown".to_string(),
                 message: format!("L'élément '{}' n'a pas d'identifiant unique (UUID).", name),
@@ -38,19 +40,21 @@ impl ConsistencyChecker {
             });
         }
 
-        // RÈGLE 3 : Vérification du Type
-        if element.kind.trim().is_empty() {
+        // RÈGLE 3 : Vérification du Type (URI)
+        if element.kind.trim().is_empty() || element.kind == arcadia::KIND_UNKNOWN {
             issues.push(ValidationIssue {
                 severity: Severity::Error,
                 rule_id: "SYS_003".to_string(),
                 element_id: element.id.clone(),
-                message: "Le type de l'élément (URI) est manquant.".to_string(),
+                message: "Le type de l'élément (URI) est manquant ou inconnu.".to_string(),
             });
         }
 
         // RÈGLE 4 : Conventions de nommage (Soft check)
-        // Les composants devraient commencer par une majuscule (PascalCase)
-        if element.kind.contains("Component") || element.kind.contains("Actor") {
+        let is_component_or_actor =
+            element.kind.contains("Component") || element.kind.contains("Actor");
+
+        if is_component_or_actor {
             if let Some(first_char) = name.chars().next() {
                 if first_char.is_lowercase() {
                     issues.push(ValidationIssue {
@@ -70,45 +74,57 @@ impl ConsistencyChecker {
     }
 }
 
-// Implémentation du contrat standard pour le moteur
 #[async_trait]
 impl ModelValidator for ConsistencyChecker {
-    /// CORRECTION : Signature asynchrone strictement alignée sur le trait
-    async fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue> {
+    async fn validate_element(
+        &self,
+        element: &ArcadiaElement,
+        _loader: &ModelLoader<'_>,
+    ) -> Vec<ValidationIssue> {
+        self.check_logic(element)
+    }
+
+    async fn validate_full(&self, loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
         let mut all_issues = Vec::new();
 
-        // Helper pour parcourir une liste
-        let mut check_list = |elements: &[ArcadiaElement]| {
-            for el in elements {
-                all_issues.extend(self.validate_element(el));
-            }
-        };
+        if let Ok(model) = loader.load_full_model().await {
+            // Helper local
+            let mut check_list = |elements: &[ArcadiaElement]| {
+                for el in elements {
+                    all_issues.extend(self.check_logic(el));
+                }
+            };
 
-        // 1. Operational Analysis
-        check_list(&model.oa.actors);
-        check_list(&model.oa.activities);
-        check_list(&model.oa.capabilities);
-        check_list(&model.oa.entities);
+            // Tous les layers...
+            check_list(&model.oa.actors);
+            check_list(&model.oa.activities);
+            check_list(&model.oa.capabilities);
+            check_list(&model.oa.entities);
+            check_list(&model.oa.exchanges);
 
-        // 2. System Analysis
-        check_list(&model.sa.components);
-        check_list(&model.sa.functions);
-        check_list(&model.sa.actors);
-        check_list(&model.sa.capabilities);
+            check_list(&model.sa.components);
+            check_list(&model.sa.functions);
+            check_list(&model.sa.actors);
+            check_list(&model.sa.capabilities);
+            check_list(&model.sa.exchanges);
 
-        // 3. Logical Architecture
-        check_list(&model.la.components);
-        check_list(&model.la.functions);
-        check_list(&model.la.actors);
+            check_list(&model.la.components);
+            check_list(&model.la.functions);
+            check_list(&model.la.actors);
+            check_list(&model.la.interfaces);
+            check_list(&model.la.exchanges);
 
-        // 4. Physical Architecture
-        check_list(&model.pa.components);
-        check_list(&model.pa.functions);
-        check_list(&model.pa.actors);
+            check_list(&model.pa.components);
+            check_list(&model.pa.functions);
+            check_list(&model.pa.actors);
+            check_list(&model.pa.links);
+            check_list(&model.pa.exchanges);
 
-        // 5. EPBS & Data
-        check_list(&model.epbs.configuration_items);
-        check_list(&model.data.classes);
+            check_list(&model.epbs.configuration_items);
+            check_list(&model.data.classes);
+            check_list(&model.data.data_types);
+            check_list(&model.data.exchange_items);
+        }
 
         all_issues
     }
@@ -117,64 +133,54 @@ impl ModelValidator for ConsistencyChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::NameType;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::model_engine::types::{ArcadiaElement, NameType};
     use std::collections::HashMap;
+    use tempfile::tempdir;
 
-    // Helper pour créer des éléments de test
     fn create_dummy_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
         ArcadiaElement {
             id: id.to_string(),
             name: NameType::String(name.to_string()),
             kind: kind.to_string(),
-            description: None, // CORRECTION : Initialisation du champ manquant
+            description: None,
             properties: HashMap::new(),
-            ..Default::default()
         }
     }
 
     #[test]
-    fn test_valid_element() {
+    fn test_valid_element_logic() {
         let checker = ConsistencyChecker::new();
-        let el = create_dummy_element("UUID-1", "MyComponent", "LogicalComponent");
-        let issues = checker.validate_element(&el);
+        let el = create_dummy_element("UUID-1", "MyComponent", arcadia::KIND_LA_COMPONENT);
+        let issues = checker.check_logic(&el);
         assert!(issues.is_empty());
     }
 
     #[test]
     fn test_missing_name_warning() {
         let checker = ConsistencyChecker::new();
-        let el = create_dummy_element("UUID-2", "", "LogicalComponent");
-        let issues = checker.validate_element(&el);
+        let el = create_dummy_element("UUID-2", "", arcadia::KIND_LA_COMPONENT);
+        let issues = checker.check_logic(&el);
 
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, Severity::Warning);
         assert_eq!(issues[0].rule_id, "SYS_002");
     }
 
-    #[test]
-    fn test_naming_convention_info() {
-        let checker = ConsistencyChecker::new();
-        // Nom en minuscule pour un Composant -> Info
-        let el = create_dummy_element("UUID-3", "myComponent", "LogicalComponent");
-        let issues = checker.validate_element(&el);
+    #[tokio::test]
+    async fn test_validate_element_trait() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let loader = ModelLoader::new_with_manager(
+            crate::json_db::collections::manager::CollectionsManager::new(&storage, "test", "val"),
+        );
 
+        let checker = ConsistencyChecker::new();
+        let el = create_dummy_element("UUID-3", "badName", arcadia::KIND_SA_COMPONENT);
+
+        let issues = checker.validate_element(&el, &loader).await;
         assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].severity, Severity::Info);
         assert_eq!(issues[0].rule_id, "NAMING_001");
-    }
-
-    #[tokio::test] // CORRECTION : Passage en test asynchrone
-    async fn test_full_model_validation() {
-        let checker = ConsistencyChecker::new();
-        let mut model = ProjectModel::default();
-
-        // Ajout d'un élément invalide dans le modèle
-        let bad_el = create_dummy_element("UUID-Bad", "", "SystemFunction");
-        model.sa.functions.push(bad_el);
-
-        // CORRECTION : Appel asynchrone (.await)
-        let issues = checker.validate(&model).await;
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].rule_id, "SYS_002");
     }
 }

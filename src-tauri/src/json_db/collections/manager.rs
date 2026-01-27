@@ -176,9 +176,8 @@ impl<'a> CollectionsManager<'a> {
 
         let meta = json!({ "schema": final_schema_uri, "indexes": [] });
         let meta_path = col_path.join("_meta.json");
-        if !meta_path.exists() {
-            fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
-        }
+
+        fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
 
         self.update_system_index_collection(name, &final_schema_uri)
             .await?;
@@ -217,10 +216,16 @@ impl<'a> CollectionsManager<'a> {
         let content = fs::read_to_string(&sys_path).await?;
         let sys_json: Value = serde_json::from_str(&content)?;
         let ptr = format!("/collections/{}/schema", col_name);
+
         let raw_path = sys_json
             .pointer(&ptr)
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("Collection '{}' inconnue", col_name))?;
+
+        if raw_path.is_empty() {
+            return Ok(String::new());
+        }
+
         let relative_path = if let Some(idx) = raw_path.find("/schemas/v1/") {
             &raw_path[idx + "/schemas/v1/".len()..]
         } else {
@@ -376,15 +381,19 @@ impl<'a> CollectionsManager<'a> {
         &self,
         collection: &str,
         id: &str,
-        mut doc: Value,
+        patch_data: Value,
     ) -> Result<Value> {
-        let old_doc = self.get_document(collection, id).await?;
-        if old_doc.is_none() {
-            return Err(anyhow!("Document introuvable"));
-        }
+        let old_doc_opt = self.get_document(collection, id).await?;
+        let mut doc = old_doc_opt.ok_or_else(|| anyhow!("Document introuvable pour update"))?;
+
+        json_merge(&mut doc, patch_data);
+
         if let Some(obj) = doc.as_object_mut() {
             obj.insert("id".to_string(), Value::String(id.to_string()));
+            let now = Utc::now().to_rfc3339();
+            obj.insert("updatedAt".to_string(), Value::String(now));
         }
+
         self.prepare_document(collection, &mut doc).await?;
 
         self.storage
@@ -392,11 +401,36 @@ impl<'a> CollectionsManager<'a> {
             .await?;
 
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-        if let Some(old) = old_doc {
-            let _ = idx_mgr.remove_document(collection, &old).await;
-        }
         let _ = idx_mgr.index_document(collection, &doc).await;
+
         Ok(doc)
+    }
+
+    pub async fn upsert_document(&self, collection: &str, data: Value) -> Result<String> {
+        let id_opt = data
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let mut target_id = None;
+
+        if let Some(ref id) = id_opt {
+            if let Ok(Some(_)) = self.get_document(collection, id).await {
+                target_id = Some(id.clone());
+            }
+        }
+
+        match target_id {
+            Some(id) => {
+                self.update_document(collection, &id, data).await?;
+                Ok(format!("Updated: {}", id))
+            }
+            None => {
+                let doc = self.insert_with_schema(collection, data).await?;
+                let new_id = doc.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+                Ok(format!("Created: {}", new_id))
+            }
+        }
     }
 
     pub async fn delete_document(&self, collection: &str, id: &str) -> Result<bool> {
@@ -411,7 +445,8 @@ impl<'a> CollectionsManager<'a> {
         Ok(true)
     }
 
-    async fn prepare_document(&self, collection: &str, doc: &mut Value) -> Result<()> {
+    pub async fn prepare_document(&self, collection: &str, doc: &mut Value) -> Result<()> {
+        // 1. Injection des champs techniques (ID, Timestamps)
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("id") {
                 obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
@@ -425,73 +460,166 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
+        // 2. Résolution du schéma (ROBUSTE)
         let meta_path = self
             .storage
             .config
             .db_collection_path(&self.space, &self.db, collection)
             .join("_meta.json");
-        let schema_uri = if meta_path.exists() {
-            let content = fs::read_to_string(&meta_path).await?;
-            let meta: Value = serde_json::from_str(&content)?;
-            meta.get("schema")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        } else {
-            None
-        };
 
-        if let Some(uri) = schema_uri {
-            if !uri.is_empty() {
-                if let Some(obj) = doc.as_object_mut() {
-                    if !obj.contains_key("$schema") {
-                        obj.insert("$schema".to_string(), Value::String(uri.clone()));
+        let mut resolved_uri = None;
+
+        if meta_path.exists() {
+            if let Ok(content) = fs::read_to_string(&meta_path).await {
+                if let Ok(meta) = serde_json::from_str::<Value>(&content) {
+                    if let Some(s) = meta.get("schema").and_then(|v| v.as_str()) {
+                        if !s.is_empty() {
+                            resolved_uri = Some(s.to_string());
+                        }
                     }
                 }
-                let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)?;
-
-                if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, &uri).await
-                {
-                    eprintln!("⚠️ Erreur règles métier (non bloquant): {}", e);
-                }
-
-                let validator = SchemaValidator::compile_with_registry(&uri, &reg)?;
-                validator.compute_then_validate(doc)?;
             }
         }
-        self.apply_semantic_logic(doc)
+
+        if resolved_uri.is_none() {
+            if let Ok(sys_uri) = self.resolve_schema_from_index(collection).await {
+                if !sys_uri.is_empty() {
+                    resolved_uri = Some(sys_uri);
+                }
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        println!(
+            "🔧 Prepare Doc [{}]: Schema URI résolu = {:?}",
+            collection, resolved_uri
+        );
+
+        if let Some(uri) = &resolved_uri {
+            if let Some(obj) = doc.as_object_mut() {
+                obj.insert("$schema".to_string(), Value::String(uri.clone()));
+            }
+
+            let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)?;
+
+            // CORRECTION CLIPPY : 'uri' au lieu de '&uri'
+            if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, uri).await {
+                eprintln!("⚠️ Erreur règles métier (non bloquant): {}", e);
+            }
+
+            let validator = SchemaValidator::compile_with_registry(uri, &reg)?;
+            validator.compute_then_validate(doc)?;
+        } else {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "⚠️ ATTENTION: Aucun schéma trouvé pour la collection '{}'. Insertion schemaless.",
+                collection
+            );
+        }
+
+        // 4. Logique Sémantique (CORRIGÉ : passage de resolved_uri)
+        self.apply_semantic_logic(doc, resolved_uri.as_deref())
             .context("Validation sémantique")?;
         Ok(())
     }
 
-    fn apply_semantic_logic(&self, doc: &mut Value) -> Result<()> {
+    // --- OPTIMISATION SEMANTIQUE ---
+    fn apply_semantic_logic(&self, doc: &mut Value, schema_uri: Option<&str>) -> Result<()> {
+        // 1. Détection de la couche (Layer)
+        let layer_hint = if let Some(uri) = schema_uri {
+            if uri.contains("/oa/") {
+                Some("oa")
+            } else if uri.contains("/sa/") {
+                Some("sa")
+            } else if uri.contains("/la/") {
+                Some("la")
+            } else if uri.contains("/pa/") {
+                Some("pa")
+            } else if uri.contains("/epbs/") {
+                Some("epbs")
+            } else if uri.contains("/data/") {
+                Some("data")
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 2. Injection du Contexte (@context)
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("@context") {
-                obj.insert(
-                    "@context".to_string(),
-                    json!({
-                            "oa": "https://raise.io/ontology/arcadia/oa#",
-                            "sa": "https://raise.io/ontology/arcadia/sa#",
-                            "la": "https://raise.io/ontology/arcadia/la#",
-                            "pa": "https://raise.io/ontology/arcadia/pa#",
-                            "data": "https://raise.io/ontology/arcadia/data#"
-                    }),
-                );
+                let registry = VocabularyRegistry::global();
+
+                if let Some(layer) = layer_hint {
+                    if let Some(layer_ctx) = registry.get_context_for_layer(layer) {
+                        obj.insert("@context".to_string(), layer_ctx);
+                    } else {
+                        let defaults = registry.get_default_context();
+                        if let Ok(val) = serde_json::to_value(defaults) {
+                            obj.insert("@context".to_string(), val);
+                        }
+                    }
+                } else {
+                    let defaults = registry.get_default_context();
+                    if let Ok(val) = serde_json::to_value(defaults) {
+                        obj.insert("@context".to_string(), val);
+                    }
+                }
             }
         }
-        let processor = JsonLdProcessor::new();
-        if let Some(type_uri) = processor.get_type(doc) {
-            let registry = VocabularyRegistry::new();
-            let expanded_type = processor.context_manager().expand_term(&type_uri);
-            if !registry.has_class(&expanded_type) {
-                #[cfg(debug_assertions)]
-                println!("⚠️ [Semantic Warning] Type inconnu: {}", expanded_type);
+
+        // 3. Validation sémantique du Type
+        let has_type = doc.get("@type").is_some()
+            || doc
+                .get("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+                .is_some();
+
+        if has_type {
+            // CORRECTION IMPORTANTE : Initialisation avec le contexte du document
+            let processor = JsonLdProcessor::new()
+                .with_doc_context(doc)
+                .unwrap_or_else(|_| JsonLdProcessor::new());
+
+            if let Some(type_uri) = processor.get_type(doc) {
+                let registry = VocabularyRegistry::global();
+
+                // 1. Expansion primaire : "OperationalActor" -> "oa:OperationalActor"
+                let mut expanded_type = processor.context_manager().expand_term(&type_uri);
+
+                // 2. DOUBLE EXPANSION (Recursive) : Pour les CURIEs (ex: "oa:Actor")
+                // Le registre contient des IRIs complets (https://...), pas des CURIEs.
+                // Si l'expansion donne encore un préfixe (ex: oa:...), on ré-expand.
+                if !VocabularyRegistry::is_iri(&expanded_type) && expanded_type.contains(':') {
+                    let deep_expanded = processor.context_manager().expand_term(&expanded_type);
+                    if VocabularyRegistry::is_iri(&deep_expanded) {
+                        expanded_type = deep_expanded;
+                    }
+                }
+
+                if !registry.has_class(&expanded_type) {
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "⚠️ [Semantic Warning] Type inconnu: {} (Expanded from {})",
+                        expanded_type, type_uri
+                    );
+                }
             }
         }
         Ok(())
     }
 }
 
-// --- RULES ENGINE PIPELINE ---
+fn json_merge(a: &mut Value, b: Value) {
+    match (a, b) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (k, v) in b {
+                json_merge(a.entry(k).or_insert(Value::Null), v);
+            }
+        }
+        (a, b) => *a = b,
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_business_rules(
@@ -521,7 +649,7 @@ pub async fn apply_business_rules(
                         }
                     }
                     Err(e) => {
-                        eprintln!("⚠️ Règle invalide dans le schéma (index {}): {}", index, e);
+                        eprintln!("⚠️ Règle invalide dans le schéma (index {}): {}", index, e)
                     }
                 }
             }
@@ -529,21 +657,17 @@ pub async fn apply_business_rules(
     }
 
     let provider = CachedDataProvider::new(&manager.storage.config, &manager.space, &manager.db);
-
     let mut current_changes = compute_diff(doc, old_doc);
     let mut passes = 0;
     const MAX_PASSES: usize = 10;
 
     while !current_changes.is_empty() && passes < MAX_PASSES {
-        // CORRECTION : Pas de .await car get_impacted_rules est synchrone (lookup mémoire)
         let rules = store.get_impacted_rules(collection_name, &current_changes);
-
         if rules.is_empty() {
             break;
         }
 
         let mut next_changes = HashSet::new();
-
         for rule in rules {
             match Evaluator::evaluate(&rule.expr, doc, &provider).await {
                 Ok(result) => {
@@ -555,11 +679,9 @@ pub async fn apply_business_rules(
                 Err(e) => return Err(anyhow!("Erreur calcul règle '{}': {}", rule.id, e)),
             }
         }
-
         current_changes = next_changes;
         passes += 1;
     }
-
     Ok(())
 }
 
@@ -580,7 +702,6 @@ fn find_changes(
             return;
         }
     }
-
     if !path.is_empty() {
         changes.insert(path.to_string());
     }
@@ -613,7 +734,6 @@ fn find_changes(
 fn set_value_by_path(doc: &mut Value, path: &str, value: Value) -> bool {
     let parts: Vec<&str> = path.split('.').collect();
     let mut current = doc;
-
     for (i, part) in parts.iter().enumerate() {
         if i == parts.len() - 1 {
             if let Some(obj) = current.as_object_mut() {
@@ -717,5 +837,71 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("DATABASE CORRUPTION"));
+    }
+
+    #[tokio::test]
+    async fn test_crud_workflow() {
+        let (_dir, config) = setup_env();
+        let storage = StorageEngine::new(config);
+        let mgr = CollectionsManager::new(&storage, "test", "crud");
+        mgr.init_db().await.unwrap();
+
+        mgr.create_collection("items", None).await.unwrap();
+
+        // 1. CREATE (Insert)
+        let doc = json!({ "name": "Item 1", "price": 100 });
+        let created_doc = mgr.insert_with_schema("items", doc).await.unwrap();
+        let id = created_doc["id"].as_str().unwrap().to_string();
+
+        // Vérif existence
+        let fetched = mgr.get_document("items", &id).await.unwrap();
+        assert!(fetched.is_some());
+
+        // 2. UPDATE (Partial Merge)
+        mgr.update_document("items", &id, json!({ "price": 150, "status": "active" }))
+            .await
+            .unwrap();
+
+        let updated = mgr.get_document("items", &id).await.unwrap().unwrap();
+        assert_eq!(updated["price"], 150);
+        assert_eq!(updated["name"], "Item 1"); // Champ préservé
+        assert_eq!(updated["status"], "active"); // Champ ajouté
+
+        // 3. DELETE
+        let deleted = mgr.delete_document("items", &id).await.unwrap();
+        assert!(deleted);
+
+        let missing = mgr.get_document("items", &id).await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_upsert_idempotence() {
+        let (_dir, config) = setup_env();
+        let storage = StorageEngine::new(config);
+        let mgr = CollectionsManager::new(&storage, "test", "upsert");
+        mgr.init_db().await.unwrap();
+
+        mgr.create_collection("configs", None).await.unwrap();
+
+        // 1. Premier Upsert (Création)
+        let data1 = json!({ "id": "config-01", "val": "A" });
+        let res1 = mgr.upsert_document("configs", data1).await.unwrap();
+        assert!(res1.contains("Created"));
+
+        // 2. Deuxième Upsert (Mise à jour)
+        let data2 = json!({ "id": "config-01", "val": "B" });
+        let res2 = mgr.upsert_document("configs", data2).await.unwrap();
+        assert!(res2.contains("Updated"));
+
+        // Vérif finale
+        let final_doc = mgr
+            .get_document("configs", "config-01")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(final_doc["val"], "B");
+        assert_eq!(final_doc["id"], "config-01");
     }
 }

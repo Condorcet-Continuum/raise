@@ -28,7 +28,7 @@ pub use validators::{
 };
 
 // Arcadia Semantics (Couches et Catégories)
-pub use arcadia::{ArcadiaSemantics, ElementCategory, Layer};
+pub use arcadia::element_kind::{ArcadiaSemantics, ElementCategory, Layer};
 
 // Capella (Import)
 pub use capella::{CapellaReader, CapellaXmiParser};

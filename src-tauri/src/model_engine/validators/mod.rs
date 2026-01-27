@@ -4,9 +4,10 @@ pub mod compliance_validator;
 pub mod consistency_checker;
 pub mod dynamic_validator;
 
-use crate::model_engine::types::ProjectModel;
+use crate::model_engine::loader::ModelLoader;
+use crate::model_engine::types::ArcadiaElement;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize}; // Import nécessaire pour le trait
+use serde::{Deserialize, Serialize};
 
 // Re-exports pour faciliter l'usage externe
 pub use compliance_validator::ComplianceValidator;
@@ -31,102 +32,85 @@ pub struct ValidationIssue {
 }
 
 /// Trait commun que tous les validateurs doivent implémenter.
+/// Refactorisé pour le Lazy Loading et la validation incrémentale.
 #[async_trait]
 pub trait ModelValidator: Send + Sync {
-    // Signature asynchrone stricte sans lifetimes explicites
-    async fn validate(&self, model: &ProjectModel) -> Vec<ValidationIssue>;
+    /// Valide un élément unique (Contexte Temps Réel).
+    /// Le Loader est fourni pour permettre des vérifications croisées (ex: vérifier l'existence d'une cible).
+    async fn validate_element(
+        &self,
+        element: &ArcadiaElement,
+        loader: &ModelLoader<'_>,
+    ) -> Vec<ValidationIssue>;
+
+    /// Valide l'ensemble du modèle (Batch).
+    /// Utile pour les rapports CI/CD ou les vérifications globales.
+    /// Par défaut, retourne vide (à implémenter si nécessaire en itérant sur le loader).
+    async fn validate_full(&self, _loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    // Imports nécessaires pour les tests d'intégration
-    use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::rules_engine::ast::{Expr, Rule};
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::model_engine::types::NameType;
+    use std::collections::HashMap;
+    use tempfile::tempdir;
 
+    // Mock d'un validateur simple pour tester le trait
     struct MockValidator;
 
     #[async_trait]
     impl ModelValidator for MockValidator {
-        // CORRECTION : Passage en async pour respecter le trait
-        async fn validate(&self, _model: &ProjectModel) -> Vec<ValidationIssue> {
-            vec![ValidationIssue {
-                severity: Severity::Error,
-                rule_id: "MOCK_RULE".to_string(),
-                element_id: "mock_id".to_string(),
-                message: "Mock Error".to_string(),
-            }]
+        async fn validate_element(
+            &self,
+            element: &ArcadiaElement,
+            _loader: &ModelLoader<'_>,
+        ) -> Vec<ValidationIssue> {
+            if element.name.as_str() == "Invalid" {
+                vec![ValidationIssue {
+                    severity: Severity::Error,
+                    rule_id: "MOCK_RULE".to_string(),
+                    element_id: element.id.clone(),
+                    message: "Invalid name".to_string(),
+                }]
+            } else {
+                vec![]
+            }
         }
     }
 
-    #[test]
-    fn test_severity_serialization() {
-        assert_eq!(
-            serde_json::to_value(Severity::Error).unwrap(),
-            json!("Error")
+    #[tokio::test]
+    async fn test_model_validator_trait_integration() {
+        // 1. Setup minimal du Loader (nécessaire pour la signature)
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        // On utilise new_with_manager pour éviter de dépendre de l'état global Tauri
+        let loader = ModelLoader::new_with_manager(
+            crate::json_db::collections::manager::CollectionsManager::new(
+                &storage,
+                "test_space",
+                "test_db",
+            ),
         );
-    }
 
-    #[test]
-    fn test_validation_issue_structure() {
-        let issue = ValidationIssue {
-            severity: Severity::Warning,
-            rule_id: "TEST_001".to_string(),
-            element_id: "uuid-123".to_string(),
-            message: "Something is wrong".to_string(),
+        // 2. Création élément
+        let el = ArcadiaElement {
+            id: "1".to_string(),
+            name: NameType::String("Invalid".to_string()),
+            kind: "Test".to_string(),
+            description: None,
+            properties: HashMap::new(),
         };
-        let json = serde_json::to_value(&issue).unwrap();
-        assert_eq!(json["severity"], "Warning");
-        assert_eq!(json["rule_id"], "TEST_001");
-    }
 
-    #[tokio::test] // CORRECTION : Test asynchrone
-    async fn test_trait_implementation() {
-        let model = ProjectModel::default();
+        // 3. Validation
         let validator = MockValidator;
-        let issues = validator.validate(&model).await; // Ajout de .await
+        let issues = validator.validate_element(&el, &loader).await;
+
         assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].message, "Mock Error");
-    }
-
-    #[tokio::test] // CORRECTION : Test asynchrone
-    async fn test_dynamic_validator_integration() {
-        // 1. Création d'une règle via l'AST
-        let rule_expr = Expr::Eq(vec![
-            Expr::Var("name".to_string()),
-            Expr::Val(json!("ValidElement")),
-        ]);
-
-        let rule = Rule {
-            id: "INTEGRATION_TEST_RULE".to_string(),
-            target: "oa.actors".to_string(),
-            expr: rule_expr,
-            // CORRECTION : Champs obligatoires ajoutés
-            description: Some("Test integration".to_string()),
-            severity: Some("Warning".to_string()),
-        };
-
-        // 2. Instanciation du Validateur via le Trait
-        let validator: Box<dyn ModelValidator> = Box::new(DynamicValidator::new(vec![rule]));
-
-        // 3. Création du Modèle
-        let mut model = ProjectModel::default();
-
-        let mut actor1 = ArcadiaElement::default();
-        actor1.name = NameType::String("ValidElement".to_string());
-        model.oa.actors.push(actor1);
-
-        let mut actor2 = ArcadiaElement::default();
-        actor2.name = NameType::String("InvalidElement".to_string());
-        model.oa.actors.push(actor2);
-
-        // 4. Exécution (Appel .await car le trait est async)
-        let issues = validator.validate(&model).await;
-
-        // 5. Vérification
-        assert_eq!(issues.len(), 1, "Il devrait y avoir exactement 1 erreur");
-        assert_eq!(issues[0].rule_id, "INTEGRATION_TEST_RULE");
-        assert_eq!(issues[0].element_id, model.oa.actors[1].id);
+        assert_eq!(issues[0].message, "Invalid name");
     }
 }

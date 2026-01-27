@@ -1,0 +1,201 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@vocab": "https://raise.io/ontology/arcadia/data#",
+    "arcadia": "https://raise.io/ontology/arcadia#",
+    "oa": "https://raise.io/ontology/arcadia/oa#",
+    "sa": "https://raise.io/ontology/arcadia/sa#",
+    "la": "https://raise.io/ontology/arcadia/la#",
+    "pa": "https://raise.io/ontology/arcadia/pa#",
+    "epbs": "https://raise.io/ontology/arcadia/epbs#",
+    "data": "https://raise.io/ontology/arcadia/data#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "dct": "http://purl.org/dc/terms/",
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "mbse": "http://www.omg.org/spec/SysML/",
+    "id": "@id",
+    "type": "@type",
+    "DataPackage": "data:DataPackage",
+    "DataType": "data:DataType",
+    "PrimitiveType": "data:PrimitiveType",
+    "NumericType": "data:NumericType",
+    "IntegerType": "data:IntegerType",
+    "RealType": "data:RealType",
+    "BooleanType": "data:BooleanType",
+    "StringType": "data:StringType",
+    "Enumeration": "data:Enumeration",
+    "EnumerationLiteral": "data:EnumerationLiteral",
+    "Class": "data:Class",
+    "Attribute": "data:Attribute",
+    "Association": "data:Association",
+    "Collection": "data:Collection",
+    "Unit": "data:Unit",
+    "QuantityKind": "data:QuantityKind",
+    "ExchangeItem": "data:ExchangeItem",
+    "ExchangeItemElement": "data:ExchangeItemElement",
+    "exchangeMechanism": "data:exchangeMechanism",
+    "name": {
+      "@id": "skos:prefLabel",
+      "@type": "xsd:string"
+    },
+    "description": {
+      "@id": "dct:description",
+      "@type": "xsd:string"
+    },
+    "summary": {
+      "@id": "dct:abstract",
+      "@type": "xsd:string"
+    },
+    "version": {
+      "@id": "dct:hasVersion",
+      "@type": "xsd:string"
+    },
+    "layer": {
+      "@id": "arcadia:belongsToLayer",
+      "@type": "@id"
+    },
+    "kind": {
+      "@id": "rdf:type",
+      "@type": "@vocab"
+    },
+    "subPackages": {
+      "@id": "data:hasSubPackage",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "dataTypes": {
+      "@id": "data:containsDataType",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "classes": {
+      "@id": "data:containsClass",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "enumerations": {
+      "@id": "data:containsEnumeration",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "exchangeItems": {
+      "@id": "data:containsExchangeItem",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "units": {
+      "@id": "data:containsUnit",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "quantityKinds": {
+      "@id": "data:containsQuantityKind",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "baseType": {
+      "@id": "data:baseType",
+      "@type": "@id"
+    },
+    "unit": {
+      "@id": "data:unit",
+      "@type": "@id"
+    },
+    "quantityKind": {
+      "@id": "data:quantityKind",
+      "@type": "@id"
+    },
+    "defaultValue": {
+      "@id": "data:defaultValue",
+      "@type": "xsd:string"
+    },
+    "attributes": {
+      "@id": "data:hasAttribute",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "superClasses": {
+      "@id": "data:extendsClass",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "attributeOf": {
+      "@id": "data:attributeOf",
+      "@type": "@id"
+    },
+    "typeRef": {
+      "@id": "data:type",
+      "@type": "@id"
+    },
+    "isCollection": {
+      "@id": "data:isCollection",
+      "@type": "xsd:boolean"
+    },
+    "collectionKind": {
+      "@id": "data:collectionKind",
+      "@type": "@vocab"
+    },
+    "elementType": {
+      "@id": "data:elementType",
+      "@type": "@id"
+    },
+    "cardinalityMin": {
+      "@id": "data:cardinalityMin",
+      "@type": "xsd:integer"
+    },
+    "cardinalityMax": {
+      "@id": "data:cardinalityMax",
+      "@type": "xsd:integer"
+    },
+    "source": {
+      "@id": "data:associationSource",
+      "@type": "@id"
+    },
+    "target": {
+      "@id": "data:associationTarget",
+      "@type": "@id"
+    },
+    "sourceRole": {
+      "@id": "data:sourceRole",
+      "@type": "xsd:string"
+    },
+    "targetRole": {
+      "@id": "data:targetRole",
+      "@type": "xsd:string"
+    },
+    "sourceMin": {
+      "@id": "data:sourceMultiplicityMin",
+      "@type": "xsd:integer"
+    },
+    "sourceMax": {
+      "@id": "data:sourceMultiplicityMax",
+      "@type": "xsd:integer"
+    },
+    "targetMin": {
+      "@id": "data:targetMultiplicityMin",
+      "@type": "xsd:integer"
+    },
+    "targetMax": {
+      "@id": "data:targetMultiplicityMax",
+      "@type": "xsd:integer"
+    },
+    "elements": {
+      "@id": "data:hasElement",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "direction": {
+      "@id": "data:direction",
+      "@type": "@vocab"
+    },
+    "payloadType": {
+      "@id": "data:payloadType",
+      "@type": "@id"
+    }
+  }
+}

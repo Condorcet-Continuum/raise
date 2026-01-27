@@ -25,6 +25,7 @@ use raise::commands::{
 use raise::ai::llm::candle_engine::CandleLlmEngine;
 use raise::ai::llm::NativeLlmState;
 
+use raise::json_db::jsonld::VocabularyRegistry;
 use raise::json_db::migrations::migrator::Migrator;
 use raise::json_db::migrations::{Migration, MigrationStep};
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
@@ -75,6 +76,8 @@ fn main() {
             let storage = StorageEngine::new(config.clone());
             let default_space = "un2";
             let default_db = "_system";
+
+            load_arcadia_ontologies(app.handle());
 
             // 3. GRAPH STORE
             let graph_path = db_root.join("graph_store");
@@ -304,4 +307,20 @@ async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> a
     // CORRECTION E0277 : Ajout de .await car run_migrations est asynchrone
     migrator.run_migrations(migrations).await?;
     Ok(())
+}
+fn load_arcadia_ontologies(app_handle: &tauri::AppHandle) {
+    // Chemin vers le dossier "ontology" dans vos ressources
+    // Note: Assurez-vous que ce dossier est bien copié via tauri.conf.json > bundle > resources
+    if let Ok(resource_path) = app_handle.path().resource_dir() {
+        let ontology_root = resource_path.join("ontology/arcadia/@context");
+        let registry = VocabularyRegistry::global();
+
+        // Chargement silencieux (ne crashe pas si les fichiers manquent, mais log en debug)
+        let _ = registry.load_layer_from_file("oa", &ontology_root.join("oa.jsonld"));
+        let _ = registry.load_layer_from_file("sa", &ontology_root.join("sa.jsonld"));
+        let _ = registry.load_layer_from_file("la", &ontology_root.join("la.jsonld"));
+        let _ = registry.load_layer_from_file("pa", &ontology_root.join("pa.jsonld"));
+        let _ = registry.load_layer_from_file("epbs", &ontology_root.join("epbs.jsonld"));
+        let _ = registry.load_layer_from_file("data", &ontology_root.join("data.jsonld"));
+    }
 }

@@ -30,6 +30,14 @@ pub enum TransactionRequest {
         collection: String,
         path: String,
     },
+    UpdateFrom {
+        collection: String,
+        path: String,
+    },
+    UpsertFrom {
+        collection: String,
+        path: String,
+    },
 }
 
 // --- INTERNE (Bas Niveau / ACID) ---
