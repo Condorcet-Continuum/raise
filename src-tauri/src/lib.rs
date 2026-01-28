@@ -16,6 +16,8 @@ pub mod workflow_engine;
 pub mod genetics;
 pub mod graph_store;
 
+pub mod spatial_engine;
+
 use crate::model_engine::types::ProjectModel;
 use std::sync::Mutex;
 

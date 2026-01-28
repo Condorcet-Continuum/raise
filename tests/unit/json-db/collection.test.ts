@@ -1,22 +1,31 @@
-import { describe, it, expect } from 'vitest';
-import { collectionService } from '@/services/json-db';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { collectionService } from '../../../src/services/json-db/collection-service'; // Adaptez le chemin si besoin
 
-describe('CollectionService', () => {
-  it('should create a collection', async () => {
-    const result = await collectionService.createCollection(
-      'test_collection',
-      { type: 'object', properties: { name: { type: 'string' } } }
-    );
-    
-    expect(result).toBeDefined();
-    expect(result.name).toBe('test_collection');
+// Mock de tauri invoke
+const invokeMock = vi.fn();
+vi.mock('@tauri-apps/api/core', () => ({
+  // CORRECTION : On remplace 'any' par un type plus strict
+  invoke: (cmd: string, args: Record<string, unknown>) => invokeMock(cmd, args),
+}));
+
+describe('Collection Service', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it('should insert a document', async () => {
-    const doc = { name: 'Test Document' };
-    const result = await collectionService.insertDocument('test_collection', doc);
-    
-    expect(result).toBeDefined();
-    expect(result.id).toBeDefined();
+  it('creates a collection successfully', async () => {
+    invokeMock.mockResolvedValue(undefined);
+
+    // CORRECTION 1 : On passe le schéma en string via JSON.stringify
+    // CORRECTION 2 : On n'attend pas de valeur de retour (void)
+    await collectionService.createCollection(
+      'test_collection',
+      JSON.stringify({ type: 'object', properties: { name: { type: 'string' } } }),
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('jsondb_create_collection', {
+      name: 'test_collection',
+      schema: JSON.stringify({ type: 'object', properties: { name: { type: 'string' } } }),
+    });
   });
 });

@@ -39,6 +39,9 @@ export const CMDS = {
 
   // Contrôle Jumeau Numérique
   SENSOR_SET: 'set_sensor_value',
+
+  // --- MODULE SPATIAL (Nouveau) ---
+  SPATIAL_TOPOLOGY: 'get_spatial_topology',
 } as const;
 
 // --- DÉFINITIONS DES TYPES ---
@@ -95,10 +98,6 @@ export const getWorkflowState = async (instanceId: string): Promise<WorkflowView
   return await invoke<WorkflowView>(CMDS.WORKFLOW_STATE, { instanceId });
 };
 
-export const resumeWorkflow = async (
-  instanceId: string,
-  nodeId: string,
-  approved: boolean,
-): Promise<WorkflowView> => {
-  return await invoke<WorkflowView>(CMDS.WORKFLOW_RESUME, { instanceId, nodeId, approved });
+export const resumeWorkflow = async (instanceId: string): Promise<WorkflowView> => {
+  return await invoke<WorkflowView>(CMDS.WORKFLOW_RESUME, { instanceId });
 };

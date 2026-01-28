@@ -47,6 +47,8 @@ use raise::model_engine::loader::ModelLoader;
 
 use raise::commands::ai_commands::DlState;
 
+use raise::spatial_engine;
+
 fn main() {
     // [MODIFICATION] Chargement explicite du .env au démarrage
     dotenvy::dotenv().ok();
@@ -261,7 +263,9 @@ fn main() {
             workflow_commands::start_workflow,
             workflow_commands::resume_workflow,
             workflow_commands::get_workflow_state,
-            workflow_commands::set_sensor_value
+            workflow_commands::set_sensor_value,
+            // Moteur 3D
+            spatial_engine::get_spatial_topology
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
