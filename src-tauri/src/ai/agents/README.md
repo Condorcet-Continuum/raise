@@ -1,120 +1,158 @@
-# Module `ai/agents` — Système Multi-Agents Neuro-Symbolique
+# Module `ai/agents` — Système Multi-Agents Neuro-Symbolique & Stateful
 
-Ce module implémente la logique **exécutive** de l'IA de RAISE. Il transforme des requêtes en langage naturel (floues) en artefacts d'ingénierie formels (stricts, validés et persistés) selon la méthodologie **Arcadia**.
+Ce module implémente la logique **exécutive** de l'IA de RAISE. Il transforme des requêtes en langage naturel en artefacts d'ingénierie formels (Arcadia), tout en maintenant une **mémoire conversationnelle persistante** et une capacité de **collaboration active** entre agents.
 
 ---
 
 ## 🧠 Architecture Globale
 
-Le système repose sur un pipeline **Comprendre → Décider → Agir** orchestré par un Dispatcher central.
+Le système repose sur un pipeline **Comprendre → Contextualiser → Agir → Déléguer**.
+Le Dispatcher (`ai_commands.rs`) agit comme un chef d'orchestre qui gère une boucle de résolution jusqu'à satisfaction complète de la demande.
 
 ```mermaid
 graph TD
     User[Utilisateur] -->|Prompt| Dispatcher[Dispatcher / ai_chat]
     Dispatcher -->|Classify| Intent[Intent Classifier]
+    Intent -->|Recommended ID| Factory[Agent Factory]
 
-    Intent -->|EngineeringIntent| Router{Router}
-
-    subgraph "Squad d'Agents Spécialisés"
-        Router -->|OA| Business[Business Agent]
-        Router -->|SA| System[System Agent]
-        Router -->|LA| Software[Software Agent]
-        Router -->|PA| Hardware[Hardware Agent]
-        Router -->|EPBS| Epbs[Epbs Agent]
-        Router -->|DATA| Data[Data Agent]
-        Router -->|TRANSVERSE| Transverse[Transverse Agent]
+    subgraph "Cycle de Vie Agent (Stateful)"
+        Factory -->|Instantiate| Agent[Agent Spécialisé]
+        Agent -->|1. Load Session| DB[(JSON DB / Sessions)]
+        DB -->|History Context| Agent
+        Agent -->|2. Prompt + History| LLM[LLM Engine]
+        LLM -->|Response| Agent
+        Agent -->|3. Save Response| DB
+        Agent -->|4. Save Artifact| FS[File System / Data]
     end
 
-    subgraph "Agent Toolbox (Shared Utils)"
-        Business & System & Software & Hardware & Epbs & Data & Transverse -->|1. Extract JSON| ToolJson[Tools: JSON Extractor]
-        Business & System & Software & Hardware & Epbs & Data & Transverse -->|2. Save File| ToolSave[Tools: Save Artifact]
-    end
+    Agent -->|Return Result + ACL| Dispatcher
 
-    ToolSave -->|Write JSON| FS[File System / JSON DB]
-    ToolSave -->|Return| Result[AgentResult]
+    %% Boucle de rétroaction (Orchestration)
+    Dispatcher -->|Check Outgoing Message| ACL{Message ACL ?}
+    ACL -->|Oui: Loop| Dispatcher
+    ACL -->|Non: Final Response| User
 
 ```
 
 ---
 
-## 👥 La "Squad" d'Agents
+## 👥 La "Squad" d'Agents (Stateful & Communicants)
 
-Chaque agent est expert dans sa couche d'abstraction Arcadia, mais partage désormais la même infrastructure technique (**AgentToolbox**).
+Chaque agent est expert dans sa couche d'abstraction Arcadia. Il sait **quoi produire** (Schémas) et **à qui transmettre la suite** (Transitions ACL).
 
-| Agent               | Rôle & Responsabilités | Couche         | Schémas gérés                                              |
-| ------------------- | ---------------------- | -------------- | ---------------------------------------------------------- |
-| **BusinessAgent**   | Analyste Métier        | **OA**         | `OperationalCapability`, `OperationalActor`                |
-| **SystemAgent**     | Architecte Système     | **SA**         | `SystemFunction`, `SystemComponent`, `SystemActor`         |
-| **SoftwareAgent**   | Architecte Logiciel    | **LA**         | `LogicalComponent` + **Génération de Code**                |
-| **HardwareAgent**   | Architecte Matériel    | **PA**         | `PhysicalNode` (Détection auto: Électronique vs Infra)     |
-| **EpbsAgent**       | Config Manager         | **EPBS**       | `ConfigurationItem` (Gestion P/N, Kind)                    |
-| **DataAgent**       | Data Architect         | **DATA**       | `Class`, `DataType`, `ExchangeItem` (MDM)                  |
-| **TransverseAgent** | Qualité & IVVQ Manager | **TRANSVERSE** | `Requirement`, `Scenario`, `TestProcedure`, `TestCampaign` |
+| Agent             | Rôle            | Couche | Schémas gérés (Artefacts)   | Transitions Automatiques (Délégation) |
+| ----------------- | --------------- | ------ | --------------------------- | ------------------------------------- |
+| **BusinessAgent** | Analyste Métier | **OA** | `OperationalCapability`<br> |
+
+<br>`OperationalActor` | ➔ **SystemAgent**<br>
+
+<br>_(Transition Besoin → Système)_ |
+| **SystemAgent** | Architecte Système | **SA** | `SystemFunction`<br>
+
+<br>`SystemComponent`<br>
+
+<br>`SystemActor` | ➔ **SoftwareAgent**<br>
+
+<br>_(Transition Archi → Design)_ |
+| **SoftwareAgent** | Architecte Logiciel | **LA** | `LogicalComponent`<br>
+
+<br>`SourceFile` (Code Gen) | ➔ **EpbsAgent** (Config)<br>
+
+<br>➔ **TransverseAgent** (Qualité) |
+| **HardwareAgent** | Architecte Matériel | **PA** | `PhysicalNode`<br>
+
+<br>_(Détection: Elec vs Infra)_ | ➔ **EpbsAgent**<br>
+
+<br>_(Création BOM / Part Number)_ |
+| **EpbsAgent** | Config Manager | **EPBS** | `ConfigurationItem`<br>
+
+<br>_(Gestion P/N, Version)_ | _Fin de chaîne_ |
+| **DataAgent** | Data Architect | **DATA** | `Class`, `DataType`<br>
+
+<br>`ExchangeItem` | ➔ **Routage Dynamique**<br>
+
+<br>_(Vers Business, Soft ou Hard)_ |
+| **TransverseAgent** | Qualité & IVVQ | **TRANS** | `Requirement`, `Scenario`<br>
+
+<br>`TestProcedure` | _Fin de chaîne_ |
 
 ---
 
-## 🛠️ Refactoring & Optimisation (AgentToolbox)
+## 🧠 Mémoire & Persistance
 
-Le module a été massivement optimisé pour éliminer la duplication de code et garantir la robustesse.
+Les agents disposent d'une mémoire persistante partagée au sein d'une même séquence d'orchestration.
 
-### 1. Centralisation I/O (`tools::save_artifact`)
+### Fonctionnement
 
-Les agents ne gèrent plus manuellement les chemins de fichiers ou la création de dossiers. Ils délèguent cette tâche à la **Toolbox** (`mod.rs`).
+1. **Session Partagée** : Le Dispatcher génère un `global_session_id`. Tous les agents impliqués dans la chaîne (ex: Business puis System) lisent et écrivent dans le même fil historique.
+2. **Injection Contextuelle** : L'historique des échanges précédents (même ceux des autres agents) est injecté dans le prompt du LLM.
+3. **Sauvegarde** : Chaque interaction est persistée dans `un2/_system/agent_sessions/`.
 
-- **Avantage** : Si la structure des dossiers change (`un2/sa/...`), il suffit de modifier une seule fonction pour mettre à jour les 7 agents.
-- **Standardisation** : Garantie que tous les artefacts ont un ID, un nom et sont stockés au bon endroit.
+Cela permet au `SoftwareAgent` de "savoir" ce que le `SystemAgent` vient de décider sans que l'utilisateur ait besoin de le répéter.
 
-### 2. Parsing Robuste (`tools::extract_json_from_llm`)
+---
 
-Une fonction centralisée nettoie les réponses des LLM (qui sont souvent "bavards" en local).
+## 🛠️ Agent Toolbox & Protocoles
 
-- Ignore le Markdown (````json`).
-- Trouve les accolades `{}` même s'il y a du texte avant/après.
-- Validé par des tests unitaires dédiés.
+### 1. Gestion de Session (`tools::load/save_session`)
+
+Fonctions asynchrones standardisées pour lire et écrire dans la collection `agent_sessions`.
+
+### 2. Protocole ACL (`protocols::acl`)
+
+Implémentation standardisée des messages Agent-to-Agent.
+
+- **Performative** : `Request`, `Inform`, `Propose`...
+- **Contenu** : Instructions en langage naturel pour l'agent destinataire.
+
+### 3. Parsing Robuste (`tools::extract_json_from_llm`)
+
+Nettoie les réponses LLM (suppression du Markdown, extraction du JSON pur) pour garantir la conformité des schémas.
 
 ---
 
 ## 📦 Sortie Structurée
 
-Pour permettre une UI riche, les agents renvoient une structure `AgentResult` standardisée :
+L'interface avec le Frontend a évolué pour supporter la communication inter-agents :
 
 ```rust
 pub struct AgentResult {
     pub message: String,                 // Feedback textuel (Markdown)
-    pub artifacts: Vec<CreatedArtifact>, // Liste des objets créés (ID, Path, Layer...)
+    pub artifacts: Vec<CreatedArtifact>, // Liste des objets créés
+
+    // NOUVEAU : Canal de communication sortant
+    pub outgoing_message: Option<AclMessage>,
 }
 
 ```
 
-Cela permet au Frontend d'afficher des **"Cartes d'Artefacts"** cliquables directement dans le chat.
+Si `outgoing_message` est présent, le Dispatcher intercepte la réponse et ne l'affiche pas tout de suite à l'utilisateur : il déclenche l'agent destinataire.
 
 ---
 
-## 🚀 Tests Unitaires (Colocation)
+## 🚀 Tests Unitaires & Intégration
 
-Les tests sont désormais **colocalisés** (situés dans les mêmes fichiers que le code) pour faciliter la maintenance.
-
-### Lancer les tests du module
+Les tests couvrent le cycle de vie complet, incluant la délégation ACL.
 
 ```bash
 cargo test ai::agents -- --nocapture
 
 ```
 
-### Couverture actuelle (15 tests passants)
+### Couverture
 
-- **Toolbox** : Validation du parsing JSON (cas nominaux, markdown, bruit).
-- **Identity** : Vérification que chaque agent s'identifie correctement (`id()`).
-- **Logique Métier** : Tests spécifiques (ex: catégorisation Matériel "Electronics" vs "Infrastructure").
-- **Intent Classifier** : Validation des heuristiques de secours (`heuristic_fallback`).
+- **Identity** : Validation du routage.
+- **Workflow** : Vérification que `SystemAgent` déclenche bien `SoftwareAgent` lors de la création d'un composant.
+- **Routage Dynamique** : Vérification que `DataAgent` choisit le bon destinataire selon le contexte.
+- **Schémas** : Validation que les JSON produits respectent la structure attendue par la DB.
 
 ---
 
 ## 🔮 Roadmap Technique
 
-- [ ] **Intégration GraphStore** : Connecter `save_artifact` pour qu'il indexe aussi directement dans SurrealDB (en plus du fichier JSON).
-- [ ] **Multi-Artefacts** : Permettre à un agent de générer une hiérarchie complète (ex: Un système + ses sous-fonctions) en une seule passe.
-- [ ] **Validation Schéma** : Intégrer une validation JSON Schema stricte avant sauvegarde.
+- [ ] **Protocole MCP (Model Context Protocol)** : Standardiser les actions des agents (outils) via `mcp.rs`.
+- [ ] **RAG (Retrieval Augmented Generation)** : Connecter la mémoire à une recherche vectorielle.
+- [ ] **Validation Schema** : Intégrer une validation JSON Schema stricte (Valico) avant la sauvegarde disque.
 
 ```
 

@@ -1,25 +1,32 @@
+// FICHIER : src-tauri/src/plugins/manager.rs
+
 use super::runtime::CognitivePlugin;
+use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::storage::StorageEngine;
 use anyhow::{anyhow, Result};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
 pub struct PluginManager {
     storage: StorageEngine,
-    // Stockage des instances actives
+    ai_orchestrator: Option<Arc<Mutex<AiOrchestrator>>>,
     plugins: Arc<Mutex<HashMap<String, CognitivePlugin>>>,
 }
 
 impl PluginManager {
-    pub fn new(storage: &StorageEngine) -> Self {
+    pub fn new(
+        storage: &StorageEngine,
+        ai_orchestrator: Option<Arc<Mutex<AiOrchestrator>>>,
+    ) -> Self {
         Self {
             storage: storage.clone(),
+            ai_orchestrator,
             plugins: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Charge un plugin depuis le disque
     pub fn load_plugin(
         &self,
         plugin_id: &str,
@@ -32,7 +39,13 @@ impl PluginManager {
         let binary = fs::read(file_path)
             .map_err(|e| anyhow!("Impossible de lire le fichier wasm : {}", e))?;
 
-        let plugin = CognitivePlugin::new(&binary, &self.storage, space, db)?;
+        let plugin = CognitivePlugin::new(
+            &binary,
+            &self.storage,
+            space,
+            db,
+            self.ai_orchestrator.clone(),
+        )?;
 
         self.plugins
             .lock()
@@ -41,19 +54,94 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Exécute un plugin chargé
-    pub fn run_plugin(&self, plugin_id: &str) -> Result<i32> {
+    pub fn run_plugin_with_context(
+        &self,
+        plugin_id: &str,
+        mandate: Option<Value>,
+    ) -> Result<(i32, Vec<Value>)> {
         let mut map = self.plugins.lock().unwrap();
         if let Some(plugin) = map.get_mut(plugin_id) {
-            println!("▶️ Exécution du plugin : {}", plugin_id);
-            plugin.run()
+            if let Some(m) = mandate {
+                plugin.set_mandate(m);
+            }
+
+            let result = plugin.run()?;
+            let signals = plugin.get_signals();
+
+            Ok((result, signals))
         } else {
             Err(anyhow!("Plugin introuvable : {}", plugin_id))
         }
     }
 
-    /// Liste les plugins chargés
     pub fn list_active_plugins(&self) -> Vec<String> {
         self.plugins.lock().unwrap().keys().cloned().collect()
+    }
+}
+
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    fn create_test_env() -> (PluginManager, StorageEngine, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let manager = PluginManager::new(&storage, None);
+        (manager, storage, dir)
+    }
+
+    /// Générateur de Bytecode WASM ultra-sécurisé (Validé par spécification).
+    /// Contient uniquement une fonction exportée "run" retournant 1.
+    /// Aucune dépendance de section Data ou Import pour éviter les erreurs de parsing.
+    fn generate_minimal_wasm() -> Vec<u8> {
+        vec![
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // Magic + Version
+            0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, // Type: () -> i32
+            0x03, 0x02, 0x01, 0x00, // Function: utilise type 0
+            0x07, 0x07, 0x01, 0x03, 0x72, 0x75, 0x6e, 0x00, 0x00, // Export: "run"
+            0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x01, 0x0b, // Code: i32.const 1, end
+        ]
+    }
+
+    #[tokio::test]
+    async fn test_plugin_workflow_signal_retrieval() {
+        let (manager, _storage, _tmp_dir) = create_test_env();
+
+        let wasm_bytes = generate_minimal_wasm();
+        let wasm_path = _tmp_dir.path().join("workflow_spy.wasm");
+        fs::write(&wasm_path, wasm_bytes).unwrap();
+
+        manager
+            .load_plugin("workflow_spy", wasm_path.to_str().unwrap(), "s", "d")
+            .expect("Le chargement a échoué");
+
+        // Test d'exécution avec injection de mandat (même si le binaire minimal l'ignore)
+        let mandate = json!({ "id": "test_mandate" });
+        let (result_code, signals) = manager
+            .run_plugin_with_context("workflow_spy", Some(mandate))
+            .expect("L'exécution a échoué");
+
+        assert_eq!(result_code, 1, "Le plugin minimal doit retourner 1");
+        assert!(
+            signals.is_empty(),
+            "Les signaux doivent être vides pour ce binaire minimal"
+        );
+
+        println!("✅ Test de cycle de vie Manager passé avec succès.");
+    }
+
+    #[test]
+    fn test_plugin_not_found() {
+        let (manager, _, _) = create_test_env();
+        let res = manager.run_plugin_with_context("unknown", None);
+        assert!(res.is_err());
     }
 }

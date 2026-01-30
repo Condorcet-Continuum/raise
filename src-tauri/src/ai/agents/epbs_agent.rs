@@ -1,5 +1,7 @@
+// FICHIER : src-tauri/src/ai/agents/epbs_agent.rs
+
 use super::intent_classifier::EngineeringIntent;
-use super::tools::{extract_json_from_llm, save_artifact};
+use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
 use super::{Agent, AgentContext, AgentResult};
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
@@ -21,6 +23,7 @@ impl EpbsAgent {
         ctx: &AgentContext,
         name: &str,
         raw_type: &str,
+        history_context: &str,
     ) -> Result<serde_json::Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
@@ -33,8 +36,8 @@ impl EpbsAgent {
 
         let sys = "Tu es Config Manager (EPBS). JSON Strict.";
         let user = format!(
-            "Item: {}. Type: {}. {}\nJSON: {{ \"name\": \"str\", \"partNumber\": \"PN-XXX\" }}",
-            name, raw_type, nlp_hint
+            "=== HISTORIQUE ===\n{}\n\nItem: {}. Type: {}. {}\nJSON: {{ \"name\": \"str\", \"partNumber\": \"PN-XXX\" }}",
+            history_context, name, raw_type, nlp_hint
         );
 
         let res = ctx
@@ -66,18 +69,42 @@ impl Agent for EpbsAgent {
         ctx: &AgentContext,
         intent: &EngineeringIntent,
     ) -> Result<Option<AgentResult>> {
+        let mut session = load_session(ctx)
+            .await
+            .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
+
         match intent {
             EngineeringIntent::CreateElement {
                 layer,
                 element_type,
                 name,
             } if layer == "EPBS" => {
-                let doc = self.enrich_item(ctx, name, element_type).await?;
+                session.add_message("user", &format!("Create CI: {} ({})", name, element_type));
+
+                let history_str = session
+                    .messages
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .rev()
+                    .map(|m| format!("{}: {}", m.role, m.content))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let doc = self
+                    .enrich_item(ctx, name, element_type, &history_str)
+                    .await?;
                 let artifact = save_artifact(ctx, "epbs", "configuration_items", &doc)?;
+                let msg = format!("Article **{}** (EPBS) créé.", name);
+
+                session.add_message("assistant", &msg);
+                save_session(ctx, &session).await?;
 
                 Ok(Some(AgentResult {
-                    message: format!("Article **{}** (EPBS) créé.", name),
+                    message: msg,
                     artifacts: vec![artifact],
+                    // CORRECTION : Champ ajouté
+                    outgoing_message: None,
                 }))
             }
             _ => Ok(None),

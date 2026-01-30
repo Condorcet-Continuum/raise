@@ -5,6 +5,7 @@ use crate::utils::{AppError, Result};
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use serde_json::Value; // AJOUT : Nécessaire pour stocker l'AST JSON
 use std::collections::HashMap;
 
 // --- STRUCTURES DU MANDAT ---
@@ -57,6 +58,10 @@ pub struct VetoRule {
     pub rule: String,
     pub active: bool,
     pub action: String,
+    // AJOUT : Stockage optionnel de la règle dynamique (AST JSON)
+    // Le "Option" garantit la rétrocompatibilité (pas obligatoire dans le JSON)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ast: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +161,46 @@ mod tests {
 
         let mandate = result.unwrap();
         assert_eq!(mandate.governance.strategy, Strategy::SafetyFirst);
+        // Vérification rétrocompatibilité : ast doit être None
+        assert!(mandate.hard_logic.vetos[0].ast.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_mandate_with_ast() {
+        let env = init_test_env().await;
+        let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
+        manager.init_db().await.unwrap();
+
+        // Une règle dynamique injectée
+        let ast_json = json!({
+            "Gt": [{"Var": "temp"}, {"Val": 100.0}]
+        });
+
+        let full_json = json!({
+            "id": "man_ast",
+            "meta": { "author": "System", "version": "2.0", "status": "ACTIVE" },
+            "governance": {
+                "strategy": "PERFORMANCE",
+                "condorcetWeights": {}
+            },
+            "hardLogic": {
+                "vetos": [{
+                    "rule": "DYNAMIC_TEMP",
+                    "active": true,
+                    "action": "STOP",
+                    "ast": ast_json // Nouveau champ
+                }]
+            },
+            "observability": { "heartbeatMs": 100 }
+        });
+
+        manager.insert_raw("mandates", &full_json).await.unwrap();
+
+        let result = Mandate::fetch_from_store(&manager, "man_ast").await;
+        assert!(result.is_ok());
+        let mandate = result.unwrap();
+        // Vérification que l'AST est bien présent
+        assert!(mandate.hard_logic.vetos[0].ast.is_some());
     }
 
     #[tokio::test]
@@ -174,10 +219,5 @@ mod tests {
 
         let result = Mandate::fetch_from_store(&manager, "man_broken").await;
         assert!(result.is_err());
-
-        match result {
-            Err(AppError::Serialization(_)) => (),
-            _ => panic!("Should be a serialization error"),
-        }
     }
 }

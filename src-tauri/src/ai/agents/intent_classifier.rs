@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/ai/agents/intent_classifier.rs
+
 use crate::ai::llm::client::{LlmBackend, LlmClient};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -37,6 +39,38 @@ pub enum EngineeringIntent {
     Chat,
     #[serde(rename = "unknown")]
     Unknown,
+}
+
+impl EngineeringIntent {
+    /// Retourne l'ID de l'agent le plus qualifié pour traiter cette intention.
+    /// Centralise la logique de routage du système.
+    pub fn recommended_agent_id(&self) -> &'static str {
+        match self {
+            Self::DefineBusinessUseCase { .. } => "business_agent",
+            Self::CreateElement { layer, .. } => match layer.as_str() {
+                "OA" => "business_agent",
+                "SA" => "system_agent",
+                "LA" => "software_agent",
+                "PA" => "hardware_agent",
+                "EPBS" => "epbs_agent",
+                "DATA" => "data_agent",
+                "TRANSVERSE" => "transverse_agent",
+                _ => "orchestrator_agent", // Fallback
+            },
+            Self::CreateRelationship { .. } => "system_agent", // Par défaut, souvent géré au niveau système
+            Self::GenerateCode { .. } => "software_agent",
+            Self::Chat | Self::Unknown => "orchestrator_agent",
+        }
+    }
+
+    /// Définit le scope de session par défaut pour cette intention.
+    /// Utile pour savoir si on doit reprendre le contexte global ou créer une branche.
+    pub fn default_session_scope(&self) -> &'static str {
+        match self {
+            Self::Chat => "global_chat",
+            _ => "main_workflow",
+        }
+    }
 }
 
 pub struct IntentClassifier {
@@ -235,6 +269,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_recommended_agent_routing() {
+        let intent_sa = EngineeringIntent::CreateElement {
+            layer: "SA".to_string(),
+            element_type: "System".to_string(),
+            name: "Test".to_string(),
+        };
+        assert_eq!(intent_sa.recommended_agent_id(), "system_agent");
+
+        let intent_la = EngineeringIntent::CreateElement {
+            layer: "LA".to_string(),
+            element_type: "Component".to_string(),
+            name: "Test".to_string(),
+        };
+        assert_eq!(intent_la.recommended_agent_id(), "software_agent");
+
+        let intent_code = EngineeringIntent::GenerateCode {
+            language: "rust".into(),
+            context: "".into(),
+            filename: "".into(),
+        };
+        assert_eq!(intent_code.recommended_agent_id(), "software_agent");
+    }
+
+    #[test]
     fn test_extract_name() {
         assert_eq!(
             extract_name("Crée une exigence de performance", "exigence"),
@@ -264,7 +322,4 @@ mod tests {
         assert_eq!(val["layer"], "LA");
         assert_eq!(val["element_type"], "Component");
     }
-
-    // Le test de `classify` complet nécessiterait de mocker LlmClient,
-    // ce qui est complexe ici. Mais on a testé les briques logiques (extract_name, fallback).
 }

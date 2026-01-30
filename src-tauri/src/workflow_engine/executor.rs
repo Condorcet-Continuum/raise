@@ -3,12 +3,16 @@
 use super::compiler::WorkflowCompiler;
 use super::mandate::Mandate;
 use super::tools::AgentTool;
-use super::wasm_host::WasmHost;
+// REMPLACEMENT : On utilise le PluginManager du Hub au lieu du WasmHost isolé
 use super::{critic::WorkflowCritic, ExecutionStatus, NodeType, WorkflowDefinition, WorkflowNode};
+use crate::plugins::manager::PluginManager;
 
 use crate::ai::assurance::xai::{ExplanationScope, XaiFrame, XaiMethod};
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::collections::manager::CollectionsManager;
+// AJOUT : Intégration du moteur de règles
+use crate::rules_engine::ast::Expr;
+use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
 use crate::utils::{AppError, Result};
 
 use serde_json::{json, Value};
@@ -20,6 +24,8 @@ use tokio::sync::Mutex;
 pub struct WorkflowExecutor {
     /// Référence partagée vers l'Orchestrateur IA
     pub orchestrator: Arc<Mutex<AiOrchestrator>>,
+    /// Gestionnaire de plugins pour l'exécution WASM cognitive
+    pub plugin_manager: Arc<PluginManager>,
     /// Module de Critique (Reward Model)
     critic: WorkflowCritic,
     /// Registre des outils disponibles (MCP)
@@ -27,10 +33,14 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
-    /// Crée un nouvel exécuteur lié à l'intelligence centrale
-    pub fn new(orchestrator: Arc<Mutex<AiOrchestrator>>) -> Self {
+    /// Crée un nouvel exécuteur lié à l'intelligence centrale et au Hub de Plugins
+    pub fn new(
+        orchestrator: Arc<Mutex<AiOrchestrator>>,
+        plugin_manager: Arc<PluginManager>,
+    ) -> Self {
         Self {
             orchestrator,
+            plugin_manager,
             critic: WorkflowCritic::default(),
             tools: HashMap::new(), // Initialisation vide
         }
@@ -46,13 +56,7 @@ impl WorkflowExecutor {
     // ========================================================================
 
     /// Point d'entrée sécurisé pour charger un mandat et préparer l'exécution.
-    ///
-    /// Cette méthode :
-    /// 1. Récupère le JSON brut depuis la DB.
-    /// 2. Le valide et le convertit en structure `Mandate` stricte (Le Pont).
-    /// 3. Compile ce mandat en `WorkflowDefinition` technique.
     pub async fn load_and_prepare_workflow(
-        // CORRECTION E0726 : Ajout de la lifetime anonyme pour CollectionsManager
         manager: &CollectionsManager<'_>,
         mandate_id: &str,
     ) -> Result<WorkflowDefinition> {
@@ -104,54 +108,56 @@ impl WorkflowExecutor {
             // Appel d'outil MCP
             NodeType::CallMcp => self.handle_tool_call(node, context).await,
 
-            // --- NOUVEAU : Exécution de Module WASM (Hot-Swap) ---
+            // ================================================================
+            // INTÉGRATION HUB : Exécution de Module WASM (Hot-Swap & Cognitif)
+            // ================================================================
             NodeType::Wasm => {
-                let default_path = "../wasm-modules/governance/governance.wasm";
-
-                let wasm_path = node
+                let plugin_id = node
                     .params
-                    .get("path")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or(default_path);
+                    .get("plugin_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&node.id);
 
-                tracing::info!("🔮 [WASM] Chargement du module : {}", wasm_path);
+                tracing::info!("🔮 [WASM Hub] Appel du plugin : {}", plugin_id);
 
-                let wasm_bytes = std::fs::read(wasm_path).map_err(|e| {
-                    format!(
-                        "Impossible de lire le fichier WASM '{}'. Erreur : {}",
-                        wasm_path, e
-                    )
-                })?;
-
-                let host = WasmHost::new()?;
-
-                let input = serde_json::to_value(&context)
-                    .map_err(|e| format!("Erreur sérialisation contexte : {}", e))?;
+                // Récupération du Mandat depuis le contexte pour injection
+                let mandate_ctx = context.get("_mandate").cloned();
 
                 let start = std::time::Instant::now();
-                let result = host.run_module(&wasm_bytes, &input)?;
-                let duration = start.elapsed();
 
-                tracing::info!(
-                    "🔮 [WASM] Exécution terminée en {:?} : {}",
-                    duration,
-                    result
-                );
+                // Exécution via le PluginManager (accès DB, AI, Rules inclus)
+                match self
+                    .plugin_manager
+                    .run_plugin_with_context(plugin_id, mandate_ctx)
+                {
+                    Ok((exit_code, signals)) => {
+                        let duration = start.elapsed();
+                        tracing::info!(
+                            "🔮 [WASM] Exécution terminée en {:?} (Code: {})",
+                            duration,
+                            exit_code
+                        );
 
-                if let Some(approved) = result.get("approved").and_then(|b| b.as_bool()) {
-                    if approved {
-                        Ok(ExecutionStatus::Completed)
-                    } else {
-                        let reason = result
-                            .get("reason")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("Refus par la politique WASM");
+                        // Traitement des Signaux (Feedback vers le Workflow)
+                        for signal in signals {
+                            tracing::info!("📡 [SIGNAL PLUGIN] {} : {:?}", plugin_id, signal);
+                            context.insert(format!("{}_signal", plugin_id), signal);
+                        }
 
-                        tracing::warn!("⛔ [WASM VETO] Workflow bloqué : {}", reason);
+                        if exit_code == 1 {
+                            Ok(ExecutionStatus::Completed)
+                        } else {
+                            tracing::warn!(
+                                "⛔ [WASM VETO] Plugin a retourné un échec (Code {})",
+                                exit_code
+                            );
+                            Ok(ExecutionStatus::Failed)
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("❌ [WASM ERROR] Échec exécution : {}", e);
                         Ok(ExecutionStatus::Failed)
                     }
-                } else {
-                    Ok(ExecutionStatus::Completed)
                 }
             }
 
@@ -218,6 +224,40 @@ impl WorkflowExecutor {
             .unwrap_or("UNKNOWN");
         tracing::info!("🛡️ Vérification Veto : {}", rule_name);
 
+        // 1. MODE DYNAMIQUE (via Rules Engine)
+        if let Some(ast_val) = node.params.get("ast") {
+            if let Ok(expr) = serde_json::from_value::<Expr>(ast_val.clone()) {
+                // Conversion du contexte HashMap -> Value
+                let context_value = serde_json::to_value(context).unwrap_or(json!({}));
+                let provider = NoOpDataProvider; // Pas de lookup DB pour l'instant dans ce scope
+
+                match Evaluator::evaluate(&expr, &context_value, &provider).await {
+                    Ok(res_cow) => {
+                        let res = res_cow.as_ref();
+                        // Convention Veto : Si la règle renvoie TRUE, on BLOQUE (Fail)
+                        let is_triggered = match res {
+                            Value::Bool(b) => *b,
+                            _ => false, // Par défaut, si pas booléen, on ne bloque pas
+                        };
+
+                        if is_triggered {
+                            tracing::error!("🚨 VETO DYNAMIQUE DÉCLENCHÉ : {}", rule_name);
+                            return Ok(ExecutionStatus::Failed);
+                        } else {
+                            return Ok(ExecutionStatus::Completed);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "❌ Erreur lors de l'évaluation de la règle dynamique : {}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        // 2. MODE LEGACY (Hardcodé pour rétrocompatibilité)
         if rule_name == "VIBRATION_MAX" {
             let current_vibration =
                 if let Some(obj) = context.get("sensor_vibration").and_then(|v| v.as_object()) {
@@ -339,28 +379,36 @@ impl WorkflowExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::ProjectModel;
     use crate::workflow_engine::tools::SystemMonitorTool;
     use serde_json::json;
     use std::sync::Arc;
+    use tempfile::tempdir;
     use tokio::sync::Mutex;
 
-    // 2. CORRECTIF E0432 : Import depuis le module test_utils
-    // On retire TEST_DB/TEST_SPACE de l'import car ils sont définis localement juste au-dessus
-    use crate::json_db::test_utils::{ensure_db_exists, init_test_env};
-
-    // 3. CORRECTIF PATH : Import des schémas (ajustez le chemin selon votre structure réelle, souvent sous collections)
-    // Si 'json_db::schema' n'existe pas, essayez 'json_db::collections::schemas'
     use crate::json_db::schema::registry::SchemaRegistry;
     use crate::json_db::schema::validator::SchemaValidator;
+    use crate::json_db::test_utils::{ensure_db_exists, init_test_env};
 
     async fn create_test_executor_with_tools() -> WorkflowExecutor {
         let model = ProjectModel::default();
-        let orch = AiOrchestrator::new(model, "http://127.0.0.1:6334", "http://127.0.0.1:8081")
-            .await
-            .unwrap_or_else(|_| panic!("Mock fail"));
+        // CORRECTION E0061 : Ajout de None pour l'argument StorageEngine (pas nécessaire dans ce mock)
+        let orch = AiOrchestrator::new(
+            model,
+            "http://127.0.0.1:6334",
+            "http://127.0.0.1:8081",
+            None,
+        )
+        .await
+        .unwrap_or_else(|_| panic!("Mock fail"));
 
-        let mut exec = WorkflowExecutor::new(Arc::new(Mutex::new(orch)));
+        // Initialisation de la dépendance PluginManager pour les tests
+        let dir = tempdir().unwrap();
+        let storage = StorageEngine::new(JsonDbConfig::new(dir.path().to_path_buf()));
+        let plugin_manager = Arc::new(PluginManager::new(&storage, None));
+
+        let mut exec = WorkflowExecutor::new(Arc::new(Mutex::new(orch)), plugin_manager);
         exec.register_tool(Box::new(SystemMonitorTool));
         exec
     }
@@ -407,6 +455,40 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Nécessite connexion orchestrateur"]
+    async fn test_policy_veto_dynamic() {
+        let executor = create_test_executor_with_tools().await;
+
+        // Règle AST : Trigger veto si temperature > 100
+        let ast_veto = json!({
+            "Gt": [
+                { "Var": "temperature" },
+                { "Val": 100.0 }
+            ]
+        });
+
+        let node = WorkflowNode {
+            id: "gate_dynamic".into(),
+            r#type: NodeType::GatePolicy,
+            name: "VETO: HIGH_TEMP".into(),
+            params: json!({
+                "rule": "HIGH_TEMP",
+                "ast": ast_veto
+            }),
+        };
+
+        // Cas OK (Temp = 50, règle false, pas de veto)
+        let mut ctx_ok = to_ctx(json!({ "temperature": 50.0 }));
+        let res_ok = executor.execute_node(&node, &mut ctx_ok).await;
+        assert_eq!(res_ok.unwrap(), ExecutionStatus::Completed);
+
+        // Cas KO (Temp = 150, règle true, veto activé)
+        let mut ctx_fail = to_ctx(json!({ "temperature": 150.0 }));
+        let res_fail = executor.execute_node(&node, &mut ctx_fail).await;
+        assert_eq!(res_fail.unwrap(), ExecutionStatus::Failed);
+    }
+
+    #[tokio::test]
+    #[ignore = "Nécessite connexion orchestrateur"]
     async fn test_weighted_condorcet() {
         let executor = create_test_executor_with_tools().await;
 
@@ -434,8 +516,6 @@ mod tests {
         ensure_db_exists(cfg, space, db).await;
 
         // --- ÉTAPE 1 : PRÉPARATION PHYSIQUE DES FICHIERS ---
-        // On doit s'assurer que le fichier existe AVANT de charger le registre
-
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let src_schemas = manifest_dir.join("../schemas/v1");
 
@@ -443,18 +523,14 @@ mod tests {
         std::fs::create_dir_all(&dest_schemas).unwrap();
 
         let dest_mandate_path = dest_schemas.join("mandates.json");
-
-        // Logique de priorité : Copie réelle > Sinon Fallback
         let mut file_created = false;
 
-        // Tentative de copie depuis le projet
         if src_schemas.exists() {
             if std::fs::copy(src_schemas.join("mandates.json"), &dest_mandate_path).is_ok() {
                 file_created = true;
             }
         }
 
-        // Si la copie a échoué (ex: en CI), on écrit le fallback MAINTENANT
         if !file_created {
             let fallback = json!({
                 "type": "object",
@@ -465,7 +541,6 @@ mod tests {
         }
 
         // --- ÉTAPE 2 : INITIALISATION DU REGISTRE ---
-        // Le registre scanne le dossier maintenant que le fichier est présent
         let reg = SchemaRegistry::from_db(cfg, space, db).expect("registry init failed");
         let root_uri = reg.uri("mandates.json");
 

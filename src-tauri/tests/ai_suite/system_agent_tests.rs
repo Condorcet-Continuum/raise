@@ -34,7 +34,13 @@ async fn test_system_agent_creates_function_end_to_end() {
     let client = LlmClient::new(&local_url, &api_key, model_name);
     let test_root = env.storage.config.data_root.clone();
 
+    // CORRECTION E0061 : Injection agent_id + session_id
+    let agent_id = "system_agent_test";
+    let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_sa");
+
     let ctx = AgentContext::new(
+        agent_id,
+        &session_id,
         Arc::new(env.storage.clone()),
         client.clone(),
         test_root.clone(),

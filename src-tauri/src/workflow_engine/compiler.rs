@@ -36,6 +36,7 @@ impl WorkflowCompiler {
         for (i, veto) in mandate.hard_logic.vetos.iter().enumerate() {
             if veto.active {
                 // --- Injection de l'outil de lecture AVANT le Veto ---
+                // Note : À terme, cela devrait être configuré dynamiquement, pas hardcodé.
                 if veto.rule == "VIBRATION_MAX" {
                     let tool_node_id = format!("tool_read_vibration_{}", i);
 
@@ -62,14 +63,24 @@ impl WorkflowCompiler {
 
                 let node_id = format!("gate_veto_{}", i);
 
+                // Construction des paramètres du nœud GatePolicy
+                let mut params = json!({
+                    "rule": veto.rule,
+                    "action": veto.action
+                });
+
+                // AJOUT : Transmission de l'AST dynamique si présent dans le mandat
+                if let Some(ast) = &veto.ast {
+                    if let Some(obj) = params.as_object_mut() {
+                        obj.insert("ast".to_string(), ast.clone());
+                    }
+                }
+
                 nodes.push(WorkflowNode {
                     id: node_id.clone(),
                     r#type: NodeType::GatePolicy, // Contrôle : Vérifier la valeur
                     name: format!("VETO: {}", veto.rule),
-                    params: json!({
-                        "rule": veto.rule,
-                        "action": veto.action
-                    }),
+                    params,
                 });
 
                 // Lien : (Précédent ou Outil) -> GatePolicy
@@ -184,11 +195,13 @@ mod tests {
                         rule: "VIBRATION_MAX".into(),
                         active: true,
                         action: "SHUTDOWN".into(),
+                        ast: None, // CORRECTION : Champ ajouté
                     },
                     VetoRule {
                         rule: "TEMP_MAX".into(),
                         active: false,
                         action: "LOG".into(),
+                        ast: None, // CORRECTION : Champ ajouté
                     },
                 ],
             },
@@ -208,7 +221,7 @@ mod tests {
         // 1. Start
         // 2. ToolRead (pour VIBRATION_MAX)
         // 3. GateVeto (pour VIBRATION_MAX)
-        // 4. WASM (Politique Dynamique) <-- AJOUTÉ
+        // 4. WASM (Politique Dynamique)
         // 5. Exec (Agent)
         // 6. Vote (Condorcet)
         // 7. End
@@ -234,5 +247,25 @@ mod tests {
         let weights = decision_node.params.get("weights").unwrap();
 
         assert_eq!(weights.get("agent_security").unwrap().as_f64(), Some(3.0));
+    }
+
+    #[test]
+    fn test_compiler_injects_ast() {
+        let mut mandate = get_test_mandate();
+        // Injection d'un AST fictif
+        let ast = json!({ "Eq": [{"Var": "x"}, {"Val": 1}] });
+        mandate.hard_logic.vetos[0].ast = Some(ast.clone());
+
+        let wf = WorkflowCompiler::compile(&mandate);
+
+        // On cherche le nœud de veto actif (le premier, index 2 dans la liste finale car start + tool avant)
+        // Mais plus robuste de chercher par nom
+        let veto_node = wf
+            .nodes
+            .iter()
+            .find(|n| n.name.contains("VIBRATION_MAX") && n.r#type == NodeType::GatePolicy)
+            .unwrap();
+
+        assert_eq!(veto_node.params.get("ast"), Some(&ast));
     }
 }

@@ -93,27 +93,23 @@ fn main() {
                 eprintln!("❌ [GraphStore] Echec chargement base graphe.");
             }
 
-            // 4. MIGRATIONS
+            // 4. MIGRATIONS & PLUGIN MANAGER (NETTOYÉ)
+            // On exécute les migrations une seule fois
             let _ = tauri::async_runtime::block_on(run_app_migrations(
                 &storage,
                 default_space,
                 default_db,
             ));
-            let _plugin_mgr = PluginManager::new(&storage);
-            app.manage(_plugin_mgr);
 
-            // 5. INJECTION ÉTATS
-            let _ = tauri::async_runtime::block_on(run_app_migrations(
-                &storage,
-                default_space,
-                default_db,
-            ));
-            let plugin_mgr = PluginManager::new(&storage);
+            // Initialisation du PluginManager
+            // NOTE : On passe `None` pour l'IA car l'Orchestrateur n'est pas encore chargé (Async).
+            // Pour permettre aux plugins d'utiliser l'IA, il faudra une injection dynamique (Late Binding) plus tard.
+            let plugin_mgr = Arc::new(PluginManager::new(&storage, None));
 
             // 5. INJECTION ÉTATS
             app.manage(config);
             app.manage(storage);
-            app.manage(plugin_mgr);
+            app.manage(plugin_mgr.clone()); // On partage l'Arc avec Tauri
 
             // CORRECTION E0308 : Le compilateur attend std::sync::Mutex pour AppState
             app.manage(AppState {
@@ -146,6 +142,8 @@ fn main() {
 
             // 6. INITIALISATION ASYNC ORCHESTRATEUR
             let app_handle_clone = app.handle().clone();
+            let plugin_mgr_for_wf = plugin_mgr.clone(); // Clone de l'Arc pour le Workflow
+
             tauri::async_runtime::spawn(async move {
                 let llm_url =
                     env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
@@ -171,7 +169,12 @@ fn main() {
                     Ok(model) => {
                         println!("✅ [IA] Modèle symbolique chargé. Démarrage Orchestrateur...");
 
-                        match AiOrchestrator::new(model, &qdrant_url, &llm_url).await {
+                        // CORRECTION E0061 : Injection du StorageEngine requis par les Agents
+                        let storage_arc = Arc::new(storage_state.inner().clone());
+
+                        match AiOrchestrator::new(model, &qdrant_url, &llm_url, Some(storage_arc))
+                            .await
+                        {
                             Ok(orchestrator) => {
                                 let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
 
@@ -182,7 +185,10 @@ fn main() {
                                 let wf_state =
                                     app_handle_clone.state::<AsyncMutex<WorkflowStore>>();
                                 let mut wf_store = wf_state.lock().await;
-                                wf_store.scheduler = Some(WorkflowScheduler::new(shared_orch));
+
+                                // CORRECTION E0061 : Injection des deux arguments requis (Orchestrateur + PluginManager)
+                                wf_store.scheduler =
+                                    Some(WorkflowScheduler::new(shared_orch, plugin_mgr_for_wf));
 
                                 println!("✅ [RAISE] Orchestrateur IA opérationnel (Hybride).");
                             }
@@ -312,6 +318,7 @@ async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> a
     migrator.run_migrations(migrations).await?;
     Ok(())
 }
+
 fn load_arcadia_ontologies(app_handle: &tauri::AppHandle) {
     // Chemin vers le dossier "ontology" dans vos ressources
     // Note: Assurez-vous que ce dossier est bien copié via tauri.conf.json > bundle > resources

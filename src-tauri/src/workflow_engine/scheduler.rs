@@ -6,6 +6,8 @@ use super::{
 };
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::collections::manager::CollectionsManager;
+// AJOUT : Import du manager de plugins pour la cohérence avec l'executor
+use crate::plugins::manager::PluginManager;
 use crate::utils::Result;
 
 use super::tools::{AgentTool, SystemMonitorTool};
@@ -18,17 +20,24 @@ pub struct WorkflowScheduler {
     pub executor: WorkflowExecutor,
     pub definitions: HashMap<String, WorkflowDefinition>,
     pub orchestrator: Arc<Mutex<AiOrchestrator>>,
+    /// Référence vers le gestionnaire de plugins
+    pub plugin_manager: Arc<PluginManager>,
 }
 
 impl WorkflowScheduler {
-    pub fn new(orchestrator: Arc<Mutex<AiOrchestrator>>) -> Self {
-        let mut executor = WorkflowExecutor::new(orchestrator.clone());
+    pub fn new(
+        orchestrator: Arc<Mutex<AiOrchestrator>>,
+        plugin_manager: Arc<PluginManager>,
+    ) -> Self {
+        // CORRECTION E0061 : passage du deuxième argument requis par WorkflowExecutor::new
+        let mut executor = WorkflowExecutor::new(orchestrator.clone(), plugin_manager.clone());
         executor.register_tool(Box::new(SystemMonitorTool));
 
         Self {
             executor,
             definitions: HashMap::new(),
             orchestrator,
+            plugin_manager,
         }
     }
 
@@ -44,7 +53,6 @@ impl WorkflowScheduler {
     /// C'est le point d'entrée "Politique -> Technique".
     pub async fn load_mission(
         &mut self,
-        // CORRECTION E0726 : Ajout de la lifetime anonyme pour CollectionsManager
         manager: &CollectionsManager<'_>,
         mandate_id: &str,
     ) -> Result<String> {
@@ -130,23 +138,38 @@ impl WorkflowScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::json_db::test_utils::init_test_env;
     use crate::model_engine::types::ProjectModel;
+    // WorkflowNode est importé ici pour éviter le warning unused_import en haut du fichier
     use crate::workflow_engine::{
         ExecutionStatus, NodeType, WorkflowDefinition, WorkflowEdge, WorkflowNode,
     };
     use serde_json::json;
     use std::sync::Arc;
+    use tempfile::tempdir;
     use tokio::sync::Mutex;
 
     async fn setup_test() -> WorkflowScheduler {
         let model = ProjectModel::default();
-        let orch = AiOrchestrator::new(model, "http://127.0.0.1:6334", "http://127.0.0.1:8081")
-            .await
-            .unwrap_or_else(|_| panic!("Mock fail"));
+        // CORRECTION E0061 : Ajout de None pour l'argument StorageEngine (pas nécessaire dans ce mock)
+        let orch = AiOrchestrator::new(
+            model,
+            "http://127.0.0.1:6334",
+            "http://127.0.0.1:8081",
+            None,
+        )
+        .await
+        .unwrap_or_else(|_| panic!("Mock fail"));
 
         let shared_orch = Arc::new(Mutex::new(orch));
-        WorkflowScheduler::new(shared_orch)
+
+        // Initialisation de la dépendance PluginManager pour les tests
+        let dir = tempdir().unwrap();
+        let storage = StorageEngine::new(JsonDbConfig::new(dir.path().to_path_buf()));
+        let plugin_manager = Arc::new(PluginManager::new(&storage, None));
+
+        WorkflowScheduler::new(shared_orch, plugin_manager)
     }
 
     #[tokio::test]

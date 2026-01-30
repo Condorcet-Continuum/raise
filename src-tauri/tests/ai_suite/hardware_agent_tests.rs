@@ -30,7 +30,14 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
 
     let client = LlmClient::new(&local_url, &api_key, model_name);
     let test_root = env.storage.config.data_root.clone();
+
+    // CORRECTION E0061 : Injection agent_id + session_id
+    let agent_id = "hardware_agent_test";
+    let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_pa");
+
     let ctx = AgentContext::new(
+        agent_id,
+        &session_id,
         Arc::new(env.storage.clone()),
         client.clone(),
         test_root.clone(),

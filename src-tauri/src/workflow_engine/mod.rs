@@ -38,25 +38,24 @@ pub enum NodeType {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExecutionStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Paused,  // En attente (HITL)
-    Skipped, // Branche non prise
+    Pending,   // En attente
+    Running,   // En cours
+    Completed, // Terminé avec succès
+    Failed,    // Erreur technique ou Veto
+    Paused,    // En attente d'action humaine (HITL)
+    Skipped,   // Branche non prise
 }
 
-/// Représentation d'une étape du workflow
+/// Nœud unitaire du workflow
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNode {
     pub id: String,
-    pub r#type: NodeType,
+    pub r#type: NodeType, // "type" est un mot clé réservé en Rust
     pub name: String,
-    #[serde(default)]
-    pub params: Value,
+    pub params: Value, // Paramètres libres (JSON)
 }
 
-/// Représentation d'une transition entre deux nœuds
+/// Lien orienté entre deux nœuds
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowEdge {
     pub from: String,

@@ -1,10 +1,12 @@
+// FICHIER : src-tauri/src/ai/agents/transverse_agent.rs
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::json;
 use uuid::Uuid;
 
 use super::intent_classifier::EngineeringIntent;
-use super::tools::{extract_json_from_llm, save_artifact};
+use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
 use super::{Agent, AgentContext, AgentResult};
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
@@ -41,7 +43,6 @@ impl TransverseAgent {
         doc["type"] = json!(doc_type);
         doc["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
 
-        // Defaults
         if doc_type == "Requirement" && doc.get("reqId").is_none() {
             doc["reqId"] = json!("REQ-AUTO");
         }
@@ -53,6 +54,7 @@ impl TransverseAgent {
         &self,
         ctx: &AgentContext,
         name: &str,
+        history_context: &str, // AJOUT : Contexte
     ) -> Result<serde_json::Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
@@ -64,8 +66,8 @@ impl TransverseAgent {
         }
         let sys = "RÔLE: Ingénieur Exigences. JSON Strict.";
         let user = format!(
-            "Exigence: \"{}\"\n{}\nJSON: {{ \"statement\": \"str\", \"reqId\": \"REQ-01\" }}",
-            name, nlp_hint
+            "=== HISTORIQUE ===\n{}\n\nExigence: \"{}\"\n{}\nJSON: {{ \"statement\": \"str\", \"reqId\": \"REQ-01\" }}",
+            history_context, name, nlp_hint
         );
         self.call_llm(ctx, sys, &user, "Requirement", name).await
     }
@@ -82,26 +84,56 @@ impl Agent for TransverseAgent {
         ctx: &AgentContext,
         intent: &EngineeringIntent,
     ) -> Result<Option<AgentResult>> {
+        // 1. CHARGEMENT SESSION
+        let mut session = load_session(ctx)
+            .await
+            .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
+
         match intent {
             EngineeringIntent::CreateElement {
                 layer,
                 element_type,
                 name,
             } if layer == "TRANSVERSE" => {
-                let et_lower = element_type.to_lowercase();
+                session.add_message(
+                    "user",
+                    &format!("Create Transverse: {} ({})", name, element_type),
+                );
 
+                // Calcul Historique
+                let history_str = session
+                    .messages
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .rev()
+                    .map(|m| format!("{}: {}", m.role, m.content))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let et_lower = element_type.to_lowercase();
                 let (doc, sub_folder) = match et_lower.as_str() {
-                    "requirement" | "exigence" => {
-                        (self.enrich_requirement(ctx, name).await?, "requirements")
-                    }
-                    _ => (self.enrich_requirement(ctx, name).await?, "requirements"),
+                    "requirement" | "exigence" => (
+                        self.enrich_requirement(ctx, name, &history_str).await?,
+                        "requirements",
+                    ),
+                    _ => (
+                        self.enrich_requirement(ctx, name, &history_str).await?,
+                        "requirements",
+                    ),
                 };
 
                 let artifact = save_artifact(ctx, "transverse", sub_folder, &doc)?;
+                let msg = format!("Élément Transverse **{}** ({}) créé.", name, element_type);
+
+                session.add_message("assistant", &msg);
+                save_session(ctx, &session).await?;
 
                 Ok(Some(AgentResult {
-                    message: format!("Élément Transverse **{}** ({}) créé.", name, element_type),
+                    message: msg,
                     artifacts: vec![artifact],
+                    // CORRECTION : Champ ajouté
+                    outgoing_message: None,
                 }))
             }
             _ => Ok(None),

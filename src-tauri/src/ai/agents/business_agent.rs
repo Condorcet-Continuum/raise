@@ -1,8 +1,14 @@
+// FICHIER : src-tauri/src/ai/agents/business_agent.rs
+
 use super::intent_classifier::EngineeringIntent;
-use super::tools::{extract_json_from_llm, save_artifact};
+use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
 use super::{Agent, AgentContext, AgentResult};
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
+
+// AJOUT : Import du protocole ACL
+use crate::ai::protocols::acl::{AclMessage, Performative};
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::json;
@@ -16,26 +22,31 @@ impl BusinessAgent {
         Self {}
     }
 
+    /// Analyse le besoin métier en tenant compte de l'historique de conversation
     async fn analyze_business_need(
         &self,
         ctx: &AgentContext,
         domain: &str,
         description: &str,
+        history_context: &str,
     ) -> Result<serde_json::Value> {
         let entities = entity_extractor::extract_entities(description);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
-            nlp_hint.push_str("Acteurs potentiels :\n");
+            nlp_hint.push_str("Acteurs potentiels détectés (NLP) :\n");
             for entity in entities {
                 nlp_hint.push_str(&format!("- {}\n", entity.text));
             }
         }
 
-        let system_prompt =
-            "Tu es un Business Analyst Senior. Extrais Capacité et Acteurs en JSON.";
+        let system_prompt = "Tu es un Business Analyst Senior expert en méthode Arcadia. 
+        Ton rôle est d'extraire une Capacité Opérationnelle (OperationalCapability) et des Acteurs (OperationalActor).
+        Utilise le contexte de la conversation précédente pour affiner ou corriger ton analyse si nécessaire.";
+
+        // Construction du prompt enrichi
         let user_prompt = format!(
-            "Domaine: {}\nBesoin: {}\n{}\nJSON: {{ \"capability\": {{ \"name\": \"str\", \"description\": \"str\" }}, \"actors\": [ {{ \"name\": \"str\" }} ] }}",
-            domain, description, nlp_hint
+            "=== HISTORIQUE DE CONVERSATION ===\n{}\n\n=== NOUVELLE DEMANDE ===\nDomaine: {}\nBesoin: {}\n{}\n\nAttendus JSON strict:\n{{ \"capability\": {{ \"name\": \"str\", \"description\": \"str\" }}, \"actors\": [ {{ \"name\": \"str\" }} ] }}",
+            history_context, domain, description, nlp_hint
         );
 
         let response = ctx
@@ -60,15 +71,38 @@ impl Agent for BusinessAgent {
         ctx: &AgentContext,
         intent: &EngineeringIntent,
     ) -> Result<Option<AgentResult>> {
+        // 1. CHARGEMENT DE LA MÉMOIRE (Session)
+        let mut session = load_session(ctx)
+            .await
+            .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
+
         if let EngineeringIntent::DefineBusinessUseCase {
             domain,
             process_name,
             description,
         } = intent
         {
-            // CORRECTION : Suppression de 'mut' ici
+            // 2. ENREGISTREMENT ENTRÉE UTILISATEUR
+            let user_msg = format!(
+                "Domaine: {}, Process: {}, Description: {}",
+                domain, process_name, description
+            );
+            session.add_message("user", &user_msg);
+
+            // 3. PRÉPARATION DU CONTEXTE
+            let history_str = session
+                .messages
+                .iter()
+                .rev()
+                .take(5)
+                .rev()
+                .map(|m| format!("{}: {}", m.role, m.content))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // 4. ANALYSE INTELLIGENTE (Stateful)
             let analysis = self
-                .analyze_business_need(ctx, domain, description)
+                .analyze_business_need(ctx, domain, description, &history_str)
                 .await
                 .unwrap_or(json!({}));
 
@@ -77,7 +111,7 @@ impl Agent for BusinessAgent {
                 .unwrap_or(description)
                 .to_string();
 
-            // 1. Capacité
+            // 5. CRÉATION ARTEFACTS
             let cap_id = Uuid::new_v4().to_string();
             let cap_doc = json!({
                 "id": cap_id,
@@ -92,7 +126,6 @@ impl Agent for BusinessAgent {
             let mut artifacts = vec![];
             artifacts.push(save_artifact(ctx, "oa", "capabilities", &cap_doc)?);
 
-            // 2. Acteurs
             if let Some(actors) = analysis["actors"].as_array() {
                 for actor in actors {
                     let actor_name = actor["name"].as_str().unwrap_or("UnknownActor");
@@ -109,9 +142,35 @@ impl Agent for BusinessAgent {
                 }
             }
 
+            let result_message = format!(
+                "J'ai analysé le processus **{}** et identifié {} acteur(s). Je transmets l'analyse au système...",
+                process_name,
+                artifacts.len() - 1
+            );
+
+            // 6. DÉLÉGATION AUTOMATIQUE (OA -> SA)
+            let transition_msg = format!(
+                "J'ai modélisé la capacité opérationnelle (OA) '{}' avec {} acteurs. Peux-tu en déduire les Fonctions Système et les Acteurs Système correspondants ?",
+                process_name,
+                artifacts.len() - 1
+            );
+
+            let acl_msg = AclMessage::new(
+                Performative::Request,
+                self.id(),          // Sender: business_analyst
+                "system_architect", // Receiver: system_architect
+                &transition_msg,
+            );
+
+            // 7. MÉMORISATION DE LA RÉPONSE & SAUVEGARDE
+            session.add_message("assistant", &result_message);
+            save_session(ctx, &session).await?;
+
             return Ok(Some(AgentResult {
-                message: format!("Analyse **{}** terminée.", process_name),
+                message: result_message,
                 artifacts,
+                // AJOUT : Message sortant activé
+                outgoing_message: Some(acl_msg),
             }));
         }
         Ok(None)
@@ -121,8 +180,36 @@ impl Agent for BusinessAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::protocols::acl::Performative;
+
     #[test]
     fn test_business_id() {
         assert_eq!(BusinessAgent::new().id(), "business_analyst");
+    }
+
+    // NOUVEAU TEST : Vérifie le déclenchement de la transition vers SystemAgent
+    #[tokio::test]
+    async fn test_business_delegation_trigger() {
+        // Préfixe '_' pour éviter les warnings unused variables
+        let _agent = BusinessAgent::new();
+        let process_name = "Gestion_Commandes";
+        let actors_count = 2;
+
+        let transition_msg = format!(
+            "J'ai modélisé la capacité opérationnelle (OA) '{}' avec {} acteurs. Peux-tu en déduire les Fonctions Système et les Acteurs Système correspondants ?",
+            process_name,
+            actors_count
+        );
+
+        let acl_msg = AclMessage::new(
+            Performative::Request,
+            "business_analyst",
+            "system_architect",
+            &transition_msg,
+        );
+
+        assert_eq!(acl_msg.receiver, "system_architect");
+        assert_eq!(acl_msg.performative, Performative::Request);
+        assert!(acl_msg.content.contains("Gestion_Commandes"));
     }
 }

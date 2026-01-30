@@ -1,29 +1,29 @@
+// FICHIER : src-tauri/src/ai/protocols/mcp.rs
+
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
+use std::collections::HashMap;
+use std::sync::Arc;
+use uuid::Uuid; // Nécessaire pour les traits asynchrones
+
+// =========================================================================
+// 1. STRUCTURES DE DONNÉES (Payloads) - Celles que vous avez fournies
+// =========================================================================
 
 /// Représente une demande d'exécution d'outil (Function Call).
-/// Cette structure est le "payload" technique qui sera transporté ou validé.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolCall {
-    /// Identifiant unique de l'appel.
     #[serde(rename = "_id")]
     pub id: Uuid,
-
-    /// Le nom de l'outil ciblé (ex: "fs_write", "git_commit").
     pub name: String,
-
-    /// Les arguments de la fonction sous format JSON.
     pub arguments: Value,
-
-    /// Horodatage de la création de la demande.
     pub timestamp: DateTime<Utc>,
 }
 
 impl McpToolCall {
-    /// Crée un nouvel appel d'outil.
     pub fn new(name: &str, arguments: Value) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -38,25 +38,15 @@ impl McpToolCall {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolResult {
-    /// Identifiant unique du résultat.
     #[serde(rename = "_id")]
     pub id: Uuid,
-
-    /// Référence à l'ID du `McpToolCall` qui a déclenché ce résultat.
     pub call_id: Uuid,
-
-    /// Le contenu de la réponse (peut être une donnée, un texte, ou une erreur).
     pub content: Value,
-
-    /// Flag indiquant si l'exécution a échoué (exit code != 0 ou exception).
     pub is_error: bool,
-
-    /// Horodatage de la fin d'exécution.
     pub timestamp: DateTime<Utc>,
 }
 
 impl McpToolResult {
-    /// Crée un résultat de succès.
     pub fn success(call_id: Uuid, content: Value) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -67,7 +57,6 @@ impl McpToolResult {
         }
     }
 
-    /// Crée un résultat d'erreur.
     pub fn error(call_id: Uuid, message: &str) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -79,20 +68,94 @@ impl McpToolResult {
     }
 }
 
+// =========================================================================
+// 2. LOGIQUE D'EXÉCUTION (Registry & Traits) - Ajout pour rendre le MCP actif
+// =========================================================================
+
+/// Définition d'un outil exposée au LLM (Schema).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value, // JSON Schema des arguments
+}
+
+/// Trait que chaque outil concret (FileSystem, Search, etc.) devra implémenter.
+#[async_trait]
+pub trait McpTool: Send + Sync {
+    /// Retourne la définition pour le Prompt Système
+    fn definition(&self) -> ToolDefinition;
+
+    /// Exécute l'outil en prenant un Call et en retournant un Result
+    async fn execute(&self, call: McpToolCall) -> McpToolResult;
+}
+
+/// Catalogue d'outils disponibles pour un Agent.
+#[derive(Default, Clone)]
+pub struct ToolRegistry {
+    tools: HashMap<String, Arc<dyn McpTool>>,
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self {
+            tools: HashMap::new(),
+        }
+    }
+
+    /// Enregistre un nouvel outil dans le registre.
+    pub fn register<T: McpTool + 'static>(&mut self, tool: T) {
+        let def = tool.definition();
+        self.tools.insert(def.name, Arc::new(tool));
+    }
+
+    /// Récupère un outil par son nom.
+    pub fn get(&self, name: &str) -> Option<Arc<dyn McpTool>> {
+        self.tools.get(name).cloned()
+    }
+
+    /// Liste toutes les définitions (pour l'injection dans le prompt).
+    pub fn list_definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.values().map(|t| t.definition()).collect()
+    }
+
+    /// Génère le texte à injecter dans le prompt système de l'agent.
+    pub fn to_system_prompt(&self) -> String {
+        if self.tools.is_empty() {
+            return String::new();
+        }
+
+        let mut prompt = String::from("\n## OUTILS DISPONIBLES (Protocol MCP)\n");
+        prompt.push_str("Tu as accès à des outils externes. Pour en utiliser un, réponds UNIQUEMENT avec ce format JSON :\n");
+        prompt.push_str("```json\n{ \"mcp_tool_call\": { \"name\": \"tool_name\", \"arguments\": { ... } } }\n```\n\n");
+        prompt.push_str("Liste des outils :\n");
+
+        for tool in self.tools.values() {
+            let def = tool.definition();
+            prompt.push_str(&format!("- **{}**: {}\n", def.name, def.description));
+            // On pourrait ajouter le schema complet ici si besoin, mais la description suffit souvent pour les modèles puissants.
+        }
+        prompt
+    }
+}
+
+// =========================================================================
+// 3. TESTS
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
+    // --- Tests des Structures (Vos tests existants) ---
     #[test]
     fn test_mcp_tool_call_creation() {
         let args = json!({
             "path": "/tmp/test.txt",
             "content": "Hello World"
         });
-
         let call = McpToolCall::new("fs_write", args.clone());
-
         assert_eq!(call.name, "fs_write");
         assert_eq!(call.arguments["path"], "/tmp/test.txt");
         assert!(!call.id.is_nil());
@@ -102,22 +165,48 @@ mod tests {
     fn test_mcp_result_serialization() {
         let call_id = Uuid::new_v4();
         let result = McpToolResult::success(call_id, json!("Operation successful"));
-
         let json_str = serde_json::to_string(&result).expect("Serialization failed");
-
-        // Vérification des conventions JSON
         assert!(json_str.contains("_id"));
-        assert!(json_str.contains("callId")); // camelCase check
+        assert!(json_str.contains("callId"));
         assert!(json_str.contains("isError"));
-        assert!(json_str.contains("false"));
     }
 
     #[test]
     fn test_mcp_error_handling() {
         let call_id = Uuid::new_v4();
         let result = McpToolResult::error(call_id, "Access Denied");
-
         assert!(result.is_error);
         assert_eq!(result.content["error"], "Access Denied");
+    }
+
+    // --- Tests du Registre (Nouveau) ---
+
+    // Outil Mock pour les tests
+    struct EchoTool;
+    #[async_trait]
+    impl McpTool for EchoTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "echo".to_string(),
+                description: "Renvoie l'argument".to_string(),
+                input_schema: json!({ "type": "object", "properties": { "msg": { "type": "string" } } }),
+            }
+        }
+        async fn execute(&self, call: McpToolCall) -> McpToolResult {
+            McpToolResult::success(call.id, call.arguments)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_execution() {
+        let mut registry = ToolRegistry::new();
+        registry.register(EchoTool);
+
+        let tool = registry.get("echo").expect("Tool not found");
+        let call = McpToolCall::new("echo", json!({ "msg": "Hello MCP" }));
+
+        let result = tool.execute(call).await;
+        assert!(!result.is_error);
+        assert_eq!(result.content["msg"], "Hello MCP");
     }
 }

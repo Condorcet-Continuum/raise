@@ -1,88 +1,92 @@
-# Module AI — Intelligence Artificielle Neuro-Symbolique
+# Module AI — Intelligence Artificielle Neuro-Symbolique & Multi-Agents
 
-Ce module implémente l'approche **MBAIE** (Model-Based AI Engineering) de RAISE. Il transforme le langage naturel en structures d'ingénierie formelles, valides et persistées.
+Ce module implémente l'approche **MBAIE** (Model-Based AI Engineering) de RAISE. Il transforme le langage naturel en structures d'ingénierie formelles, valides et persistées, grâce à une architecture **Multi-Agents Unifiée**.
 
 ## 🎯 Vision & Philosophie
 
 L'IA de RAISE n'est pas un simple chatbot. C'est un **opérateur qualifié** qui agit sur le modèle.
 
 1.  **Workstation-First** : Par défaut, l'intelligence tourne localement (Mistral via Docker + Candle).
-2.  **Dual Mode** : Capacité à déborder sur le Cloud (Gemini Pro) pour les tâches complexes nécessitant un raisonnement supérieur.
-3.  **Grounding (Ancrage)** : L'IA ne répond jamais "dans le vide". Elle est nourrie par le contexte réel du projet (`json_db`) via un système RAG Hybride.
-4.  **Intégrité** : Les actions de l'IA passent par les mêmes validateurs (`x_compute`, Schema Validator) que les actions humaines.
-5.  **Simulation** : Avant d'agir, l'IA "imagine" les conséquences de ses actions grâce à un **World Model** prédictif.
+2.  **Grounding (Ancrage)** : L'IA ne répond jamais "dans le vide". Elle est nourrie par le contexte réel du projet (`json_db`) via un système RAG Hybride injecté dans chaque Agent.
+3.  **Collaboration (Squad)** : Les tâches complexes sont résolues par une équipe d'agents spécialisés qui communiquent entre eux (Protocole ACL).
+4.  **Intégrité & Outils** : Les agents manipulent le système via des outils standardisés et sécurisés (Protocole MCP).
+5.  **Simulation** : Avant d'agir, l'IA "imagine" les conséquences de ses actions grâce à un **World Model** prédictif (Jumeau Numérique Cognitif).
 
 ---
 
 ## 🏗️ Architecture Modulaire
 
-Le module est divisé en quatre sous-systèmes interconnectés. Chaque sous-système possède sa propre documentation détaillée.
+Le module est divisé en sous-systèmes interconnectés pilotés par un Orchestrateur central.
 
-### 1\\. [Le Cerveau Exécutif (`agents/`)](./agents/README.md)
+### 1\. [L'Orchestrateur & La Squad (`agents/` & `orchestrator.rs`)](./agents/README.md)
 
-Responsable de la compréhension sémantique et de la construction des commandes.
+Le cœur du système. L'**`AiOrchestrator`** reçoit la demande, interroge le RAG, et lance une boucle de résolution.
 
-- **Intent Classifier** : Analyse la demande (ex: "Crée un acteur") et produit une structure Rust stricte.
-- **Agents Spécialisés** :
-  - `SystemAgent` : Crée/Modifie les éléments OA/SA (Acteurs, Fonctions).
-  - _(Futur)_ `SoftwareAgent`, `HardwareAgent`.
+- **Intent Classifier** : Analyse la demande et choisit l'Agent de départ.
+- **La Squad (Agents Experts)** :
+  - `BusinessAgent` (OA) : Analyse métier, besoins opérationnels.
+  - `SystemAgent` (SA) : Architecture système, fonctions, acteurs.
+  - `SoftwareAgent` (LA) : Architecture logicielle, génération de code.
+  - `HardwareAgent` (PA) : Noeuds physiques, infrastructure.
+  - `EpbsAgent` (EPBS) : Configuration, BOM.
+  - `DataAgent` (DATA) : Modélisation de données, classes.
+  - `TransverseAgent` (IVVQ) : Exigences, Tests, Qualité.
 
-### 2\\. [La Mémoire Contextuelle (`context/`)](./context/README.md)
+### 2\. [Protocoles de Communication (`protocols/`)](./protocols/mod.rs)
 
-Responsable de l'ancrage des réponses dans la réalité du projet.
+Pour garantir la robustesse et l'auditabilité des échanges.
 
-- **RAG Hybride** : Combine deux approches pour une précision maximale.
-  - **Symbolique (`SimpleRetriever`)** : Recherche exacte par mots-clés sur la structure du modèle en mémoire.
-  - **Vectoriel (`RagRetriever`)** : Recherche sémantique via **Qdrant** (base de données vectorielle) pour trouver des concepts similaires même sans mots-clés exacts.
+- **ACL (Agent Communication Language)** : Permet aux agents de se déléguer des tâches (ex: _SystemAgent_ demande à _SoftwareAgent_ d'implémenter une fonction).
+- **MCP (Model Context Protocol)** : Standardise l'utilisation des outils externes (ex: Écriture de fichiers, Requête DB).
 
-### 3\\. [L'Infrastructure d'Inférence (`llm/`)](./llm/README.md)
+### 3\. [La Mémoire Contextuelle (`context/`)](./context/README.md)
 
-Responsable de la communication brute avec les modèles de langage.
+Responsable de l'ancrage des réponses.
 
-- **Client Dual Mode** : Interface unifiée `ask()` qui route vers Local ou Cloud.
-- **Moteur Natif** : Intégration de `candle` pour faire tourner des modèles légers (Llama/Mistral) directement dans le binaire Rust (sans Docker).
+- **RAG Hybride** : Combine recherche symbolique (Graphe Arcadia) et vectorielle (Qdrant). Ce contexte est injecté dynamiquement dans le prompt de chaque agent.
 
-### 4\\. [Le World Model (`world_model/`)](./world_model/README.md) ✨
+### 4\. [Le World Model (`world_model/`)](./world_model/README.md) ✨
 
-Responsable de la **Simulation** et de l'**Apprentissage**. C'est un "Jumeau Numérique Cognitif".
+Responsable de la **Simulation** et de l'**Apprentissage**.
 
-- **Architecture JEPA** : Pipeline Perception -> Représentation -> Dynamique.
-- **Prédiction** : Estime l'impact d'une action (`Create`, `Delete`) sur l'état latent du système.
-- **Apprentissage** : S'améliore en continu via le feedback utilisateur (`reinforce_learning`).
+- **Architecture JEPA** : Estime l'impact latent d'une action avant exécution.
+- **Apprentissage** : S'améliore via le feedback utilisateur (`reinforce_learning`).
 
 ---
 
-## 🔄 Flux de Données (Orchestration)
+## 🔄 Flux de Données (Workflow Unifié)
 
-L'orchestration est gérée par l'**`AiOrchestrator`** qui coordonne le LLM (Verbe), le RAG (Mémoire) et le World Model (Intuition).
+L'orchestrateur gère une boucle de résolution itérative (ACL Loop).
 
 ```mermaid
 graph TD
-    User[Utilisateur] -->|Input| Orch[Orchestrateur]
+    User[Utilisateur] -->|Prompt| Orch[AiOrchestrator]
 
-    subgraph "Mémoire (RAG Hybride)"
-        Orch -->|Keyword Search| SR[Simple Retriever]
-        Orch -->|Semantic Search| Qdrant[(Qdrant Vector DB)]
-        SR & Qdrant --> Context
+    subgraph "Phase 1 : Compréhension"
+        Orch -->|Retrieval| RAG[RAG Hybride]
+        RAG --> Context
+        Orch -->|Classify| Intent[Intent Classifier]
     end
 
-    subgraph "Fast Path : Intuition"
-        Orch -->|Action?| WM[World Model]
-        WM -->|Simulation| Pred[Prédiction Latente]
-        Pred -->|Info| Orch
+    subgraph "Phase 2 : Boucle de Résolution (ACL)"
+        Intent -->|Start| AgentA["Agent 1 : System"]
+        AgentA -->|Thinking + Context| LLM
+
+        AgentA -->|Décision| Action{Action ?}
+
+        Action -->|Message ACL| AgentB["Agent 2 : Software"]
+        AgentB -->|Loop| AgentA
+
+        Action -->|Tool Call MCP| Tool["Outil : FS Write"]
+        Tool -->|Result| AgentA
     end
 
-    subgraph "Slow Path : Raisonnement"
-        Orch -->|Context + Prompt| LLM[LLM Agent]
-        LLM -->|JSON Action| DB[(JSON-DB)]
+    subgraph "Phase 3 : Persistance & Feedback"
+        AgentA -->|Save Artifact| DB[(JSON-DB)]
+        DB -->|Train| WM[World Model]
     end
 
-    subgraph "Feedback Loop"
-        DB -->|Real State| Trainer[World Trainer]
-        Trainer -->|Update Weights| WM
-    end
-
-    Orch -->|Réponse| User
+    Orch -->|Réponse Finale| User
 
 ```
 
@@ -90,39 +94,39 @@ graph TD
 
 ## 🛠️ Points d'Entrée
 
-### 1\. Application GUI (Tauri)
+### 1. Application GUI (Tauri)
 
-L'utilisateur final interagit via le panneau de chat React.
+L'utilisateur final interagit via le panneau de chat React. La commande `ai_chat` est désormais un contrôleur léger qui délègue tout à l'Orchestrateur.
 
-- **Commande** : `ai_chat` (Conversation).
+- **Commande** : `ai_chat` (Point d'entrée unique).
 - **Commande** : `ai_confirm_learning` (Feedback pour le World Model).
-- **Retour** : Flux textuel ou confirmation d'action.
 
-### 2\. Outil Développeur (`ai_cli`)
+### 2. Outil Développeur (`ai_cli`)
 
-Pour le test rapide, l'automatisation et le débogage sans interface graphique.
+Pour le test rapide sans interface graphique.
 
 - **Localisation** : `src-tauri/tools/ai_cli`.
 
 ---
 
-## 📊 État d'Avancement (v0.2.0)
+## 📊 État d'Avancement (v0.2.0 - Grand Unification)
 
-| Composant          | Statut    | Description                                             |
-| ------------------ | --------- | ------------------------------------------------------- |
-| **LLM Client**     | ✅ Stable | Support Local/Cloud, Gestion d'erreurs.                 |
-| **Classification** | ✅ Stable | Détection précise (Create vs Chat).                     |
-| **RAG Vectoriel**  | ✅ Stable | Intégration **Qdrant** opérationnelle (`RagRetriever`). |
-| **System Agent**   | ✅ Actif  | Création d'éléments OA/SA.                              |
-| **World Model**    | 🚀 Alpha  | Simulation et Apprentissage (Backpropagation) actif.    |
-| **Deep Learning**  | ✅ Actif  | Support `candle-nn` et sérialisation `.safetensors`.    |
+| Composant         | Statut     | Description                                            |
+| ----------------- | ---------- | ------------------------------------------------------ |
+| **Orchestrateur** | ✅ Unifié  | Gère RAG + Agents + ACL dans une boucle unique.        |
+| **Squad Agents**  | ✅ Complet | 7 Agents experts (Business ➔ Transverse).              |
+| **Protocole ACL** | ✅ Actif   | Délégation automatique entre agents (Hop-to-Hop).      |
+| **Protocole MCP** | ✅ Actif   | Support des outils standardisés (`fs_write`, etc.).    |
+| **RAG Vectoriel** | ✅ Stable  | Intégration **Qdrant** partagée entre tous les agents. |
+| **World Model**   | 🚀 Beta    | Simulation active en tâche de fond (Training Loop).    |
 
 ---
 
 > **Note aux contributeurs :**
-> Pour modifier la logique d'un agent, voir `src/ai/agents`.
-> Pour ajuster la "physique" du cerveau IA, voir `src/ai/world_model`.
-> Pour toucher à la base de données, passer par `json_db::collections::manager`.
+>
+> - Pour ajouter un agent : `src/ai/agents/`.
+> - Pour ajouter un outil (MCP) : `src/ai/tools/`.
+> - Pour la logique centrale : `src/ai/orchestrator.rs`.
 
 ```
 

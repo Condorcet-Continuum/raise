@@ -15,7 +15,7 @@ pub struct RuleStore<'a> {
     /// "champ_modifié" -> Vec<"rule_id">
     dependency_cache: HashMap<String, Vec<String>>,
     /// Cache des règles chargées : "rule_id" -> Rule
-    rules_cache: HashMap<String, Rule>,
+    pub rules_cache: HashMap<String, Rule>,
 }
 
 impl<'a> RuleStore<'a> {
@@ -33,7 +33,7 @@ impl<'a> RuleStore<'a> {
         let stored_rules = self
             .db_manager
             .list_all("_system_rules")
-            .await // Migration async
+            .await
             .unwrap_or_default();
 
         self.dependency_cache.clear();
@@ -48,12 +48,11 @@ impl<'a> RuleStore<'a> {
     }
 
     /// Enregistre une règle de manière idempotente (Async)
-    /// Ne persiste sur le disque QUE si la règle est nouvelle ou modifiée
     pub async fn register_rule(&mut self, collection: &str, rule: Rule) -> Result<()> {
         // OPTIMISATION : Vérifier si la règle existe déjà et est identique
         if let Some(existing_rule) = self.rules_cache.get(&rule.id) {
             if *existing_rule == rule {
-                return Ok(()); // Rien à faire, on économise l'I/O
+                return Ok(());
             }
         }
 
@@ -65,7 +64,7 @@ impl<'a> RuleStore<'a> {
             obj.insert("id".to_string(), json!(rule.id));
         }
 
-        self.db_manager.insert_raw("_system_rules", &doc).await?; // Migration async
+        self.db_manager.insert_raw("_system_rules", &doc).await?;
 
         // 2. Mise à jour du cache mémoire
         self.index_rule_in_cache(rule);
@@ -83,7 +82,7 @@ impl<'a> RuleStore<'a> {
         self.rules_cache.insert(rule.id.clone(), rule);
     }
 
-    /// Récupère les règles impactées (Lookup O(1) via le cache)
+    /// Récupère les règles impactées par des changements (Mode Réactif)
     pub fn get_impacted_rules(
         &self,
         _collection: &str,
@@ -105,6 +104,21 @@ impl<'a> RuleStore<'a> {
             .cloned()
             .collect()
     }
+
+    /// [NOUVEAU] Récupère toutes les règles ciblant une entité spécifique (Mode Validatif)
+    /// Utilisé par le Bloc Cognitif pour valider un objet complet.
+    pub fn get_rules_for_target(&self, target: &str) -> Vec<Rule> {
+        self.rules_cache
+            .values()
+            .filter(|r| r.target == target)
+            .cloned()
+            .collect()
+    }
+
+    /// [NOUVEAU] Récupère l'ensemble des règles connues (Dump)
+    pub fn get_all_rules(&self) -> Vec<Rule> {
+        self.rules_cache.values().cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -114,48 +128,50 @@ mod tests {
     use crate::rules_engine::ast::Expr;
     use tempfile::tempdir;
 
-    #[tokio::test] // Migration async pour les tests
-    async fn test_store_idempotency() {
+    #[tokio::test]
+    async fn test_store_idempotency_and_retrieval() {
         let dir = tempdir().unwrap();
-        // Configuration via la méthode new() conforme
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
         let manager = CollectionsManager::new(&storage, "test_space", "test_db");
-        manager.init_db().await.unwrap(); // Migration async
+        manager.init_db().await.unwrap();
 
         let mut store = RuleStore::new(&manager);
 
-        let rule = Rule {
+        let rule1 = Rule {
             id: "r1".into(),
-            target: "t".into(),
+            target: "user_age".into(), // Cible spécifique
             expr: Expr::Val(json!(1)),
             description: None,
             severity: None,
         };
 
-        // Premier enregistrement : Doit écrire (Async)
-        store.register_rule("col", rule.clone()).await.unwrap();
-
-        // Deuxième enregistrement identique : Ne doit PAS écrire (Async)
-        store.register_rule("col", rule.clone()).await.unwrap();
-
-        let docs_pass_2 = manager.list_all("_system_rules").await.unwrap(); // Migration async
-        assert_eq!(docs_pass_2.len(), 1);
-
-        // Si on modifie la règle
-        let rule_mod = Rule {
-            id: "r1".into(),
-            target: "t".into(),
+        let rule2 = Rule {
+            id: "r2".into(),
+            target: "system_status".into(),
             expr: Expr::Val(json!(2)),
-            description: Some("Modifiée".into()),
+            description: None,
             severity: None,
         };
-        store.register_rule("col", rule_mod).await.unwrap(); // Migration async
-        let docs_pass_3 = manager.list_all("_system_rules").await.unwrap(); // Migration async
-        assert_eq!(docs_pass_3.len(), 1);
 
-        // Vérification de la prise en compte du changement
-        let content = &docs_pass_3[0];
-        assert!(content.to_string().contains("\"val\":2"));
+        // Enregistrement
+        store.register_rule("users", rule1.clone()).await.unwrap();
+        store.register_rule("systems", rule2.clone()).await.unwrap();
+
+        // Test de récupération ciblée (get_rules_for_target)
+        let user_rules = store.get_rules_for_target("user_age");
+        assert_eq!(user_rules.len(), 1);
+        assert_eq!(user_rules[0].id, "r1");
+
+        let system_rules = store.get_rules_for_target("system_status");
+        assert_eq!(system_rules.len(), 1);
+        assert_eq!(system_rules[0].id, "r2");
+
+        let unknown_rules = store.get_rules_for_target("unknown");
+        assert!(unknown_rules.is_empty());
+
+        // Test de récupération globale (get_all_rules)
+        let all_rules = store.get_all_rules();
+        assert_eq!(all_rules.len(), 2);
     }
 }

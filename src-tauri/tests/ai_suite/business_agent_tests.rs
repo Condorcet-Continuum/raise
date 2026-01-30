@@ -33,7 +33,13 @@ async fn test_business_agent_generates_oa_entities() {
     let client = LlmClient::new(&local_url, &api_key, model_name);
     let test_root = env.storage.config.data_root.clone();
 
+    // CORRECTION E0061 : Fournit les 6 arguments requis incluant l'ID agent et session
+    let agent_id = "business_agent_test";
+    let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_oa");
+
     let ctx = AgentContext::new(
+        agent_id,
+        &session_id,
         Arc::new(env.storage.clone()),
         client.clone(),
         test_root.clone(),
@@ -64,14 +70,13 @@ async fn test_business_agent_generates_oa_entities() {
     // --- VÉRIFICATIONS (Robustes) ---
 
     // 1. CAPACITÉS (OA)
-    // On construit le chemin proprement avec .join() pour éviter les erreurs de séparateur
     let capabilities_dir = test_root
         .join("un2")
         .join("oa")
         .join("collections")
         .join("capabilities");
 
-    // On laisse le temps au système de fichiers (surtout sur Docker/CI)
+    // On laisse le temps au système de fichiers
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
     println!("📂 Vérification dans : {:?}", capabilities_dir);
@@ -84,7 +89,6 @@ async fn test_business_agent_generates_oa_entities() {
                     .unwrap_or_default()
                     .to_lowercase();
 
-                // CORRECTION : Recherche insensible à la casse (instruction vs Instruction)
                 if content.contains("crédit")
                     || content.contains("instruction")
                     || content.contains("immo")

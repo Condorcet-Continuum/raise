@@ -28,7 +28,14 @@ async fn test_transverse_agent_ivvq_cycle() {
 
     let client = LlmClient::new(&local_url, &api_key, model_name);
     let test_root = env.storage.config.data_root.clone();
+
+    // CORRECTION E0061 : Injection agent_id + session_id
+    let agent_id = "transverse_agent_test";
+    let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_transverse");
+
     let ctx = AgentContext::new(
+        agent_id,
+        &session_id,
         Arc::new(env.storage.clone()),
         client.clone(),
         test_root.clone(),

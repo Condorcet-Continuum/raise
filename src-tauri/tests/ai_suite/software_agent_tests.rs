@@ -34,7 +34,14 @@ async fn test_software_agent_creates_component_end_to_end() {
 
     // --- CONTEXTE ---
     let test_data_root = env.storage.config.data_root.clone();
+
+    // CORRECTION E0061 : Injection agent_id + session_id
+    let agent_id = "software_agent_test";
+    let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_la");
+
     let ctx = AgentContext::new(
+        agent_id,
+        &session_id,
         Arc::new(env.storage.clone()),
         client.clone(),
         test_data_root.clone(),
