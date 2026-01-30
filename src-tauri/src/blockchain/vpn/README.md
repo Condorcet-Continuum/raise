@@ -1,113 +1,100 @@
-# Module `vpn`
+# Module `vpn` - RAISE Core
 
 ## 🎯 Objectif
 
-Le module **`vpn`** assure la souveraineté des communications de RAISE. Il encapsule la complexité de gestion d'un réseau Mesh P2P basé sur **Innernet** (une surcouche ergonomique à WireGuard).
+Le module **`vpn`** assure la souveraineté et le cloisonnement des communications de RAISE. Il encapsule la gestion d'un réseau **Mesh P2P** basé sur **Innernet** (surcouche ergonomique à WireGuard), garantissant que le trafic blockchain reste strictement privé.
 
-Contrairement à un VPN classique (Client-Serveur), ce module permet :
+Contrairement à un VPN classique, ce module permet :
 
-1.  Des connexions directes (Peer-to-Peer) entre les instances RAISE.
-2.  Une indépendance totale vis-à-vis des fournisseurs cloud.
-3.  Une gestion d'état réactive pour l'interface utilisateur.
+1.  Des communications directes **Peer-to-Peer** (P2P) chiffrées entre instances RAISE.
+2.  Une isolation réseau totale sans dépendance à un contrôleur Cloud central.
+3.  Une visibilité en temps réel de la topologie du maillage (Mesh).
 
 ---
 
-## 🏗️ Architecture du Client
+## 🏗️ Architecture Technique
 
-Le struct `InnernetClient` agit comme un **Wrapper de CLI**. Il pilote les exécutables système et maintient un cache de l'état réseau.
+Le `InnernetClient` est conçu comme un orchestrateur de processus asynchrone.
 
 ```mermaid
 graph TD
-    UI[Frontend Tauri] -->|Commandes| Client[InnernetClient Rust]
+    UI[Frontend Tauri] -->|Invoke| Cmd[Blockchain Commands]
+    Cmd -->|Lock Mutex| State[SharedInnernetClient]
+    State -->|Clone & Async Call| Client[InnernetClient Rust]
 
     subgraph System [Système Hôte]
-        Client -->|Exec| InnernetCLI[innernet CLI]
-        Client -->|Exec| WG[wg CLI]
-        Client -->|Exec| Ping[ping]
+        Client -->|tokio::process| InnernetCLI[innernet CLI]
+        Client -->|tokio::process| WG[wg CLI]
     end
 
-    InnernetCLI -->|Config interface| Kernel[Interface WireGuard (raise0)]
-    WG -->|Lecture stats| Kernel
+    InnernetCLI -->|Netlink| Kernel[Interface WireGuard raise0]
 
 ```
 
 ---
 
-## ⚙️ Configuration (`NetworkConfig`)
+## ⚙️ Capacités Implémentées
 
-La configuration définit les paramètres de l'interface réseau virtuelle.
+### 1. Cycle de vie Asynchrone
 
-| Champ             | Type     | Description                 | Valeur par défaut         |
-| ----------------- | -------- | --------------------------- | ------------------------- |
-| `name`            | `String` | Nom du réseau Innernet      | `"raise"`                 |
-| `cidr`            | `String` | Plage d'adresses IP du mesh | `"10.42.0.0/16"`          |
-| `interface`       | `String` | Nom de l'interface système  | `"raise0"`                |
-| `server_endpoint` | `String` | Point d'entrée pour l'init  | `"vpn.raise.local:51820"` |
+Toutes les opérations (`connect`, `disconnect`, `get_status`) sont désormais non-bloquantes grâce à `tokio::process`. L'interface utilisateur reste fluide même lors de latences réseau.
 
----
+### 2. Gestion des Pairs & Invitations
 
-## 📡 Gestion de la Connexion
+L'implémentation de `add_peer(invitation_code)` permet d'automatiser la commande `innernet install` :
 
-### Connexion (`connect`)
+- Intégration automatique d'un nouveau nœud via un jeton d'invitation.
+- Validation immédiate de la connectivité après installation.
 
-La méthode `connect()` exécute la commande `innernet up <name>`.
+### 3. Monitoring WireGuard NATIF
 
-- **Succès** : Met à jour le statut (`connected = true`) et récupère l'IP assignée via `innernet show`.
-- **Échec** : Retourne une `VpnError::Connection` avec la sortie d'erreur standard (stderr).
+Le module ne se contente pas de piloter Innernet ; il interroge directement `wg show` pour extraire des métriques de bas niveau :
 
-### Déconnexion (`disconnect`)
-
-Exécute `innernet down <name>`, nettoie l'IP et vide la liste des pairs en mémoire.
-
-### Surveillance (`get_status`)
-
-Le statut est protégé par un verrou asynchrone (`Arc<RwLock<NetworkStatus>>`).
-Lorsqu'on demande le statut :
-
-1. Si connecté, le client lance `wg show` (WireGuard) en arrière-plan.
-2. Il parse la sortie pour mettre à jour la liste des pairs (IP, Handshake, Transfert).
-3. Il retourne une copie de l'état courant.
+- **Handshake** : Temps écoulé depuis le dernier échange sécurisé.
+- **Transfert** : Volume précis de données RX/TX par pair.
+- **Endpoints** : Identification des adresses IP physiques des pairs.
 
 ---
 
-## 👥 Gestion des Pairs
+## 📡 Détails des Commandes
 
-Le module interagit directement avec WireGuard pour obtenir des métriques précises sur les autres nœuds du réseau.
-
-### Structure `Peer`
-
-Chaque pair détecté contient :
-
-- **`public_key`** : L'identifiant cryptographique unique.
-- **`endpoint`** : L'adresse IP physique (réelle) et le port.
-- **`last_handshake`** : Timestamp du dernier contact (prouve la connectivité).
-- **`transfer_rx/tx`** : Volume de données échangées (Bytes).
-
-### Diagnostic (`ping_peer`)
-
-Une commande utilitaire `ping -c 1 -W 2 <ip>` permet de vérifier la latence et l'accessibilité d'un pair spécifique depuis l'application.
+| Méthode      | Action Système  | Description                                       |
+| ------------ | --------------- | ------------------------------------------------- |
+| `connect`    | `innernet up`   | Active l'interface et établit le maillage.        |
+| `disconnect` | `innernet down` | Coupe les tunnels et nettoie les routes.          |
+| `list_peers` | `innernet list` | Récupère la liste des membres déclarés du réseau. |
+| `get_status` | `wg show`       | Analyse les statistiques de trafic en temps réel. |
+| `ping_peer`  | `ping -c 1`     | Mesure la latence ICMP à l'intérieur du tunnel.   |
 
 ---
 
-## 🚨 Prérequis Système
+## 🔒 Sécurité & Intégration Tauri
 
-Ce module **ne contient pas** le binaire Innernet. Il suppose que l'environnement hôte dispose de :
+Le client est exposé au frontend via un état partagé sécurisé :
 
-1. `innernet` (Installé et configuré).
-2. `wg` (Outils WireGuard).
-3. Privilèges suffisants (souvent `sudo` ou capabilities réseau) pour créer des interfaces.
-
-La méthode `InnernetClient::check_installation()` permet de valider la présence de la CLI au démarrage.
-
-## 🗺️ Roadmap Implémentation
-
-- [x] Wrapper CLI de base (`up`, `down`, `show`).
-- [x] Parsing manuel de la sortie `wg show`.
-- [x] Gestion d'état Thread-safe.
-- [ ] **Implémentation** : `add_peer` pour gérer les invitations (`innernet install`).
-- [ ] **Amélioration** : Parsing plus robuste des unités de transfert (GiB, MiB) dans `wg show`.
-- [ ] **Sécurité** : Gestion fine des privilèges (polkit/sudo) pour éviter de lancer toute l'app en root.
+```rust
+pub type SharedInnernetClient = Mutex<InnernetClient>;
 
 ```
+
+Pour éviter les "deadlocks", les commandes Tauri utilisent le pattern **Lock-then-Clone** :
+
+1. Verrouillage du Mutex pour obtenir une copie légère du client.
+2. Libération immédiate du verrou.
+3. Exécution de la tâche réseau de manière asynchrone.
+
+---
+
+## 🗺️ État d'avancement
+
+- [x] Wrapper CLI asynchrone (`tokio`).
+- [x] Parsing robuste de la sortie `wg show`.
+- [x] Gestion des invitations (`add_peer`).
+- [x] Intégration au State global de RAISE.
+- [ ] **Amélioration** : Support des notifications système lors de la perte d'un pair.
+- [ ] **Sécurité** : Intégration de `polkit` pour la gestion transparente des privilèges `sudo`.
+
+```
+
 
 ```

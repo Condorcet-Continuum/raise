@@ -2,12 +2,16 @@
 //! Commandes Tauri liées à la Blockchain et au VPN mesh.
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
-// CORRECTION : Utilisation de crate:: car nous sommes dans la lib
-use crate::blockchain::{FabricClient, InnernetClient};
+use crate::blockchain::{
+    error::BlockchainError,
+    fabric_state,   // Helper pour Fabric
+    innernet_state, // Helper pour Innernet
+    vpn::innernet_client::{NetworkStatus as VpnStatus, Peer as VpnPeer},
+};
 
-/// Résultat générique d'une transaction Fabric exposé au frontend.
+// --- DTOs pour le Frontend ---
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionResult {
     pub success: bool,
@@ -16,111 +20,189 @@ pub struct TransactionResult {
     pub payload: Option<serde_json::Value>,
 }
 
-/// Représente un peer Innernet
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Peer {
-    pub name: String,
-    pub address: String,
-    pub online: bool,
-}
+// --- COMMANDES FABRIC ---
 
-/// État synthétique du réseau Innernet.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NetworkStatus {
-    pub profile: String,
-    pub connected: bool,
-    pub peers: Vec<Peer>,
+/// Vérifie l'état du client Fabric (remplace l'ancien ping).
+#[tauri::command]
+pub async fn fabric_ping(app: tauri::AppHandle) -> Result<String, BlockchainError> {
+    // On vérifie juste qu'on peut accéder au state
+    let _client = {
+        let state = fabric_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("Fabric Mutex poisoned".into()))?;
+        guard.clone()
+    };
+
+    Ok("Fabric Client Ready (v2)".to_string())
 }
 
 #[tauri::command]
-pub fn fabric_ping(client: State<FabricClient>) -> String {
-    client.ping()
-}
-
-#[tauri::command]
-pub fn fabric_submit_transaction(
-    client: State<FabricClient>,
+pub async fn fabric_submit_transaction(
+    app: tauri::AppHandle,
     chaincode: String,
     function: String,
     args: Vec<String>,
-) -> TransactionResult {
-    let connection_info = client.ping();
-    TransactionResult {
+) -> Result<TransactionResult, BlockchainError> {
+    // 1. Récupération thread-safe du client
+    let client = {
+        let state = fabric_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("Fabric Mutex poisoned".into()))?;
+        guard.clone()
+    };
+
+    // 2. Appel asynchrone (non-bloquant pour l'UI)
+    let tx_id = client
+        .submit_transaction(&chaincode, &function, args)
+        .await?;
+
+    Ok(TransactionResult {
         success: true,
-        message: format!(
-            "stub submit_transaction: chaincode={chaincode}, fn={function}, args={:?}, conn={}",
-            args, connection_info
-        ),
+        message: format!("Transaction submitted: {}", tx_id),
         payload: None,
-    }
+    })
 }
 
 #[tauri::command]
-pub fn fabric_query_transaction(
-    client: State<FabricClient>,
+pub async fn fabric_query_transaction(
+    app: tauri::AppHandle,
     chaincode: String,
     function: String,
     args: Vec<String>,
-) -> TransactionResult {
-    let connection_info = client.ping();
-    TransactionResult {
+) -> Result<TransactionResult, BlockchainError> {
+    let client = {
+        let state = fabric_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("Fabric Mutex poisoned".into()))?;
+        guard.clone()
+    };
+
+    // Conversion des args String -> Vec<u8>
+    let byte_args: Vec<Vec<u8>> = args.into_iter().map(|s| s.into_bytes()).collect();
+
+    let result_bytes = client.query_transaction(&function, byte_args).await?;
+    let result_str = String::from_utf8_lossy(&result_bytes).to_string();
+
+    Ok(TransactionResult {
         success: true,
-        message: format!(
-            "stub query_transaction: chaincode={chaincode}, fn={function}, args={:?}, conn={}",
-            args, connection_info
-        ),
-        payload: None,
-    }
+        message: "Query successful".to_string(),
+        payload: Some(serde_json::json!({ "data": result_str, "chaincode": chaincode })),
+    })
 }
 
 #[tauri::command]
-pub fn fabric_get_history(client: State<FabricClient>, key: String) -> TransactionResult {
-    let connection_info = client.ping();
-    TransactionResult {
+pub async fn fabric_get_history(
+    app: tauri::AppHandle,
+    key: String,
+) -> Result<TransactionResult, BlockchainError> {
+    let client = {
+        let state = fabric_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("Fabric Mutex poisoned".into()))?;
+        guard.clone()
+    };
+
+    let args = vec![key.into_bytes()];
+    let result = client.query_transaction("GetHistory", args).await?;
+
+    Ok(TransactionResult {
         success: true,
-        message: format!("stub get_history: key={key}, conn={}", connection_info),
-        payload: None,
-    }
+        message: "History retrieved".to_string(),
+        payload: Some(serde_json::json!({ "history": String::from_utf8_lossy(&result) })),
+    })
+}
+
+// --- COMMANDES VPN (INNERNET) ---
+
+#[tauri::command]
+pub async fn vpn_network_status(app: tauri::AppHandle) -> Result<VpnStatus, BlockchainError> {
+    let client = {
+        let state = innernet_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+        guard.clone()
+    };
+    client.get_status().await.map_err(BlockchainError::from)
 }
 
 #[tauri::command]
-pub fn vpn_network_status(client: State<InnernetClient>) -> NetworkStatus {
-    let status = client.status();
-    NetworkStatus {
-        profile: client.profile.clone(),
-        connected: !status.is_empty(),
-        peers: Vec::new(),
-    }
+pub async fn vpn_connect(app: tauri::AppHandle) -> Result<(), BlockchainError> {
+    let client = {
+        let state = innernet_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+        guard.clone()
+    };
+    client.connect().await.map_err(BlockchainError::from)
 }
 
 #[tauri::command]
-pub fn vpn_connect(_client: State<InnernetClient>) -> Result<(), String> {
-    Ok(())
+pub async fn vpn_disconnect(app: tauri::AppHandle) -> Result<(), BlockchainError> {
+    let client = {
+        let state = innernet_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+        guard.clone()
+    };
+    client.disconnect().await.map_err(BlockchainError::from)
 }
 
 #[tauri::command]
-pub fn vpn_disconnect(_client: State<InnernetClient>) -> Result<(), String> {
-    Ok(())
+pub async fn vpn_list_peers(app: tauri::AppHandle) -> Result<Vec<VpnPeer>, BlockchainError> {
+    let client = {
+        let state = innernet_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+        guard.clone()
+    };
+    client.list_peers().await.map_err(BlockchainError::from)
 }
 
 #[tauri::command]
-pub fn vpn_list_peers(_client: State<InnernetClient>) -> Vec<Peer> {
-    Vec::new()
+pub async fn vpn_add_peer(
+    app: tauri::AppHandle,
+    invitation_code: String,
+) -> Result<String, BlockchainError> {
+    let client = {
+        let state = innernet_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+        guard.clone()
+    };
+    client
+        .add_peer(&invitation_code)
+        .await
+        .map_err(BlockchainError::from)
 }
 
 #[tauri::command]
-pub fn vpn_add_peer(_client: State<InnernetClient>, peer: Peer) -> Result<(), String> {
-    println!("vpn_add_peer stub: {} ({})", peer.name, peer.address);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn vpn_ping_peer(_client: State<InnernetClient>, peer: Peer) -> Result<(), String> {
-    println!("vpn_ping_peer stub: {} ({})", peer.name, peer.address);
-    Ok(())
+pub async fn vpn_ping_peer(
+    app: tauri::AppHandle,
+    peer_ip: String,
+) -> Result<bool, BlockchainError> {
+    let client = {
+        let state = innernet_state(&app);
+        let guard = state
+            .lock()
+            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+        guard.clone()
+    };
+    client
+        .ping_peer(&peer_ip)
+        .await
+        .map_err(BlockchainError::from)
 }
 
 #[tauri::command]
 pub fn vpn_check_installation() -> bool {
-    true
+    crate::blockchain::InnernetClient::check_installation().is_ok()
 }

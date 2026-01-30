@@ -98,6 +98,16 @@ hex = "0.4" # Pour manipuler les signatures en string
 futures = "0.3.31"
 async-recursion = "1.1.1"
 
+
+# --- BLOCKCHAIN (Fabric & VPN) ---
+serde_yaml = "0.9" # Pour lire connection-profile.yaml
+tonic = { version = "0.14.3", features = [
+    "tls-ring",
+    "tls-webpki-roots",
+] } # Client gRPC asynchrone
+prost = "0.13" # Protocol Buffers (pour Tonic)
+
+
 # --- Dépendances de développement (Pour les tests) ---
 [dev-dependencies]
 tempfile = "3.10" # Manquant pour transactions/tests.rs

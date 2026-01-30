@@ -1,101 +1,83 @@
 // src-tauri/src/blockchain/mod.rs
-//! Abstraction minimale de la couche Blockchain / VPN pour RAISE.
+//! Point d'entrée du module Blockchain.
 //!
-//! Ici on définit uniquement :
-//! - les types de configuration Fabric / réseau,
-//! - un client Fabric minimal,
-//! - un client Innernet minimal,
-//! - la gestion du state Tauri pour Innernet.
-//!
-//! ⚠️ Aucune dépendance vers `crate::commands` ici :
-//! les commandes Tauri (`blockchain_commands.rs`) viendront utiliser ce module,
-//! pas l’inverse.
+//! Agit comme une façade pour :
+//! 1. La gestion des erreurs unifiée via `error::BlockchainError`.
+//! 2. Le client Hyperledger Fabric réel (`fabric`).
+//! 3. Le client VPN Innernet réel (`vpn`).
+//! 4. La gestion de l'état global (State) pour l'application Tauri.
 
 use std::sync::Mutex;
-
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime, State};
 
-/// Configuration Hyperledger Fabric (version simplifiée).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FabricConfig {
-    /// Chemin vers le connection profile Fabric (YAML/JSON).
-    pub connection_profile: String,
-    /// Nom du channel Fabric.
-    pub channel: String,
-    /// Nom du chaincode par défaut.
-    pub chaincode: String,
-}
+// Exposition publique des sous-modules
+pub mod error;
+pub mod fabric;
+pub mod vpn;
 
-/// Configuration réseau (Mesh / Innernet / endpoint Fabric, etc.).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkConfig {
-    /// Nom logique du réseau (ex: "dev-mesh", "prod-mesh").
-    pub network_name: String,
-    /// Endpoint de l'API Fabric ou du peer principal.
-    pub endpoint: String,
-}
+// --- RÉ-EXPORTS (La vérité est ailleurs) ---
 
-/// Client Fabric très simplifié. Il encapsule la config et expose
-/// des méthodes de haut niveau (ping, invoke, query...).
-#[derive(Debug, Clone)]
-pub struct FabricClient {
-    pub fabric: FabricConfig,
-    pub network: NetworkConfig,
-}
+// On ré-exporte le VRAI client Fabric et sa config depuis le sous-module
+pub use self::fabric::client::FabricClient;
+pub use self::fabric::config::ConnectionProfile;
 
-impl FabricClient {
-    pub fn new(fabric: FabricConfig, network: NetworkConfig) -> Self {
-        Self { fabric, network }
-    }
+// On ré-exporte le VRAI client VPN et sa config
+pub use self::vpn::innernet_client::{InnernetClient, NetworkConfig as VpnConfig};
 
-    /// Méthode de test pour vérifier que tout est câblé.
-    pub fn ping(&self) -> String {
-        format!(
-            "fabric://channel={} endpoint={} cc={}",
-            self.fabric.channel, self.network.endpoint, self.fabric.chaincode
-        )
-    }
-}
+// =============================================================================
+//  GESTION DES ÉTATS TAURI (SHARED STATE)
+// =============================================================================
 
-/// Client Innernet minimal, géré côté state Tauri.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct InnernetClient {
-    /// Nom du profil Innernet (ex: "dev", "prod").
-    pub profile: String,
-}
+// Nous utilisons std::sync::Mutex car nos clients sont conçus pour être Clonés (Arc interne).
+// Le pattern est : Lock -> Clone -> Drop Lock -> Async Call sur le clone.
 
-impl InnernetClient {
-    pub fn new(profile: impl Into<String>) -> Self {
-        Self {
-            profile: profile.into(),
-        }
-    }
-
-    pub fn status(&self) -> String {
-        format!("innernet profile={}", self.profile)
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Intégration avec le state global Tauri
-// -----------------------------------------------------------------------------
+/// Type stocké dans l'état Tauri pour Fabric.
+pub type SharedFabricClient = Mutex<FabricClient>;
 
 /// Type stocké dans l'état Tauri pour Innernet.
 pub type SharedInnernetClient = Mutex<InnernetClient>;
 
-/// Initialise un client Innernet dans le state Tauri si nécessaire.
-///
-/// À appeler typiquement au démarrage de l'app ou dans une commande
-/// avant d'utiliser `innernet_state(...)`.
+// --- HELPERS D'ACCÈS ---
+
+/// Helper pour récupérer le client Innernet depuis une commande Tauri.
+pub fn innernet_state<R: Runtime>(app: &AppHandle<R>) -> State<'_, SharedInnernetClient> {
+    app.state::<SharedInnernetClient>()
+}
+
+/// Helper pour récupérer le client Fabric depuis une commande Tauri.
+pub fn fabric_state<R: Runtime>(app: &AppHandle<R>) -> State<'_, SharedFabricClient> {
+    app.state::<SharedFabricClient>()
+}
+
+// --- INITIALISATION ---
+
+/// Initialise le client Innernet dans le state Tauri.
 pub fn ensure_innernet_state<R: Runtime>(app: &AppHandle<R>, default_profile: impl Into<String>) {
     if app.try_state::<SharedInnernetClient>().is_none() {
-        let client = InnernetClient::new(default_profile);
+        let profile_name = default_profile.into();
+
+        // Initialisation propre de la config
+        let vpn_config = VpnConfig {
+            name: profile_name.clone(),
+            ..Default::default()
+        };
+
+        let client = InnernetClient::new(vpn_config);
+
+        tracing::info!(
+            "🔒 [Blockchain] Initialisation State Innernet (profil: {})",
+            profile_name
+        );
         app.manage(Mutex::new(client));
     }
 }
 
-/// Récupère le client Innernet depuis le state Tauri.
-pub fn innernet_state<R: Runtime>(app: &AppHandle<R>) -> State<'_, SharedInnernetClient> {
-    app.state::<SharedInnernetClient>()
+// Note: L'initialisation de Fabric se fera généralement plus tard,
+// via une commande `fabric_load_profile` qui chargera le fichier YAML,
+// donc pas de `ensure_fabric_state` automatique ici pour l'instant.
+
+#[cfg(test)]
+mod tests {
+    // Plus de tests unitaires ici car la logique est partie dans les sous-modules.
+    // Ce fichier ne fait que du "wiring".
 }

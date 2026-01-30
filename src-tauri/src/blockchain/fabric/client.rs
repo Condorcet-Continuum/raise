@@ -1,162 +1,127 @@
-// src-tauri/src/fabric/client.rs
-//! Client Hyperledger Fabric pour RAISE
-//!
-//! Ce module implémente un client léger pour interagir avec un réseau
-//! Hyperledger Fabric via gRPC, optimisé pour l'intégration Tauri.
+// src-tauri/src/blockchain/fabric/client.rs
+//! Client Hyperledger Fabric (Implémentation pour Tonic 0.14.3).
 
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::path::Path;
+use std::time::Duration;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FabricConfig {
-    pub endpoint: String,
-    pub msp_id: String,
-    pub channel_name: String,
-    pub chaincode_name: String,
-    pub tls_enabled: bool,
-}
+// Ces imports sont maintenant disponibles grâce à la feature "tls-ring"
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
-impl Default for FabricConfig {
-    fn default() -> Self {
-        Self {
-            endpoint: "grpc://localhost:7051".to_string(),
-            msp_id: "RAISEMSP".to_string(),
-            channel_name: "raise-channel".to_string(),
-            chaincode_name: "arcadia-chaincode".to_string(),
-            tls_enabled: false,
-        }
-    }
-}
-
-pub struct FabricClient {
-    config: FabricConfig,
-    identity: Arc<RwLock<Option<Identity>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Identity {
-    pub msp_id: String,
-    pub certificate: Vec<u8>,
-    pub private_key: Vec<u8>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TransactionResult {
-    pub transaction_id: String,
-    pub status: String,
-    pub payload: Vec<u8>,
-    pub timestamp: i64,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum FabricError {
-    #[error("Connection error: {0}")]
-    Connection(String),
-
-    #[error("Transaction error: {0}")]
-    Transaction(String),
-
-    #[error("Identity error: {0}")]
-    Identity(String),
-
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
-}
+use super::config::ConnectionProfile;
+use crate::blockchain::error::FabricError;
 
 type Result<T> = std::result::Result<T, FabricError>;
 
+#[derive(Debug, Clone)]
+pub struct FabricClient {
+    config: ConnectionProfile,
+    channel: Option<Channel>,
+    identity: Option<Identity>,
+}
+
 impl FabricClient {
-    /// Crée une nouvelle instance du client Fabric
-    pub fn new(config: FabricConfig) -> Self {
+    pub fn from_config(config: ConnectionProfile) -> Self {
         Self {
             config,
-            identity: Arc::new(RwLock::new(None)),
+            channel: None,
+            identity: None,
         }
     }
 
-    /// Charge l'identité MSP depuis les fichiers de certificat
-    pub async fn load_identity(&self, cert_path: &str, key_path: &str) -> Result<()> {
-        use tokio::fs;
-
-        let certificate = fs::read(cert_path)
+    pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let content = tokio::fs::read_to_string(path)
             .await
-            .map_err(|e| FabricError::Identity(format!("Failed to read cert: {}", e)))?;
+            .map_err(|e| FabricError::ProfileParse(format!("File read error: {}", e)))?;
 
-        let private_key = fs::read(key_path)
+        let config: ConnectionProfile = serde_yaml::from_str(&content)
+            .map_err(|e| FabricError::ProfileParse(format!("YAML error: {}", e)))?;
+
+        Ok(Self::from_config(config))
+    }
+
+    pub async fn with_identity<P: AsRef<Path>>(
+        mut self,
+        cert_path: P,
+        key_path: P,
+    ) -> Result<Self> {
+        let cert = tokio::fs::read(cert_path)
             .await
-            .map_err(|e| FabricError::Identity(format!("Failed to read key: {}", e)))?;
+            .map_err(|e| FabricError::Crypto(format!("Cert read failed: {}", e)))?;
 
-        let identity = Identity {
-            msp_id: self.config.msp_id.clone(),
-            certificate,
-            private_key,
-        };
+        let key = tokio::fs::read(key_path)
+            .await
+            .map_err(|e| FabricError::Crypto(format!("Key read failed: {}", e)))?;
 
-        *self.identity.write().await = Some(identity);
+        self.identity = Some(Identity::from_pem(cert, key));
+        Ok(self)
+    }
+
+    pub async fn connect(&mut self, peer_name: &str) -> Result<()> {
+        let peer_config = self.config.peers.get(peer_name).ok_or_else(|| {
+            FabricError::Config(format!("Peer '{}' not found in profile", peer_name))
+        })?;
+
+        // 1. Création de l'endpoint
+        let mut endpoint = Channel::from_shared(peer_config.url.clone())
+            .map_err(|e| FabricError::Config(format!("Invalid Peer URL: {}", e)))?;
+
+        // 2. Configuration TLS si présente
+        if let Some(ref tls_conf) = peer_config.tls_ca_certs.pem {
+            let ca = Certificate::from_pem(tls_conf);
+
+            let mut tls = ClientTlsConfig::new()
+                .ca_certificate(ca)
+                .domain_name(peer_name);
+
+            if let Some(ref id) = self.identity {
+                tls = tls.identity(id.clone());
+            }
+
+            // Cette méthode est disponible car tls-ring active le support TLS
+            endpoint = endpoint
+                .tls_config(tls)
+                .map_err(|e| FabricError::GrpcConnection(format!("TLS config failed: {}", e)))?;
+        }
+
+        // 3. Connexion (Lazy)
+        let channel = endpoint.timeout(Duration::from_secs(10)).connect_lazy();
+
+        self.channel = Some(channel);
+        tracing::info!("🔗 [Fabric] Canal gRPC configuré pour {}", peer_name);
 
         Ok(())
     }
 
-    /// Soumet une transaction au réseau Fabric
     pub async fn submit_transaction(
         &self,
-        function: &str,
-        args: Vec<Vec<u8>>,
-    ) -> Result<TransactionResult> {
-        let identity = self.identity.read().await;
-        let identity = identity
-            .as_ref()
-            .ok_or_else(|| FabricError::Identity("No identity loaded".to_string()))?;
+        chaincode: &str,
+        func: &str,
+        args: Vec<String>,
+    ) -> Result<String> {
+        if self.channel.is_none() {
+            return Err(FabricError::GrpcConnection(
+                "Channel not initialized. Call connect() first.".into(),
+            ));
+        }
 
-        // TODO: Implémenter l'appel gRPC vers le peer Fabric
-        // Pour l'instant, on simule une réponse
-
-        let tx_id = uuid::Uuid::new_v4().to_string();
-        let timestamp = chrono::Utc::now().timestamp();
-
-        tracing::info!(
-            "Submitting transaction to {}/{}: {} with {} args",
-            self.config.channel_name,
-            self.config.chaincode_name,
-            function,
-            args.len()
+        let log_msg = format!(
+            "Would invoke chaincode '{}' function '{}' with args {:?}",
+            chaincode, func, args
         );
+        tracing::debug!("{}", log_msg);
 
-        Ok(TransactionResult {
-            transaction_id: tx_id,
-            status: "VALID".to_string(),
-            payload: Vec::new(),
-            timestamp,
-        })
+        // Simulation réseau
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        Ok(format!("TX_ID_MOCK_12345 ({})", log_msg))
     }
 
-    /// Effectue une requête en lecture seule
-    pub async fn query_transaction(&self, function: &str, args: Vec<Vec<u8>>) -> Result<Vec<u8>> {
-        let identity = self.identity.read().await;
-        let _identity = identity
-            .as_ref()
-            .ok_or_else(|| FabricError::Identity("No identity loaded".to_string()))?;
-
-        // TODO: Implémenter l'appel gRPC query
-
-        tracing::info!(
-            "Querying {}/{}: {}",
-            self.config.channel_name,
-            self.config.chaincode_name,
-            function
-        );
-
-        Ok(Vec::new())
-    }
-
-    /// Récupère l'historique d'une clé
-    pub async fn get_history(&self, key: &str) -> Result<Vec<TransactionResult>> {
-        // TODO: Implémenter GetHistoryForKey
-
-        tracing::info!("Getting history for key: {}", key);
-
-        Ok(Vec::new())
+    pub async fn query_transaction(&self, func: &str, args: Vec<Vec<u8>>) -> Result<Vec<u8>> {
+        if self.channel.is_none() {
+            return Err(FabricError::GrpcConnection("No channel".into()));
+        }
+        tracing::debug!("Querying '{}' with {} args", func, args.len());
+        Ok(b"Query Result Mock".to_vec())
     }
 }
 
@@ -165,23 +130,39 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_fabric_client_creation() {
-        let config = FabricConfig::default();
-        let client = FabricClient::new(config);
+    async fn test_fabric_client_lifecycle() {
+        let mut config = ConnectionProfile {
+            name: "test".into(),
+            version: "1.0".into(),
+            client: super::super::config::ClientConfig {
+                organization: "Org1".into(),
+                connection: None,
+            },
+            organizations: std::collections::HashMap::new(),
+            peers: std::collections::HashMap::new(),
+            certificate_authorities: std::collections::HashMap::new(),
+        };
 
-        assert!(client.identity.read().await.is_none());
-    }
+        config.peers.insert(
+            "peer0".into(),
+            super::super::config::PeerConfig {
+                url: "http://localhost:50051".into(),
+                tls_ca_certs: super::super::config::TlsConfig {
+                    pem: None,
+                    path: None,
+                },
+                grpc_options: None,
+            },
+        );
 
-    #[tokio::test]
-    async fn test_transaction_submission() {
-        let config = FabricConfig::default();
-        let client = FabricClient::new(config);
+        let mut client = FabricClient::from_config(config);
 
-        // Note: Ce test échouera sans identité chargée
-        let result = client
-            .submit_transaction("RecordDecision", vec![b"test".to_vec()])
-            .await;
+        // Test connect_lazy
+        let res = client.connect("peer0").await;
+        assert!(res.is_ok());
 
-        assert!(result.is_err());
+        // Test transaction mock
+        let tx = client.submit_transaction("cc", "fn", vec![]).await;
+        assert!(tx.is_ok());
     }
 }

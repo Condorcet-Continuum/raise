@@ -1,123 +1,106 @@
-# Module `fabric`
+# Module `fabric` - RAISE Core
 
 ## 🎯 Objectif
 
-Le module **`fabric`** fournit l'implémentation bas niveau du client Hyperledger Fabric. Il est conçu pour être :
+Le module **`fabric`** fournit l'intégration native de Hyperledger Fabric au sein de l'écosystème RAISE. Il permet une traçabilité immuable et souveraine des processus de conception.
 
-1.  **Asynchrone** (basé sur `tokio`).
-2.  **Thread-safe** (les identités sont protégées par `Arc<RwLock>`).
-3.  **Léger** (évite d'embarquer le SDK Fabric Go complet).
+Il est conçu pour être :
 
-Il gère la cryptographie (chargement des certificats) et la communication (gRPC) avec les pairs du réseau.
+1.  **Asynchrone** : Basé sur `tokio` et `tonic` pour ne pas bloquer l'UI.
+2.  **Sécurisé** : Support complet du **mTLS** (mutual TLS) via le moteur cryptographique `ring`.
+3.  **Flexible** : Configuration via des _Connection Profiles_ standards (YAML/JSON).
+4.  **Thread-safe** : Géré via `Arc<Mutex>` pour un accès concurrent sûr depuis Tauri.
 
 ---
 
 ## 🏗️ Architecture du Client
 
-Le struct principal `FabricClient` agit comme une façade pour toutes les interactions blockchain.
+Le client utilise une architecture de façade asynchrone.
 
 ```mermaid
 classDiagram
     class FabricClient {
-        -FabricConfig config
-        -Arc~RwLock~ identity
-        +new(config)
-        +load_identity(cert, key)
-        +submit_transaction()
-        +query_transaction()
+        -ConnectionProfile config
+        -Identity identity
+        -Option~GatewayClient~ inner
+        +from_config(profile)
+        +submit_transaction(chaincode, func, args)
+        +query_transaction(func, args)
     }
 
-    class Identity {
-        +String msp_id
-        +Vec~u8~ certificate
-        +Vec~u8~ private_key
+    class ConnectionProfile {
+        +String name
+        +ClientConfig client
+        +Map organizations
+        +Map peers
     }
 
-    class FabricConfig {
-        +String endpoint
-        +String channel_name
-        +String chaincode_name
-    }
-
-    FabricClient *-- FabricConfig
-    FabricClient o-- Identity : "Thread-safe Option"
-
+    FabricClient *-- ConnectionProfile
 ```
 
 ---
 
-## ⚙️ Configuration (`FabricConfig`)
+## ⚙️ Configuration & Connexion
 
-La configuration est définie via la structure `FabricConfig`. Elle détermine la cible de connexion par défaut.
+Le client se configure désormais via un `ConnectionProfile` (norme Hyperledger Fabric).
 
-| Champ            | Type     | Description                | Valeur par défaut         |
-| ---------------- | -------- | -------------------------- | ------------------------- |
-| `endpoint`       | `String` | URL gRPC du Peer cible     | `"grpc://localhost:7051"` |
-| `msp_id`         | `String` | ID de l'organisation (MSP) | `"RAISEMSP"`              |
-| `channel_name`   | `String` | Canal cible                | `"raise-channel"`         |
-| `chaincode_name` | `String` | Smart Contract cible       | `"arcadia-chaincode"`     |
-| `tls_enabled`    | `bool`   | Activation du TLS          | `false`                   |
+### 1. Authentification mTLS
 
----
+Le module gère automatiquement l'authentification mutuelle :
 
-## 🔐 Gestion des Identités
+- **Certificat Client** : Utilisé pour signer les propositions.
+- **Clé Privée** : Stockée de manière sécurisée et jamais exposée.
+- **Root CA** : Pour vérifier l'identité des Peers du réseau.
 
-Le client est initialisé **sans identité**. Une identité (Certificat X.509 + Clé Privée) doit être chargée dynamiquement avant de pouvoir signer des transactions.
+### 2. État Partagé (Tauri)
 
-### Chargement d'Identité
-
-L'opération est asynchrone et thread-safe :
+Dans RAISE, le client est injecté dans le State Tauri :
 
 ```rust
-// Exemple d'utilisation
-client.load_identity(
-    "./crypto/users/Admin@org1/msp/signcerts/cert.pem",
-    "./crypto/users/Admin@org1/msp/keystore/priv_key"
-).await?;
+app.manage(Mutex::new(FabricClient::from_config(profile)) as SharedFabricClient);
 
 ```
 
-Si aucune identité n'est chargée, les appels de transaction échoueront avec l'erreur `FabricError::Identity("No identity loaded")`.
-
 ---
 
-## 📡 Transactions & Requêtes
+## 📡 Opérations de Ledger
 
 ### 1. Soumission (`submit_transaction`)
 
-Utilisé pour modifier l'état du ledger (écritures).
+**Action :** Écriture sur le Ledger (Consensus requis).
 
-- **Input** : Nom de la fonction, Arguments (bytes).
-- **Output** : `TransactionResult` contenant un ID de transaction (UUID v4) et le timestamp.
+- **Processus** : Forge une proposition gRPC, la signe avec l'identité locale, et l'envoie aux peers pour endossement.
+- **Retour** : Un `Result<String, BlockchainError>` contenant l'ID de transaction unique.
 
-> ⚠️ **État Actuel (Mock)** : L'implémentation actuelle simule une transaction réussie ("VALID") sans effectuer l'appel réseau gRPC réel. Les logs tracent l'appel pour le débogage.
+### 2. Requête (`query_transaction`)
 
-### 2. Lecture (`query_transaction`)
+**Action :** Lecture optimisée (Pas de consensus nécessaire).
 
-Utilisé pour lire l'état sans consensus.
-
-- **Input** : Nom de la fonction, Arguments.
-- **Output** : Payload brut (`Vec<u8>`).
+- **Usage** : Idéal pour récupérer l'état actuel d'un composant ou d'une règle sans latence de bloc.
 
 ---
 
-## 🚨 Gestion des Erreurs
+## 🚨 Gestion des Erreurs Typées
 
-Le module utilise `thiserror` pour des erreurs typées :
+Le module utilise l'énumération `BlockchainError` pour une remontée d'erreur précise vers le frontend :
 
-- `FabricError::Connection` : Échec réseau gRPC.
-- `FabricError::Identity` : Certificat manquant ou invalide.
-- `FabricError::Transaction` : Rejet par le chaincode ou le peer.
-- `FabricError::Serialization` : Erreur de formatage JSON.
+- `BlockchainError::Connection` : Échec de liaison gRPC ou mTLS.
+- `BlockchainError::Identity` : Certificat expiré ou clé invalide.
+- `BlockchainError::Transaction` : Rejet par les politiques d'endossement du Chaincode.
+- `BlockchainError::Parse` : Erreur lors du décodage du profil de connexion.
 
-## 🗺️ Roadmap Implémentation
+---
 
-- [x] Structures de données (`Config`, `Identity`).
-- [x] Chargement asynchrone des certificats X.509.
-- [x] Architecture Thread-safe (`Arc<RwLock>`).
-- [ ] **Critique** : Remplacer les Mocks par de vrais appels gRPC via `tonic`.
-- [ ] Implémenter le parsing des réponses Chaincode.
+## 🗺️ Roadmap & État d'Avancement
+
+- [x] Structures de données conformes aux spécifications Fabric.
+- [x] Moteur de transport gRPC avec `Tonic`.
+- [x] Support mTLS (Certificats X.509).
+- [x] Intégration asynchrone dans le State Tauri.
+- [ ] Support du Service de Commande (Ordering Service) complet.
+- [ ] Gestion des événements (Event Listeners) du ledger.
 
 ```
+
 
 ```

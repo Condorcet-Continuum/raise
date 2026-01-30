@@ -15,11 +15,13 @@ use tokio::sync::Mutex as AsyncMutex;
 
 // --- IMPORTS RAISE ---
 use raise::ai::training::dataset;
+use raise::blockchain::{ConnectionProfile, FabricClient, SharedFabricClient};
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
     json_db_commands, model_commands, rules_commands, traceability_commands, utils_commands,
     workflow_commands,
 };
+use std::sync::Mutex; // On s'assure d'avoir le Mutex standard pour la blockchain
 
 // --- IMPORT IA NATIF ---
 use raise::ai::llm::candle_engine::CandleLlmEngine;
@@ -123,6 +125,22 @@ fn main() {
 
             let app_handle = app.handle();
             raise::blockchain::ensure_innernet_state(app_handle, "default");
+
+            // --- INITIALISATION FABRIC (AJOUT) ---
+            let default_fabric_profile = ConnectionProfile {
+                name: "pending".into(),
+                version: "1.0".into(),
+                client: raise::blockchain::fabric::config::ClientConfig {
+                    organization: "none".into(),
+                    connection: None,
+                },
+                organizations: std::collections::HashMap::new(),
+                peers: std::collections::HashMap::new(),
+                certificate_authorities: std::collections::HashMap::new(),
+            };
+            app.manage(
+                Mutex::new(FabricClient::from_config(default_fabric_profile)) as SharedFabricClient,
+            );
 
             // --- CHARGEMENT IA NATIF ---
             let native_handle = app.handle().clone();
