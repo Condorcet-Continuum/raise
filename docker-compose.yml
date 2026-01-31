@@ -6,7 +6,7 @@ services:
     image: qdrant/qdrant:latest
     container_name: raise_qdrant
     # --- INTERRUPTEUR ON/OFF ---
-    profiles: ["core", "qdrant"] 
+    profiles: ["core", "qdrant"]
     # ---------------------------
     restart: unless-stopped
     ports:
@@ -20,7 +20,7 @@ services:
   # 📚 LEANN (Nouvelle Mémoire Légère)
   leann:
     # On construit l'image depuis le dossier ./leann (où se trouve le Dockerfile)
-    build: 
+    build:
       context: ./leann
     container_name: raise_leann
     # --- INTERRUPTEUR ON/OFF ---
@@ -65,3 +65,47 @@ services:
       --n-gpu-layers 99
       --ctx-size 8192
       --batch-size 512
+
+  # ⛓️ BLOCKCHAIN (Hyperledger Fabric & Chaincode)
+  chaincode:
+    # On construit depuis la racine (.) pour avoir accès à 'shared'
+    build:
+      context: .
+      dockerfile: blockchain-engine/chaincode/Dockerfile
+    container_name: raise_chaincode
+    # --- INTERRUPTEUR ON/OFF ---
+    profiles: ["blockchain", "core"]
+    # ---------------------------
+    restart: unless-stopped
+    ports:
+      - "9999:9999" # Port gRPC du Chaincode
+    environment:
+      - CHAINCODE_CC_ID=raise-cc:v1 # ID utilisé par Fabric
+      - CHAINCODE_ADDRESS=0.0.0.0:9999
+    networks:
+      - raise_net
+
+  # Peer Fabric (Nœud de validation)
+  # Note: Configuration minimale pour l'instant. Nécessitera des certificats plus tard.
+  peer:
+    image: hyperledger/fabric-peer:2.5
+    container_name: raise_peer
+    profiles: ["blockchain"]
+    environment:
+      - CORE_PEER_ID=peer0.org1.example.com
+      - CORE_PEER_ADDRESS=peer:7051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
+      - CORE_PEER_CHAINCODEADDRESS=peer:7052
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      # Mode Dev pour tester sans certificats complexes au début
+      - CORE_PEER_TLS_ENABLED=false
+    ports:
+      - "7051:7051"
+    depends_on:
+      - chaincode
+    networks:
+      - raise_net
+
+networks:
+  raise_net:
+    driver: bridge

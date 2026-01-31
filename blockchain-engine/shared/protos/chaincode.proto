@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package chaincode;
+
+// Message envoyé par le Peer vers le Chaincode (Instructions)
+message ChaincodeMessage {
+    enum Type {
+        UNDEFINED = 0;
+        REGISTER = 1;
+        REGISTERED = 2;
+        INIT = 3;
+        READY = 4;
+        TRANSACTION = 5;
+        COMPLETED = 6;
+        ERROR = 7;
+        RESPONSE = 13;
+    }
+    
+    Type type = 1;
+    
+    // Remplacé google.protobuf.timestamp par un int64 (Unix Epoch)
+    // Cela simplifie la compilation et la gestion en Rust
+    int64 timestamp_seconds = 2; 
+    
+    bytes payload = 3;
+    string txid = 4;
+}
+
+// Le service gRPC que votre binaire Rust doit implémenter
+service Chaincode {
+    rpc Chat(stream ChaincodeMessage) returns (stream ChaincodeMessage) {}
+}

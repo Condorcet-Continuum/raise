@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "src-tauri/tools/jsondb_cli"]
+members = ["src-tauri","src-tauri/tools/jsondb_cli"]
 exclude = ["src-wasm", "wasm-modules"]
 resolver = "2"
 

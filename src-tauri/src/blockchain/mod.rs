@@ -15,6 +15,8 @@ pub mod error;
 pub mod fabric;
 pub mod vpn;
 
+//pub mod dev_client;
+
 // --- RÉ-EXPORTS (La vérité est ailleurs) ---
 
 // On ré-exporte le VRAI client Fabric et sa config depuis le sous-module

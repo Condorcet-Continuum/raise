@@ -27,6 +27,7 @@ regex = "1.10"
 
 # --- Asynchrone & Runtime ---
 tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
 async-trait = "0.1"
 lru = "0.16.3"
 
@@ -104,9 +105,12 @@ serde_yaml = "0.9" # Pour lire connection-profile.yaml
 tonic = { version = "0.14.3", features = [
     "tls-ring",
     "tls-webpki-roots",
+    "transport",
+    "codegen",
 ] } # Client gRPC asynchrone
 prost = "0.13" # Protocol Buffers (pour Tonic)
 
+# raise-shared = { path = "../blockchain-engine/shared" } # Le pont vers vos définitions Protobuf
 
 # --- Dépendances de développement (Pour les tests) ---
 [dev-dependencies]
