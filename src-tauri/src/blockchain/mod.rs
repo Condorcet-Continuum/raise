@@ -11,32 +11,38 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Runtime, State};
 
 // Exposition publique des sous-modules
+pub mod bridge;
+pub mod consensus;
+pub mod crypto;
 pub mod error;
 pub mod fabric;
+pub mod p2p;
+pub mod storage;
+pub mod sync;
 pub mod vpn;
 
-//pub mod dev_client;
+// Réexportations stratégiques pour le moteur Arcadia
+pub use consensus::ArcadiaConsensus;
+pub use p2p::swarm::create_swarm;
+pub use storage::chain::Ledger;
+pub use storage::commit::ArcadiaCommit;
+pub use sync::SyncEngine;
 
-// --- RÉ-EXPORTS (La vérité est ailleurs) ---
+// --- RÉ-EXPORTS ---
 
-// On ré-exporte le VRAI client Fabric et sa config depuis le sous-module
 pub use self::fabric::client::FabricClient;
 pub use self::fabric::config::ConnectionProfile;
 
-// On ré-exporte le VRAI client VPN et sa config
+// On ré-exporte le client VPN et sa config (NetworkConfig renommé en VpnConfig pour la clarté)
 pub use self::vpn::innernet_client::{InnernetClient, NetworkConfig as VpnConfig};
 
 // =============================================================================
 //  GESTION DES ÉTATS TAURI (SHARED STATE)
 // =============================================================================
 
-// Nous utilisons std::sync::Mutex car nos clients sont conçus pour être Clonés (Arc interne).
-// Le pattern est : Lock -> Clone -> Drop Lock -> Async Call sur le clone.
-
-/// Type stocké dans l'état Tauri pour Fabric.
+/// Type alias pour le client Fabric partagé
 pub type SharedFabricClient = Mutex<FabricClient>;
-
-/// Type stocké dans l'état Tauri pour Innernet.
+/// Type alias pour le client VPN partagé
 pub type SharedInnernetClient = Mutex<InnernetClient>;
 
 // --- HELPERS D'ACCÈS ---
@@ -58,7 +64,7 @@ pub fn ensure_innernet_state<R: Runtime>(app: &AppHandle<R>, default_profile: im
     if app.try_state::<SharedInnernetClient>().is_none() {
         let profile_name = default_profile.into();
 
-        // Initialisation propre de la config
+        // CORRECTION CLIPPY : Initialisation directe au lieu de reassignment
         let vpn_config = VpnConfig {
             name: profile_name.clone(),
             ..Default::default()
@@ -74,12 +80,53 @@ pub fn ensure_innernet_state<R: Runtime>(app: &AppHandle<R>, default_profile: im
     }
 }
 
-// Note: L'initialisation de Fabric se fera généralement plus tard,
-// via une commande `fabric_load_profile` qui chargera le fichier YAML,
-// donc pas de `ensure_fabric_state` automatique ici pour l'instant.
+/// Initialise un client Fabric vide (en attente de chargement de profil).
+pub fn ensure_fabric_state<R: Runtime>(app: &AppHandle<R>) {
+    if app.try_state::<SharedFabricClient>().is_none() {
+        let empty_profile = ConnectionProfile {
+            name: "pending".into(),
+            version: "1.0".into(),
+            client: self::fabric::config::ClientConfig {
+                organization: "unknown".into(),
+                connection: None,
+            },
+            organizations: std::collections::HashMap::new(),
+            peers: std::collections::HashMap::new(),
+            certificate_authorities: std::collections::HashMap::new(),
+        };
+
+        let client = FabricClient::from_config(empty_profile);
+        app.manage(Mutex::new(client));
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    // Plus de tests unitaires ici car la logique est partie dans les sous-modules.
-    // Ce fichier ne fait que du "wiring".
+    use super::*;
+
+    #[test]
+    fn test_vpn_config_initialization() {
+        // Test de la logique d'initialisation propre
+        let config = VpnConfig {
+            name: "test-mesh".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(config.name, "test-mesh");
+    }
+
+    #[test]
+    fn test_fabric_client_reexport() {
+        let profile = ConnectionProfile {
+            name: "test".into(),
+            version: "1.0".into(),
+            client: self::fabric::config::ClientConfig {
+                organization: "Org1".into(),
+                connection: None,
+            },
+            organizations: std::collections::HashMap::new(),
+            peers: std::collections::HashMap::new(),
+            certificate_authorities: std::collections::HashMap::new(),
+        };
+        let _client = FabricClient::from_config(profile);
+    }
 }

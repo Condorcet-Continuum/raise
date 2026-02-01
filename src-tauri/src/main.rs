@@ -10,11 +10,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use futures::StreamExt;
 use tauri::Manager;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::Mutex as AsyncMutex; // Nécessaire pour select_next_some() sur le Swarm
 
 // --- IMPORTS RAISE ---
 use raise::ai::training::dataset;
+use raise::blockchain::p2p::swarm::create_swarm;
+use raise::blockchain::storage::chain::Ledger;
+use raise::blockchain::sync::engine::SyncEngine;
 use raise::blockchain::{ConnectionProfile, FabricClient, SharedFabricClient};
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
@@ -22,6 +26,14 @@ use raise::commands::{
     workflow_commands,
 };
 use std::sync::Mutex; // On s'assure d'avoir le Mutex standard pour la blockchain
+
+// --- BRIDGE, CONSENSUS & P2P ---
+use libp2p::swarm::SwarmEvent;
+use libp2p::{gossipsub, kad};
+use raise::blockchain::bridge::ArcadiaBridge;
+use raise::blockchain::consensus::{ConsensusEngine, Vote}; // Ajout du moteur de consensus
+use raise::blockchain::p2p::behavior::ArcadiaBehaviorEvent;
+use raise::blockchain::p2p::protocol::ArcadiaNetMessage;
 
 // --- IMPORT IA NATIF ---
 use raise::ai::llm::candle_engine::CandleLlmEngine;
@@ -51,6 +63,9 @@ use raise::commands::ai_commands::DlState;
 
 use raise::spatial_engine;
 
+// FIX CLIPPY FINAL : On autorise le maintien du verrou pendant un await pour toute la fonction main.
+// C'est nécessaire car list_peers() emprunte le client protégé par Mutex, et sans risque ici (setup unique).
+#[allow(clippy::await_holding_lock)]
 fn main() {
     // [MODIFICATION] Chargement explicite du .env au démarrage
     dotenvy::dotenv().ok();
@@ -110,13 +125,14 @@ fn main() {
 
             // 5. INJECTION ÉTATS
             app.manage(config);
+            let storage_engine = storage.clone();
             app.manage(storage);
             app.manage(plugin_mgr.clone()); // On partage l'Arc avec Tauri
 
-            // CORRECTION E0308 : Le compilateur attend std::sync::Mutex pour AppState
-            app.manage(AppState {
+            let app_state = Arc::new(AppState {
                 model: std::sync::Mutex::new(ProjectModel::default()),
             });
+            app.manage(app_state.clone());
 
             // Pour WorkflowStore, on conserve AsyncMutex car il est géré comme un type autonome
             app.manage(AsyncMutex::new(WorkflowStore::default()));
@@ -141,6 +157,40 @@ fn main() {
             app.manage(
                 Mutex::new(FabricClient::from_config(default_fabric_profile)) as SharedFabricClient,
             );
+
+            // --- INITIALISATION RÉSEAU ARCADIA ---
+            let local_key = libp2p::identity::Keypair::generate_ed25519();
+            // Récupération de l'ID de pair local pour l'auto-vote
+            let local_peer_id = local_key.public().to_peer_id().to_string();
+            let swarm_res = tauri::async_runtime::block_on(async { create_swarm(local_key).await });
+
+            if let Ok(swarm) = swarm_res {
+                // On encapsule le Swarm et le Ledger pour un accès thread-safe
+                app.manage(AsyncMutex::new(swarm));
+                app.manage(Mutex::new(Ledger::new()));
+                app.manage(Mutex::new(SyncEngine::new()));
+
+                // --- INITIALISATION CONSENSUS (NOUVEAU) ---
+                // On récupère les pairs VPN Innernet pour définir les autorités
+                let innernet = raise::blockchain::innernet_state(app.handle());
+
+                // On appelle list_peers() directement. L'attribut #[allow] sur main() gère le warning.
+                // Le compilateur est satisfait car le MutexGuard vit aussi longtemps que la Future.
+                let peers_res = tauri::async_runtime::block_on(async {
+                    innernet.lock().unwrap().list_peers().await
+                });
+
+                if let Ok(peers) = peers_res {
+                    // On initialise le moteur avec un quorum par défaut de 50%
+                    let consensus = ConsensusEngine::new(&peers, 0.5);
+                    app.manage(AsyncMutex::new(consensus));
+                    println!("✅ [Arcadia] Swarm, Ledger et Consensus (Quorum 50%) initialisés.");
+                } else {
+                    eprintln!("⚠️ [Arcadia] Impossible de récupérer les pairs VPN pour le Consensus.");
+                }
+            } else {
+                eprintln!("❌ [Arcadia] Échec du démarrage du réseau P2P.");
+            }
 
             // --- CHARGEMENT IA NATIF ---
             let native_handle = app.handle().clone();
@@ -217,6 +267,97 @@ fn main() {
                 }
             });
 
+            // --- BOUCLE D'ÉVÉNEMENTS P2P ARCADIA ---
+            let swarm_handle = app.handle().clone();
+            let storage_for_p2p = storage_engine;
+            let app_state_for_p2p = app_state;
+            let local_id_for_vote = local_peer_id;
+
+            tauri::async_runtime::spawn(async move {
+                let swarm_state =
+                    swarm_handle.state::<AsyncMutex<
+                        libp2p::Swarm<raise::blockchain::p2p::behavior::ArcadiaBehavior>,
+                    >>();
+
+                // Accès au moteur de consensus pour validation
+                let consensus_state = swarm_handle.state::<AsyncMutex<ConsensusEngine>>();
+
+                println!("🌐 [Arcadia] Écoute réseau active (Mode Consensus Strict + Auto-Vote)...");
+
+                let mut swarm = swarm_state.lock().await;
+
+                loop {
+                    tokio::select! {
+                        event = swarm.select_next_some() => match event {
+                            // Interception des messages Gossipsub (Commits et Votes)
+                            SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
+                                if let Ok(net_msg) = serde_json::from_slice::<ArcadiaNetMessage>(&message.data) {
+                                    let mut engine = consensus_state.lock().await;
+
+                                    match net_msg {
+                                        // 1. Un pair diffuse un nouveau commit
+                                        ArcadiaNetMessage::AnnounceCommit(commit) => {
+                                            // Vérification immédiate de l'autorité (VPN mesh)
+                                            if engine.verify_authority(&commit) {
+                                                println!("📥 [Arcadia] Commit {} proposé par authority validée. Enregistrement...", commit.id);
+                                                let _ = engine.register_proposal(commit.clone());
+
+                                                // --- LOGIQUE AUTO-VOTE ---
+                                                // Si le commit est valide, notre nœud émet son propre vote immédiatement
+                                                let my_vote = Vote {
+                                                    commit_id: commit.id.clone(),
+                                                    validator_key: local_id_for_vote.clone(),
+                                                    signature: vec![1, 0, 1, 0], // Simulation signature simplifiée
+                                                };
+
+                                                if let Ok(vote_data) = serde_json::to_vec(&ArcadiaNetMessage::SubmitVote(my_vote)) {
+                                                    let topic = gossipsub::IdentTopic::new("arcadia-consensus");
+                                                    let _ = swarm.behaviour_mut().gossipsub.publish(topic, vote_data);
+                                                    println!("🗳️ [Arcadia] Auto-vote émis pour commit: {}", commit.id);
+                                                }
+                                            }
+                                        },
+
+                                        // 2. Réception d'un vote individuel
+                                        ArcadiaNetMessage::SubmitVote(vote) => {
+                                            // On traite le vote. Si le quorum est atteint, le moteur retourne le commit final
+                                            match engine.process_vote(vote) {
+                                                Ok(Some(final_commit)) => {
+                                                    println!("⚖️ [Consensus] Quorum atteint pour commit: {} ! Application...", final_commit.id);
+
+                                                    // Déclenchement du Bridge pour la réconciliation (Persistance + Mémoire)
+                                                    let bridge = ArcadiaBridge::new(&storage_for_p2p, &app_state_for_p2p);
+                                                    if let Err(e) = bridge.process_new_commit(&final_commit).await {
+                                                        eprintln!("❌ [Bridge] Échec de synchronisation finale: {}", e);
+                                                    }
+                                                    engine.finalize_commit(&final_commit.id);
+                                                },
+                                                Ok(None) => {}, // Vote valide enregistré, quorum non encore atteint
+                                                Err(e) => eprintln!("⚠️ [Consensus] Vote rejeté: {}", e),
+                                            }
+                                        },
+                                        _ => {}
+                                    }
+                                }
+                            },
+
+                            // Découverte de pairs via Kademlia
+                            SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Kademlia(kad::Event::OutboundQueryProgressed {
+                                result: kad::QueryResult::GetClosestPeers(Ok(ok)), ..
+                            })) => {
+                                for peer in ok.peers {
+                                    println!("🤝 [Arcadia] Pair découvert: {:?}", peer);
+                                }
+                            },
+
+                            SwarmEvent::NewListenAddr { address, .. } => {
+                                println!("📡 [Arcadia] Écoute locale sur: {:?}", address);
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -270,6 +411,10 @@ fn main() {
             blockchain_commands::vpn_add_peer,
             blockchain_commands::vpn_ping_peer,
             blockchain_commands::vpn_check_installation,
+            // Commandes Arcadia (P2P Souverain)
+            blockchain_commands::arcadia_broadcast_mutation,
+            blockchain_commands::arcadia_get_sync_status,
+            blockchain_commands::arcadia_get_ledger_info,
             // Commandes Génétiques
             genetics_commands::run_architecture_optimization,
             genetics_commands::debug_genetics_ping,
@@ -295,7 +440,6 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-// CORRECTION E0277 : run_app_migrations doit être async pour utiliser .await
 async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> anyhow::Result<()> {
     let migrator = Migrator::new(storage, space, db);
     let migrations = vec![

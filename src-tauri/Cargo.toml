@@ -101,6 +101,20 @@ async-recursion = "1.1.1"
 
 
 # --- BLOCKCHAIN (Fabric & VPN) ---
+libp2p = { version = "0.56", features = [
+    "kad",
+    "gossipsub",
+    "request-response",
+    "cbor",
+    "macros",
+    "tcp",
+    "noise",
+    "yamux",
+    "dns",
+    "tokio",
+] }
+getrandom = { version = "0.2", features = ["js"] }
+
 serde_yaml = "0.9" # Pour lire connection-profile.yaml
 tonic = { version = "0.14.3", features = [
     "tls-ring",

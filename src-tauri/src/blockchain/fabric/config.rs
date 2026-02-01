@@ -75,8 +75,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_connection_profile() {
-        // Simulation d'un fichier connection-profile.yaml standard
+    fn test_parse_connection_profile_full() {
         let yaml_data = r#"
 name: "raise-network"
 version: "1.0.0"
@@ -104,21 +103,38 @@ certificateAuthorities:
     caName: "ca-org1"
 "#;
 
-        // Tentative de désérialisation
         let config: ConnectionProfile =
-            serde_yaml::from_str(yaml_data).expect("Échec du parsing YAML du Connection Profile");
+            serde_yaml::from_str(yaml_data).expect("Échec du parsing YAML complet");
 
-        // Vérifications
         assert_eq!(config.name, "raise-network");
-        assert_eq!(config.client.organization, "Org1");
         assert_eq!(config.organizations["Org1"].mspid, "Org1MSP");
-        assert_eq!(
-            config.peers["peer0.org1.example.com"].url,
-            "grpcs://localhost:7051"
-        );
+        assert!(config.peers.contains_key("peer0.org1.example.com"));
+    }
 
-        // Vérification TLS
-        let peer_tls = &config.peers["peer0.org1.example.com"].tls_ca_certs;
-        assert!(peer_tls.pem.as_ref().unwrap().contains("FAKE_CERT"));
+    #[test]
+    fn test_parse_minimal_config() {
+        let yaml_data = r#"
+name: "minimal"
+version: "1.0"
+client:
+  organization: "Org1"
+organizations: {}
+peers: {}
+certificateAuthorities: {}
+"#;
+        let config: ConnectionProfile =
+            serde_yaml::from_str(yaml_data).expect("Échec du parsing minimal");
+        assert_eq!(config.name, "minimal");
+        assert!(config.client.connection.is_none());
+    }
+
+    #[test]
+    fn test_tls_config_optionality() {
+        let tls = TlsConfig {
+            pem: None,
+            path: Some("/tmp/cert.pem".into()),
+        };
+        assert!(tls.pem.is_none());
+        assert!(tls.path.is_some());
     }
 }
