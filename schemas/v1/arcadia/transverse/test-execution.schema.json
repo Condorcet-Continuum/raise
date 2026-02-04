@@ -3,15 +3,32 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/test-execution.schema.json",
   "title": "Test Execution",
   "description": "Résultat de l'exécution d'une procédure de test.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Exécution de Test",
+    "en": "Test Execution"
+  },
+  "x_description": {
+    "fr": "Enregistrement du résultat (Verdict, Preuves) de l'exécution d'une procédure de test lors d'une campagne.",
+    "en": "Record of the result (Verdict, Evidence) of a test procedure execution during a campaign."
+  },
   "type": "object",
-  "allOf": [{ "$ref": "../../common/base.schema.json" }],
+  "unevaluatedProperties": false,
+  "allOf": [
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
   "properties": {
     "procedure": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "La procédure testée."
     },
     "campaign": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "La campagne de test parente."
     },
     "verdict": {
@@ -19,16 +36,21 @@
       "enum": ["Pass", "Fail", "Inconclusive", "Blocked"],
       "description": "Résultat global."
     },
-    "executedBy": { "type": "string", "description": "Nom du testeur ou de l'agent IA." },
+    "executedBy": {
+      "type": "string",
+      "description": "Nom du testeur ou de l'agent IA."
+    },
     "evidence": {
       "type": "array",
       "items": {
         "type": "object",
+        "unevaluatedProperties": false,
         "properties": {
           "filename": { "type": "string" },
           "uri": { "type": "string", "format": "uri" },
           "description": { "type": "string" }
-        }
+        },
+        "required": ["filename", "uri"]
       },
       "description": "Preuves (Logs, Screenshots, Rapports)."
     },
@@ -38,5 +60,5 @@
       "description": "IDs des anomalies (bugs) levées."
     }
   },
-  "required": ["procedure", "verdict"]
+  "required": ["procedure", "campaign", "verdict"]
 }

@@ -3,10 +3,23 @@
   "$id": "https://raise.local/schemas/v1/arcadia/oa/capability.schema.json",
   "title": "Operational Capability",
   "description": "Aptitude d'une organisation ou d'acteurs à fournir un service.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Capacité Opérationnelle",
+    "en": "Operational Capability"
+  },
+  "x_description": {
+    "fr": "Aptitude d'une organisation ou d'acteurs à fournir un service.",
+    "en": "Ability of an organization or actors to provide a service."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
     }
   ],
   "properties": {
@@ -20,14 +33,14 @@
     "stakeholders": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Acteurs opérationnels concernés"
     },
     "involvedActivities": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Activités opérationnelles réalisant cette capacité"
     }

@@ -3,15 +3,32 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/property-value.schema.json",
   "title": "Property Value (PVMT)",
   "description": "Instance de valeurs pour un groupe de propriétés donné, attachée à un élément du modèle.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Valeur de Propriété",
+    "en": "Property Value"
+  },
+  "x_description": {
+    "fr": "Jeu de valeurs effectives correspondant à une définition de propriété (Property Definition) appliquée à un élément.",
+    "en": "Set of effective values corresponding to a Property Definition applied to an element."
+  },
   "type": "object",
-  "allOf": [{ "$ref": "../../common/base.schema.json" }],
+  "unevaluatedProperties": false,
+  "allOf": [
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
   "properties": {
     "definitionId": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "Référence vers la Property Definition (le moule) utilisée."
     },
     "appliedTo": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "L'élément du modèle (Composant, Fonction...) qui porte ces valeurs."
     },
     "values": {

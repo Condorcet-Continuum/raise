@@ -6,13 +6,13 @@ pub mod data_agent;
 pub mod epbs_agent;
 pub mod hardware_agent;
 pub mod intent_classifier;
+pub mod orchestrator_agent;
 pub mod software_agent;
 pub mod system_agent;
 pub mod transverse_agent;
 
 pub use self::context::AgentContext;
 
-// AJOUT : Import du protocole de communication
 use crate::ai::protocols::acl::AclMessage;
 
 use anyhow::{Context, Result};

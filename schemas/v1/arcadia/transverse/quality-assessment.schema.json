@@ -3,15 +3,28 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/quality-assessment.schema.json",
   "title": "Quality Assessment",
   "description": "Résultat d'une analyse qualité, d'une revue de pairs ou d'un audit.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Évaluation Qualité",
+    "en": "Quality Assessment"
+  },
+  "x_description": {
+    "fr": "Rapport d'audit ou d'analyse qualité portant sur un élément ou un modèle.",
+    "en": "Audit or quality analysis report regarding an element or a model."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
     }
   ],
   "properties": {
     "assessedElement": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "L'élément (ou le package) audité."
     },
     "date": {
@@ -26,7 +39,9 @@
       "items": {
         "type": "object",
         "properties": {
-          "rule": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+          "rule": {
+            "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+          },
           "comment": { "type": "string" }
         },
         "required": ["rule"]

@@ -3,10 +3,20 @@
   "$id": "https://raise.local/schemas/v1/arcadia/sa/system-capability.schema.json",
   "title": "System Capability",
   "description": "Aptitude du système à rendre un service attendu par les utilisateurs.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Capacité Système",
+    "en": "System Capability"
+  },
+  "x_description": {
+    "fr": "Aptitude du système à rendre un service attendu par les utilisateurs.",
+    "en": "Ability of the system to provide a service expected by users."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -16,28 +26,28 @@
     "realizedCapabilities": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Traçabilité : Capacités Opérationnelles (OA) satisfaites par cette capacité système."
     },
     "involvedFunctions": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Fonctions système impliquées dans cette capacité."
     },
     "involvedChains": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Chaînes fonctionnelles décrivant cette capacité."
     },
     "scenarios": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Scénarios système illustrant cette capacité."
     }

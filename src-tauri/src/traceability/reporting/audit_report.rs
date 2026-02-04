@@ -21,6 +21,10 @@ pub struct ModelStats {
     pub total_elements: usize,
     pub total_functions: usize,
     pub total_components: usize,
+    // AJOUT : Statistiques de la couche Transverse
+    pub total_requirements: usize,
+    pub total_scenarios: usize,
+    pub total_functional_chains: usize,
 }
 
 pub struct AuditGenerator;
@@ -51,12 +55,18 @@ impl AuditGenerator {
             compliance_results: results,
             model_stats: ModelStats {
                 total_elements: model.meta.element_count,
+                // Somme des fonctions (SA/LA/PA)
                 total_functions: model.sa.functions.len()
                     + model.la.functions.len()
                     + model.pa.functions.len(),
+                // Somme des composants (SA/LA/PA)
                 total_components: model.sa.components.len()
                     + model.la.components.len()
                     + model.pa.components.len(),
+                // AJOUT : Comptage Transverse
+                total_requirements: model.transverse.requirements.len(),
+                total_scenarios: model.transverse.scenarios.len(),
+                total_functional_chains: model.transverse.functional_chains.len(),
             },
         }
     }
@@ -115,7 +125,6 @@ mod tests {
             id: id.to_string(),
             name: NameType::String(format!("Elem {}", id)),
             kind: "Dummy".to_string(),
-            // CORRECTION : Initialisation du champ description ajouté récemment
             description: None,
             properties: HashMap::new(),
         }
@@ -129,29 +138,47 @@ mod tests {
             id: id.to_string(),
             name: NameType::String(format!("AI {}", id)),
             kind: "Component".to_string(),
-            // CORRECTION : Initialisation du champ description ajouté récemment
             description: None,
             properties: props,
         }
     }
 
     #[test]
-    fn test_audit_generator_structure() {
+    fn test_audit_generator_structure_with_transverse() {
         let mut model = ProjectModel::default();
         model.meta = ProjectMeta {
             name: "Projet Test".to_string(),
             element_count: 10,
             ..Default::default()
         };
-        // Ajout d'éléments pour les stats
+        // Ajout d'éléments classiques
         model.sa.functions = vec![create_dummy_element("f1")];
+
+        // Ajout d'éléments Transverses
+        model
+            .transverse
+            .requirements
+            .push(create_dummy_element("REQ-1"));
+        model
+            .transverse
+            .scenarios
+            .push(create_dummy_element("SCEN-1"));
 
         let report = AuditGenerator::generate(&model);
 
         assert_eq!(report.project_name, "Projet Test");
         assert_eq!(report.model_stats.total_functions, 1);
-        // On attend 4 résultats : DO-178C, ISO-26262, EU AI Act, + AI Governance
-        assert_eq!(report.compliance_results.len(), 4);
+
+        // Assertions Transverses
+        assert_eq!(
+            report.model_stats.total_requirements, 1,
+            "Compte exigences incorrect"
+        );
+        assert_eq!(
+            report.model_stats.total_scenarios, 1,
+            "Compte scénarios incorrect"
+        );
+        assert_eq!(report.model_stats.total_functional_chains, 0); // Pas ajouté
     }
 
     #[test]

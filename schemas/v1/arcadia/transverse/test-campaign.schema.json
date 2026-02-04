@@ -3,10 +3,24 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/test-campaign.schema.json",
   "title": "Test Campaign",
   "description": "Regroupement d'exécutions de tests pour une version ou un jalon donné.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Campagne de Test",
+    "en": "Test Campaign"
+  },
+  "x_description": {
+    "fr": "Session de test regroupant plusieurs exécutions pour valider une version spécifique du système.",
+    "en": "Test session grouping multiple executions to validate a specific system version."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "targetVersion": {
@@ -16,7 +30,8 @@
     "status": {
       "type": "string",
       "enum": ["Planned", "Running", "Completed", "Archived"],
-      "default": "Planned"
+      "default": "Planned",
+      "description": "État d'avancement de la campagne."
     }
   },
   "required": ["name"]

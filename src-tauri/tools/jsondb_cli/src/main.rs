@@ -4,10 +4,13 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dotenvy::dotenv;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value}; // Ajout de Map
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+// Ajouts pour la récursivité asynchrone
+use std::future::Future;
+use std::pin::Pin;
 
 // --- IMPORTS RAISE ---
 use raise::json_db::{
@@ -16,7 +19,8 @@ use raise::json_db::{
     jsonld::VocabularyRegistry,
     // Note: 'sql' retiré ici pour éviter le warning "unused import",
     // car on utilise le chemin complet raise::json_db::query::sql::...
-    query::QueryEngine,
+    // Ajout des structures nécessaires pour le Smart Linking :
+    query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter},
     storage::{JsonDbConfig, StorageEngine},
     transactions::{manager::TransactionManager, TransactionRequest},
 };
@@ -276,7 +280,13 @@ async fn main() -> Result<()> {
         // --- DATA WRITE (CRUD) ---
         Commands::Insert { collection, data } => {
             let json_val = parse_data(&data)?;
-            let res = col_mgr.insert_with_schema(&collection, json_val).await?;
+
+            // >>> SMART LINKING (MODIF 1) <<<
+            let resolved_json = resolve_references(json_val, &col_mgr).await?;
+
+            let res = col_mgr
+                .insert_with_schema(&collection, resolved_json)
+                .await?;
             let id = res.get("id").and_then(|v| v.as_str()).unwrap_or("?");
             println!("✅ Inséré : {}", id);
         }
@@ -287,7 +297,10 @@ async fn main() -> Result<()> {
             data,
         } => {
             let json_val = parse_data(&data)?;
-            let updated = col_mgr.update_document(&collection, &id, json_val).await?;
+            let resolved_json = resolve_references(json_val, &col_mgr).await?;
+            let updated = col_mgr
+                .update_document(&collection, &id, resolved_json)
+                .await?;
             println!("✅ Document {} mis à jour (Merge).", id);
             #[cfg(debug_assertions)]
             println!("   -> {}", updated);
@@ -295,7 +308,8 @@ async fn main() -> Result<()> {
 
         Commands::Upsert { collection, data } => {
             let json_val = parse_data(&data)?;
-            let status = col_mgr.upsert_document(&collection, json_val).await?;
+            let resolved_json = resolve_references(json_val, &col_mgr).await?;
+            let status = col_mgr.upsert_document(&collection, resolved_json).await?;
             println!("✅ Upsert : {}", status);
         }
 
@@ -315,6 +329,7 @@ async fn main() -> Result<()> {
             limit,
             offset,
         } => {
+            // Note: On pourrait aussi utiliser les imports du haut ici
             use raise::json_db::query::{Condition, FilterOperator, Query, QueryFilter};
 
             let mut query = Query::new(&collection);
@@ -371,11 +386,19 @@ async fn main() -> Result<()> {
             let mut count = 0;
             if let Some(arr) = json.as_array() {
                 for doc in arr {
-                    col_mgr.insert_with_schema(&collection, doc.clone()).await?;
+                    // >>> SMART LINKING (MODIF 2) <<<
+                    let resolved_doc = resolve_references(doc.clone(), &col_mgr).await?;
+                    col_mgr
+                        .insert_with_schema(&collection, resolved_doc)
+                        .await?;
                     count += 1;
                 }
             } else {
-                col_mgr.insert_with_schema(&collection, json).await?;
+                // >>> SMART LINKING (MODIF 3) <<<
+                let resolved_doc = resolve_references(json, &col_mgr).await?;
+                col_mgr
+                    .insert_with_schema(&collection, resolved_doc)
+                    .await?;
                 count = 1;
             }
             println!("✅ {} documents importés.", count);
@@ -470,15 +493,96 @@ fn print_examples() {
    ./jsondb_cli upsert --collection "users" --data '{{"id": "fixed", "name": "Bob"}}'
    ./jsondb_cli delete --collection "users" --id "UUID"
 
-3️⃣  SQL & QUERY
-   ./jsondb_cli query --collection "users" --filter '{{"age": 30}}'
-   ./jsondb_cli sql --query "SELECT name FROM users WHERE age = 30"
+3️⃣  SMART LINKING
+   Référencez un objet par son nom : "allocatedTo": ["ref:oa_actors:name:Opérateur"]
 
 4️⃣  TRANSACTIONS & IMPORT
    ./jsondb_cli import --collection "users" --path ./backup.json
    ./jsondb_cli transaction --file tx.json
 "#
     );
+}
+
+// ==================================================================================
+// ===  FONCTIONS DE RÉSOLUTION DE LIENS (SMART LINKING)                          ===
+// ==================================================================================
+
+// Découpe "ref:collection:field:value" en (collection, field, value)
+fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
+    if !s.starts_with("ref:") {
+        return None;
+    }
+    let parts: Vec<&str> = s.splitn(4, ':').collect();
+    if parts.len() == 4 {
+        Some((parts[1], parts[2], parts[3]))
+    } else {
+        None
+    }
+}
+
+// Parcourt récursivement le JSON pour remplacer les références par les UUIDs
+fn resolve_references<'a>(
+    data: Value,
+    col_mgr: &'a CollectionsManager,
+) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+    Box::pin(async move {
+        match data {
+            Value::String(s) => {
+                if let Some((target_col, target_field, target_val)) = parse_smart_link(&s) {
+                    println!(
+                        "🔍 Résolution lien : {} -> {} = {}",
+                        target_col, target_field, target_val
+                    );
+
+                    let mut query = Query::new(target_col);
+                    query.filter = Some(QueryFilter {
+                        operator: FilterOperator::And,
+                        conditions: vec![Condition::eq(target_field, target_val.into())],
+                    });
+
+                    let engine = QueryEngine::new(col_mgr);
+                    let result = engine.execute_query(query).await?;
+
+                    if let Some(doc) = result.documents.first() {
+                        // CORRECTION ICI : On cherche 'id' d'abord, puis '_id'
+                        let id = doc
+                            .get("id")
+                            .or_else(|| doc.get("_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        if id.is_empty() {
+                            eprintln!("⚠️ ATTENTION : Document trouvé mais ID vide !");
+                        } else {
+                            println!("   -> Trouvé : {}", id);
+                        }
+
+                        Ok(Value::String(id.to_string()))
+                    } else {
+                        eprintln!("⚠️ ATTENTION : Référence introuvable pour {}", s);
+                        Ok(Value::String(s))
+                    }
+                } else {
+                    Ok(Value::String(s))
+                }
+            }
+            Value::Array(arr) => {
+                let mut new_arr = Vec::new();
+                for item in arr {
+                    new_arr.push(resolve_references(item, col_mgr).await?);
+                }
+                Ok(Value::Array(new_arr))
+            }
+            Value::Object(map) => {
+                let mut new_map = Map::new();
+                for (k, v) in map {
+                    new_map.insert(k, resolve_references(v, col_mgr).await?);
+                }
+                Ok(Value::Object(new_map))
+            }
+            _ => Ok(data),
+        }
+    })
 }
 
 // --- TESTS UNITAIRES ---
@@ -591,5 +695,43 @@ mod tests {
             }
             _ => panic!("Parsing delete failed"),
         }
+    }
+
+    // --- TESTS DU SMART LINKING ---
+
+    #[test]
+    fn test_parse_smart_link_valid() {
+        let input = "ref:oa_actors:name:Sécurité";
+        let res = parse_smart_link(input);
+        assert!(res.is_some());
+        let (col, field, val) = res.unwrap();
+        assert_eq!(col, "oa_actors");
+        assert_eq!(field, "name");
+        assert_eq!(val, "Sécurité");
+    }
+
+    #[test]
+    fn test_parse_smart_link_invalid_prefix() {
+        let input = "uuid:1234-5678";
+        let res = parse_smart_link(input);
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn test_parse_smart_link_missing_parts() {
+        let input = "ref:oa_actors:name"; // Manque la valeur
+        let res = parse_smart_link(input);
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn test_parse_smart_link_complex_value() {
+        let input = "ref:oa_actors:description:Ceci:est:une:description";
+        let res = parse_smart_link(input);
+        assert!(res.is_some());
+        let (col, field, val) = res.unwrap();
+        assert_eq!(col, "oa_actors");
+        assert_eq!(field, "description");
+        assert_eq!(val, "Ceci:est:une:description");
     }
 }

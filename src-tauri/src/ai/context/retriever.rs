@@ -1,6 +1,5 @@
 // FICHIER : src-tauri/src/ai/context/retriever.rs
 
-// AJOUT : Import du preprocessing pour la normalisation
 use crate::ai::nlp::{preprocessing, tokenizers};
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 
@@ -36,7 +35,12 @@ impl SimpleRetriever {
         if let Some(el) = self.model.data.classes.first() {
             return Some(el.clone());
         }
-        if let Some(el) = self.model.data.exchange_items.first() {
+
+        // 4. AJOUT : Transverse (Si on n'a que des exigences au début du projet)
+        if let Some(el) = self.model.transverse.requirements.first() {
+            return Some(el.clone());
+        }
+        if let Some(el) = self.model.transverse.scenarios.first() {
             return Some(el.clone());
         }
 
@@ -46,13 +50,12 @@ impl SimpleRetriever {
     /// Cherche les éléments pertinents avec tolérance aux accents/casse
     pub fn retrieve_context(&self, query: &str) -> String {
         // 1. NORMALISATION DE LA REQUÊTE (via NLP)
-        // "Système" -> "systeme"
         let normalized_query = preprocessing::normalize(query);
         let keywords = tokenizers::tokenize(&normalized_query);
 
         let mut found_elements = Vec::new();
 
-        // Scan des couches (inchangé mais utilise la nouvelle logique de scan)
+        // --- SCAN ARCHITECTURE ---
         self.scan_layer(
             "OA:Acteur",
             &self.model.oa.actors,
@@ -78,6 +81,20 @@ impl SimpleRetriever {
             &mut found_elements,
         );
         self.scan_layer(
+            "LA:Composant",
+            &self.model.la.components,
+            &keywords,
+            &mut found_elements,
+        );
+        self.scan_layer(
+            "PA:Composant",
+            &self.model.pa.components,
+            &keywords,
+            &mut found_elements,
+        );
+
+        // --- SCAN DATA ---
+        self.scan_layer(
             "DATA:Class",
             &self.model.data.classes,
             &keywords,
@@ -86,6 +103,38 @@ impl SimpleRetriever {
         self.scan_layer(
             "DATA:Item",
             &self.model.data.exchange_items,
+            &keywords,
+            &mut found_elements,
+        );
+
+        // --- AJOUT : SCAN TRANSVERSE ---
+        self.scan_layer(
+            "TRANS:Exigence",
+            &self.model.transverse.requirements,
+            &keywords,
+            &mut found_elements,
+        );
+        self.scan_layer(
+            "TRANS:Scénario",
+            &self.model.transverse.scenarios,
+            &keywords,
+            &mut found_elements,
+        );
+        self.scan_layer(
+            "TRANS:Chaîne",
+            &self.model.transverse.functional_chains,
+            &keywords,
+            &mut found_elements,
+        );
+        self.scan_layer(
+            "TRANS:Contrainte",
+            &self.model.transverse.constraints,
+            &keywords,
+            &mut found_elements,
+        );
+        self.scan_layer(
+            "TRANS:Définition",
+            &self.model.transverse.common_definitions,
             &keywords,
             &mut found_elements,
         );
@@ -106,17 +155,14 @@ impl SimpleRetriever {
         &self,
         kind_label: &str,
         elements: &[ArcadiaElement],
-        keywords: &[String], // Changement: Vec<String> car tokenize renvoie des String
+        keywords: &[String],
         results: &mut Vec<(String, String, String)>,
     ) {
         for el in elements {
             let raw_name = el.name.as_str();
 
             // 2. NORMALISATION DES DONNÉES DU MODÈLE
-            // On normalise le nom et la description pour la comparaison
             let name_norm = preprocessing::normalize(raw_name);
-
-            // CORRECTION: On utilise le champ `description` dédié
             let raw_desc = el.description.as_deref().unwrap_or("");
             let desc_norm = preprocessing::normalize(raw_desc);
 
@@ -150,7 +196,6 @@ mod tests {
             id: "uuid".to_string(),
             name: NameType::String(name.to_string()),
             kind: "test".to_string(),
-            // CORRECTION : Utilisation du champ description
             description: Some("desc".to_string()),
             properties: HashMap::new(),
         }
@@ -159,15 +204,11 @@ mod tests {
     #[test]
     fn test_retrieval_normalization() {
         let mut model = ProjectModel::default();
-        // On ajoute "Système Électrique" avec accents et majuscules
         model.sa.components.push(mock_el("Système Électrique"));
 
         let retriever = SimpleRetriever::new(model);
-
-        // On cherche "systeme electrique" (minuscule sans accent)
         let result = retriever.retrieve_context("Je cherche le systeme electrique");
 
-        // Ça doit matcher grâce au preprocessing
         assert!(result.contains("Système Électrique"));
     }
 
@@ -182,17 +223,44 @@ mod tests {
     #[test]
     fn test_get_root_element() {
         let mut model = ProjectModel::default();
-        // Le modèle est vide, on s'attend à None
         let retriever_empty = SimpleRetriever::new(model.clone());
         assert!(retriever_empty.get_root_element().is_none());
 
-        // On ajoute un élément dans SA Components
         model.sa.components.push(mock_el("Composant Racine"));
         let retriever_full = SimpleRetriever::new(model);
 
-        // On s'attend à récupérer cet élément
         let root = retriever_full.get_root_element();
         assert!(root.is_some());
         assert_eq!(root.unwrap().name.as_str(), "Composant Racine");
+    }
+
+    #[test]
+    fn test_retrieval_transverse_elements() {
+        let mut model = ProjectModel::default();
+        // Ajout d'une exigence
+        let mut req = mock_el("Perf Constraint 10ms");
+        req.description = Some("Le système doit répondre en moins de 10ms".to_string());
+        model.transverse.requirements.push(req);
+
+        // Ajout d'un scénario
+        model.transverse.scenarios.push(mock_el("Scénario Nominal"));
+
+        let retriever = SimpleRetriever::new(model);
+
+        // 1. Recherche sur Exigence (mot clé "10ms")
+        let res_req = retriever.retrieve_context("exigence 10ms");
+        assert!(res_req.contains("TRANS:Exigence"), "Label manquant");
+        assert!(res_req.contains("Perf Constraint"), "Nom manquant");
+
+        // 2. Recherche sur Scénario
+        let res_scen = retriever.retrieve_context("scénario nominal");
+        assert!(
+            res_scen.contains("TRANS:Scénario"),
+            "Label Scénario manquant"
+        );
+        assert!(
+            res_scen.contains("Scénario Nominal"),
+            "Nom Scénario manquant"
+        );
     }
 }

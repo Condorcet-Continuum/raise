@@ -3,10 +3,20 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/quality-rule.schema.json",
   "title": "Quality Rule",
   "description": "Règle de vérification de la qualité du modèle ou du système (Model Validation Rule).",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Règle de Qualité",
+    "en": "Quality Rule"
+  },
+  "x_description": {
+    "fr": "Règle formelle permettant de valider la conformité du modèle (ex: Convention de nommage, Cohérence).",
+    "en": "Formal rule used to validate model compliance (e.g., Naming convention, Consistency)."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -20,7 +30,8 @@
     "severity": {
       "type": "string",
       "enum": ["Info", "Warning", "Error", "Critical"],
-      "default": "Warning"
+      "default": "Warning",
+      "description": "Niveau de sévérité de la violation."
     },
     "targetType": {
       "type": "string",

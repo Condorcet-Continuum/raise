@@ -3,24 +3,44 @@
   "$id": "https://raise.local/schemas/v1/arcadia/la/logical-actor.schema.json",
   "title": "Logical Actor",
   "description": "Entité externe interagissant avec l'architecture logique.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Acteur Logique",
+    "en": "Logical Actor"
+  },
+  "x_description": {
+    "fr": "Entité externe (humaine ou non) interagissant avec le système au niveau de l'architecture logique.",
+    "en": "External entity (human or non-human) interacting with the system at the logical architecture level."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "isHuman": {
       "type": "boolean",
-      "default": true
+      "default": true,
+      "x_label": { "fr": "Est humain", "en": "Is Human" },
+      "description": "Indique si l'acteur est un être humain ou un système externe."
     },
     "realizedSystemActors": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Traçabilité : Acteurs Système (SA) incarnés par cet acteur logique."
     },
     "allocatedFunctions": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Fonctions logiques exécutées par cet acteur."
     }
   },

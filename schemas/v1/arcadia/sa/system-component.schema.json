@@ -2,11 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raise.local/schemas/v1/arcadia/sa/system-component.schema.json",
   "title": "System Component",
-  "description": "Le système lui-même, vu comme une boîte noire.",
+  "description": "Le système étudié, considéré comme une boîte noire interagissant avec son environnement.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Système (Composant)",
+    "en": "System Component"
+  },
+  "x_description": {
+    "fr": "Le système étudié, vu comme une entité globale réalisant des fonctions et interagissant avec des acteurs.",
+    "en": "The system under study, viewed as a global entity performing functions and interacting with actors."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -16,16 +26,30 @@
     "realizedEntities": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
-      "description": "Traçabilité : Entités Opérationnelles (OA) couvertes par le système."
+      "description": "Traçabilité : Entités Opérationnelles (OA) couvertes par ce système."
     },
     "allocatedFunctions": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
-      "description": "Fonctions allouées au système."
+      "description": "Fonctions Système allouées à ce composant."
+    },
+    "providedInterfaces": {
+      "type": "array",
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Interfaces fournies par le système à son environnement."
+    },
+    "requiredInterfaces": {
+      "type": "array",
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
+      "description": "Interfaces requises par le système auprès de son environnement."
     }
   },
   "required": ["name"]

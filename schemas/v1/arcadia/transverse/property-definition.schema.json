@@ -2,11 +2,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/property-definition.schema.json",
   "title": "Property Definition (PVMT)",
-  "description": "Définition d'un groupe de propriétés personnalisées (ex: 'Bilan de Masse', 'Sécurité').",
+  "description": "Définition d'un groupe de propriétés personnalisées.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Définition de Propriété",
+    "en": "Property Definition"
+  },
+  "x_description": {
+    "fr": "Définition d'un groupe de propriétés personnalisées (ex: Bilan de Masse, Coût) applicable aux éléments.",
+    "en": "Definition of a group of custom properties (e.g., Mass Budget, Cost) applicable to elements."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "domain": {

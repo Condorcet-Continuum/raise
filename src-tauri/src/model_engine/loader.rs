@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/src/model_engine/loader.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::jsonld::JsonLdProcessor;
 use crate::json_db::storage::StorageEngine;
-use crate::model_engine::arcadia; // <-- Accès au vocabulaire sémantique
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
 use crate::rules_engine::evaluator::DataProvider;
 use anyhow::{anyhow, Result};
@@ -15,13 +15,12 @@ use tauri::State;
 use tokio::sync::RwLock;
 
 /// Cache de localisation pour le Lazy Loading.
-/// Mappe un UUID vers le nom de sa collection (ex: "550e8400-..." -> "oa").
 type LocationIndex = HashMap<String, String>;
 
 pub struct ModelLoader<'a> {
     pub manager: CollectionsManager<'a>,
-    /// Index en mémoire pour localiser un élément sans scanner le disque
     index: Arc<RwLock<LocationIndex>>,
+    processor: JsonLdProcessor,
 }
 
 impl<'a> ModelLoader<'a> {
@@ -35,6 +34,7 @@ impl<'a> ModelLoader<'a> {
         Self {
             manager: CollectionsManager::new(storage, space, db),
             index: Arc::new(RwLock::new(HashMap::new())),
+            processor: JsonLdProcessor::new(),
         }
     }
 
@@ -42,17 +42,26 @@ impl<'a> ModelLoader<'a> {
         Self {
             manager,
             index: Arc::new(RwLock::new(HashMap::new())),
+            processor: JsonLdProcessor::new(),
         }
     }
 
-    // --- INDEXATION (INITIALISATION RAPIDE) ---
+    // --- INDEXATION ---
 
     pub async fn index_project(&self) -> Result<usize> {
         let mut idx = self.index.write().await;
         idx.clear();
 
-        // Liste des collections standard Arcadia
-        let collections = ["oa", "sa", "la", "pa", "epbs", "data", "common"];
+        let collections = [
+            "oa",
+            "sa",
+            "la",
+            "pa",
+            "epbs",
+            "data",
+            "transverse",
+            "common",
+        ];
         let mut count = 0;
 
         for col in collections {
@@ -80,7 +89,7 @@ impl<'a> ModelLoader<'a> {
         Ok(count)
     }
 
-    // --- ACCÈS UNITAIRE (LAZY LOADING) ---
+    // --- ACCÈS UNITAIRE ---
 
     pub async fn get_element(&self, id: &str) -> Result<ArcadiaElement> {
         let collection = {
@@ -93,8 +102,7 @@ impl<'a> ModelLoader<'a> {
                 let doc = self.manager.get_document(&col, id).await?.ok_or_else(|| {
                     anyhow!("Document {} introuvable dans {} (Index périmé ?)", id, col)
                 })?;
-
-                self.json_to_element(doc)
+                self.json_to_element(doc, Some(&col))
             }
             None => Err(anyhow!("ID inconnu ou non indexé : {}", id)),
         }
@@ -116,37 +124,41 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
-    fn json_to_element(&self, doc: Value) -> Result<ArcadiaElement> {
-        // Utilisation des constantes sémantiques pour parser le JSON
+    fn json_to_element(&self, doc: Value, layer_hint: Option<&str>) -> Result<ArcadiaElement> {
         let id = doc
-            .get(arcadia::PROP_ID)
+            .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
 
-        let short_type = doc
-            .get("@type")
-            .or_else(|| doc.get("type"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(arcadia::KIND_UNKNOWN);
-
-        let kind = self.resolve_uri_from_shortname(short_type);
-
         let name_val = doc
-            .get(arcadia::PROP_NAME)
+            .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Sans nom");
         let name = NameType::String(name_val.to_string());
 
         let description = doc
-            .get(arcadia::PROP_DESCRIPTION)
+            .get("description")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+
+        let short_type = doc
+            .get("@type")
+            .or_else(|| doc.get("type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+
+        let kind = if let Some(layer) = layer_hint {
+            let mut local_proc = self.processor.clone();
+            let _ = local_proc.load_layer_context(layer);
+            local_proc.context_manager().expand_term(short_type)
+        } else {
+            short_type.to_string()
+        };
 
         let obj = doc.as_object().ok_or(anyhow!("Document invalide"))?;
         let mut properties = HashMap::new();
         for (k, v) in obj {
-            // On exclut les champs standards déjà traités
             if !matches!(
                 k.as_str(),
                 "id" | "name" | "description" | "@type" | "type" | "@context" | "$schema"
@@ -164,21 +176,22 @@ impl<'a> ModelLoader<'a> {
         })
     }
 
-    // --- HYDRATATION CIBLÉE ---
+    // --- HYDRATATION ---
 
     pub async fn fetch_hydrated_element(&self, element_id: &str) -> Result<Value> {
         let mut element = self.get_json(element_id).await?;
 
-        // Liste des relations standard à hydrater (Utilisation des constantes pour éviter les typos)
         let relations = [
-            arcadia::PROP_OWNED_LOGICAL_COMPONENTS,
-            arcadia::PROP_OWNED_SYSTEM_COMPONENTS,
-            arcadia::PROP_ALLOCATED_FUNCTIONS,
-            arcadia::PROP_INCOMING_EXCHANGES,
-            arcadia::PROP_OUTGOING_EXCHANGES,
-            "ownedFunctionalAllocation", // Conserver pour compatibilité si pas dans constantes
+            "ownedLogicalComponents",
+            "ownedSystemComponents",
+            "allocatedFunctions",
+            "incomingComponentExchanges",
+            "outgoingComponentExchanges",
+            "ownedFunctionalAllocation",
             "base_class",
             "deployedComponents",
+            "realizedEntities",
+            "realizedActivities",
         ];
 
         self.hydrate_element(&mut element, &relations).await?;
@@ -216,24 +229,25 @@ impl<'a> ModelLoader<'a> {
         Ok(())
     }
 
-    // --- CHARGEMENT COMPLET (Legacy) ---
+    // --- CHARGEMENT COMPLET ---
 
     pub async fn load_full_model(&self) -> Result<ProjectModel> {
-        if self.index.read().await.is_empty() {
-            self.index_project().await?;
-        }
+        let count = self.index_project().await?;
+
+        let all_ids: Vec<String> = {
+            let index = self.index.read().await;
+            index.keys().cloned().collect()
+        };
 
         let mut model = ProjectModel {
             meta: ProjectMeta {
                 name: format!("{}/{}", self.manager.space, self.manager.db),
                 loaded_at: Utc::now().to_rfc3339(),
-                element_count: 0,
+                element_count: count,
+                ..Default::default()
             },
             ..Default::default()
         };
-
-        let all_ids: Vec<String> = self.index.read().await.keys().cloned().collect();
-        model.meta.element_count = all_ids.len();
 
         for id in all_ids {
             if let Ok(el) = self.get_element(&id).await {
@@ -247,104 +261,90 @@ impl<'a> ModelLoader<'a> {
     fn dispatch_element(&self, model: &mut ProjectModel, el: ArcadiaElement) {
         let k = &el.kind;
 
-        // Dispatch basé sur l'URI complète ou des marqueurs
-        // OA
-        if k.contains("/oa") || k.contains("Operational") {
-            if k == arcadia::KIND_OA_ACTOR || k.contains("Actor") {
+        // Dispatch robuste basé sur l'URI ou le nom
+
+        if k.contains("/oa#") || k.contains("Operational") {
+            if k.contains("Actor") {
                 model.oa.actors.push(el);
-            } else if k == arcadia::KIND_OA_ACTIVITY || k.contains("Activity") {
+            } else if k.contains("Activity") {
                 model.oa.activities.push(el);
-            } else if k == arcadia::KIND_OA_CAPABILITY || k.contains("Capability") {
+            } else if k.contains("Capability") {
                 model.oa.capabilities.push(el);
-            } else if k == arcadia::KIND_OA_EXCHANGE || k.contains("Exchange") {
+            } else if k.contains("Exchange") {
                 model.oa.exchanges.push(el);
             } else {
                 model.oa.entities.push(el);
             }
-        }
-        // SA
-        else if k.contains("/sa") || k.contains("System") {
-            if k == arcadia::KIND_SA_ACTOR || k.contains("Actor") {
+        } else if k.contains("/sa#") || k.contains("System") {
+            if k.contains("Actor") {
                 model.sa.actors.push(el);
-            } else if k == arcadia::KIND_SA_FUNCTION || k.contains("Function") {
+            } else if k.contains("Function") {
                 model.sa.functions.push(el);
-            } else if k == arcadia::KIND_SA_COMPONENT || k.contains("Component") {
+            } else if k.contains("Component") {
                 model.sa.components.push(el);
-            } else if k == arcadia::KIND_SA_EXCHANGE || k.contains("Exchange") {
+            } else if k.contains("Exchange") {
                 model.sa.exchanges.push(el);
             } else {
                 model.sa.capabilities.push(el);
             }
-        }
-        // LA
-        else if k.contains("/la") || k.contains("Logical") {
-            if k == arcadia::KIND_LA_COMPONENT || k.contains("Component") {
+        } else if k.contains("/la#") || k.contains("Logical") {
+            if k.contains("Component") {
                 model.la.components.push(el);
-            } else if k == arcadia::KIND_LA_FUNCTION || k.contains("Function") {
+            } else if k.contains("Function") {
                 model.la.functions.push(el);
-            } else if k == arcadia::KIND_LA_ACTOR || k.contains("Actor") {
+            } else if k.contains("Actor") {
                 model.la.actors.push(el);
-            } else if k == arcadia::KIND_LA_INTERFACE || k.contains("Interface") {
+            } else if k.contains("Interface") {
                 model.la.interfaces.push(el);
             } else {
                 model.la.exchanges.push(el);
             }
-        }
-        // PA
-        else if k.contains("/pa") || k.contains("Physical") {
-            if k == arcadia::KIND_PA_COMPONENT || k.contains("Component") {
+        } else if k.contains("/pa#") || k.contains("Physical") {
+            if k.contains("Component") {
                 model.pa.components.push(el);
-            } else if k == arcadia::KIND_PA_FUNCTION || k.contains("Function") {
+            } else if k.contains("Function") {
                 model.pa.functions.push(el);
-            } else if k == arcadia::KIND_PA_LINK || k.contains("Link") {
+            } else if k.contains("Link") {
                 model.pa.links.push(el);
             } else {
                 model.pa.actors.push(el);
             }
-        }
-        // Data
-        else if k == arcadia::KIND_DATA_CLASS || k.contains("Class") {
+        } else if k.contains("Class") {
             model.data.classes.push(el);
+        } else if k.contains("DataType") {
+            model.data.data_types.push(el);
+        } else if k.contains("ExchangeItem") {
+            model.data.exchange_items.push(el);
         }
-        // EPBS
-        else {
+        // CORRECTION : Ajout de "CommonDefinition" dans la condition principale
+        else if k.contains("/transverse#")
+            || k.contains("Requirement")
+            || k.contains("Scenario")
+            || k.contains("FunctionalChain")
+            || k.contains("Constraint")
+            || k.contains("CommonDefinition")
+        {
+            if k.contains("Requirement") {
+                model.transverse.requirements.push(el);
+            } else if k.contains("Scenario") {
+                model.transverse.scenarios.push(el);
+            } else if k.contains("FunctionalChain") {
+                model.transverse.functional_chains.push(el);
+            } else if k.contains("Constraint") {
+                model.transverse.constraints.push(el);
+            } else if k.contains("CommonDefinition") {
+                model.transverse.common_definitions.push(el);
+            } else {
+                model.transverse.others.push(el);
+            }
+        } else {
             model.epbs.configuration_items.push(el);
-        }
-    }
-
-    /// Résolution des noms courts vers les URIs Arcadia officielles.
-    /// Utilise maintenant le vocabulaire centralisé.
-    fn resolve_uri_from_shortname(&self, short: &str) -> String {
-        match short {
-            // OA
-            "OperationalActor" => arcadia::KIND_OA_ACTOR.to_string(),
-            "OperationalActivity" => arcadia::KIND_OA_ACTIVITY.to_string(),
-            "OperationalCapability" => arcadia::KIND_OA_CAPABILITY.to_string(),
-            "OperationalExchange" => arcadia::KIND_OA_EXCHANGE.to_string(),
-            "OperationalEntity" => arcadia::KIND_OA_ENTITY.to_string(),
-            // SA
-            "SystemFunction" => arcadia::KIND_SA_FUNCTION.to_string(),
-            "SystemComponent" => arcadia::KIND_SA_COMPONENT.to_string(),
-            "SystemActor" => arcadia::KIND_SA_ACTOR.to_string(),
-            "SystemFunctionalExchange" => arcadia::KIND_SA_EXCHANGE.to_string(),
-            // LA
-            "LogicalFunction" => arcadia::KIND_LA_FUNCTION.to_string(),
-            "LogicalComponent" => arcadia::KIND_LA_COMPONENT.to_string(),
-            "LogicalActor" => arcadia::KIND_LA_ACTOR.to_string(),
-            "LogicalInterface" => arcadia::KIND_LA_INTERFACE.to_string(),
-            // PA
-            "PhysicalFunction" => arcadia::KIND_PA_FUNCTION.to_string(),
-            "PhysicalComponent" => arcadia::KIND_PA_COMPONENT.to_string(),
-            "PhysicalLink" => arcadia::KIND_PA_LINK.to_string(),
-            // Data
-            "Class" => arcadia::KIND_DATA_CLASS.to_string(),
-            // Fallback
-            other => other.into(),
         }
     }
 }
 
-// --- IMPLEMENTATION RULES_ENGINE ---
+// --- DATA PROVIDER ---
+
 #[async_trait]
 impl<'a> DataProvider for ModelLoader<'a> {
     async fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<Value> {
@@ -375,88 +375,129 @@ impl<'a> DataProvider for ModelLoader<'a> {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::rules_engine::evaluator::DataProvider;
     use serde_json::json;
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_loader_index_and_lazy_fetch() {
+    async fn test_loader_index_and_semantic_resolution() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "space_lazy", "db_lazy");
+        let manager = CollectionsManager::new(&storage, "space1", "db1");
         manager.init_db().await.unwrap();
 
-        // On utilise les constantes même dans les tests pour garantir la cohérence
         let doc = json!({
-            "id": "UUID-LAZY-1",
-            "name": "LazyComponent",
-            "@type": "LogicalComponent"
+            "id": "UUID-SEM-1", "name": "User", "@type": "OperationalActor"
         });
-        manager.insert_raw("la", &doc).await.unwrap();
+        manager.insert_raw("oa", &doc).await.unwrap();
 
         let loader = ModelLoader::new_with_manager(manager);
+        loader.index_project().await.unwrap();
+        let el = loader.get_element("UUID-SEM-1").await.unwrap();
 
-        let count = loader.index_project().await.unwrap();
-        assert_eq!(count, 1);
-
-        let el = loader.get_element("UUID-LAZY-1").await.unwrap();
-        assert_eq!(el.name.as_str(), "LazyComponent");
-        // Vérification que l'URI est bien résolue via la constante
-        assert_eq!(el.kind, arcadia::KIND_LA_COMPONENT);
+        assert!(el.kind.contains("OperationalActor"));
+        assert_eq!(el.name.as_str(), "User");
     }
 
     #[tokio::test]
-    async fn test_loader_hydration() {
+    async fn test_transverse_dispatch_comprehensive() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "space_hydro", "db_hydro");
+        let manager = CollectionsManager::new(&storage, "space_tr", "db_tr");
         manager.init_db().await.unwrap();
 
-        let parent = json!({
-            "id": "PARENT-1",
-            "name": "Motherboard",
-            "ownedLogicalComponents": ["CHILD-1"]
-        });
-        let child = json!({
-            "id": "CHILD-1",
-            "name": "CPU"
-        });
+        manager
+            .insert_raw(
+                "transverse",
+                &json!({ "id": "REQ-1", "name": "Req1", "type": "Requirement" }),
+            )
+            .await
+            .unwrap();
+        manager
+            .insert_raw(
+                "transverse",
+                &json!({ "id": "SC-1", "name": "Scen1", "type": "Scenario" }),
+            )
+            .await
+            .unwrap();
+        manager
+            .insert_raw(
+                "transverse",
+                &json!({ "id": "FC-1", "name": "Chain1", "type": "FunctionalChain" }),
+            )
+            .await
+            .unwrap();
+        manager
+            .insert_raw(
+                "transverse",
+                &json!({ "id": "CST-1", "name": "Const1", "type": "Constraint" }),
+            )
+            .await
+            .unwrap();
+        manager
+            .insert_raw(
+                "transverse",
+                &json!({ "id": "COM-1", "name": "Def1", "type": "CommonDefinition" }),
+            )
+            .await
+            .unwrap();
+        manager.insert_raw("transverse", &json!({ "id": "OTH-1", "name": "Other1", "type": "https://raise.io/ontology/arcadia/transverse#CustomThing" })).await.unwrap();
 
-        manager.insert_raw("la", &parent).await.unwrap();
-        manager.insert_raw("la", &child).await.unwrap();
+        let loader = ModelLoader::new_with_manager(manager);
+        let model = loader.load_full_model().await.unwrap();
+
+        assert_eq!(
+            model.transverse.requirements.len(),
+            1,
+            "Requirement manquant"
+        );
+        assert_eq!(model.transverse.scenarios.len(), 1, "Scenario manquant");
+        assert_eq!(
+            model.transverse.functional_chains.len(),
+            1,
+            "FunctionalChain manquante"
+        );
+        assert_eq!(
+            model.transverse.constraints.len(),
+            1,
+            "Constraint manquante"
+        );
+        assert_eq!(
+            model.transverse.common_definitions.len(),
+            1,
+            "CommonDefinition manquante"
+        );
+        assert_eq!(model.transverse.others.len(), 1, "Other manquant");
+    }
+
+    #[tokio::test]
+    async fn test_provider_access_on_transverse() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let manager = CollectionsManager::new(&storage, "space_prov", "db_prov");
+        manager.init_db().await.unwrap();
+
+        manager
+            .insert_raw(
+                "transverse",
+                &json!({
+                    "id": "REQ-TEST", "name": "Limit", "properties": { "max": 120 }
+                }),
+            )
+            .await
+            .unwrap();
 
         let loader = ModelLoader::new_with_manager(manager);
         loader.index_project().await.unwrap();
 
-        let hydrated = loader.fetch_hydrated_element("PARENT-1").await.unwrap();
-        let children = hydrated["ownedLogicalComponents"].as_array().unwrap();
+        let name = loader.get_value("transverse", "REQ-TEST", "name").await;
+        assert_eq!(name, Some(Value::String("Limit".to_string())));
 
-        assert_eq!(children[0]["name"], "CPU");
-    }
-
-    #[tokio::test]
-    async fn test_loader_as_data_provider() {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "space_dp", "db_dp");
-        manager.init_db().await.unwrap();
-
-        let doc = json!({
-            "id": "DOC-1",
-            "status": { "active": true, "level": 5 }
-        });
-        manager.insert_raw("common", &doc).await.unwrap();
-
-        let loader = ModelLoader::new_with_manager(manager);
-        loader.index_project().await.unwrap();
-
-        let val = loader.get_value("common", "DOC-1", "status.level").await;
-        assert_eq!(val, Some(json!(5)));
-
-        let val_idx = loader.get_value("", "DOC-1", "status.active").await;
-        assert_eq!(val_idx, Some(json!(true)));
+        let max = loader
+            .get_value("transverse", "REQ-TEST", "properties/max")
+            .await;
+        assert_eq!(max, Some(json!(120)));
     }
 }

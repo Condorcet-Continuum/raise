@@ -3,35 +3,55 @@
   "$id": "https://raise.local/schemas/v1/arcadia/la/functional-exchange.schema.json",
   "title": "Functional Exchange (LA)",
   "description": "Flux d'échange entre deux Fonctions Logiques.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Échange Fonctionnel (Logique)",
+    "en": "Functional Exchange (Logical)"
+  },
+  "x_description": {
+    "fr": "Flux d'information, d'énergie ou de matière échangé entre deux Fonctions Logiques.",
+    "en": "Flow of information, energy, or matter exchanged between two Logical Functions."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "source": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "Fonction logique émettrice."
     },
     "target": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "Fonction logique réceptrice."
     },
     "exchangeItems": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Référence aux Exchange Items (Data) transportés."
     },
     "realizedSystemExchanges": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Traçabilité : Flux fonctionnels Système (SA) raffinés par cet échange."
     },
     "allocatedToComponentExchange": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Allocation : Échange structurel (Component Exchange) portant ce flux fonctionnel."
     }
   },
-  "required": ["name", "source", "target"]
+  "required": ["source", "target"]
 }

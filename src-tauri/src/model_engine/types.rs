@@ -3,9 +3,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// On n'importe plus les structures spécifiques d'Arcadia,
-// car tout est maintenant géré dynamiquement via ArcadiaElement.
-
 // --- TYPES FONDAMENTAUX ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -35,7 +32,6 @@ impl Default for NameType {
 }
 
 /// Structure générique représentant n'importe quel élément du modèle Arcadia.
-/// Remplace toutes les anciennes structures rigides (OperationalActor, SystemComponent, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ArcadiaElement {
     #[serde(default)]
@@ -45,18 +41,43 @@ pub struct ArcadiaElement {
     pub name: NameType,
 
     /// URI du type (ex: "https://.../oa#OperationalActor") ou nom court ("OperationalActor")
-    #[serde(default, rename = "type", alias = "@type")]
+    #[serde(default, rename = "type")]
     pub kind: String,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// Contient tous les autres champs (relations, attributs techniques)
+    /// Propriétés dynamiques (clé -> valeur/objet)
     #[serde(flatten)]
     pub properties: HashMap<String, serde_json::Value>,
 }
 
-// --- STRUCTURE DU PROJET (CONTENEUR) ---
+impl ArcadiaElement {
+    /// Helper pour récupérer le nom affichable
+    pub fn get_name(&self) -> &str {
+        self.name.as_str()
+    }
+}
+
+// --- MODÈLE DU PROJET ---
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ProjectMeta {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub last_modified: String,
+
+    // CHAMPS TECHNIQUES RESTAURÉS (Requis par Loader et AuditReport)
+    #[serde(default)]
+    pub loaded_at: String,
+    #[serde(default)]
+    pub element_count: usize,
+}
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ProjectModel {
@@ -67,17 +88,11 @@ pub struct ProjectModel {
     pub pa: PhysicalArchitectureModel,
     pub epbs: EPBSModel,
     pub data: DataModel,
+    // AJOUT : Couche Transverse (Exigences, Scénarios, etc.)
+    pub transverse: TransverseModel,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct ProjectMeta {
-    pub name: String,
-    pub loaded_at: String,
-    pub element_count: usize,
-}
-
-// --- SOUS-MODÈLES (LAYERS) ---
-// Note : Tous les vecteurs contiennent désormais des ArcadiaElement génériques.
+// --- COUCHES ARCADIA ---
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct OperationalAnalysisModel {
@@ -125,4 +140,98 @@ pub struct DataModel {
     pub classes: Vec<ArcadiaElement>,
     pub data_types: Vec<ArcadiaElement>,
     pub exchange_items: Vec<ArcadiaElement>,
+}
+
+// AJOUT : Structure pour la couche Transverse
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TransverseModel {
+    pub requirements: Vec<ArcadiaElement>,
+    pub scenarios: Vec<ArcadiaElement>,
+    pub functional_chains: Vec<ArcadiaElement>,
+    pub constraints: Vec<ArcadiaElement>,
+    pub common_definitions: Vec<ArcadiaElement>,
+    pub others: Vec<ArcadiaElement>, // Pour tout ce qui n'est pas catégorisé explicitement ci-dessus
+}
+
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_name_type_polymorphism() {
+        // Cas 1: String simple
+        let n1 = NameType::String("Test".to_string());
+        assert_eq!(n1.as_str(), "Test");
+
+        // Cas 2: Objet multilingue
+        let mut map = HashMap::new();
+        map.insert("en".to_string(), "Test EN".to_string());
+        map.insert("fr".to_string(), "Test FR".to_string());
+        let n2 = NameType::Object(map);
+        assert_eq!(n2.as_str(), "Test EN"); // Priorité à l'anglais par défaut
+    }
+
+    #[test]
+    fn test_arcadia_element_flattening() {
+        // Teste que les champs inconnus vont bien dans "properties"
+        let json_data = json!({
+            "id": "123",
+            "name": "MyElement",
+            "type": "LogicalComponent",
+            "custom_prop": "value",
+            "allocated_to": ["456"]
+        });
+
+        let el: ArcadiaElement = serde_json::from_value(json_data).unwrap();
+        assert_eq!(el.id, "123");
+        assert_eq!(el.kind, "LogicalComponent");
+
+        // Vérification des propriétés dynamiques
+        assert!(el.properties.contains_key("custom_prop"));
+        assert_eq!(el.properties.get("custom_prop").unwrap(), "value");
+    }
+
+    #[test]
+    fn test_project_model_structure() {
+        // Vérifie que la structure contient bien toutes les couches, y compris Transverse
+        let model = ProjectModel::default();
+
+        // Les vecteurs doivent être vides par défaut
+        assert!(model.oa.actors.is_empty());
+        assert!(model.transverse.requirements.is_empty());
+        assert!(model.transverse.scenarios.is_empty());
+    }
+
+    #[test]
+    fn test_project_meta_fields() {
+        // Vérifie que les champs restaurés sont bien là et accessibles
+        let meta = ProjectMeta {
+            loaded_at: "now".to_string(),
+            element_count: 42,
+            ..Default::default()
+        };
+        assert_eq!(meta.element_count, 42);
+        assert_eq!(meta.loaded_at, "now");
+    }
+
+    #[test]
+    fn test_transverse_model_serialization() {
+        let mut transverse = TransverseModel::default();
+        transverse.requirements.push(ArcadiaElement {
+            id: "REQ-001".to_string(),
+            name: NameType::String("Perf Requirement".to_string()),
+            kind: "Requirement".to_string(),
+            ..Default::default()
+        });
+
+        // Sérialisation
+        let json = serde_json::to_string(&transverse).unwrap();
+        assert!(json.contains("requirements"));
+        assert!(json.contains("REQ-001"));
+    }
 }

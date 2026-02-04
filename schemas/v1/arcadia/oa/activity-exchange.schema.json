@@ -6,7 +6,7 @@
   "type": "object",
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -14,11 +14,11 @@
   ],
   "properties": {
     "source": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "L'élément émetteur (Activité, Acteur ou Entité)."
     },
     "target": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "L'élément récepteur (Activité, Acteur ou Entité)."
     },
     "exchangeItems": {
@@ -31,8 +31,7 @@
     "flowType": {
       "type": "string",
       "enum": ["Information", "Energy", "Matter", "Control", "Mixed"],
-      "default": "Information",
-      "description": "Type de flux."
+      "default": "Information"
     }
   },
   "required": ["source", "target"]

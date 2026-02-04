@@ -3,23 +3,39 @@
   "$id": "https://raise.local/schemas/v1/arcadia/la/component-exchange.schema.json",
   "title": "Component Exchange (Logical)",
   "description": "Connexion structurelle entre deux composants logiques (ex: lien réseau, dépendance logicielle).",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Échange de Composants (Logique)",
+    "en": "Component Exchange (Logical)"
+  },
+  "x_description": {
+    "fr": "Connexion structurelle entre deux composants logiques permettant le transit d'échanges fonctionnels.",
+    "en": "Structural connection between two logical components allowing the transit of functional exchanges."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "source": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "Composant source."
     },
     "target": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
       "description": "Composant cible."
     },
     "allocatesFunctionalExchanges": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Flux fonctionnels transitant par ce lien."
     },
     "orientation": {

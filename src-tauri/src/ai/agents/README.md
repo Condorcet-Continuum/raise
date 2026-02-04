@@ -22,7 +22,11 @@ graph TD
         Agent -->|2. Prompt + History| LLM[LLM Engine]
         LLM -->|Response| Agent
         Agent -->|3. Save Response| DB
-        Agent -->|4. Save Artifact| FS[File System / Data]
+
+        %% NOUVEAU : Exécution via MCP
+        Agent -->|4. Select Tool| MCP[MCP Toolbox]
+        MCP -->|Generate Code| FS[File System / src-gen]
+        MCP -->|Read/Write Model| DB
     end
 
     Agent -->|Return Result + ACL| Dispatcher
@@ -31,7 +35,6 @@ graph TD
     Dispatcher -->|Check Outgoing Message| ACL{Message ACL ?}
     ACL -->|Oui: Loop| Dispatcher
     ACL -->|Non: Final Response| User
-
 ```
 
 ---
@@ -109,6 +112,16 @@ Implémentation standardisée des messages Agent-to-Agent.
 
 Nettoie les réponses LLM (suppression du Markdown, extraction du JSON pur) pour garantir la conformité des schémas.
 
+### 4. Moteur d'Exécution (MCP / AI Tools)
+
+Les agents utilisent désormais le **Model Context Protocol** pour interagir avec le monde réel de manière sécurisée et déterministe.
+
+- **CodeGenTool** : Orchestre la génération de code physique (Rust, C++, etc.) à partir des définitions du modèle.
+- _Round-Trip Engineering_ : Préserve le code manuel utilisateur via les balises `AI_INJECTION_POINT`.
+- _Smart Linking_ : Utilise l'UUID du composant pour retrouver sa configuration en base.
+
+- **FileWriteTool** : Permet l'écriture sécurisée (Sandbox) sur le disque.
+
 ---
 
 ## 📦 Sortie Structurée
@@ -120,7 +133,7 @@ pub struct AgentResult {
     pub message: String,                 // Feedback textuel (Markdown)
     pub artifacts: Vec<CreatedArtifact>, // Liste des objets créés
 
-    // NOUVEAU : Canal de communication sortant
+    // Canal de communication sortant (Délégation)
     pub outgoing_message: Option<AclMessage>,
 }
 
@@ -132,7 +145,7 @@ Si `outgoing_message` est présent, le Dispatcher intercepte la réponse et ne l
 
 ## 🚀 Tests Unitaires & Intégration
 
-Les tests couvrent le cycle de vie complet, incluant la délégation ACL.
+Les tests couvrent le cycle de vie complet, incluant la délégation ACL et la génération de code physique.
 
 ```bash
 cargo test ai::agents -- --nocapture
@@ -143,14 +156,15 @@ cargo test ai::agents -- --nocapture
 
 - **Identity** : Validation du routage.
 - **Workflow** : Vérification que `SystemAgent` déclenche bien `SoftwareAgent` lors de la création d'un composant.
-- **Routage Dynamique** : Vérification que `DataAgent` choisit le bon destinataire selon le contexte.
+- **CodeGen Integration** : Test de bout en bout (Agent -> DB -> Tool -> Fichier Rust).
 - **Schémas** : Validation que les JSON produits respectent la structure attendue par la DB.
 
 ---
 
 ## 🔮 Roadmap Technique
 
-- [ ] **Protocole MCP (Model Context Protocol)** : Standardiser les actions des agents (outils) via `mcp.rs`.
+- [x] **Protocole MCP (Model Context Protocol)** : Standardisé via `ai::tools` (CodeGen, FS).
+- [x] **Round-Trip Engineering** : Préservation du code manuel (Implémenté).
 - [ ] **RAG (Retrieval Augmented Generation)** : Connecter la mémoire à une recherche vectorielle.
 - [ ] **Validation Schema** : Intégrer une validation JSON Schema stricte (Valico) avant la sauvegarde disque.
 

@@ -3,10 +3,20 @@
   "$id": "https://raise.local/schemas/v1/arcadia/data/data-type.schema.json",
   "title": "Data Type",
   "description": "Type de données élémentaire (Primitif, Énumération).",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Type de Données",
+    "en": "Data Type"
+  },
+  "x_description": {
+    "fr": "Type de données élémentaire comme un Booléen, un Entier, une Chaîne ou une Énumération.",
+    "en": "Elementary data type such as Boolean, Integer, String, or Enumeration."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -42,5 +52,5 @@
       "description": "Unité physique (ex: 'kg', 'm/s')."
     }
   },
-  "required": ["kind"]
+  "required": ["name", "kind"]
 }

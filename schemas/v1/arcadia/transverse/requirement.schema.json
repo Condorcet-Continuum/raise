@@ -3,10 +3,20 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/requirement.schema.json",
   "title": "Requirement",
   "description": "Exigence formelle (fonctionnelle ou non-fonctionnelle) à laquelle le système doit satisfaire.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Exigence",
+    "en": "Requirement"
+  },
+  "x_description": {
+    "fr": "Besoin ou contrainte formelle auquel le système doit satisfaire.",
+    "en": "Formal need or constraint that the system must satisfy."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -46,14 +56,14 @@
     "satisfiedBy": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Traçabilité aval : Liste des éléments d'architecture (Fonctions, Composants) qui satisfont cette exigence."
     },
     "verifiedBy": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Traçabilité de vérification : Liste des Scénarios de test ou preuves de conformité."
     }

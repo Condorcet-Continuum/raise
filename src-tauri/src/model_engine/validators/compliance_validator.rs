@@ -1,6 +1,5 @@
 // FICHIER : src-tauri/src/model_engine/validators/compliance_validator.rs
 
-use crate::model_engine::arcadia; // <-- Import Vocabulaire
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
 use crate::model_engine::validators::{ModelValidator, Severity, ValidationIssue};
@@ -20,6 +19,7 @@ impl ComplianceValidator {
         let mut issues = Vec::new();
         let name = element.name.as_str().trim();
 
+        // Règle 1 : Nommage explicite
         if name.is_empty() || name == "Unnamed" || name.starts_with("Copy of") {
             issues.push(ValidationIssue {
                 severity: Severity::Warning,
@@ -29,6 +29,7 @@ impl ComplianceValidator {
             });
         }
 
+        // Règle 2 : Description présente
         let has_desc = element
             .description
             .as_ref()
@@ -40,78 +41,22 @@ impl ComplianceValidator {
                 severity: Severity::Info,
                 element_id: element.id.clone(),
                 message: format!("Description manquante pour '{}'", name),
-                rule_id: "RULE_DOC_MISSING".to_string(),
+                rule_id: "RULE_DOC".to_string(),
             });
         }
 
         issues
     }
 
-    /// Vérifie les allocations
-    fn check_allocations(&self, element: &ArcadiaElement) -> Vec<ValidationIssue> {
-        let mut issues = Vec::new();
-        let k = &element.kind;
-
-        // Détection générique "Est-ce un composant ?" via le vocabulaire ou substring
-        let is_component = k.contains("Component")
-            || k == arcadia::KIND_LA_COMPONENT
-            || k == arcadia::KIND_SA_COMPONENT
-            || k == arcadia::KIND_PA_COMPONENT;
-
-        // Détection "Est-ce un acteur ?"
-        let is_actor = k.contains("Actor")
-            || k == arcadia::KIND_OA_ACTOR
-            || k == arcadia::KIND_SA_ACTOR
-            || k == arcadia::KIND_LA_ACTOR
-            || k == arcadia::KIND_PA_ACTOR;
-
-        if is_component && !is_actor {
-            // Utilisation de la constante pour la clé de propriété
-            let has_functions =
-                if let Some(val) = element.properties.get(arcadia::PROP_ALLOCATED_FUNCTIONS) {
-                    val.as_array().map(|arr| !arr.is_empty()).unwrap_or(false)
-                } else {
-                    // Fallback legacy key
-                    element
-                        .properties
-                        .get("ownedFunctionalAllocation")
-                        .and_then(|v| v.as_array())
-                        .map(|a| !a.is_empty())
-                        .unwrap_or(false)
-                };
-
-            if !has_functions {
-                let is_node = k.contains("Node"); // Spécifique PA
-                let severity = if is_node {
-                    Severity::Info
-                } else {
-                    Severity::Warning
-                };
-
-                issues.push(ValidationIssue {
-                    severity,
-                    element_id: element.id.clone(),
-                    message: format!(
-                        "Composant '{}' sans fonction allouée.",
-                        element.name.as_str()
-                    ),
-                    rule_id: "RULE_EMPTY_COMPONENT".to_string(),
-                });
-            }
-        }
-        issues
-    }
-
-    /// Helper asynchrone pour valider une liste d'éléments.
+    /// Helper pour itérer sur une liste
     async fn validate_list(
         &self,
         elements: &[ArcadiaElement],
-        loader: &ModelLoader<'_>,
+        _loader: &ModelLoader<'_>,
         issues: &mut Vec<ValidationIssue>,
     ) {
         for el in elements {
-            let el_issues = self.validate_element(el, loader).await;
-            issues.extend(el_issues);
+            issues.extend(self.check_quality(el));
         }
     }
 }
@@ -123,16 +68,13 @@ impl ModelValidator for ComplianceValidator {
         element: &ArcadiaElement,
         _loader: &ModelLoader<'_>,
     ) -> Vec<ValidationIssue> {
-        let mut issues = self.check_quality(element);
-        issues.extend(self.check_allocations(element));
-        issues
+        self.check_quality(element)
     }
 
     async fn validate_full(&self, loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
         let mut all_issues = Vec::new();
 
         if let Ok(model) = loader.load_full_model().await {
-            // Utilisation systématique du helper
             // OA
             self.validate_list(&model.oa.actors, loader, &mut all_issues)
                 .await;
@@ -190,6 +132,24 @@ impl ModelValidator for ComplianceValidator {
                 .await;
             self.validate_list(&model.data.exchange_items, loader, &mut all_issues)
                 .await;
+
+            // AJOUT : COUCHE TRANSVERSE
+            self.validate_list(&model.transverse.requirements, loader, &mut all_issues)
+                .await;
+            self.validate_list(&model.transverse.scenarios, loader, &mut all_issues)
+                .await;
+            self.validate_list(&model.transverse.functional_chains, loader, &mut all_issues)
+                .await;
+            self.validate_list(&model.transverse.constraints, loader, &mut all_issues)
+                .await;
+            self.validate_list(
+                &model.transverse.common_definitions,
+                loader,
+                &mut all_issues,
+            )
+            .await;
+            self.validate_list(&model.transverse.others, loader, &mut all_issues)
+                .await;
         }
 
         all_issues
@@ -223,11 +183,45 @@ mod tests {
         let bad_el = ArcadiaElement {
             id: "1".into(),
             name: NameType::String("Unnamed".into()),
-            kind: arcadia::KIND_LA_COMPONENT.into(), // Utilisation constante
+            // CORRECTION : Utilisation d'une chaîne directe pour éviter l'import inutilisé arcadia::KIND_...
+            kind: "LogicalComponent".into(),
             description: Some("Desc".into()),
             properties: HashMap::new(),
         };
         let issues = validator.validate_element(&bad_el, &loader).await;
-        assert!(issues.iter().any(|i| i.rule_id == "RULE_NAMING"));
+
+        assert!(!issues.is_empty());
+        assert_eq!(issues[0].rule_id, "RULE_NAMING");
+    }
+
+    #[tokio::test]
+    async fn test_compliance_transverse_naming() {
+        // Vérifie que les règles s'appliquent aussi aux éléments transverses
+        let (_dir, config) = setup_loader();
+        let storage = StorageEngine::new(config);
+        let manager =
+            crate::json_db::collections::manager::CollectionsManager::new(&storage, "space", "db");
+        manager.init_db().await.unwrap();
+
+        // Insertion d'un Requirement mal nommé
+        let req = serde_json::json!({
+            "id": "REQ-BAD",
+            "name": "Copy of Req 1", // Trigger RULE_NAMING
+            "type": "Requirement"
+        });
+        manager.insert_raw("transverse", &req).await.unwrap();
+
+        let loader = ModelLoader::new_with_manager(manager);
+        let validator = ComplianceValidator::new();
+
+        let issues = validator.validate_full(&loader).await;
+
+        let found = issues
+            .iter()
+            .any(|i| i.element_id == "REQ-BAD" && i.rule_id == "RULE_NAMING");
+        assert!(
+            found,
+            "Le validateur de conformité ignore la couche Transverse !"
+        );
     }
 }

@@ -3,10 +3,24 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/functional-chain.schema.json",
   "title": "Functional Chain",
   "description": "Séquence ordonnée de fonctions et d'échanges décrivant un chemin critique ou un cas d'usage.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Chaîne Fonctionnelle",
+    "en": "Functional Chain"
+  },
+  "x_description": {
+    "fr": "Séquence ordonnée de fonctions et d'échanges traversant le système pour réaliser un service.",
+    "en": "Ordered sequence of functions and exchanges traversing the system to realize a service."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "layer": {
@@ -20,7 +34,9 @@
       "items": {
         "type": "object",
         "properties": {
-          "element": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+          "element": {
+            "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+          },
           "stepOrder": { "type": "integer" },
           "type": { "type": "string", "enum": ["Function", "Exchange"] }
         },
@@ -29,7 +45,9 @@
     },
     "realizedCapabilities": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Capacités (Capabilities) illustrées par cette chaîne."
     }
   },

@@ -3,10 +3,20 @@
   "$id": "https://raise.local/schemas/v1/arcadia/epbs/configuration-item.schema.json",
   "title": "Configuration Item (EPBS)",
   "description": "Élément de configuration (CI) ou Partie Système (System Part).",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Article de Configuration (CI)",
+    "en": "Configuration Item (CI)"
+  },
+  "x_description": {
+    "fr": "Élément constitutif de la solution finale (Matériel, Logiciel, etc.) géré en configuration.",
+    "en": "Component of the final solution (Hardware, Software, etc.) managed in configuration."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -39,14 +49,14 @@
     "composition": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Arborescence produit : CIs enfants ou SystemParts inclus."
     },
     "allocatedPhysicalArtifacts": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Traçabilité : Composants Physiques (Node/Behavior) ou Liens Physiques implémentés par ce CI."
     }

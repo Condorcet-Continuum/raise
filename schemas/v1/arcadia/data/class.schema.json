@@ -3,10 +3,20 @@
   "$id": "https://raise.local/schemas/v1/arcadia/data/class.schema.json",
   "title": "Data Class",
   "description": "Structure de données complexe composée d'attributs.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Classe de Données",
+    "en": "Data Class"
+  },
+  "x_description": {
+    "fr": "Structure de données complexe définie par des attributs et pouvant hériter d'autres classes.",
+    "en": "Complex data structure defined by attributes and capable of inheriting from other classes."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -15,12 +25,14 @@
   "properties": {
     "isAbstract": {
       "type": "boolean",
-      "default": false
+      "default": false,
+      "x_label": { "fr": "Est abstrait", "en": "Is Abstract" },
+      "description": "Indique si la classe est abstraite (non instanciable)."
     },
     "superClasses": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Héritage : classes parentes."
     },
@@ -33,7 +45,7 @@
             "$ref": "../../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
           },
           "typeRef": {
-            "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+            "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
             "description": "Référence vers un DataType ou une autre Class."
           },
           "minCardinality": { "type": "integer", "default": 1 },
@@ -43,7 +55,9 @@
           }
         },
         "required": ["name", "typeRef"]
-      }
+      },
+      "description": "Liste des attributs de la classe."
     }
-  }
+  },
+  "required": ["name"]
 }

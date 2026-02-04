@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/code_generator/mod.rs
+
 pub mod analyzers;
 pub mod generators;
 pub mod templates;
@@ -11,11 +13,14 @@ use self::generators::{
 };
 use self::templates::template_engine::TemplateEngine;
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+// AJOUT : Derive Serialize pour l'affichage JSON dans les outils
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TargetLanguage {
     Rust,
     TypeScript,
@@ -45,8 +50,7 @@ impl CodeGeneratorService {
         element: &Value,
         lang: TargetLanguage,
     ) -> Result<Vec<PathBuf>> {
-        // 1. Analyse des dépendances (Modèle -> Imports)
-        // Le résultat est stocké dans _analysis pour usage futur (injection dans le contexte)
+        // 1. Analyse des dépendances
         let _analysis = self.dep_analyzer.analyze(element)?;
 
         // 2. Sélection du générateur
@@ -67,27 +71,30 @@ impl CodeGeneratorService {
             fs::create_dir_all(&self.root_path)?;
         }
 
+        // Variable pour repérer la racine du Crate (pour Clippy)
+        let mut crate_root: Option<PathBuf> = None;
+
         for file in &mut files {
             let full_path = self.root_path.join(&file.path);
 
+            // Détection de la racine du projet Rust
+            if file.path.ends_with("Cargo.toml") {
+                if let Some(parent) = full_path.parent() {
+                    crate_root = Some(parent.to_path_buf());
+                }
+            }
+
             // 4. Préservation du code (Fichier existant -> Injections)
             if full_path.exists() {
-                // On récupère le code utilisateur
                 if let Ok(injections) = InjectionAnalyzer::extract_injections(&full_path) {
                     for (key, user_code) in injections {
-                        // On réinjecte le code dans le contenu généré
-                        // On cherche le marqueur par défaut dans le nouveau contenu
                         let marker = format!("AI_INJECTION_POINT: {}", key);
-
-                        // Si le nouveau fichier contient le point d'injection
                         if file.content.contains(&marker) {
                             println!(
                                 "Réinjection trouvée pour {} : {} octets",
                                 key,
                                 user_code.len()
                             );
-
-                            // Remplacement : on remet le code utilisateur après le marqueur
                             file.content = file
                                 .content
                                 .replace(&marker, &format!("{}\n{}", marker, user_code));
@@ -104,7 +111,56 @@ impl CodeGeneratorService {
             generated_paths.push(full_path);
         }
 
+        // 6. POST-PROCESS : CLIPPY (Uniquement pour Rust)
+        if lang == TargetLanguage::Rust {
+            if let Some(path) = crate_root {
+                self.apply_clippy(&path);
+            }
+        }
+
         Ok(generated_paths)
+    }
+
+    /// Exécute `cargo clippy --fix` sur le dossier généré.
+    fn apply_clippy(&self, crate_path: &Path) {
+        println!("🔧 Exécution de Clippy sur : {:?}", crate_path);
+
+        // CORRECTION : On retire le '&' devant le tableau.
+        // .args([...]) au lieu de .args(&[...])
+        let output = Command::new("cargo")
+            .current_dir(crate_path)
+            .args([
+                "clippy",
+                "--fix",
+                "--allow-dirty",  // Autorise à tourner même si git est sale
+                "--allow-staged", // Autorise à tourner même si git a des fichiers stagés
+                "--",
+                "-A",
+                "clippy::all", // On désactive les erreurs bloquantes pour le fix
+                "-D",
+                "warnings", // On force les warnings à être traités
+            ])
+            .output();
+
+        match output {
+            Ok(o) => {
+                if !o.status.success() {
+                    eprintln!(
+                        "⚠️ Warning: Clippy n'a pas pu s'exécuter complètement (Probablement des dépendances manquantes). Stderr: {}",
+                        String::from_utf8_lossy(&o.stderr)
+                    );
+                } else {
+                    println!("✅ Clippy a nettoyé le code.");
+                }
+            }
+            Err(e) => eprintln!("⚠️ Impossible de lancer cargo: {}", e),
+        }
+
+        // On relance un formatage final car clippy --fix peut parfois casser l'indentation
+        let _ = Command::new("cargo")
+            .current_dir(crate_path)
+            .arg("fmt")
+            .output();
     }
 }
 
@@ -125,8 +181,6 @@ mod tests {
         let existing_file = root.join("MyComponent.rs");
         {
             let mut f = fs::File::create(&existing_file).unwrap();
-            // Correction ici : utilisation d'une string raw (r#""#) convertie en bytes
-            // cela supporte les caractères UTF-8 comme 'é' dans "Généré"
             f.write_all(
                 r#"
 // Généré par Raise

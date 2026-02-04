@@ -1,8 +1,11 @@
+// FICHIER : src-tauri/src/commands/traceability_commands.rs
+
 use crate::model_engine::types::ArcadiaElement;
-use crate::AppState; // Fonctionne maintenant grâce à la modif dans lib.rs
+use crate::AppState;
 use tauri::State;
 
 // Import des services du module de traçabilité
+// Ces modules ont été mis à jour pour inclure la couche Transverse
 use crate::traceability::{
     impact_analyzer::{ImpactAnalyzer, ImpactReport},
     reporting::{
@@ -14,6 +17,7 @@ use crate::traceability::{
 
 /// Commande : Analyse d'Impact
 /// Déclenche le calcul de propagation des changements à partir d'un élément racine.
+/// Prend désormais en compte les liens vers les Exigences et Scénarios.
 #[tauri::command]
 pub fn analyze_impact(
     state: State<AppState>,
@@ -35,10 +39,12 @@ pub fn analyze_impact(
 
 /// Commande : Rapport d'Audit Global
 /// Exécute tous les checkers de conformité (DO-178C, EU AI Act, etc.)
+/// Retourne un rapport incluant les statistiques de la couche Transverse.
 #[tauri::command]
 pub fn run_compliance_audit(state: State<AppState>) -> Result<AuditReport, String> {
     let model = state.model.lock().map_err(|e| e.to_string())?;
 
+    // AuditGenerator a été mis à jour pour compter les Requirements/Scenarios
     let report = AuditGenerator::generate(&model);
 
     Ok(report)
@@ -66,11 +72,11 @@ pub fn get_element_neighbors(
 
     let tracer = Tracer::new(&model);
 
-    // Récupération des références
+    // Récupération des références (incluant potentiellement des liens transverses)
     let upstream_refs = tracer.get_upstream_elements(&element_id);
     let downstream_refs = tracer.get_downstream_elements(&element_id);
 
-    // Clonage pour le DTO (ArcadiaElement implémente Clone dans votre types.rs)
+    // Clonage pour le DTO (ArcadiaElement implémente Clone)
     let upstream: Vec<ArcadiaElement> = upstream_refs.into_iter().cloned().collect();
     let downstream: Vec<ArcadiaElement> = downstream_refs.into_iter().cloned().collect();
 

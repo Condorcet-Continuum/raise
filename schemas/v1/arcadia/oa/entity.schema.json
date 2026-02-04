@@ -3,10 +3,20 @@
   "$id": "https://raise.local/schemas/v1/arcadia/oa/entity.schema.json",
   "title": "Operational Entity",
   "description": "Une organisation, un service ou un groupe contenant des acteurs ou d'autres entités.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Entité Opérationnelle",
+    "en": "Operational Entity"
+  },
+  "x_description": {
+    "fr": "Une organisation, un service ou un groupe contenant des acteurs ou d'autres entités.",
+    "en": "An organization, service, or group containing actors or other entities."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
     {
-      "$ref": "../../common/base.schema.json"
+      "$ref": "../../common/types/base.schema.json"
     },
     {
       "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
@@ -16,16 +26,17 @@
     "composition": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Sous-entités ou Acteurs contenus dans cette entité."
     },
     "allocatedActivities": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Activités opérationnelles allouées à cette entité."
     }
-  }
+  },
+  "required": ["name"]
 }

@@ -3,20 +3,37 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/scenario.schema.json",
   "title": "Exchange Scenario",
   "description": "Description temporelle des interactions (Diagramme de Séquence).",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Scénario d'Échange",
+    "en": "Exchange Scenario"
+  },
+  "x_description": {
+    "fr": "Représentation temporelle (Diagramme de Séquence) décrivant l'enchaînement des interactions entre éléments.",
+    "en": "Temporal representation (Sequence Diagram) describing the sequence of interactions between elements."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "kind": {
       "type": "string",
       "enum": ["Functional", "Interface", "Data"],
-      "default": "Functional"
+      "default": "Functional",
+      "description": "Type de scénario (Fonctionnel, Interface ou Données)."
     },
     "lifelines": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Participants au scénario (Acteurs, Fonctions, Composants)."
     },
     "messages": {
@@ -24,13 +41,18 @@
       "description": "Séquence chronologique des messages échangés.",
       "items": {
         "type": "object",
+        "unevaluatedProperties": false,
         "properties": {
           "id": { "type": "string", "format": "uuid" },
           "name": { "type": "string" },
-          "source": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
-          "target": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+          "source": {
+            "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+          },
+          "target": {
+            "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+          },
           "refersTo": {
-            "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
+            "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
             "description": "Lien vers l'Exchange (SA/LA/PA) réel correspondant."
           },
           "sequenceOrder": { "type": "integer" }

@@ -3,30 +3,52 @@
   "$id": "https://raise.local/schemas/v1/arcadia/pa/physical-function.schema.json",
   "title": "Physical Function",
   "description": "Fonction terminale allouée à un composant physique.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Fonction Physique",
+    "en": "Physical Function"
+  },
+  "x_description": {
+    "fr": "Fonction terminale allouée à un composant physique (Node ou Behavior), concrétisant les fonctions logiques.",
+    "en": "Terminal function allocated to a physical component (Node or Behavior), realizing logical functions."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "realizedLogicalFunctions": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Traçabilité : Fonctions Logiques (LA) réalisées par cette fonction."
     },
     "allocatedTo": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Allocation : Composant Physique exécutant cette fonction."
     },
     "inputs": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Flux entrants."
     },
     "outputs": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Flux sortants."
     }
   },

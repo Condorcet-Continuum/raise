@@ -75,6 +75,12 @@ impl JsonLdProcessor {
         Ok(self)
     }
 
+    /// Charge le contexte d'une couche spécifique (OA, SA...) pour la résolution sémantique.
+    /// Indispensable pour que le ModelLoader puisse comprendre les types sans préfixe.
+    pub fn load_layer_context(&mut self, layer: &str) -> Result<()> {
+        self.context_manager.load_layer_context(layer)
+    }
+
     pub fn context_manager(&self) -> &ContextManager {
         &self.context_manager
     }
@@ -297,7 +303,8 @@ mod tests {
         let processor = JsonLdProcessor::new();
         let ctx_manager = processor.context_manager();
         // Le contexte par défaut doit être chargé
-        assert!(ctx_manager.active_namespaces.contains_key("oa"));
+        // CORRECTION : utilisation de 'active_mappings' au lieu de 'active_namespaces'
+        assert!(ctx_manager.active_mappings.contains_key("oa"));
     }
 
     #[test]

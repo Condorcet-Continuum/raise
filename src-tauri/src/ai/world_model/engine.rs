@@ -6,14 +6,11 @@ use candle_nn::{VarBuilder, VarMap};
 use std::collections::HashMap;
 use std::path::Path;
 
-// Imports des types existants
 use crate::ai::nlp::parser::CommandType;
-use crate::model_engine::types::ArcadiaElement;
-
-// Imports des sous-modules
 use crate::ai::world_model::dynamics::WorldModelPredictor;
 use crate::ai::world_model::perception::ArcadiaEncoder;
 use crate::ai::world_model::representation::VectorQuantizer;
+use crate::model_engine::types::ArcadiaElement;
 
 pub struct WorldAction {
     pub intent: CommandType,
@@ -38,13 +35,11 @@ impl WorldAction {
     }
 }
 
-/// Moteur principal du World Model.
 pub struct NeuroSymbolicEngine {
     pub varmap: VarMap,
     pub quantizer: VectorQuantizer,
     pub predictor: WorldModelPredictor,
 
-    // Configurations
     #[allow(dead_code)]
     pub config_vocab_size: usize,
     #[allow(dead_code)]
@@ -55,7 +50,6 @@ pub struct NeuroSymbolicEngine {
     pub config_hidden_dim: usize,
 }
 
-// DÉBUT DU BLOC D'IMPLÉMENTATION
 impl NeuroSymbolicEngine {
     pub fn new(
         vocab_size: usize,
@@ -91,8 +85,6 @@ impl NeuroSymbolicEngine {
         Ok(predicted_future_state)
     }
 
-    // --- HELPER FUNCTION SYNCHRONE ---
-    // Cette fonction EST BIEN À L'INTÉRIEUR du bloc impl NeuroSymbolicEngine
     fn extract_tensors_sync(&self) -> HashMap<String, Tensor> {
         let data_guard = self.varmap.data().lock().unwrap();
         let mut extracted = HashMap::new();
@@ -104,14 +96,9 @@ impl NeuroSymbolicEngine {
 
     pub async fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref().to_owned();
-
-        // Appel de la méthode synchrone (le self la voit car elle est dans le même impl)
         let tensors = self.extract_tensors_sync();
-
-        // Sauvegarde asynchrone (le Mutex est déjà relâché)
         tokio::task::spawn_blocking(move || candle_core::safetensors::save(&tensors, path))
             .await??;
-
         Ok(())
     }
 
@@ -135,7 +122,7 @@ impl NeuroSymbolicEngine {
 
         Self::new(vocab_size, embedding_dim, action_dim, hidden_dim, varmap)
     }
-} // FIN DU BLOC D'IMPLÉMENTATION
+}
 
 #[cfg(test)]
 mod tests {
@@ -148,11 +135,12 @@ mod tests {
     #[test]
     fn test_engine_simulation_flow() {
         let varmap = VarMap::new();
-        let engine = NeuroSymbolicEngine::new(10, 15, 5, 32, varmap).unwrap();
+        // CORRECTION : embedding_dim = 16 (8 layers + 8 categories) au lieu de 15
+        let engine = NeuroSymbolicEngine::new(10, 16, 5, 32, varmap).unwrap();
         let element = ArcadiaElement {
             id: "1".to_string(),
             name: NameType::default(),
-            kind: "https://arcadia/la#LogicalComponent".to_string(),
+            kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string(), // URI valide
             description: None,
             properties: HashMap::new(),
         };
@@ -167,10 +155,12 @@ mod tests {
         let file = NamedTempFile::new().unwrap();
         let path = file.path();
         let varmap = VarMap::new();
-        let engine1 = NeuroSymbolicEngine::new(10, 15, 5, 32, varmap).unwrap();
+        // CORRECTION : embedding_dim = 16
+        let engine1 = NeuroSymbolicEngine::new(10, 16, 5, 32, varmap).unwrap();
         engine1.save_to_file(path).await.expect("Save failed");
 
-        let engine2 = NeuroSymbolicEngine::load_from_file(path, 10, 15, 5, 32)
+        // CORRECTION : embedding_dim = 16
+        let engine2 = NeuroSymbolicEngine::load_from_file(path, 10, 16, 5, 32)
             .await
             .expect("Load failed");
         let element = ArcadiaElement {

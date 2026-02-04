@@ -7,10 +7,16 @@ use uuid::Uuid;
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
-use super::{Agent, AgentContext, AgentResult};
+use super::{Agent, AgentContext, AgentResult, CreatedArtifact};
 
-// AJOUT : Import du protocole ACL
+// IMPORTS PROTOCOLES
 use crate::ai::protocols::acl::{AclMessage, Performative};
+use crate::ai::protocols::mcp::{McpTool, McpToolCall};
+
+// IMPORTS OUTILS & DB
+use crate::ai::tools::CodeGenTool;
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
@@ -32,6 +38,33 @@ impl HardwareAgent {
         }
     }
 
+    /// Retrouve l'ID d'un composant physique par son nom
+    async fn find_component_id(&self, ctx: &AgentContext, name: &str) -> Option<String> {
+        let manager = CollectionsManager::new(&ctx.db, "mbse2", "drones");
+        let query_engine = QueryEngine::new(&manager);
+
+        // On cherche principalement dans pa_components (Physique)
+        let collections = ["pa_components", "la_components"];
+
+        for col in collections {
+            let mut query = Query::new(col);
+            query.filter = Some(QueryFilter {
+                operator: FilterOperator::And,
+                conditions: vec![Condition::eq("name", name.into())],
+            });
+            query.limit = Some(1);
+
+            if let Ok(result) = query_engine.execute_query(query).await {
+                if let Some(doc) = result.documents.first() {
+                    if let Some(id) = doc.get("id").and_then(|v| v.as_str()) {
+                        return Some(id.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     async fn enrich_physical_node(
         &self,
         ctx: &AgentContext,
@@ -41,7 +74,7 @@ impl HardwareAgent {
     ) -> Result<serde_json::Value> {
         let category = self.determine_category(name, element_type);
         let instruction = if category == "Electronics" {
-            "Contexte: Design Électronique."
+            "Contexte: Design Électronique (VHDL/Verilog)."
         } else {
             "Contexte: Infrastructure IT."
         };
@@ -92,12 +125,12 @@ impl Agent for HardwareAgent {
         ctx: &AgentContext,
         intent: &EngineeringIntent,
     ) -> Result<Option<AgentResult>> {
-        // 1. CHARGEMENT SESSION
         let mut session = load_session(ctx)
             .await
             .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
 
         match intent {
+            // 1. CRÉATION (PA)
             EngineeringIntent::CreateElement {
                 layer,
                 element_type,
@@ -122,8 +155,7 @@ impl Agent for HardwareAgent {
 
                 let artifact = save_artifact(ctx, "pa", "physical_nodes", &doc)?;
 
-                // 2. DÉLÉGATION -> EPBS (Configuration Manager)
-                // Tout matériel physique doit être référencé (BOM/PartNumber)
+                // Délégation -> EPBS (Configuration Manager)
                 let transition_msg = format!(
                     "J'ai spécifié le matériel '{}' (Nature: {}). Merci de créer l'Article de Configuration (CI) associé.",
                     name, nature
@@ -131,8 +163,8 @@ impl Agent for HardwareAgent {
 
                 let acl_msg = AclMessage::new(
                     Performative::Request,
-                    self.id(),               // Sender
-                    "configuration_manager", // Receiver
+                    self.id(),
+                    "configuration_manager",
                     &transition_msg,
                 );
 
@@ -147,10 +179,97 @@ impl Agent for HardwareAgent {
                 Ok(Some(AgentResult {
                     message: msg,
                     artifacts: vec![artifact],
-                    // AJOUT : Message sortant activé
                     outgoing_message: Some(acl_msg),
                 }))
             }
+
+            // 2. GÉNÉRATION CODE (VHDL/Verilog)
+            EngineeringIntent::GenerateCode {
+                language,
+                context, // Nom du composant (ex: "FPGA Video Processor")
+                filename: _,
+            } => {
+                session.add_message(
+                    "user",
+                    &format!("Generate hardware code for '{}' in {}", context, language),
+                );
+
+                // A. Recherche ID
+                let component_id = self
+                    .find_component_id(ctx, context)
+                    .await
+                    .ok_or_else(|| anyhow!("Composant matériel '{}' introuvable.", context))?;
+
+                // B. Appel Outil MCP
+                let gen_path = ctx.paths.domain_root.join("src-gen");
+                let tool = CodeGenTool::new(gen_path, ctx.db.clone(), "mbse2", "drones");
+
+                let call = McpToolCall::new(
+                    "generate_component_code",
+                    json!({
+                        "component_id": component_id,
+                        "dry_run": false
+                    }),
+                );
+
+                let result = tool.execute(call).await;
+
+                if result.is_error {
+                    return Err(anyhow!("Erreur CodeGen Hardware: {}", result.content));
+                }
+
+                let file_list = result.content["files"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|v| v.as_str().unwrap_or("?").to_string())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                let artifacts: Vec<CreatedArtifact> = file_list
+                    .iter()
+                    .map(|path| CreatedArtifact {
+                        id: format!("gen_{}", Uuid::new_v4()),
+                        name: std::path::Path::new(path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
+                        layer: "CODE".to_string(),
+                        element_type: "HardwareSource".to_string(),
+                        path: path.clone(),
+                    })
+                    .collect();
+
+                // C. Délégation -> Quality (Vérification Syntaxe VHDL)
+                let transition_msg = format!(
+                    "Code HDL généré pour '{}' ({}). Vérification syntaxique requise.",
+                    context, language
+                );
+
+                let acl_msg = AclMessage::new(
+                    Performative::Request,
+                    self.id(),
+                    "quality_manager",
+                    &transition_msg,
+                );
+
+                let msg = format!(
+                    "Description matérielle ({}) générée pour **{}**. Fichiers : {:?}",
+                    language, context, file_list
+                );
+
+                session.add_message("assistant", &msg);
+                save_session(ctx, &session).await?;
+
+                Ok(Some(AgentResult {
+                    message: msg,
+                    artifacts,
+                    outgoing_message: Some(acl_msg),
+                }))
+            }
+
             _ => Ok(None),
         }
     }
@@ -159,7 +278,11 @@ impl Agent for HardwareAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::llm::client::LlmClient;
     use crate::ai::protocols::acl::Performative;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn test_category_detection() {
@@ -171,19 +294,155 @@ mod tests {
         );
     }
 
-    // NOUVEAU TEST : Vérifie la délégation vers EPBS
     #[tokio::test]
     async fn test_hardware_delegation_trigger() {
         let _agent = HardwareAgent::new();
-
         let msg = AclMessage::new(
             Performative::Request,
             "hardware_architect",
             "configuration_manager",
             "Content",
         );
-
         assert_eq!(msg.receiver, "configuration_manager");
-        assert_eq!(msg.performative, Performative::Request);
+    }
+
+    #[tokio::test]
+    async fn test_hardware_generation_integration() {
+        let dir = tempdir().unwrap();
+        let domain_root = dir.path().to_path_buf();
+
+        let config = JsonDbConfig::new(domain_root.clone());
+        let db = Arc::new(StorageEngine::new(config));
+        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
+
+        let manager = CollectionsManager::new(&db, "mbse2", "drones");
+        manager.init_db().await.unwrap();
+
+        let comp_doc = json!({
+            "id": "fpga-001",
+            "name": "FPGA Controller",
+            "layer": "PA",
+            "type": "PhysicalNode",
+            "nature": "Electronics", // CORRECTION : Champ obligatoire pour la validation schema
+            "implementation": {
+                "technology": "VHDL_Entity",
+                "artifactName": "fpga_ctrl"
+            }
+        });
+        manager
+            .upsert_document("pa_components", comp_doc)
+            .await
+            .unwrap();
+
+        let ctx = AgentContext::new(
+            "tester",
+            "sess_hw_01",
+            db,
+            llm,
+            domain_root.clone(),
+            domain_root.clone(),
+        );
+
+        let agent = HardwareAgent::new();
+
+        let intent = EngineeringIntent::GenerateCode {
+            language: "vhdl".into(),
+            context: "FPGA Controller".into(),
+            filename: "".into(),
+        };
+
+        let result = agent.process(&ctx, &intent).await;
+
+        match result {
+            Ok(Some(res)) => {
+                println!("Output: {}", res.message);
+
+                // CORRECTION : Check insensible à la casse ("vhdl" vs "VHDL")
+                assert!(res.message.to_lowercase().contains("vhdl"));
+                assert!(!res.artifacts.is_empty());
+
+                // CORRECTION : Check du nom de fichier généré par défaut
+                // Le générateur utilise le nom du composant par défaut (fpga_controller.vhd)
+                let vhdl_file_default = domain_root.join("src-gen/fpga_controller.vhd");
+
+                // On vérifie que le fichier existe (quel que soit le nom exact, mais basé sur le log d'erreur précédent)
+                assert!(
+                    vhdl_file_default.exists(),
+                    "Le fichier généré n'a pas été trouvé à l'emplacement attendu"
+                );
+
+                if let Some(msg) = res.outgoing_message {
+                    assert_eq!(msg.receiver, "quality_manager");
+                } else {
+                    panic!("Pas de message sortant vers la qualité");
+                }
+            }
+            _ => panic!("Échec de la génération Hardware"),
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_hardware_in_user_domain() {
+        // 1. Définition du chemin réel de votre environnement
+        // On récupère le HOME (ex: /home/zair) et on ajoute "raise_domain"
+        let home = std::env::var("HOME").expect("Variable HOME non définie");
+        let domain_root = std::path::PathBuf::from(home).join("raise_domain");
+
+        // On vérifie que le dossier existe (créé par vos précédents tests)
+        if !domain_root.exists() {
+            std::fs::create_dir_all(&domain_root).unwrap();
+        }
+
+        println!("🌍 Environnement cible : {:?}", domain_root);
+
+        // 2. Configuration du Contexte
+        let config = JsonDbConfig::new(domain_root.clone());
+        let db = Arc::new(StorageEngine::new(config));
+
+        // Initialisation de la DB dans ce dossier réel
+        let manager = CollectionsManager::new(&db, "mbse2", "drones");
+        manager.init_db().await.unwrap();
+
+        // 3. Injection du composant FPGA dans la base réelle
+        let comp_doc = json!({
+            "id": "fpga-video-proc",
+            "name": "Video Processor FPGA",
+            "layer": "PA",
+            "type": "PhysicalNode",
+            "nature": "Electronics", // CORRECTION : Ajout du champ obligatoire
+            "implementation": {
+                "technology": "VHDL_Entity",
+                "artifactName": "video_proc"
+            }
+        });
+        manager
+            .upsert_document("pa_components", comp_doc)
+            .await
+            .unwrap();
+
+        // 4. Instanciation de l'Agent
+        // Note: On utilise "dummy" pour le LLM car on teste la génération de code (symbolique)
+        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
+
+        let ctx = AgentContext::new(
+            "zair", // Votre nom utilisateur
+            "session_live",
+            db,
+            llm,
+            domain_root.clone(),
+            domain_root.clone(),
+        );
+
+        let agent = HardwareAgent::new();
+
+        // 5. Exécution de la commande
+        let intent = EngineeringIntent::GenerateCode {
+            language: "vhdl".into(),
+            context: "Video Processor FPGA".into(),
+            filename: "".into(),
+        };
+
+        let result = agent.process(&ctx, &intent).await.unwrap().unwrap();
+        println!("✅ Résultat Agent : {}", result.message);
     }
 }

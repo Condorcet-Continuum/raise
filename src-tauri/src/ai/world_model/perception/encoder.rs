@@ -6,16 +6,16 @@ use anyhow::Result;
 use candle_core::{Device, Tensor};
 
 /// Dimensions fixes pour l'encodage One-Hot
-/// OA, SA, LA, PA, EPBS, Data, Unknown
-const LAYER_DIM: usize = 7;
-/// Component, Function, Actor, Exchange, Interface, Data, Capability, Other
+/// OA, SA, LA, PA, EPBS, Data, Transverse, Unknown -> 8 dimensions
+const LAYER_DIM: usize = 8;
+/// Component, Function, Actor, Exchange, Interface, Data, Capability, Other -> 8 dimensions
 const CATEGORY_DIM: usize = 8;
 
 /// Encodeur sans état (Stateless) pour transformer les concepts Arcadia en Tenseurs.
 pub struct ArcadiaEncoder;
 
 impl ArcadiaEncoder {
-    /// Encode la couche (Layer) en vecteur One-Hot [1, 7]
+    /// Encode la couche (Layer) en vecteur One-Hot [1, 8]
     pub fn encode_layer(layer: Layer) -> Result<Tensor> {
         let index = match layer {
             Layer::OperationalAnalysis => 0,
@@ -24,7 +24,8 @@ impl ArcadiaEncoder {
             Layer::PhysicalArchitecture => 3,
             Layer::EPBS => 4,
             Layer::Data => 5,
-            Layer::Unknown => 6,
+            Layer::Transverse => 6, // AJOUT
+            Layer::Unknown => 7,
         };
 
         Self::one_hot(index, LAYER_DIM)
@@ -47,7 +48,7 @@ impl ArcadiaEncoder {
     }
 
     /// Encode un élément complet (Concaténation Layer + Category)
-    /// Dimension de sortie : [1, 15] (7 + 8)
+    /// Dimension de sortie : [1, 16] (8 + 8)
     pub fn encode_element(element: &ArcadiaElement) -> Result<Tensor> {
         // 1. Extraction sémantique via le Trait existant
         let layer = element.get_layer();
@@ -94,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_encode_layer_sa() {
-        // SA est l'index 1 -> [0, 1, 0, 0, 0, 0, 0]
+        // SA est l'index 1 -> [0, 1, 0, 0, 0, 0, 0, 0]
         let t = ArcadiaEncoder::encode_layer(Layer::SystemAnalysis).unwrap();
         let vec: Vec<f32> = t.to_vec2::<f32>().unwrap()[0].clone();
 
@@ -118,25 +119,25 @@ mod tests {
         // Un LogicalComponent dans LA
         // Layer LA = index 2
         // Category Component = index 0
-        let el = make_element("https://arcadia/la#LogicalComponent");
+        // NOTE: On utilise une URI valide pour passer la validation stricte de element_kind.rs
+        let el = make_element("https://raise.io/ontology/arcadia/la#LogicalComponent");
 
         let t = ArcadiaEncoder::encode_element(&el).unwrap();
         let vec: Vec<f32> = t.to_vec2::<f32>().unwrap()[0].clone();
 
-        // Taille totale attendue : 7 + 8 = 15
+        // Taille totale attendue : 8 + 8 = 16
         assert_eq!(vec.len(), LAYER_DIM + CATEGORY_DIM);
 
         // Vérif Layer part (index 2)
         assert_eq!(vec[2], 1.0, "Layer index 2 (LA) doit être 1.0");
 
-        // Vérif Category part (index 7 + 0 = 7)
-        // Attention : Tensor::cat met les vecteurs bout à bout.
-        // Layer occupe indices 0..6
-        // Category occupe indices 7..14
-        // Component est index 0 de Category, donc index 7 global.
+        // Vérif Category part.
+        // LAYER_DIM est 8.
+        // Category Component est index 0 localement.
+        // Index global = 8 + 0 = 8.
         assert_eq!(
-            vec[7], 1.0,
-            "Category index 0 (Component) décalé de 7 doit être 1.0"
+            vec[8], 1.0,
+            "Category index 0 (Component) décalé de 8 doit être 1.0"
         );
     }
 }

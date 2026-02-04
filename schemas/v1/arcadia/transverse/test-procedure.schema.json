@@ -3,37 +3,61 @@
   "$id": "https://raise.local/schemas/v1/arcadia/transverse/test-procedure.schema.json",
   "title": "Test Procedure",
   "description": "Procédure de test (cas de test) définissant les étapes et les critères de réussite.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Procédure de Test",
+    "en": "Test Procedure"
+  },
+  "x_description": {
+    "fr": "Description détaillée d'un cas de test incluant les étapes, actions et résultats attendus.",
+    "en": "Detailed description of a test case including steps, actions, and expected results."
+  },
   "type": "object",
+  "unevaluatedProperties": false,
   "allOf": [
-    { "$ref": "../../common/base.schema.json" },
-    { "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties" }
+    {
+      "$ref": "../../common/types/base.schema.json"
+    },
+    {
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
   ],
   "properties": {
     "verifies": {
       "type": "array",
-      "items": { "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref" },
+      "items": {
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
+      },
       "description": "Traçabilité : Exigences, Fonctions ou Scénarios vérifiés par ce test."
     },
     "testType": {
       "type": "string",
       "enum": ["Unit", "Integration", "Validation", "Performance", "Security"],
-      "default": "Validation"
+      "default": "Validation",
+      "description": "Type de test (Unitaire, Intégration, Validation, etc.)."
     },
     "steps": {
       "type": "array",
       "items": {
         "type": "object",
+        "unevaluatedProperties": false,
         "properties": {
           "order": { "type": "integer" },
-          "action": { "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nString" },
+          "action": {
+            "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nString"
+          },
           "expectedResult": {
             "$ref": "../../common/types/primitive-types.schema.json#/$defs/i18nString"
           }
         },
         "required": ["action", "expectedResult"]
-      }
+      },
+      "description": "Liste ordonnée des étapes du test."
     },
-    "setupDuration": { "type": "string", "description": "Durée estimée (ISO 8601 duration)." }
+    "setupDuration": {
+      "type": "string",
+      "description": "Durée estimée (ISO 8601 duration)."
+    }
   },
   "required": ["name", "verifies"]
 }

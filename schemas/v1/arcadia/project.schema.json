@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raise.local/schemas/v1/arcadia/project.schema.json",
+  "title": "Arcadia Project",
+  "description": "Racine d'un projet de modélisation système basé sur la méthode Arcadia.",
+  "x_schemaVersion": "1.0.0",
+  "x_label": {
+    "fr": "Projet Arcadia",
+    "en": "Arcadia Project"
+  },
+  "x_description": {
+    "fr": "Structure racine contenant l'ensemble des couches d'architecture (OA, SA, LA, PA, EPBS) et les définitions transverses.",
+    "en": "Root structure containing all architecture layers (OA, SA, LA, PA, EPBS) and transverse definitions."
+  },
+  "type": "object",
+  "unevaluatedProperties": false,
+  "allOf": [
+    {
+      "$ref": "../common/types/base.schema.json"
+    },
+    {
+      "$ref": "metamodel/metamodel.schema.json#/$defs/BaseProperties"
+    }
+  ],
+  "properties": {
+    "modelMetadata": {
+      "type": "object",
+      "description": "Métadonnées générales du projet (Auteur, Organisation, Version du modèle).",
+      "properties": {
+        "author": { "type": "string" },
+        "organization": { "type": "string" },
+        "version": { "type": "string" },
+        "creationDate": { "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime" },
+        "lastModificationDate": {
+          "$ref": "../common/types/primitive-types.schema.json#/$defs/dateTime"
+        }
+      }
+    },
+    "operationalAnalysis": {
+      "type": "object",
+      "title": "Operational Analysis (OA)",
+      "description": "Définition du besoin client et de l'environnement opérationnel.",
+      "properties": {
+        "actors": {
+          "type": "array",
+          "items": { "$ref": "oa/operational-actor.schema.json" }
+        },
+        "activities": {
+          "type": "array",
+          "items": { "$ref": "oa/operational-activity.schema.json" }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "oa/operational-capability.schema.json" }
+        },
+        "interactions": {
+          "type": "array",
+          "items": { "$ref": "oa/operational-interaction.schema.json" }
+        }
+      }
+    },
+    "systemAnalysis": {
+      "type": "object",
+      "title": "System Analysis (SA)",
+      "description": "Définition du système comme une boîte noire (besoin système).",
+      "properties": {
+        "actors": {
+          "type": "array",
+          "items": { "$ref": "sa/system-actor.schema.json" }
+        },
+        "functions": {
+          "type": "array",
+          "items": { "$ref": "sa/system-function.schema.json" }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "sa/system-capability.schema.json" }
+        },
+        "functionalExchanges": {
+          "type": "array",
+          "items": {
+            "$ref": "metamodel/metamodel.schema.json#/$defs/Ref"
+          },
+          "description": "Flux fonctionnels système (souvent définis directement ou via FunctionalExchange générique)."
+        }
+      }
+    },
+    "logicalArchitecture": {
+      "type": "object",
+      "title": "Logical Architecture (LA)",
+      "description": "Conception structurelle logique (non-physique) du système.",
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": { "$ref": "la/logical-component.schema.json" }
+        },
+        "actors": {
+          "type": "array",
+          "items": { "$ref": "la/logical-actor.schema.json" }
+        },
+        "functions": {
+          "type": "array",
+          "items": { "$ref": "la/logical-function.schema.json" }
+        },
+        "interfaces": {
+          "type": "array",
+          "items": { "$ref": "la/logical-interface.schema.json" }
+        },
+        "functionalExchanges": {
+          "type": "array",
+          "items": { "$ref": "la/functional-exchange.schema.json" }
+        },
+        "componentExchanges": {
+          "type": "array",
+          "items": { "$ref": "la/component-exchange.schema.json" }
+        }
+      }
+    },
+    "physicalArchitecture": {
+      "type": "object",
+      "title": "Physical Architecture (PA)",
+      "description": "Conception matérielle et logicielle détaillée (As-Built).",
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": { "$ref": "pa/physical-component.schema.json" }
+        },
+        "actors": {
+          "type": "array",
+          "items": { "$ref": "pa/physical-actor.schema.json" }
+        },
+        "functions": {
+          "type": "array",
+          "items": { "$ref": "pa/physical-function.schema.json" }
+        },
+        "links": {
+          "type": "array",
+          "items": { "$ref": "pa/physical-link.schema.json" }
+        },
+        "componentExchanges": {
+          "type": "array",
+          "items": { "$ref": "pa/component-exchange.schema.json" }
+        }
+      }
+    },
+    "epbsArchitecture": {
+      "$ref": "epbs/epbs-architecture.schema.json",
+      "description": "Structure de rupture du produit final (End-Product Breakdown Structure)."
+    },
+    "dataDefinition": {
+      "type": "object",
+      "title": "Data & Interfaces",
+      "description": "Dictionnaire de données commun à toutes les couches.",
+      "properties": {
+        "classes": {
+          "type": "array",
+          "items": { "$ref": "data/class.schema.json" }
+        },
+        "types": {
+          "type": "array",
+          "items": { "$ref": "data/data-type.schema.json" }
+        },
+        "exchangeItems": {
+          "type": "array",
+          "items": { "$ref": "data/exchange-item.schema.json" }
+        }
+      }
+    },
+    "transverseElements": {
+      "type": "object",
+      "title": "Transverse Elements",
+      "description": "Éléments transverses (Exigences, Scénarios, Règles, Tests).",
+      "properties": {
+        "requirements": {
+          "type": "array",
+          "items": { "$ref": "transverse/requirement.schema.json" }
+        },
+        "scenarios": {
+          "type": "array",
+          "items": { "$ref": "transverse/scenario.schema.json" }
+        },
+        "functionalChains": {
+          "type": "array",
+          "items": { "$ref": "transverse/functional-chain.schema.json" }
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "transverse/constraint.schema.json" }
+        },
+        "propertyDefinitions": {
+          "type": "array",
+          "items": { "$ref": "transverse/property-definition.schema.json" }
+        },
+        "qualityRules": {
+          "type": "array",
+          "items": { "$ref": "transverse/quality-rule.schema.json" }
+        },
+        "testProcedures": {
+          "type": "array",
+          "items": { "$ref": "transverse/test-procedure.schema.json" }
+        },
+        "testCampaigns": {
+          "type": "array",
+          "items": { "$ref": "transverse/test-campaign.schema.json" }
+        },
+        "testExecutions": {
+          "type": "array",
+          "items": { "$ref": "transverse/test-execution.schema.json" }
+        }
+      }
+    }
+  },
+  "required": ["name"]
+}

@@ -12,21 +12,16 @@
     "fr": "Entité logique susceptible d'émettre/recevoir des événements et de détenir des rôles.",
     "en": "Logical entity that can emit/receive events and hold roles."
   },
-
   "type": "object",
-
   "unevaluatedProperties": false,
-
   "allOf": [
     {
       "$ref": "../../common/types/base.schema.json"
     },
-
     {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/BaseProperties"
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/BaseProperties"
     }
   ],
-
   "properties": {
     "isHuman": {
       "type": "boolean",
@@ -35,15 +30,16 @@
       "description": "Indique si l'acteur est un être humain ou un système externe."
     },
     "organization": {
-      "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref",
-      "description": "Référence vers l'Entité Opérationnelle parente."
+      "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref",
+      "description": "Référence vers l'Entité Opérationnelle parente (Organisation/Service)."
     },
     "allocatedActivities": {
       "type": "array",
       "items": {
-        "$ref": "../../metamodel/metamodel.schema.json#/$defs/Ref"
+        "$ref": "../metamodel/metamodel.schema.json#/$defs/Ref"
       },
       "description": "Activités opérationnelles effectuées par cet acteur."
     }
-  }
+  },
+  "required": ["name"]
 }

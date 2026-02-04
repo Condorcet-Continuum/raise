@@ -7,12 +7,12 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use tauri::Manager;
-use tokio::sync::Mutex as AsyncMutex; // Nécessaire pour select_next_some() sur le Swarm
+use tokio::sync::Mutex as AsyncMutex;
 
 // --- IMPORTS RAISE ---
 use raise::ai::training::dataset;
@@ -25,13 +25,12 @@ use raise::commands::{
     json_db_commands, model_commands, rules_commands, traceability_commands, utils_commands,
     workflow_commands,
 };
-use std::sync::Mutex; // On s'assure d'avoir le Mutex standard pour la blockchain
 
 // --- BRIDGE, CONSENSUS & P2P ---
+use libp2p::gossipsub;
 use libp2p::swarm::SwarmEvent;
-use libp2p::{gossipsub, kad};
 use raise::blockchain::bridge::ArcadiaBridge;
-use raise::blockchain::consensus::{ConsensusEngine, Vote}; // Ajout du moteur de consensus
+use raise::blockchain::consensus::{ConsensusEngine, Vote};
 use raise::blockchain::p2p::behavior::ArcadiaBehaviorEvent;
 use raise::blockchain::p2p::protocol::ArcadiaNetMessage;
 
@@ -63,11 +62,9 @@ use raise::commands::ai_commands::DlState;
 
 use raise::spatial_engine;
 
-// FIX CLIPPY FINAL : On autorise le maintien du verrou pendant un await pour toute la fonction main.
-// C'est nécessaire car list_peers() emprunte le client protégé par Mutex, et sans risque ici (setup unique).
 #[allow(clippy::await_holding_lock)]
 fn main() {
-    // [MODIFICATION] Chargement explicite du .env au démarrage
+    // 1. CHARGEMENT ENV
     dotenvy::dotenv().ok();
 
     println!("🚀 Démarrage de RAISE...");
@@ -75,12 +72,12 @@ fn main() {
     let _ = raise::utils::AppConfig::init();
 
     tauri::Builder::default()
-        // 0. GESTION ETAT IA NATIF
         .manage(NativeLlmState(std::sync::Mutex::new(None)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // 1. CONFIG DOMAINE
+            // 2. CONFIG DOMAINE & STOCKAGE
+            // Récupération du chemin racine (ex: /home/zair/raise_domain)
             let db_root = if let Ok(env_path) = env::var("PATH_RAISE_DOMAIN") {
                 PathBuf::from(env_path)
             } else {
@@ -90,15 +87,23 @@ fn main() {
                 fs::create_dir_all(&db_root)?;
             }
 
-            // 2. CONFIG STORAGE
             let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
-            let default_space = "un2";
+
+            // NOTE: Votre structure de dossier indique l'espace "mbse2"
+            let default_space = "mbse2";
             let default_db = "_system";
 
-            load_arcadia_ontologies(app.handle());
+            // 3. CHARGEMENT ONTOLOGIES (Depuis le dossier de domaine)
+            // Construction du chemin : ~/raise_domain/mbse2/_system/schemas/v1/arcadia/@context
+            let ontology_path = db_root
+                .join(default_space)
+                .join(default_db)
+                .join("schemas/v1/arcadia/@context");
 
-            // 3. GRAPH STORE
+            load_arcadia_ontologies(&ontology_path);
+
+            // 4. GRAPH STORE
             let graph_path = db_root.join("graph_store");
             let graph_store_result =
                 tauri::async_runtime::block_on(async { GraphStore::new(graph_path).await });
@@ -110,31 +115,26 @@ fn main() {
                 eprintln!("❌ [GraphStore] Echec chargement base graphe.");
             }
 
-            // 4. MIGRATIONS & PLUGIN MANAGER (NETTOYÉ)
-            // On exécute les migrations une seule fois
+            // 5. MIGRATIONS
             let _ = tauri::async_runtime::block_on(run_app_migrations(
                 &storage,
                 default_space,
                 default_db,
             ));
 
-            // Initialisation du PluginManager
-            // NOTE : On passe `None` pour l'IA car l'Orchestrateur n'est pas encore chargé (Async).
-            // Pour permettre aux plugins d'utiliser l'IA, il faudra une injection dynamique (Late Binding) plus tard.
             let plugin_mgr = Arc::new(PluginManager::new(&storage, None));
 
-            // 5. INJECTION ÉTATS
+            // 6. INJECTION DES ÉTATS
             app.manage(config);
             let storage_engine = storage.clone();
             app.manage(storage);
-            app.manage(plugin_mgr.clone()); // On partage l'Arc avec Tauri
+            app.manage(plugin_mgr.clone());
 
             let app_state = Arc::new(AppState {
                 model: std::sync::Mutex::new(ProjectModel::default()),
             });
             app.manage(app_state.clone());
 
-            // Pour WorkflowStore, on conserve AsyncMutex car il est géré comme un type autonome
             app.manage(AsyncMutex::new(WorkflowStore::default()));
             app.manage(AiState::new(None));
             app.manage(DlState::new());
@@ -142,10 +142,10 @@ fn main() {
             let app_handle = app.handle();
             raise::blockchain::ensure_innernet_state(app_handle, "default");
 
-            // --- INITIALISATION FABRIC (AJOUT) ---
+            // --- INITIALISATION FABRIC ---
             let default_fabric_profile = ConnectionProfile {
                 name: "pending".into(),
-                version: "1.0".into(),
+                version: "1.0.0".into(),
                 client: raise::blockchain::fabric::config::ClientConfig {
                     organization: "none".into(),
                     connection: None,
@@ -160,42 +160,33 @@ fn main() {
 
             // --- INITIALISATION RÉSEAU ARCADIA ---
             let local_key = libp2p::identity::Keypair::generate_ed25519();
-            // Récupération de l'ID de pair local pour l'auto-vote
             let local_peer_id = local_key.public().to_peer_id().to_string();
             let swarm_res = tauri::async_runtime::block_on(async { create_swarm(local_key).await });
 
             if let Ok(swarm) = swarm_res {
-                // On encapsule le Swarm et le Ledger pour un accès thread-safe
                 app.manage(AsyncMutex::new(swarm));
                 app.manage(Mutex::new(Ledger::new()));
                 app.manage(Mutex::new(SyncEngine::new()));
 
-                // --- INITIALISATION CONSENSUS (NOUVEAU) ---
-                // On récupère les pairs VPN Innernet pour définir les autorités
                 let innernet = raise::blockchain::innernet_state(app.handle());
-
-                // On appelle list_peers() directement. L'attribut #[allow] sur main() gère le warning.
-                // Le compilateur est satisfait car le MutexGuard vit aussi longtemps que la Future.
                 let peers_res = tauri::async_runtime::block_on(async {
                     innernet.lock().unwrap().list_peers().await
                 });
 
                 if let Ok(peers) = peers_res {
-                    // On initialise le moteur avec un quorum par défaut de 50%
                     let consensus = ConsensusEngine::new(&peers, 0.5);
                     app.manage(AsyncMutex::new(consensus));
-                    println!("✅ [Arcadia] Swarm, Ledger et Consensus (Quorum 50%) initialisés.");
+                    println!("✅ [Arcadia] Swarm, Ledger et Consensus initialisés.");
                 } else {
-                    eprintln!("⚠️ [Arcadia] Impossible de récupérer les pairs VPN pour le Consensus.");
+                    eprintln!("⚠️ [Arcadia] Impossible de récupérer les pairs VPN.");
                 }
             } else {
                 eprintln!("❌ [Arcadia] Échec du démarrage du réseau P2P.");
             }
 
-            // --- CHARGEMENT IA NATIF ---
+            // --- BACKGROUND: IA NATIF ---
             let native_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                println!("⏳ [Background] Initialisation du moteur IA Natif (Llama 3.2 1B)...");
                 match CandleLlmEngine::new() {
                     Ok(engine) => {
                         let state = native_handle.state::<NativeLlmState>();
@@ -208,152 +199,91 @@ fn main() {
                 }
             });
 
-            // 6. INITIALISATION ASYNC ORCHESTRATEUR
+            // --- BACKGROUND: ORCHESTRATEUR IA ---
             let app_handle_clone = app.handle().clone();
-            let plugin_mgr_for_wf = plugin_mgr.clone(); // Clone de l'Arc pour le Workflow
+            let plugin_mgr_for_wf = plugin_mgr.clone();
 
             tauri::async_runtime::spawn(async move {
                 let llm_url =
                     env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
-
                 let qdrant_url = format!(
                     "http://127.0.0.1:{}",
                     env::var("PORT_QDRANT_GRPC").unwrap_or_else(|_| "6334".into())
                 );
 
-                println!(
-                    "🤖 [IA] Chargement Orchestrateur (RAG/LLM) sur {}...",
-                    llm_url
-                );
-
                 let storage_state = app_handle_clone.state::<StorageEngine>();
+                // On utilise le même espace que défini plus haut (mbse2)
+                let loader = ModelLoader::from_engine(storage_state.inner(), "mbse2", "_system");
 
-                let loader = ModelLoader::from_engine(storage_state.inner(), "un2", "_system");
+                if let Ok(model) = loader.load_full_model().await {
+                    let storage_arc = Arc::new(storage_state.inner().clone());
 
-                // CORRECTION E0308 : Ajout de .await car load_full_model est une Future
-                let model_res = loader.load_full_model();
+                    match AiOrchestrator::new(model, &qdrant_url, &llm_url, Some(storage_arc)).await
+                    {
+                        Ok(orchestrator) => {
+                            let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
+                            let ai_state = app_handle_clone.state::<AiState>();
+                            *ai_state.0.lock().await = Some(shared_orch.clone());
+                            let wf_state = app_handle_clone.state::<AsyncMutex<WorkflowStore>>();
+                            let mut wf_store = wf_state.lock().await;
+                            wf_store.scheduler =
+                                Some(WorkflowScheduler::new(shared_orch, plugin_mgr_for_wf));
 
-                match model_res.await {
-                    Ok(model) => {
-                        println!("✅ [IA] Modèle symbolique chargé. Démarrage Orchestrateur...");
-
-                        // CORRECTION E0061 : Injection du StorageEngine requis par les Agents
-                        let storage_arc = Arc::new(storage_state.inner().clone());
-
-                        match AiOrchestrator::new(model, &qdrant_url, &llm_url, Some(storage_arc))
-                            .await
-                        {
-                            Ok(orchestrator) => {
-                                let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
-
-                                let ai_state = app_handle_clone.state::<AiState>();
-                                let mut guard = ai_state.0.lock().await;
-                                *guard = Some(shared_orch.clone());
-
-                                let wf_state =
-                                    app_handle_clone.state::<AsyncMutex<WorkflowStore>>();
-                                let mut wf_store = wf_state.lock().await;
-
-                                // CORRECTION E0061 : Injection des deux arguments requis (Orchestrateur + PluginManager)
-                                wf_store.scheduler =
-                                    Some(WorkflowScheduler::new(shared_orch, plugin_mgr_for_wf));
-
-                                println!("✅ [RAISE] Orchestrateur IA opérationnel (Hybride).");
-                            }
-                            Err(e) => eprintln!("❌ Erreur Fatale Orchestrator: {}", e),
+                            println!("✅ [RAISE] Orchestrateur IA opérationnel.");
                         }
+                        Err(e) => eprintln!("❌ Erreur Fatale Orchestrator: {}", e),
                     }
-                    Err(e) => eprintln!("❌ Erreur Chargement Modèle Projet : {}", e),
+                } else {
+                    eprintln!("⚠️ [IA] Impossible de charger le modèle symbolique initial.");
                 }
             });
 
-            // --- BOUCLE D'ÉVÉNEMENTS P2P ARCADIA ---
+            // --- BOUCLE P2P ---
             let swarm_handle = app.handle().clone();
             let storage_for_p2p = storage_engine;
             let app_state_for_p2p = app_state;
             let local_id_for_vote = local_peer_id;
 
             tauri::async_runtime::spawn(async move {
-                let swarm_state =
-                    swarm_handle.state::<AsyncMutex<
-                        libp2p::Swarm<raise::blockchain::p2p::behavior::ArcadiaBehavior>,
-                    >>();
-
-                // Accès au moteur de consensus pour validation
+                let swarm_state = swarm_handle.state::<AsyncMutex<
+                    libp2p::Swarm<raise::blockchain::p2p::behavior::ArcadiaBehavior>,
+                >>();
                 let consensus_state = swarm_handle.state::<AsyncMutex<ConsensusEngine>>();
-
-                println!("🌐 [Arcadia] Écoute réseau active (Mode Consensus Strict + Auto-Vote)...");
-
                 let mut swarm = swarm_state.lock().await;
 
                 loop {
                     tokio::select! {
-                        event = swarm.select_next_some() => match event {
-                            // Interception des messages Gossipsub (Commits et Votes)
-                            SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
+                        event = swarm.select_next_some() => {
+                            // CORRECTION CLIPPY: Remplacement de `match` par `if let` pour un cas unique
+                            if let SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Gossipsub(gossipsub::Event::Message { message, .. })) = event {
                                 if let Ok(net_msg) = serde_json::from_slice::<ArcadiaNetMessage>(&message.data) {
                                     let mut engine = consensus_state.lock().await;
-
                                     match net_msg {
-                                        // 1. Un pair diffuse un nouveau commit
                                         ArcadiaNetMessage::AnnounceCommit(commit) => {
-                                            // Vérification immédiate de l'autorité (VPN mesh)
                                             if engine.verify_authority(&commit) {
-                                                println!("📥 [Arcadia] Commit {} proposé par authority validée. Enregistrement...", commit.id);
                                                 let _ = engine.register_proposal(commit.clone());
-
-                                                // --- LOGIQUE AUTO-VOTE ---
-                                                // Si le commit est valide, notre nœud émet son propre vote immédiatement
                                                 let my_vote = Vote {
                                                     commit_id: commit.id.clone(),
                                                     validator_key: local_id_for_vote.clone(),
-                                                    signature: vec![1, 0, 1, 0], // Simulation signature simplifiée
+                                                    signature: vec![1, 0, 1, 0],
                                                 };
-
                                                 if let Ok(vote_data) = serde_json::to_vec(&ArcadiaNetMessage::SubmitVote(my_vote)) {
                                                     let topic = gossipsub::IdentTopic::new("arcadia-consensus");
                                                     let _ = swarm.behaviour_mut().gossipsub.publish(topic, vote_data);
-                                                    println!("🗳️ [Arcadia] Auto-vote émis pour commit: {}", commit.id);
                                                 }
                                             }
                                         },
-
-                                        // 2. Réception d'un vote individuel
                                         ArcadiaNetMessage::SubmitVote(vote) => {
-                                            // On traite le vote. Si le quorum est atteint, le moteur retourne le commit final
-                                            match engine.process_vote(vote) {
-                                                Ok(Some(final_commit)) => {
-                                                    println!("⚖️ [Consensus] Quorum atteint pour commit: {} ! Application...", final_commit.id);
-
-                                                    // Déclenchement du Bridge pour la réconciliation (Persistance + Mémoire)
-                                                    let bridge = ArcadiaBridge::new(&storage_for_p2p, &app_state_for_p2p);
-                                                    if let Err(e) = bridge.process_new_commit(&final_commit).await {
-                                                        eprintln!("❌ [Bridge] Échec de synchronisation finale: {}", e);
-                                                    }
-                                                    engine.finalize_commit(&final_commit.id);
-                                                },
-                                                Ok(None) => {}, // Vote valide enregistré, quorum non encore atteint
-                                                Err(e) => eprintln!("⚠️ [Consensus] Vote rejeté: {}", e),
+                                            if let Ok(Some(final_commit)) = engine.process_vote(vote) {
+                                                let bridge = ArcadiaBridge::new(&storage_for_p2p, &app_state_for_p2p);
+                                                let _ = bridge.process_new_commit(&final_commit).await;
+                                                engine.finalize_commit(&final_commit.id);
                                             }
                                         },
                                         _ => {}
                                     }
                                 }
-                            },
-
-                            // Découverte de pairs via Kademlia
-                            SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Kademlia(kad::Event::OutboundQueryProgressed {
-                                result: kad::QueryResult::GetClosestPeers(Ok(ok)), ..
-                            })) => {
-                                for peer in ok.peers {
-                                    println!("🤝 [Arcadia] Pair découvert: {:?}", peer);
-                                }
-                            },
-
-                            SwarmEvent::NewListenAddr { address, .. } => {
-                                println!("📡 [Arcadia] Écoute locale sur: {:?}", address);
-                            },
-                            _ => {}
+                            }
                         }
                     }
                 }
@@ -361,7 +291,6 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Commandes JSON DB
             json_db_commands::jsondb_create_db,
             json_db_commands::jsondb_drop_db,
             json_db_commands::jsondb_create_collection,
@@ -378,12 +307,9 @@ fn main() {
             json_db_commands::jsondb_execute_sql,
             json_db_commands::jsondb_evaluate_draft,
             json_db_commands::jsondb_init_demo_rules,
-            // Modteur de Modèle
             model_commands::load_project_model,
-            // Moteur de Règles ---
             rules_commands::dry_run_rule,
             rules_commands::validate_model,
-            // Commandes IA
             ai_commands::ai_chat,
             ai_commands::ai_reset,
             ai_commands::ask_native_llm,
@@ -393,13 +319,10 @@ fn main() {
             ai_commands::train_dl_step,
             ai_commands::save_dl_model,
             ai_commands::load_dl_model,
-            //dataset
             dataset::ai_export_dataset,
-            // Commandes Cognitives
             cognitive_commands::cognitive_load_plugin,
             cognitive_commands::cognitive_run_plugin,
             cognitive_commands::cognitive_list_plugins,
-            // Commandes Blockchain
             blockchain_commands::fabric_ping,
             blockchain_commands::fabric_submit_transaction,
             blockchain_commands::fabric_query_transaction,
@@ -411,29 +334,23 @@ fn main() {
             blockchain_commands::vpn_add_peer,
             blockchain_commands::vpn_ping_peer,
             blockchain_commands::vpn_check_installation,
-            // Commandes Arcadia (P2P Souverain)
             blockchain_commands::arcadia_broadcast_mutation,
             blockchain_commands::arcadia_get_sync_status,
             blockchain_commands::arcadia_get_ledger_info,
-            // Commandes Génétiques
             genetics_commands::run_architecture_optimization,
             genetics_commands::debug_genetics_ping,
-            // Commandes Générateur de code
             codegen_commands::generate_source_code,
-            // Commandes Traçabilité
             traceability_commands::analyze_impact,
             traceability_commands::run_compliance_audit,
             traceability_commands::get_traceability_matrix,
             traceability_commands::get_element_neighbors,
             utils_commands::get_app_info,
-            // Commandes Workflow
             workflow_commands::submit_mandate,
             workflow_commands::register_workflow,
             workflow_commands::start_workflow,
             workflow_commands::resume_workflow,
             workflow_commands::get_workflow_state,
             workflow_commands::set_sensor_value,
-            // Moteur 3D
             spatial_engine::get_spatial_topology
         ])
         .run(tauri::generate_context!())
@@ -476,24 +393,85 @@ async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> a
             applied_at: None,
         },
     ];
-    // CORRECTION E0277 : Ajout de .await car run_migrations est asynchrone
     migrator.run_migrations(migrations).await?;
     Ok(())
 }
 
-fn load_arcadia_ontologies(app_handle: &tauri::AppHandle) {
-    // Chemin vers le dossier "ontology" dans vos ressources
-    // Note: Assurez-vous que ce dossier est bien copié via tauri.conf.json > bundle > resources
-    if let Ok(resource_path) = app_handle.path().resource_dir() {
-        let ontology_root = resource_path.join("ontology/arcadia/@context");
-        let registry = VocabularyRegistry::global();
+// --- LOGIQUE DE CHARGEMENT DES ONTOLOGIES ---
 
-        // Chargement silencieux (ne crashe pas si les fichiers manquent, mais log en debug)
-        let _ = registry.load_layer_from_file("oa", &ontology_root.join("oa.jsonld"));
-        let _ = registry.load_layer_from_file("sa", &ontology_root.join("sa.jsonld"));
-        let _ = registry.load_layer_from_file("la", &ontology_root.join("la.jsonld"));
-        let _ = registry.load_layer_from_file("pa", &ontology_root.join("pa.jsonld"));
-        let _ = registry.load_layer_from_file("epbs", &ontology_root.join("epbs.jsonld"));
-        let _ = registry.load_layer_from_file("data", &ontology_root.join("data.jsonld"));
+fn load_arcadia_ontologies(ontology_root: &Path) {
+    let registry = VocabularyRegistry::global();
+    let layers = ["oa", "sa", "la", "pa", "epbs", "data", "transverse"];
+
+    println!(
+        "📂 [Ontology] Démarrage du chargement depuis {:?}",
+        ontology_root
+    );
+
+    for layer in layers {
+        let path = ontology_root.join(format!("{}.jsonld", layer));
+
+        if path.exists() {
+            if let Err(e) = registry.load_layer_from_file(layer, &path) {
+                eprintln!(
+                    "⚠️ [Ontology] Erreur lors du chargement de {}: {}",
+                    layer, e
+                );
+            } else {
+                println!("✅ [Ontology] Couche '{}' chargée avec succès.", layer);
+            }
+        } else {
+            eprintln!(
+                "⚠️ [Ontology] Fichier manquant pour la couche '{}' : {:?}",
+                layer, path
+            );
+        }
+    }
+}
+
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_load_ontologies_from_directory_success() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        let oa_content = r#"{ "@context": { "oa": "http://oa#" } }"#;
+        let transverse_content = r#"{ "@context": { "lib": "http://lib#" } }"#;
+
+        let oa_path = path.join("oa.jsonld");
+        let trans_path = path.join("transverse.jsonld");
+
+        let mut f_oa = File::create(&oa_path).unwrap();
+        write!(f_oa, "{}", oa_content).unwrap();
+
+        let mut f_trans = File::create(&trans_path).unwrap();
+        write!(f_trans, "{}", transverse_content).unwrap();
+
+        load_arcadia_ontologies(path);
+
+        let registry = VocabularyRegistry::global();
+        assert!(registry.get_context_for_layer("oa").is_some());
+        assert!(registry.get_context_for_layer("transverse").is_some());
+
+        let _ctx_sa = registry.get_context_for_layer("sa");
+    }
+
+    #[tokio::test]
+    async fn test_migrations_list_integrity() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let res = run_app_migrations(&storage, "test_space", "test_db").await;
+        assert!(res.is_ok());
     }
 }

@@ -35,10 +35,22 @@ pub enum EngineeringIntent {
         context: String,
         filename: String,
     },
+    // --- AJOUT ---
+    #[serde(rename = "verify_quality")]
+    VerifyQuality {
+        #[serde(default = "default_scope")]
+        scope: String, // "code", "model", "requirements"
+        target: String, // Cible de la vérification
+    },
+    // -------------
     #[serde(rename = "chat")]
     Chat,
     #[serde(rename = "unknown")]
     Unknown,
+}
+
+fn default_scope() -> String {
+    "global".to_string()
 }
 
 impl EngineeringIntent {
@@ -59,6 +71,8 @@ impl EngineeringIntent {
             },
             Self::CreateRelationship { .. } => "system_agent", // Par défaut, souvent géré au niveau système
             Self::GenerateCode { .. } => "software_agent",
+            // ROUTAGE VERS QUALITY MANAGER
+            Self::VerifyQuality { .. } => "transverse_agent",
             Self::Chat | Self::Unknown => "orchestrator_agent",
         }
     }
@@ -87,6 +101,24 @@ impl IntentClassifier {
 
         // --- 1. COURT-CIRCUIT (Optimisation CPU & Déterminisme) ---
         // On évite le LLM si l'intention est évidente via des mots-clés forts.
+
+        // DÉTECTION QUALITÉ / TESTS
+        if lower_input.contains("vérifi") // vérifie, vérification
+            || lower_input.contains("verify")
+            || lower_input.contains("qualité")
+            || lower_input.contains("quality")
+            || lower_input.contains("lint") 
+            || lower_input.contains("analyse statique")
+        {
+            return EngineeringIntent::VerifyQuality {
+                scope: if lower_input.contains("code") {
+                    "code".into()
+                } else {
+                    "model".into()
+                },
+                target: extract_target_heuristics(user_input),
+            };
+        }
 
         // TRANSVERSE (Exigences, Tests)
         if lower_input.contains("exigence") || lower_input.contains("requirement") {
@@ -146,8 +178,10 @@ impl IntentClassifier {
         FORMATS ATTENDUS :
         1. Création : { \"intent\": \"create_element\", \"layer\": \"OA|SA|LA|PA|DATA|TRANSVERSE\", \"element_type\": \"Type\", \"name\": \"Nom\" }
         2. Code : { \"intent\": \"generate_code\", \"language\": \"rust|python\", \"filename\": \"main.rs\", \"context\": \"description\" }
+        3. Qualité : { \"intent\": \"verify_quality\", \"scope\": \"code|model\", \"target\": \"Nom cible\" }
 
-        Exemple: 'Génère le code Rust pour Auth' -> { \"intent\": \"generate_code\", \"language\": \"rust\", \"filename\": \"auth.rs\", \"context\": \"Auth\" }";
+        Exemple: 'Génère le code Rust pour Auth' -> { \"intent\": \"generate_code\", \"language\": \"rust\", \"filename\": \"auth.rs\", \"context\": \"Auth\" }
+        Exemple: 'Vérifie la qualité de Auth' -> { \"intent\": \"verify_quality\", \"scope\": \"model\", \"target\": \"Auth\" }";
 
         let response = self
             .llm
@@ -232,8 +266,35 @@ fn extract_name(input: &str, keyword: &str) -> String {
     input.to_string()
 }
 
+fn extract_target_heuristics(input: &str) -> String {
+    let lower = input.to_lowercase();
+    for kw in [
+        "pour ",
+        "sur ",
+        "check ",
+        "verify ",
+        "vérifie ",
+        "verification ",
+    ] {
+        if let Some(idx) = lower.find(kw) {
+            return input[idx + kw.len()..].trim().to_string();
+        }
+    }
+    // Fallback: retourne tout l'input si on ne trouve pas de séparateur propre
+    input.to_string()
+}
+
 fn heuristic_fallback(input: &str) -> Value {
     let lower = input.to_lowercase();
+
+    // AJOUT : Fallback Qualité
+    if lower.contains("vérif") || lower.contains("check") {
+        return json!({
+            "intent": "verify_quality",
+            "scope": "code",
+            "target": input
+        });
+    }
 
     if lower.contains("code") || lower.contains("génère") || lower.contains("generate") {
         return json!({
@@ -270,6 +331,7 @@ mod tests {
 
     #[test]
     fn test_recommended_agent_routing() {
+        // Test existant SA
         let intent_sa = EngineeringIntent::CreateElement {
             layer: "SA".to_string(),
             element_type: "System".to_string(),
@@ -277,6 +339,7 @@ mod tests {
         };
         assert_eq!(intent_sa.recommended_agent_id(), "system_agent");
 
+        // Test existant LA
         let intent_la = EngineeringIntent::CreateElement {
             layer: "LA".to_string(),
             element_type: "Component".to_string(),
@@ -284,12 +347,20 @@ mod tests {
         };
         assert_eq!(intent_la.recommended_agent_id(), "software_agent");
 
+        // Test existant Code
         let intent_code = EngineeringIntent::GenerateCode {
             language: "rust".into(),
             context: "".into(),
             filename: "".into(),
         };
         assert_eq!(intent_code.recommended_agent_id(), "software_agent");
+
+        // AJOUT : Test Routing Qualité
+        let intent_qa = EngineeringIntent::VerifyQuality {
+            scope: "code".into(),
+            target: "MyComp".into(),
+        };
+        assert_eq!(intent_qa.recommended_agent_id(), "transverse_agent");
     }
 
     #[test]
@@ -321,5 +392,20 @@ mod tests {
         assert_eq!(val["intent"], "create_element");
         assert_eq!(val["layer"], "LA");
         assert_eq!(val["element_type"], "Component");
+    }
+
+    // AJOUT : Test Fallback Verify
+    #[test]
+    fn test_heuristic_fallback_verify() {
+        let val = heuristic_fallback("Check le module X");
+        assert_eq!(val["intent"], "verify_quality");
+        assert_eq!(val["scope"], "code");
+    }
+
+    // AJOUT : Test Heuristique Target Extraction
+    #[test]
+    fn test_extract_target() {
+        let t = extract_target_heuristics("Vérifie sur le Jetson");
+        assert_eq!(t, "le Jetson");
     }
 }

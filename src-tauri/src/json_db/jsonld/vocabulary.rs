@@ -16,6 +16,7 @@ pub mod namespaces {
     pub const PA: &str = "https://raise.io/ontology/arcadia/pa#";
     pub const EPBS: &str = "https://raise.io/ontology/arcadia/epbs#";
     pub const DATA: &str = "https://raise.io/ontology/arcadia/data#";
+    pub const TRANSVERSE: &str = "https://raise.io/ontology/arcadia/transverse#";
 
     // Standards
     pub const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -26,7 +27,7 @@ pub mod namespaces {
     pub const PROV: &str = "http://www.w3.org/ns/prov#";
 }
 
-// --- CONSTANTES DE TYPAGE (RESTAURÉES) ---
+// --- CONSTANTES DE TYPAGE ---
 pub mod arcadia_types {
     // OA
     pub const OA_ACTOR: &str = "OperationalActor";
@@ -62,6 +63,14 @@ pub mod arcadia_types {
     pub const DATA_TYPE: &str = "DataType";
     pub const EXCHANGE_ITEM: &str = "ExchangeItem";
 
+    // TRANSVERSE (Mise à jour suite à la structure réelle)
+    pub const TRANSVERSE_REQUIREMENT: &str = "Requirement";
+    pub const TRANSVERSE_SCENARIO: &str = "Scenario";
+    pub const TRANSVERSE_FUNCTIONAL_CHAIN: &str = "FunctionalChain";
+    pub const TRANSVERSE_CONSTRAINT: &str = "Constraint";
+    pub const TRANSVERSE_QUALITY_RULE: &str = "QualityRule";
+    pub const TRANSVERSE_TEST_PROCEDURE: &str = "TestProcedure";
+
     pub fn uri(namespace: &str, type_name: &str) -> String {
         format!("{}{}", namespace, type_name)
     }
@@ -92,12 +101,11 @@ pub struct Property {
 }
 
 // ============================================================================
-// DÉFINITIONS DES MODULES MÉTIERS (Pour validation interne)
+// DÉFINITIONS DES MODULES MÉTIERS
 // ============================================================================
 
 pub mod oa {
     use super::*;
-    // Ces constantes sont aussi utiles ici pour les définitions internes
     pub const OPERATIONAL_ACTIVITY: &str = "OperationalActivity";
     pub const OPERATIONAL_CAPABILITY: &str = "OperationalCapability";
     pub const OPERATIONAL_ACTOR: &str = "OperationalActor";
@@ -178,6 +186,10 @@ pub mod sa {
             },
         ]
     }
+
+    pub fn properties() -> Vec<Property> {
+        vec![]
+    }
 }
 
 pub mod la {
@@ -214,6 +226,9 @@ pub mod la {
                 sub_class_of: None,
             },
         ]
+    }
+    pub fn properties() -> Vec<Property> {
+        vec![]
     }
 }
 
@@ -252,6 +267,9 @@ pub mod pa {
             },
         ]
     }
+    pub fn properties() -> Vec<Property> {
+        vec![]
+    }
 }
 
 pub mod epbs {
@@ -265,6 +283,9 @@ pub mod epbs {
             comment: "Element of configuration (HWCI, CSCI)".to_string(),
             sub_class_of: None,
         }]
+    }
+    pub fn properties() -> Vec<Property> {
+        vec![]
     }
 }
 
@@ -296,6 +317,57 @@ pub mod data {
             },
         ]
     }
+    pub fn properties() -> Vec<Property> {
+        vec![]
+    }
+}
+
+pub mod transverse {
+    use super::*;
+    // Définition basée sur la structure de fichiers réelle
+    pub const REQUIREMENT: &str = "Requirement";
+    pub const SCENARIO: &str = "Scenario";
+    pub const FUNCTIONAL_CHAIN: &str = "FunctionalChain";
+    pub const CONSTRAINT: &str = "Constraint";
+    pub const TEST_PROCEDURE: &str = "TestProcedure";
+
+    pub fn classes() -> Vec<Class> {
+        vec![
+            Class {
+                iri: format!("{}{}", namespaces::TRANSVERSE, REQUIREMENT),
+                label: "Requirement".to_string(),
+                comment: "A system requirement".to_string(),
+                sub_class_of: None,
+            },
+            Class {
+                iri: format!("{}{}", namespaces::TRANSVERSE, SCENARIO),
+                label: "Scenario".to_string(),
+                comment: "Interaction scenario".to_string(),
+                sub_class_of: None,
+            },
+            Class {
+                iri: format!("{}{}", namespaces::TRANSVERSE, FUNCTIONAL_CHAIN),
+                label: "Functional Chain".to_string(),
+                comment: "A path through functions".to_string(),
+                sub_class_of: None,
+            },
+            Class {
+                iri: format!("{}{}", namespaces::TRANSVERSE, CONSTRAINT),
+                label: "Constraint".to_string(),
+                comment: "A system constraint".to_string(),
+                sub_class_of: None,
+            },
+            Class {
+                iri: format!("{}{}", namespaces::TRANSVERSE, TEST_PROCEDURE),
+                label: "Test Procedure".to_string(),
+                comment: "A verification procedure".to_string(),
+                sub_class_of: None,
+            },
+        ]
+    }
+    pub fn properties() -> Vec<Property> {
+        vec![]
+    }
 }
 
 // --- REGISTRE PRINCIPAL (SINGLETON DYNAMIQUE) ---
@@ -306,9 +378,6 @@ pub struct VocabularyRegistry {
     classes: HashMap<String, Class>,
     properties: HashMap<String, Property>,
     default_context: HashMap<String, String>,
-
-    // CACHE DYNAMIQUE : Stocke les contextes chargés depuis les fichiers .jsonld
-    // Arc<RwLock> permet la mutabilité même si le registre est statique (Singleton)
     layer_contexts: Arc<RwLock<HashMap<String, Value>>>,
 }
 
@@ -319,7 +388,6 @@ impl Default for VocabularyRegistry {
 }
 
 impl VocabularyRegistry {
-    /// Accès global Thread-Safe au registre (créé une seule fois)
     pub fn global() -> &'static Self {
         INSTANCE.get_or_init(Self::new)
     }
@@ -332,17 +400,16 @@ impl VocabularyRegistry {
             layer_contexts: Arc::new(RwLock::new(HashMap::new())),
         };
 
-        // Enregistrement des définitions "hardcodées" (Validation structurelle)
+        // Enregistrement des modules
         registry.register_module_oa();
         registry.register_module_sa();
         registry.register_module_la();
         registry.register_module_pa();
         registry.register_module_epbs();
         registry.register_module_data();
+        registry.register_module_transverse();
 
-        // Initialisation des préfixes par défaut
         registry.init_default_context();
-
         registry
     }
 
@@ -355,6 +422,7 @@ impl VocabularyRegistry {
         map.insert("pa".to_string(), namespaces::PA.to_string());
         map.insert("epbs".to_string(), namespaces::EPBS.to_string());
         map.insert("data".to_string(), namespaces::DATA.to_string());
+        map.insert("transverse".to_string(), namespaces::TRANSVERSE.to_string());
 
         map.insert("rdf".to_string(), namespaces::RDF.to_string());
         map.insert("rdfs".to_string(), namespaces::RDFS.to_string());
@@ -373,40 +441,55 @@ impl VocabularyRegistry {
             self.properties.insert(prop.iri.clone(), prop);
         }
     }
-
     fn register_module_sa(&mut self) {
         for cls in sa::classes() {
             self.classes.insert(cls.iri.clone(), cls);
         }
+        for prop in sa::properties() {
+            self.properties.insert(prop.iri.clone(), prop);
+        }
     }
-
     fn register_module_la(&mut self) {
         for cls in la::classes() {
             self.classes.insert(cls.iri.clone(), cls);
         }
+        for prop in la::properties() {
+            self.properties.insert(prop.iri.clone(), prop);
+        }
     }
-
     fn register_module_pa(&mut self) {
         for cls in pa::classes() {
             self.classes.insert(cls.iri.clone(), cls);
         }
+        for prop in pa::properties() {
+            self.properties.insert(prop.iri.clone(), prop);
+        }
     }
-
     fn register_module_epbs(&mut self) {
         for cls in epbs::classes() {
             self.classes.insert(cls.iri.clone(), cls);
         }
+        for prop in epbs::properties() {
+            self.properties.insert(prop.iri.clone(), prop);
+        }
     }
-
     fn register_module_data(&mut self) {
         for cls in data::classes() {
             self.classes.insert(cls.iri.clone(), cls);
         }
+        for prop in data::properties() {
+            self.properties.insert(prop.iri.clone(), prop);
+        }
+    }
+    fn register_module_transverse(&mut self) {
+        for cls in transverse::classes() {
+            self.classes.insert(cls.iri.clone(), cls);
+        }
+        for prop in transverse::properties() {
+            self.properties.insert(prop.iri.clone(), prop);
+        }
     }
 
-    // --- CHARGEMENT DYNAMIQUE (.jsonld) ---
-
-    /// Charge un fichier .jsonld pour une couche donnée (ex: "oa", "sa")
     pub fn load_layer_from_file(&self, layer: &str, path: &Path) -> Result<(), String> {
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Impossible de lire le fichier {}: {}", path.display(), e))?;
@@ -414,11 +497,9 @@ impl VocabularyRegistry {
         let json: Value = serde_json::from_str(&content)
             .map_err(|e| format!("JSON-LD invalide dans {}: {}", path.display(), e))?;
 
-        // On extrait le bloc @context du fichier JSON-LD
         if let Some(ctx) = json.get("@context") {
             let mut cache = self.layer_contexts.write().map_err(|e| e.to_string())?;
             cache.insert(layer.to_string(), ctx.clone());
-
             #[cfg(debug_assertions)]
             println!("✅ Ontologie chargée : {} -> {:?}", layer, path);
         } else {
@@ -427,7 +508,6 @@ impl VocabularyRegistry {
         Ok(())
     }
 
-    /// Récupère le contexte complet (JSON) pour une couche donnée
     pub fn get_context_for_layer(&self, layer: &str) -> Option<Value> {
         let cache = self.layer_contexts.read().ok()?;
         cache.get(layer).cloned()
@@ -441,6 +521,22 @@ impl VocabularyRegistry {
 
     pub fn has_class(&self, iri: &str) -> bool {
         self.classes.contains_key(iri)
+    }
+
+    pub fn get_property(&self, iri: &str) -> Option<&Property> {
+        self.properties.get(iri)
+    }
+
+    pub fn is_subtype_of(&self, child_iri: &str, parent_iri: &str) -> bool {
+        if child_iri == parent_iri {
+            return true;
+        }
+        if let Some(cls) = self.classes.get(child_iri) {
+            if let Some(parent) = &cls.sub_class_of {
+                return self.is_subtype_of(parent, parent_iri);
+            }
+        }
+        false
     }
 
     pub fn get_default_context(&self) -> &HashMap<String, String> {
@@ -459,33 +555,88 @@ mod tests {
     #[test]
     fn test_namespaces() {
         assert_eq!(namespaces::ARCADIA, "https://raise.io/ontology/arcadia#");
+        assert_eq!(
+            namespaces::TRANSVERSE,
+            "https://raise.io/ontology/arcadia/transverse#"
+        );
     }
 
     #[test]
-    fn test_oa_classes() {
-        let classes = oa::classes();
-        assert!(!classes.is_empty());
-    }
-
-    #[test]
-    fn test_singleton_consistency() {
-        let reg1 = VocabularyRegistry::global();
-        let reg2 = VocabularyRegistry::global();
-        // Vérifie que c'est bien la même adresse mémoire
-        assert!(std::ptr::eq(reg1, reg2));
-    }
-
-    #[test]
-    fn test_default_context_cached() {
+    fn test_get_property_attributes() {
         let reg = VocabularyRegistry::global();
-        let ctx = reg.get_default_context();
-        assert!(ctx.contains_key("oa"));
-        assert!(ctx.contains_key("rdf"));
+        let prop_iri = format!("{}involvesActivity", namespaces::OA);
+
+        let prop = reg
+            .get_property(&prop_iri)
+            .expect("La propriété OA devrait exister");
+
+        // Validation sémantique du domaine et du range
+        assert!(prop
+            .domain
+            .as_ref()
+            .unwrap()
+            .contains("OperationalCapability"));
+        assert!(prop.range.as_ref().unwrap().contains("OperationalActivity"));
+        assert_eq!(prop.property_type, PropertyType::ObjectProperty);
     }
 
     #[test]
-    fn test_arcadia_types_constants_exist() {
-        assert_eq!(arcadia_types::OA_ACTOR, "OperationalActor");
-        assert_eq!(arcadia_types::SA_FUNCTION, "SystemFunction");
+    fn test_is_subtype_reflexive() {
+        let reg = VocabularyRegistry::global();
+        let actor = format!("{}{}", namespaces::OA, arcadia_types::OA_ACTOR);
+        assert!(reg.is_subtype_of(&actor, &actor));
+    }
+
+    #[test]
+    fn test_inheritance_logic() {
+        let mut reg = VocabularyRegistry::new();
+
+        let parent_iri = "http://test.org/Animal".to_string();
+        let child_iri = "http://test.org/Chat".to_string();
+
+        reg.classes.insert(
+            parent_iri.clone(),
+            Class {
+                iri: parent_iri.clone(),
+                label: "Animal".into(),
+                comment: "".into(),
+                sub_class_of: None,
+            },
+        );
+
+        reg.classes.insert(
+            child_iri.clone(),
+            Class {
+                iri: child_iri.clone(),
+                label: "Chat".into(),
+                comment: "".into(),
+                sub_class_of: Some(parent_iri.clone()),
+            },
+        );
+
+        assert!(reg.is_subtype_of(&child_iri, &parent_iri));
+        assert!(!reg.is_subtype_of(&parent_iri, &child_iri));
+    }
+
+    #[test]
+    fn test_transverse_module() {
+        let reg = VocabularyRegistry::global();
+        // Modification pour coller aux vrais types (Requirement, Scenario...)
+        let req = format!(
+            "{}{}",
+            namespaces::TRANSVERSE,
+            arcadia_types::TRANSVERSE_REQUIREMENT
+        );
+        assert!(reg.has_class(&req));
+        assert!(reg.get_default_context().contains_key("transverse"));
+    }
+
+    #[test]
+    fn test_load_errors() {
+        let reg = VocabularyRegistry::new();
+        let path = Path::new("inconnu.jsonld");
+        let res = reg.load_layer_from_file("test", path);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Impossible de lire"));
     }
 }

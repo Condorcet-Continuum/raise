@@ -14,7 +14,8 @@ pub mod validators; // Vérification de cohérence
 
 // Loader & Modèle
 pub use loader::ModelLoader;
-pub use types::ProjectModel;
+// MISE À JOUR : On expose tous les types nécessaires, y compris la nouvelle couche Transverse
+pub use types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel, TransverseModel};
 
 // Transformers (Software, Hardware, System)
 pub use transformers::{
@@ -23,8 +24,10 @@ pub use transformers::{
 };
 
 // Validators (Règles métier)
+// MISE À JOUR : On expose les nouveaux validateurs (Compliance, Dynamic)
 pub use validators::{
-    consistency_checker::ConsistencyChecker, ModelValidator, Severity, ValidationIssue,
+    compliance_validator::ComplianceValidator, consistency_checker::ConsistencyChecker,
+    dynamic_validator::DynamicValidator, ModelValidator, Severity, ValidationIssue,
 };
 
 // Arcadia Semantics (Couches et Catégories)
@@ -41,7 +44,17 @@ mod tests {
     #[test]
     fn test_integration_facade() {
         // 1. Vérifie l'accès aux types de base
-        let _model = ProjectModel::default();
+        let mut model = ProjectModel::default();
+
+        // Vérification de l'accès à la couche Transverse via la façade
+        let req = ArcadiaElement {
+            id: "REQ-1".to_string(),
+            name: NameType::String("Test".to_string()),
+            kind: "Requirement".to_string(),
+            ..Default::default()
+        };
+        model.transverse.requirements.push(req);
+        assert_eq!(model.transverse.requirements.len(), 1);
 
         // 2. Vérifie l'accès à la Factory Transformer
         let transformer = get_transformer(TransformationDomain::Software);
