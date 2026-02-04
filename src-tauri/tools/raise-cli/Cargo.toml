@@ -1,0 +1,34 @@
+[package]
+name = "raise-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Gestion d'erreurs
+anyhow = "1"
+
+# Parsing d'arguments (Cœur du CLI)
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# Sérialisation / JSON
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Environnement & Logs
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
+
+# Runtime Async
+tokio = { version = "1", features = ["full"] }
+
+# Utilitaires
+uuid = { version = "1", features = ["v4"] }
+dirs = "6.0.0"
+
+# --- DÉPENDANCE LOCALE RAISE ---
+# Pointe vers raise/src-tauri (qui expose le module json_db)
+# Le chemin ../.. est correct car nous sommes dans tools/raise-cli
+[dependencies.raise]
+path = "../.."

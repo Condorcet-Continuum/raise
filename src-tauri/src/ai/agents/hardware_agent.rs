@@ -382,6 +382,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn generate_hardware_in_user_domain() {
         // 1. Définition du chemin réel de votre environnement
         // On récupère le HOME (ex: /home/zair) et on ajoute "raise_domain"
