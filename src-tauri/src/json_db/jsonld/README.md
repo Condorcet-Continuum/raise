@@ -84,7 +84,6 @@ Permet d'exporter les données de RAISE vers des outils du Web Sémantique tiers
 
 ```rust
 use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
-use serde_json::json;
 
 // 1. Initialisation
 let processor = JsonLdProcessor::new();

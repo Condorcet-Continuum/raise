@@ -1,10 +1,9 @@
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use anyhow::Result;
+use crate::utils::data::{ContextBuilder, Value};
+use crate::utils::io::PathBuf;
+use crate::utils::Result;
 use heck::ToPascalCase;
-use serde_json::Value;
-use std::path::PathBuf;
-use tera::Context;
 
 #[derive(Default)]
 pub struct CppGenerator;
@@ -21,8 +20,6 @@ impl LanguageGenerator for CppGenerator {
         element: &Value,
         template_engine: &TemplateEngine,
     ) -> Result<Vec<GeneratedFile>> {
-        let mut context = Context::new();
-
         let name = element
             .get("name")
             .and_then(|v| v.as_str())
@@ -33,9 +30,12 @@ impl LanguageGenerator for CppGenerator {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        context.insert("name", name);
-        context.insert("id", id);
-        context.insert("description", desc);
+        // ✅ ContextBuilder
+        let context = ContextBuilder::new()
+            .with_part("name", &name)
+            .with_part("id", &id)
+            .with_part("description", &desc)
+            .build();
 
         // 1. Génération du Header (.hpp)
         let header_content = template_engine.render("cpp/header", &context)?;
@@ -58,7 +58,7 @@ impl LanguageGenerator for CppGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     #[test]
     fn test_cpp_generation_produces_two_files() {
@@ -72,13 +72,9 @@ mod tests {
 
         let files = gen.generate(&element, &engine).unwrap();
 
-        assert_eq!(files.len(), 2); // Doit produire header et source
-
-        // Vérification du Header
+        assert_eq!(files.len(), 2);
         assert_eq!(files[0].path.to_str().unwrap(), "NavigationSystem.hpp");
         assert!(files[0].content.contains("class NavigationSystem"));
-
-        // Vérification du Source
         assert_eq!(files[1].path.to_str().unwrap(), "NavigationSystem.cpp");
         assert!(files[1]
             .content

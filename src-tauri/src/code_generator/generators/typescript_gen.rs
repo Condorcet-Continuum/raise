@@ -1,10 +1,9 @@
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use anyhow::Result;
+use crate::utils::data::{ContextBuilder, Value}; // ✅
+use crate::utils::io::PathBuf;
+use crate::utils::Result;
 use heck::ToPascalCase;
-use serde_json::Value;
-use std::path::PathBuf;
-use tera::Context;
 
 #[derive(Default)]
 pub struct TypeScriptGenerator;
@@ -21,8 +20,6 @@ impl LanguageGenerator for TypeScriptGenerator {
         element: &Value,
         template_engine: &TemplateEngine,
     ) -> Result<Vec<GeneratedFile>> {
-        let mut context = Context::new();
-
         let name = element
             .get("name")
             .and_then(|v| v.as_str())
@@ -33,9 +30,11 @@ impl LanguageGenerator for TypeScriptGenerator {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        context.insert("name", name);
-        context.insert("id", id);
-        context.insert("description", desc);
+        let context = ContextBuilder::new()
+            .with_part("name", &name)
+            .with_part("id", &id)
+            .with_part("description", &desc)
+            .build();
 
         let content = template_engine.render("ts/class", &context)?;
         let filename = format!("{}.ts", name.to_pascal_case());
@@ -50,7 +49,7 @@ impl LanguageGenerator for TypeScriptGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     #[test]
     fn test_ts_generation() {

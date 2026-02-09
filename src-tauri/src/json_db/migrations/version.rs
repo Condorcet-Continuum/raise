@@ -1,8 +1,11 @@
 // FICHIER : src-tauri/src/json_db/migrations/version.rs
 
-use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-use std::fmt;
+use crate::utils::{
+    error::AnyResult,
+    fmt,                            // pub use std::fmt
+    json::{Deserialize, Serialize}, //
+    Ordering,                       // pub use std::cmp::Ordering
+};
 
 /// Représente une version de migration (Semantic Versioning simplifié)
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -14,7 +17,7 @@ pub struct MigrationVersion {
 }
 
 impl MigrationVersion {
-    pub fn parse(version_str: &str) -> Result<Self, String> {
+    pub fn parse(version_str: &str) -> AnyResult<Self, String> {
         let parts: Vec<&str> = version_str.split('.').collect();
         if parts.len() != 3 {
             return Err(format!(

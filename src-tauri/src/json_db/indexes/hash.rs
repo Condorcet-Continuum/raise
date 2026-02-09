@@ -1,8 +1,10 @@
 // FICHIER : src-tauri/src/json_db/indexes/hash.rs
 
-use anyhow::Result;
-use serde_json::Value;
-use std::collections::HashMap;
+use crate::utils::{
+    error::AnyResult, // Gestion erreur unifiée
+    json::Value,      // JSON unifié
+    HashMap,          // Collection unifiée
+};
 
 use super::{driver, paths, IndexDefinition};
 use crate::json_db::storage::JsonDbConfig;
@@ -17,7 +19,7 @@ pub async fn update_hash_index(
     doc_id: &str,
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
-) -> Result<()> {
+) -> AnyResult<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     // On spécifie le type concret HashMap pour le driver générique (appel async)
     driver::update::<HashMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
@@ -31,7 +33,7 @@ pub async fn search_hash_index(
     collection: &str,
     def: &IndexDefinition,
     value: &Value,
-) -> Result<Vec<String>> {
+) -> AnyResult<Vec<String>> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
 
     // IMPORTANT : La clé stockée dans l'index est la représentation stringifiée du JSON.
@@ -46,9 +48,11 @@ pub async fn search_hash_index(
 mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
-    use serde_json::json;
-    use tempfile::tempdir;
-    use tokio::fs; // Pour la préparation async
+    // Utilisation de la façade pour les tests
+    use crate::utils::{
+        fs::{self, tempdir}, // fs enrichi + tempdir
+        json::json,          // macro json!
+    };
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -61,7 +65,7 @@ mod tests {
         let (dir, cfg) = setup_env();
         // Création structure dossiers nécessaire pour le test
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
-        fs::create_dir_all(&idx_dir).await.unwrap();
+        fs::ensure_dir(&idx_dir).await.unwrap();
 
         let def = IndexDefinition {
             name: "email".into(),

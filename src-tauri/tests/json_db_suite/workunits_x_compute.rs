@@ -1,23 +1,23 @@
 // FICHIER : src-tauri/tests/json_db_suite/workunits_x_compute.rs
 
 use crate::{ensure_db_exists, init_test_env, TEST_DB, TEST_SPACE};
-use raise::json_db::collections::manager::{self, CollectionsManager}; // Import CollectionsManager
+use raise::json_db::collections::manager::{self, CollectionsManager};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-use raise::json_db::storage::StorageEngine; // Import StorageEngine
-use serde_json::json;
-use uuid::Uuid;
+use raise::json_db::storage::StorageEngine;
+use raise::utils::{json::json, Uuid};
 
 #[tokio::test]
 async fn workunit_compute_then_validate_minimal() {
-    // CORRECTION E0277 : init_test_env et ensure_db_exists restent synchrones dans cette suite
     let test_env = init_test_env().await;
     let cfg = &test_env.cfg;
     let space = TEST_SPACE;
     let db = TEST_DB;
 
-    ensure_db_exists(cfg, space, db);
+    ensure_db_exists(cfg, space, db).await;
 
-    let reg = SchemaRegistry::from_db(cfg, space, db).expect("registry init failed");
+    let reg = SchemaRegistry::from_db(cfg, space, db)
+        .await
+        .expect("registry init failed");
     let root_uri = reg.uri("workunits/workunit.schema.json");
 
     if reg.get_by_uri(&root_uri).is_none() {
@@ -56,9 +56,11 @@ async fn finance_compute_minimal() {
     let space = TEST_SPACE;
     let db = TEST_DB;
 
-    ensure_db_exists(cfg, space, db);
+    ensure_db_exists(cfg, space, db).await;
 
-    let reg = SchemaRegistry::from_db(cfg, space, db).expect("registry init failed");
+    let reg = SchemaRegistry::from_db(cfg, space, db)
+        .await
+        .expect("registry init failed");
     let root_uri = reg.uri("workunits/finance.schema.json"); // On teste le module finance directement
 
     if reg.get_by_uri(&root_uri).is_none() {

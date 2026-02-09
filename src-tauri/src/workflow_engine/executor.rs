@@ -541,7 +541,9 @@ mod tests {
         }
 
         // --- ÉTAPE 2 : INITIALISATION DU REGISTRE ---
-        let reg = SchemaRegistry::from_db(cfg, space, db).expect("registry init failed");
+        let reg = SchemaRegistry::from_db(cfg, space, db)
+            .await
+            .expect("registry init failed");
         let root_uri = reg.uri("mandates.json");
 
         // --- ÉTAPE 3 : COMPILATION ---

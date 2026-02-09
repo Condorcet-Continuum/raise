@@ -1,13 +1,13 @@
 // FICHIER : src-tauri/src/json_db/indexes/driver.rs
 
-use anyhow::{Context, Result};
-use serde::{de::DeserializeOwned, Serialize};
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
-use tokio::fs; // Migration vers tokio::fs
+use crate::utils::{
+    error::{AnyResult, Context},
+    fs::{self, Path},
+    json::{self, DeserializeOwned, Serialize},
+    BTreeMap, HashMap,
+};
 
 use super::{IndexDefinition, IndexRecord};
-use crate::json_db::storage::file_storage::atomic_write_binary;
 
 /// Trait définissant le comportement d'une structure d'index en mémoire
 pub trait IndexMap: Default + Serialize + DeserializeOwned {
@@ -102,12 +102,13 @@ impl IndexMap for BTreeMap<String, Vec<String>> {
 
 // --- Logique I/O Générique (Async) ---
 
-pub async fn load<T: IndexMap>(path: &Path) -> Result<T> {
-    if !path.exists() {
+pub async fn load<T: IndexMap>(path: &Path) -> AnyResult<T> {
+    if !fs::exists(path).await {
         return Ok(T::default());
     }
-    let content = fs::read(path)
+    let content = tokio::fs::read(path)
         .await
+        .map_err(crate::utils::AppError::Io)
         .with_context(|| format!("Lecture index {}", path.display()))?;
 
     if content.is_empty() {
@@ -120,13 +121,14 @@ pub async fn load<T: IndexMap>(path: &Path) -> Result<T> {
     Ok(T::from_records(records))
 }
 
-pub async fn save<T: IndexMap>(path: &Path, index: &T) -> Result<()> {
+pub async fn save<T: IndexMap>(path: &Path, index: &T) -> AnyResult<()> {
     let records = index.to_records();
     let encoded: Vec<u8> = bincode::serde::encode_to_vec(&records, bincode::config::standard())?;
-    atomic_write_binary(path, &encoded).await // Migration async
+    fs::write_atomic(path, &encoded).await?;
+    Ok(())
 }
 
-pub async fn search<T: IndexMap>(path: &Path, key: &str) -> Result<Vec<String>> {
+pub async fn search<T: IndexMap>(path: &Path, key: &str) -> AnyResult<Vec<String>> {
     let index: T = load(path).await?;
     Ok(index.get_doc_ids(key).cloned().unwrap_or_default())
 }
@@ -135,9 +137,9 @@ pub async fn update<T: IndexMap>(
     path: &Path,
     def: &IndexDefinition,
     doc_id: &str,
-    old_doc: Option<&serde_json::Value>,
-    new_doc: Option<&serde_json::Value>,
-) -> Result<()> {
+    old_doc: Option<&json::Value>,
+    new_doc: Option<&json::Value>,
+) -> AnyResult<()> {
     let mut index: T = load(path).await?;
     let mut changed = false;
 
@@ -182,7 +184,7 @@ pub async fn update<T: IndexMap>(
 mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
-    use tempfile::NamedTempFile;
+    use crate::utils::fs::tempdir;
 
     #[test]
     fn test_driver_map_logic() {
@@ -200,26 +202,26 @@ mod tests {
 
     #[tokio::test] // Migration async
     async fn test_driver_io_roundtrip_and_search() {
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("index.bin");
 
         // 1. Save (Async)
         let mut index: HashMap<String, Vec<String>> = HashMap::new();
         index.insert_record("key1".into(), "doc1".into());
-        save(path, &index).await.unwrap();
+        save(&path, &index).await.unwrap();
 
         // 2. Load (Async)
-        let loaded: HashMap<String, Vec<String>> = load(path).await.unwrap();
+        let loaded: HashMap<String, Vec<String>> = load(&path).await.unwrap();
         assert_eq!(loaded.get_doc_ids("key1").unwrap()[0], "doc1");
 
         // 3. Search (Async)
-        let results = search::<HashMap<String, Vec<String>>>(path, "key1")
+        let results = search::<HashMap<String, Vec<String>>>(&path, "key1")
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "doc1");
 
-        let empty = search::<HashMap<String, Vec<String>>>(path, "missing")
+        let empty = search::<HashMap<String, Vec<String>>>(&path, "missing")
             .await
             .unwrap();
         assert!(empty.is_empty());
@@ -227,8 +229,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_driver_update_logic() {
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("update_test.bin");
         let def = IndexDefinition {
             name: "test".into(),
             field_path: "/val".into(),
@@ -236,14 +238,14 @@ mod tests {
             unique: true,
         };
 
-        let doc = serde_json::json!({"val": "A"});
+        let doc = json::json!({"val": "A"});
 
         // Initial update
-        update::<HashMap<String, Vec<String>>>(path, &def, "id1", None, Some(&doc))
+        update::<HashMap<String, Vec<String>>>(&path, &def, "id1", None, Some(&doc))
             .await
             .unwrap();
 
-        let results = search::<HashMap<String, Vec<String>>>(path, "\"A\"")
+        let results = search::<HashMap<String, Vec<String>>>(&path, "\"A\"")
             .await
             .unwrap();
         assert_eq!(results, vec!["id1"]);

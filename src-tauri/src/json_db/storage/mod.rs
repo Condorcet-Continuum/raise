@@ -1,13 +1,11 @@
 // FICHIER : src-tauri/src/json_db/storage/mod.rs
 
 pub mod cache;
-pub mod compression;
 pub mod file_storage;
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::path::PathBuf;
+use crate::utils::error::Result;
+use crate::utils::fs::PathBuf;
+use crate::utils::json::{Deserialize, Serialize, Value};
 
 // --- CONFIGURATION ---
 
@@ -21,7 +19,7 @@ impl JsonDbConfig {
         Self { data_root }
     }
 
-    pub fn from(path_str: String) -> Result<Self, String> {
+    pub fn from(path_str: String) -> Result<Self> {
         Ok(Self {
             data_root: PathBuf::from(path_str),
         })
@@ -123,8 +121,10 @@ impl StorageEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::{
+        fs::tempdir, // Ré-exporté depuis utils::fs
+        json::json,  // Ré-exporté depuis utils::json
+    };
 
     #[tokio::test]
     async fn test_storage_engine_cache_hit() {

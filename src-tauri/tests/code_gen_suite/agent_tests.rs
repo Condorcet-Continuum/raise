@@ -4,7 +4,7 @@ use crate::common::init_ai_test_env; // REVERSION : Retour à l'import fonctionn
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
-use std::sync::Arc;
+use raise::utils::Arc;
 
 #[tokio::test]
 #[ignore]

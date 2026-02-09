@@ -1,12 +1,11 @@
 // FICHIER : src-tauri/src/json_db/jsonld/vocabulary.rs
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
-use std::sync::{Arc, OnceLock, RwLock};
-
+use crate::utils::{
+    error::AnyResult,
+    fs::Path,
+    json::{self, Deserialize, Serialize, Value},
+    Arc, HashMap, OnceLock, RwLock,
+};
 // --- NAMESPACES ---
 pub mod namespaces {
     pub const ARCADIA: &str = "https://raise.io/ontology/arcadia#";
@@ -490,11 +489,11 @@ impl VocabularyRegistry {
         }
     }
 
-    pub fn load_layer_from_file(&self, layer: &str, path: &Path) -> Result<(), String> {
-        let content = fs::read_to_string(path)
+    pub fn load_layer_from_file(&self, layer: &str, path: &Path) -> AnyResult<(), String> {
+        let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Impossible de lire le fichier {}: {}", path.display(), e))?;
 
-        let json: Value = serde_json::from_str(&content)
+        let json: Value = json::parse(&content)
             .map_err(|e| format!("JSON-LD invalide dans {}: {}", path.display(), e))?;
 
         if let Some(ctx) = json.get("@context") {

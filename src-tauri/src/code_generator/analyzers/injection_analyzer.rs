@@ -1,8 +1,7 @@
-use anyhow::Result;
-use regex::Regex;
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+use crate::utils::data::HashMap;
+use crate::utils::io::{self, Path};
+use crate::utils::Regex;
+use crate::utils::Result;
 
 /// Analyseur capable d'extraire des blocs de code protégés d'un fichier existant.
 pub struct InjectionAnalyzer;
@@ -12,14 +11,14 @@ impl InjectionAnalyzer {
     /// Les templates doivent utiliser la syntaxe:
     /// `// AI_INJECTION_POINT: [Clé]` ... `// END_AI_INJECTION_POINT`
     /// ou `-- AI_INJECTION_POINT: [Clé]` (pour SQL/VHDL/Lua)
-    pub fn extract_injections(file_path: &Path) -> Result<HashMap<String, String>> {
+    pub async fn extract_injections(file_path: &Path) -> Result<HashMap<String, String>> {
         let mut injections = HashMap::new();
 
         if !file_path.exists() {
             return Ok(injections);
         }
 
-        let content = fs::read_to_string(file_path)?;
+        let content = io::read_to_string(file_path).await?;
 
         // Regex robuste :
         // 1. (?:^|\n)\s* -> Début de ligne avec espaces optionnels
@@ -78,48 +77,50 @@ impl InjectionAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+    use crate::utils::io::{tempdir, write_atomic};
 
-    #[test]
-    fn test_extract_rust_injection() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            r#"
-            fn main() {{}}
-            
-            // AI_INJECTION_POINT: MyLogic
-            let x = 10;
-            println!("Custom Code");
-            // END_AI_INJECTION_POINT
-        "#
-        )
-        .unwrap();
+    #[tokio::test]
+    async fn test_extract_rust_injection() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.rs");
 
-        let injections = InjectionAnalyzer::extract_injections(file.path()).unwrap();
+        let content = r#"
+        fn old() {}
+        // AI_INJECTION_POINT: MyLogic
+        fn preserved() { 
+            let x = 1; 
+        }
+        // END_AI_INJECTION_POINT
+        fn other() {}
+        "#;
+
+        write_atomic(&file_path, content.as_bytes()).await.unwrap();
+
+        let injections = InjectionAnalyzer::extract_injections(&file_path)
+            .await
+            .unwrap();
 
         assert!(injections.contains_key("MyLogic"));
-        let code = injections.get("MyLogic").unwrap();
-        assert!(code.contains("let x = 10;"));
-        assert!(code.contains("println!(\"Custom Code\");"));
+        assert!(injections.get("MyLogic").unwrap().contains("let x = 1;"));
     }
 
-    #[test]
-    fn test_extract_python_injection() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            r#"
+    #[tokio::test]
+    async fn test_extract_python_injection() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.rs");
+
+        let content = r#"
             # AI_INJECTION_POINT: PythonHook
             def custom_hook():
                 pass
             # END_AI_INJECTION_POINT
-        "#
-        )
-        .unwrap();
+        "#;
 
-        let injections = InjectionAnalyzer::extract_injections(file.path()).unwrap();
+        write_atomic(&file_path, content.as_bytes()).await.unwrap();
+
+        let injections = InjectionAnalyzer::extract_injections(&file_path)
+            .await
+            .unwrap();
         assert!(injections.contains_key("PythonHook"));
         assert!(injections
             .get("PythonHook")

@@ -37,11 +37,11 @@ async fn drop_is_idempotent_and_recreate_works() {
     );
 
     // Vérification logique
-    // CORRECTION : open_db est synchrone, pas de .await ici
-    open_db(cfg, space, db).expect("open doit réussir sur une DB existante");
+    open_db(cfg, space, db)
+        .await
+        .expect("open doit réussir sur une DB existante");
 
     // Suppression
-    // CORRECTION : .await ajouté pour la suppression finale
     drop_db(cfg, space, db, DropMode::Hard)
         .await
         .expect("hard drop final doit réussir");

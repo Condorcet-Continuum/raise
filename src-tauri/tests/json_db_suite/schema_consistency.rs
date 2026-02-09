@@ -3,10 +3,10 @@
 use crate::{init_test_env, TEST_DB, TEST_SPACE};
 use raise::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-use serde_json::{json, Value};
-use std::fs;
-use walkdir::WalkDir;
-
+use raise::utils::{
+    fs::{self, WalkDir},
+    json::{self, json, Value},
+};
 #[tokio::test]
 async fn test_structural_integrity_json_schema() {
     let env = init_test_env().await;
@@ -16,6 +16,7 @@ async fn test_structural_integrity_json_schema() {
 
     // Le chargement du registre à partir des fichiers est synchrone
     let registry = SchemaRegistry::from_db(cfg, TEST_SPACE, TEST_DB)
+        .await
         .expect("Impossible de charger le registre des schémas");
 
     let mut error_count = 0;
@@ -31,7 +32,7 @@ async fn test_structural_integrity_json_schema() {
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "json") {
+        if path.extension().is_some_and(|e| e == "json") {
             let rel_path = path.strip_prefix(&schemas_root).unwrap();
             let rel_str = rel_path.to_string_lossy().replace("\\", "/");
 
@@ -136,10 +137,15 @@ async fn test_detect_actor_duality() {
     if generic_path.exists() && arcadia_path.exists() {
         println!("\n⚠️  [AUDIT] Vérification de la distinction Acteur Générique vs Arcadia");
 
-        let gen_json: Value =
-            serde_json::from_str(&fs::read_to_string(generic_path).unwrap()).unwrap();
-        let arc_json: Value =
-            serde_json::from_str(&fs::read_to_string(arcadia_path).unwrap()).unwrap();
+        let gen_content = fs::read_to_string(&generic_path)
+            .await
+            .expect("Erreur lecture générique");
+        let arc_content = fs::read_to_string(&arcadia_path)
+            .await
+            .expect("Erreur lecture arcadia");
+
+        let gen_json: Value = json::parse(&gen_content).expect("JSON générique invalide");
+        let arc_json: Value = json::parse(&arc_content).expect("JSON arcadia invalide");
 
         let gen_props = gen_json["properties"].as_object().unwrap();
         let arc_props = arc_json["properties"].as_object().unwrap();

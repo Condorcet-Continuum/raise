@@ -3,10 +3,9 @@
 use crate::json_db::collections::collection;
 use crate::json_db::storage::JsonDbConfig;
 use crate::rules_engine::DataProvider;
-use async_trait::async_trait;
-use serde_json::Value;
-use std::collections::HashMap;
-use tokio::sync::RwLock;
+
+// FAÇADE UNIQUE
+use crate::utils::{async_trait, json::Value, AsyncRwLock, HashMap};
 
 /// Un DataProvider qui met en cache les documents lus pour la durée de son existence.
 /// Indispensable pour garantir la cohérence des lookups lors de l'exécution des règles métier.
@@ -16,7 +15,7 @@ pub struct CachedDataProvider<'a> {
     db: &'a str,
     /// Cache interne : (Collection, ID) -> Document.
     /// RwLock permet des lectures asynchrones concurrentes.
-    doc_cache: RwLock<HashMap<(String, String), Option<Value>>>,
+    doc_cache: AsyncRwLock<HashMap<(String, String), Option<Value>>>,
 }
 
 impl<'a> CachedDataProvider<'a> {
@@ -25,7 +24,7 @@ impl<'a> CachedDataProvider<'a> {
             config,
             space,
             db,
-            doc_cache: RwLock::new(HashMap::new()),
+            doc_cache: AsyncRwLock::new(HashMap::new()),
         }
     }
 
@@ -73,9 +72,10 @@ impl<'a> DataProvider for CachedDataProvider<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use tempfile::tempdir;
-    use tokio::fs;
+    use crate::utils::{
+        fs::{self, tempdir}, // tempdir et fs:: sont exportés ici
+        json::{self, json},  // La macro json! et le module json sont ici
+    };
 
     #[tokio::test]
     async fn test_cached_provider_memoization() {
@@ -92,10 +92,10 @@ mod tests {
         let initial_json = json!({ "id": id, "score": 100 });
         fs::write(
             col_path.join(format!("{}.json", id)),
-            serde_json::to_string(&initial_json).unwrap(),
+            json::stringify(&initial_json).expect("Erreur de sérialisation"),
         )
         .await
-        .unwrap();
+        .expect("Erreur d'écriture");
 
         let provider = CachedDataProvider::new(&config, space, db);
 
@@ -106,10 +106,10 @@ mod tests {
         // Altération physique du fichier
         fs::write(
             col_path.join(format!("{}.json", id)),
-            serde_json::to_string(&json!({ "id": id, "score": 999 })).unwrap(),
+            json::stringify(&json!({ "id": id, "score": 999 })).expect("Erreur de sérialisation"),
         )
         .await
-        .unwrap();
+        .expect("Erreur d'écriture");
 
         // Deuxième lecture : doit renvoyer la valeur du cache (100) et non 999
         let cached_val = provider.get_value("users", id, "score").await;

@@ -298,12 +298,12 @@ async fn main() -> Result<()> {
         } => {
             let json_val = parse_data(&data)?;
             let resolved_json = resolve_references(json_val, &col_mgr).await?;
-            let updated = col_mgr
+            let _updated = col_mgr
                 .update_document(&collection, &id, resolved_json)
                 .await?;
             println!("✅ Document {} mis à jour (Merge).", id);
             #[cfg(debug_assertions)]
-            println!("   -> {}", updated);
+            println!("   -> {}", _updated);
         }
 
         Commands::Upsert { collection, data } => {

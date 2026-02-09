@@ -1,4 +1,5 @@
 use crate::utils::error::{AppError, Result};
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -6,7 +7,7 @@ use std::sync::OnceLock;
 /// Singleton global pour la configuration
 static CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub env_mode: String,
     pub database_root: PathBuf,

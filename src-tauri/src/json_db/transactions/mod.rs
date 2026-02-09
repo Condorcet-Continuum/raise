@@ -1,7 +1,6 @@
 // FICHIER : src-tauri/src/json_db/transactions/mod.rs
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use crate::utils::json::{Deserialize, Serialize, Value};
 
 pub mod lock_manager;
 pub mod manager;
@@ -106,7 +105,7 @@ pub struct TransactionLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::json::{self, json};
 
     #[test]
     fn test_serialization() {
@@ -115,7 +114,7 @@ mod tests {
             id: None,
             document: json!({"a": 1}),
         };
-        let s = serde_json::to_string(&req).unwrap();
+        let s = json::stringify(&req).unwrap();
         assert!(s.contains("\"type\":\"insert\""));
     }
 }

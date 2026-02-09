@@ -1,8 +1,11 @@
 // FICHIER : src-tauri/src/json_db/transactions/lock_manager.rs
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock as StdRwLock};
-use tokio::sync::RwLock as TokioRwLock;
+use crate::utils::{
+    Arc,         // std::sync::Arc
+    AsyncRwLock, // tokio::sync::RwLock
+    HashMap,     // std::collections::HashMap
+    RwLock,      // std::sync::RwLock
+};
 
 /// Gestionnaire de verrous simple (granularité : Collection)
 /// Utilise des verrous ASYNCHRONES (Tokio) pour être compatible avec .await
@@ -11,26 +14,26 @@ pub struct LockManager {
     // Clé = "space/db/collection"
     // Le RwLock EXTERNE (Std) protège la Map (accès rapide mémoire)
     // Le RwLock INTERNE (Tokio) protège la Collection (attente longue async)
-    locks: Arc<StdRwLock<HashMap<String, Arc<TokioRwLock<()>>>>>,
+    locks: Arc<RwLock<HashMap<String, Arc<AsyncRwLock<()>>>>>,
 }
 
 impl LockManager {
     pub fn new() -> Self {
         Self {
-            locks: Arc::new(StdRwLock::new(HashMap::new())),
+            locks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Récupère un verrou d'écriture ASYNC pour une collection
     /// Retourne un Arc<tokio::sync::RwLock<()>>
-    pub fn get_write_lock(&self, space: &str, db: &str, collection: &str) -> Arc<TokioRwLock<()>> {
+    pub fn get_write_lock(&self, space: &str, db: &str, collection: &str) -> Arc<AsyncRwLock<()>> {
         let key = format!("{}/{}/{}", space, db, collection);
 
         // 1. On verrouille la map juste le temps de récupérer/créer l'entrée
         let mut map = self.locks.write().unwrap();
 
         map.entry(key)
-            .or_insert_with(|| Arc::new(TokioRwLock::new(())))
+            .or_insert_with(|| Arc::new(AsyncRwLock::new(())))
             .clone()
     }
 }
@@ -42,9 +45,7 @@ impl LockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-    use tokio::sync::mpsc;
-    use tokio::time::sleep;
+    use crate::utils::{mpsc, sleep, Duration};
 
     #[tokio::test]
     async fn test_lock_concurrency() {

@@ -1,8 +1,11 @@
 // FICHIER : src-tauri/src/json_db/indexes/btree.rs
 
-use anyhow::Result;
-use serde_json::Value;
-use std::collections::BTreeMap;
+// FAÇADE UNIQUE
+use crate::utils::{
+    error::AnyResult, // Gestion erreur unifiée
+    json::Value,      // JSON unifié
+    BTreeMap,
+};
 
 use super::{driver, paths, IndexDefinition};
 use crate::json_db::storage::JsonDbConfig;
@@ -17,7 +20,7 @@ pub async fn update_btree_index(
     doc_id: &str,
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
-) -> Result<()> {
+) -> AnyResult<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     // Appel au driver qui doit être async
     driver::update::<BTreeMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
@@ -33,7 +36,7 @@ pub async fn search_btree_index(
     collection: &str,
     def: &IndexDefinition,
     value: &Value,
-) -> Result<Vec<String>> {
+) -> AnyResult<Vec<String>> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     let key = value.to_string();
     // Appel au driver qui doit être async
@@ -44,9 +47,10 @@ pub async fn search_btree_index(
 mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
-    use serde_json::json;
-    use tempfile::tempdir;
-    use tokio::fs;
+    use crate::utils::{
+        fs::{self, tempdir}, // tempdir et fs:: sont exportés ici
+        json::json,          // La macro json! et le module json sont ici
+    };
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();

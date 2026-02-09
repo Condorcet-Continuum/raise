@@ -42,6 +42,7 @@ Thumbs.db
 
 # Cache IA (Modèles FastEmbed)
 src-tauri/.fastembed_cache/
+src-tauri/.raise_storage/
 
 # --- PYTHON TRAINING & TOOLS ---
 src-tauri/tools/trainer/venv/

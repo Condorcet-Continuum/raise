@@ -1,7 +1,7 @@
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use anyhow::Result;
-use serde_json::Value;
-use std::path::PathBuf;
+use crate::utils::data::Value;
+use crate::utils::io::PathBuf;
+use crate::utils::Result;
 
 // Liste complète des générateurs
 pub mod cpp_gen; // NOUVEAU
@@ -16,7 +16,7 @@ pub struct GeneratedFile {
     pub content: String,
 }
 
-pub trait LanguageGenerator {
+pub trait LanguageGenerator: Send + Sync {
     fn generate(
         &self,
         element: &Value,
@@ -28,7 +28,7 @@ pub trait LanguageGenerator {
 mod tests {
     // Les tests du trait ne changent pas
     use super::*;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     struct MockGenerator;
     impl LanguageGenerator for MockGenerator {

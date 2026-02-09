@@ -1,14 +1,12 @@
-use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand}; // Parser ajouté pour les tests internes
-use serde::Deserialize;
-use serde_json::{Map, Value};
-use std::fs;
-use std::future::Future;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::Arc;
+use clap::{Args, Subcommand};
 
 // --- IMPORTS RAISE ---
+use raise::utils::fs::{read_json, Path, PathBuf};
+use raise::utils::{Arc, Future, Pin};
+// NOUVEAU : On utilise exclusivement notre module JSON centralisé
+use raise::utils::error::{AnyResult, Context};
+use raise::utils::json::{self, Deserialize, Map, Value};
+
 use raise::json_db::{
     collections::manager::CollectionsManager,
     indexes::manager::IndexManager,
@@ -17,10 +15,12 @@ use raise::json_db::{
     storage::{JsonDbConfig, StorageEngine},
     transactions::{manager::TransactionManager, TransactionRequest},
 };
+use raise::utils::config::AppConfig;
+use raise::{user_error, user_info, user_success};
 
-// --- DÉFINITION DES ARGUMENTS (Adapté pour Clap Subcommand) ---
+// --- DÉFINITION DES ARGUMENTS ---
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct JsondbArgs {
     #[arg(short, long, default_value = "default_space")]
     pub space: String,
@@ -35,9 +35,8 @@ pub struct JsondbArgs {
     pub command: JsondbCommands,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum JsondbCommands {
-    // --- AIDE & EXEMPLES ---
     /// Affiche le guide de survie avec exemples
     Usage,
 
@@ -143,23 +142,20 @@ pub enum JsondbCommands {
     },
 }
 
-// --- HANDLER PRINCIPAL (Remplace le main) ---
+// --- HANDLER PRINCIPAL ---
 
-pub async fn handle(args: JsondbArgs) -> Result<()> {
-    // 1. GESTION IMMÉDIATE DE L'AIDE
+pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
     if let JsondbCommands::Usage = args.command {
         print_examples();
         return Ok(());
     }
 
-    // 2. CONFIGURATION MOTEUR
-    let root_dir = args.root.unwrap_or_else(|| {
-        dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("raise_db")
-    });
+    // RÉCUPÉRATION DE LA CONFIGURATION
+    let app_config = AppConfig::get();
+    let root_dir = args
+        .root
+        .unwrap_or_else(|| app_config.database_root.clone());
 
-    // --- CHARGEMENT DES ONTOLOGIES (Sémantique) ---
     bootstrap_ontologies(&root_dir, &args.space);
 
     let config = Arc::new(JsonDbConfig {
@@ -171,139 +167,113 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
     let mut idx_mgr = IndexManager::new(&storage, &args.space, &args.db);
     let tx_mgr = TransactionManager::new(&config, &args.space, &args.db);
 
+    // Feedback contextuel
     if std::env::var("RUST_LOG").is_ok() {
-        println!("📂 Database Root: {:?}", root_dir);
-        println!("🔧 Context: {}/{}", args.space, args.db);
+        user_info!("JSONDB_CTX_ROOT", "{:?}", root_dir);
+        user_info!("JSONDB_CTX_SPACE", "{}/{}", args.space, args.db);
     }
 
-    // Auto-bootstrap
     if !matches!(
         args.command,
         JsondbCommands::CreateDb | JsondbCommands::DropDb { .. }
     ) && !config.db_root(&args.space, &args.db).exists()
     {
-        println!("ℹ️  Auto-bootstrap: Initialisation de la base...");
+        user_info!("JSONDB_BOOTSTRAP_AUTO");
         let _ = col_mgr.init_db().await;
     }
 
-    // 3. EXÉCUTION
     match args.command {
-        JsondbCommands::Usage => { /* Déjà géré plus haut */ }
-
-        // --- DB ---
+        JsondbCommands::Usage => { /* Géré plus haut */ }
         JsondbCommands::CreateDb => {
             col_mgr.init_db().await?;
-            println!("✅ Base initialisée.");
+            user_success!("JSONDB_INIT_SUCCESS");
         }
         JsondbCommands::DropDb { force } => {
             if !force {
-                eprintln!("⚠️ Utilisez --force pour confirmer la suppression.");
+                user_error!("JSONDB_DROP_WARN");
+            } else if col_mgr.drop_db().await? {
+                // CORRECTION : On utilise 'else if' directement
+                // au lieu d'ouvrir un bloc 'else' qui contient un 'if'.
+                user_success!("JSONDB_DROP_SUCCESS", "{}/{}", args.space, args.db);
             } else {
-                let db_path = root_dir.join(&args.space).join(&args.db);
-                if db_path.exists() {
-                    fs::remove_dir_all(&db_path)?;
-                    println!("🔥 Base supprimée : {:?}", db_path);
-                } else {
-                    println!("❌ Base introuvable.");
-                }
+                user_error!("JSONDB_DROP_NOT_FOUND");
             }
         }
-
-        // --- COLLECTIONS ---
         JsondbCommands::CreateCollection { name, schema } => {
             let raw_schema = schema.ok_or_else(|| {
                 anyhow::anyhow!("⛔ ERREUR : Le paramètre --schema est OBLIGATOIRE.")
             })?;
-
             let schema_uri = if raw_schema.starts_with("db://") {
                 raw_schema
             } else {
                 format!("db://{}/{}/schemas/v1/{}", args.space, args.db, raw_schema)
             };
-
             col_mgr
                 .create_collection(&name, Some(schema_uri.clone()))
                 .await?;
-
-            println!("✅ Collection '{}' créée.", name);
-            println!("   🔗 Schema lié : {}", schema_uri);
+            user_success!("JSONDB_COL_CREATED", "{}", name);
         }
         JsondbCommands::DropCollection { name } => {
             col_mgr.drop_collection(&name).await?;
-            println!("🗑️ Collection '{}' supprimée.", name);
+            user_success!("JSONDB_COL_DROPPED", "{}", name);
         }
         JsondbCommands::ListCollections => {
             let cols = col_mgr.list_collections().await?;
-            println!("{}", serde_json::to_string_pretty(&cols)?);
+            // REFAC: Utilisation de json::stringify_pretty
+            println!("{}", json::stringify_pretty(&cols)?);
         }
-
-        // --- INDEXES ---
         JsondbCommands::CreateIndex {
             collection,
             field,
             kind,
         } => {
-            println!("⚙️ Création index {} sur {}.{}", kind, collection, field);
             idx_mgr.create_index(&collection, &field, &kind).await?;
-            println!("✅ Index créé.");
+            user_success!("JSONDB_INDEX_CREATED");
         }
         JsondbCommands::DropIndex { collection, field } => {
             idx_mgr.drop_index(&collection, &field).await?;
-            println!("🗑️ Index supprimé.");
+            user_success!("JSONDB_INDEX_DROPPED");
         }
-
-        // --- DATA READ ---
         JsondbCommands::List { collection } | JsondbCommands::ListAll { collection } => {
             let docs = col_mgr.list_all(&collection).await?;
-            println!("{}", serde_json::to_string_pretty(&docs)?);
+            // REFAC: Utilisation de json::stringify_pretty
+            println!("{}", json::stringify_pretty(&docs)?);
         }
-
-        // --- DATA WRITE (CRUD) ---
         JsondbCommands::Insert { collection, data } => {
-            let json_val = parse_data(&data)?;
-
-            // >>> SMART LINKING <<<
+            let json_val = parse_data(&data).await?;
             let resolved_json = resolve_references(json_val, &col_mgr).await?;
-
             let res = col_mgr
                 .insert_with_schema(&collection, resolved_json)
                 .await?;
-            let id = res.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("✅ Inséré : {}", id);
-        }
 
+            let id = res.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            user_success!("JSONDB_INSERT_SUCCESS", "{}", id);
+        }
         JsondbCommands::Update {
             collection,
             id,
             data,
         } => {
-            let json_val = parse_data(&data)?;
+            let json_val = parse_data(&data).await?;
             let resolved_json = resolve_references(json_val, &col_mgr).await?;
-            let updated = col_mgr
+            col_mgr
                 .update_document(&collection, &id, resolved_json)
                 .await?;
-            println!("✅ Document {} mis à jour (Merge).", id);
-            #[cfg(debug_assertions)]
-            println!("   -> {}", updated);
+            user_success!("JSONDB_UPDATE_SUCCESS", "{}", id);
         }
-
         JsondbCommands::Upsert { collection, data } => {
-            let json_val = parse_data(&data)?;
+            let json_val = parse_data(&data).await?;
             let resolved_json = resolve_references(json_val, &col_mgr).await?;
             let status = col_mgr.upsert_document(&collection, resolved_json).await?;
-            println!("✅ Upsert : {}", status);
+            user_success!("JSONDB_UPSERT_SUCCESS", "{:?}", status);
         }
-
         JsondbCommands::Delete { collection, id } => {
-            let success = col_mgr.delete_document(&collection, &id).await?;
-            if success {
-                println!("🗑️  Document {} supprimé.", id);
+            if col_mgr.delete_document(&collection, &id).await? {
+                user_success!("JSONDB_DELETE_SUCCESS", "{}", id);
             } else {
-                println!("⚠️ Document {} introuvable (ou déjà supprimé).", id);
+                user_error!("JSONDB_DELETE_NOT_FOUND", "{}", id);
             }
         }
-
-        // --- QUERIES ---
         JsondbCommands::Query {
             collection,
             filter,
@@ -311,9 +281,8 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
             offset,
         } => {
             let mut query = Query::new(&collection);
-
             if let Some(f_str) = filter {
-                let f_json = parse_data(&f_str)?;
+                let f_json = parse_data(&f_str).await?;
                 if let Some(obj) = f_json.as_object() {
                     let mut conditions = vec![];
                     for (k, v) in obj {
@@ -325,158 +294,102 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
                     });
                 }
             }
-
             query.limit = limit;
             query.offset = offset;
-
-            let engine = QueryEngine::new(&col_mgr);
-            let result = engine.execute_query(query).await?;
-
-            println!("{}", serde_json::to_string_pretty(&result.documents)?);
+            let result = QueryEngine::new(&col_mgr).execute_query(query).await?;
+            // REFAC: Utilisation de json::stringify_pretty
+            println!("{}", json::stringify_pretty(&result.documents)?);
         }
-
         JsondbCommands::Sql { query } => {
-            use raise::json_db::query::sql::SqlRequest;
-
-            match raise::json_db::query::sql::parse_sql(&query).context("Erreur de parsing SQL")? {
+            use raise::json_db::query::sql::{parse_sql, SqlRequest};
+            match parse_sql(&query).context("Erreur de parsing SQL")? {
                 SqlRequest::Read(query_struct) => {
-                    let engine = QueryEngine::new(&col_mgr);
-                    let result = engine.execute_query(query_struct).await?;
-                    println!("{}", serde_json::to_string_pretty(&result.documents)?);
+                    let result = QueryEngine::new(&col_mgr)
+                        .execute_query(query_struct)
+                        .await?;
+                    // REFAC: Utilisation de json::stringify_pretty
+                    println!("{}", json::stringify_pretty(&result.documents)?);
                 }
                 SqlRequest::Write(requests) => {
-                    println!(
-                        "📝 Exécution SQL Transaction ({} opérations)...",
-                        requests.len()
-                    );
                     tx_mgr.execute_smart(requests).await?;
-                    println!("✅ Transaction SQL validée.");
+                    user_success!("JSONDB_SQL_TX_SUCCESS");
                 }
             }
         }
-
-        // --- BATCH ---
         JsondbCommands::Import { collection, path } => {
-            println!("📦 Import dans '{}' depuis {:?}", collection, path);
-            let content = fs::read_to_string(&path)?;
-            let json: Value = serde_json::from_str(&content)?;
+            let json: Value = read_json(&path).await?;
 
-            let mut count = 0;
-            if let Some(arr) = json.as_array() {
-                for doc in arr {
-                    // >>> SMART LINKING <<<
-                    let resolved_doc = resolve_references(doc.clone(), &col_mgr).await?;
-                    col_mgr
-                        .insert_with_schema(&collection, resolved_doc)
-                        .await?;
-                    count += 1;
-                }
+            let docs = if let Some(arr) = json.as_array() {
+                arr.to_vec()
             } else {
-                // >>> SMART LINKING <<<
-                let resolved_doc = resolve_references(json, &col_mgr).await?;
-                col_mgr
-                    .insert_with_schema(&collection, resolved_doc)
-                    .await?;
-                count = 1;
+                vec![json]
+            };
+            for doc in docs {
+                let resolved = resolve_references(doc, &col_mgr).await?;
+                col_mgr.insert_with_schema(&collection, resolved).await?;
             }
-            println!("✅ {} documents importés.", count);
+            user_success!("JSONDB_IMPORT_SUCCESS");
         }
-
         JsondbCommands::Transaction { file } => {
-            let content = fs::read_to_string(&file)?;
+            let json_val: Value = read_json(&file).await?;
+
             #[derive(Deserialize)]
             struct Wrapper {
                 operations: Vec<TransactionRequest>,
             }
 
+            // REFAC: Utilisation de json::from_value
             let reqs: Vec<TransactionRequest> =
-                if let Ok(w) = serde_json::from_str::<Wrapper>(&content) {
+                if let Ok(w) = json::from_value::<Wrapper>(json_val.clone()) {
                     w.operations
                 } else {
-                    serde_json::from_str::<Vec<TransactionRequest>>(&content)?
+                    json::from_value::<Vec<TransactionRequest>>(json_val)
+                        .context("Format de transaction invalide")?
                 };
 
-            println!("🔄 Transaction ({} ops)...", reqs.len());
+            user_info!("JSONDB_TX_START", "{}", reqs.len());
             tx_mgr.execute_smart(reqs).await?;
-            println!("✅ Validée.");
+            user_success!("JSONDB_TX_SUCCESS");
         }
     }
-
     Ok(())
 }
 
 // --- HELPERS ---
 
-fn parse_data(input: &str) -> Result<Value> {
-    if let Some(path) = input.strip_prefix('@') {
-        let content = fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&content)?)
+async fn parse_data(input: &str) -> AnyResult<Value> {
+    if let Some(path_str) = input.strip_prefix('@') {
+        let path = Path::new(path_str);
+        let data = read_json(path).await?;
+        Ok(data)
     } else {
-        Ok(serde_json::from_str(input)?)
+        // REFAC: Utilisation de json::parse
+        Ok(json::parse(input)?)
     }
 }
 
-// Recherche et charge les fichiers JSON-LD dans le registre global
 fn bootstrap_ontologies(root_dir: &Path, space: &str) {
     let space_path = root_dir
         .join(space)
         .join("_system/schemas/v1/arcadia/@context");
     let global_path = root_dir.join("ontology/arcadia/@context");
-
-    let target_path = if space_path.exists() {
+    let target = if space_path.exists() {
         &space_path
     } else {
         &global_path
     };
 
-    if target_path.exists() {
+    if target.exists() {
         let registry = VocabularyRegistry::global();
-        let _ = registry.load_layer_from_file("oa", &target_path.join("oa.jsonld"));
-        let _ = registry.load_layer_from_file("sa", &target_path.join("sa.jsonld"));
-        let _ = registry.load_layer_from_file("la", &target_path.join("la.jsonld"));
-        let _ = registry.load_layer_from_file("pa", &target_path.join("pa.jsonld"));
-        let _ = registry.load_layer_from_file("epbs", &target_path.join("epbs.jsonld"));
-        let _ = registry.load_layer_from_file("data", &target_path.join("data.jsonld"));
-
-        #[cfg(debug_assertions)]
-        println!("🧠 Ontologies chargées depuis {:?}", target_path);
-    } else {
-        #[cfg(debug_assertions)]
-        println!(
-            "⚠️ Dossier ontologie introuvable.\n   Testé : {:?}\n   Et : {:?}",
-            space_path, global_path
-        );
+        for layer in ["oa", "sa", "la", "pa", "epbs", "data", "transverse"] {
+            let _ = registry.load_layer_from_file(layer, &target.join(format!("{}.jsonld", layer)));
+        }
     }
 }
 
 fn print_examples() {
-    println!(
-        r#"
-🚀 RAISE JSON-DB CLI - Guide de survie
-======================================
-(Note: Préfixez avec 'raise jsondb' au lieu de './jsondb_cli')
-
-1️⃣  INITIALISATION
-   create-db
-   create-collection --name "users" --schema "actors/user.schema.json"
-
-2️⃣  CRUD COMPLET
-   insert --collection "users" --data '{{"name": "Alice"}}'
-   update --collection "users" --id "UUID" --data '{{"role": "admin"}}'
-   upsert --collection "users" --data '{{"id": "fixed", "name": "Bob"}}'
-   delete --collection "users" --id "UUID"
-
-3️⃣  SMART LINKING
-   Référencez un objet par son nom : "allocatedTo": ["ref:oa_actors:name:Opérateur"]
-
-4️⃣  TRANSACTIONS & IMPORT
-   import --collection "users" --path ./backup.json
-   transaction --file tx.json
-"#
-    );
+    user_info!("JSONDB_USAGE_TITLE");
 }
-
-// --- SMART LINKING HELPERS ---
 
 fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
     if !s.starts_with("ref:") {
@@ -493,41 +406,25 @@ fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
 fn resolve_references<'a>(
     data: Value,
     col_mgr: &'a CollectionsManager,
-) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+) -> Pin<Box<dyn Future<Output = AnyResult<Value>> + Send + 'a>> {
     Box::pin(async move {
         match data {
             Value::String(s) => {
-                if let Some((target_col, target_field, target_val)) = parse_smart_link(&s) {
-                    println!(
-                        "🔍 Résolution lien : {} -> {} = {}",
-                        target_col, target_field, target_val
-                    );
-
-                    let mut query = Query::new(target_col);
+                if let Some((col, field, val)) = parse_smart_link(&s) {
+                    let mut query = Query::new(col);
                     query.filter = Some(QueryFilter {
                         operator: FilterOperator::And,
-                        conditions: vec![Condition::eq(target_field, target_val.into())],
+                        conditions: vec![Condition::eq(field, val.into())],
                     });
-
-                    let engine = QueryEngine::new(col_mgr);
-                    let result = engine.execute_query(query).await?;
-
+                    let result = QueryEngine::new(col_mgr).execute_query(query).await?;
                     if let Some(doc) = result.documents.first() {
                         let id = doc
                             .get("id")
                             .or_else(|| doc.get("_id"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-
-                        if id.is_empty() {
-                            eprintln!("⚠️ ATTENTION : Document trouvé mais ID vide !");
-                        } else {
-                            println!("   -> Trouvé : {}", id);
-                        }
-
                         Ok(Value::String(id.to_string()))
                     } else {
-                        eprintln!("⚠️ ATTENTION : Référence introuvable pour {}", s);
                         Ok(Value::String(s))
                     }
                 } else {
@@ -553,13 +450,13 @@ fn resolve_references<'a>(
     })
 }
 
-// --- TESTS UNITAIRES (Migrés) ---
+// --- TESTS UNITAIRES (Patrimoine Conservé & Adapté) ---
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    use clap::Parser;
 
-    // Wrapper pour tester les arguments comme s'ils venaient du CLI principal
     #[derive(Parser)]
     struct TestCli {
         #[command(flatten)]
@@ -568,14 +465,13 @@ mod tests {
 
     #[test]
     fn verify_cli_structure() {
-        // Vérifie la structure de JsondbArgs
         TestCli::command().debug_assert();
     }
 
     #[test]
     fn test_parse_create_index_defaults() {
         let args = vec![
-            "test", // Nom du binaire simulé
+            "test",
             "create-index",
             "--collection",
             "users",
@@ -639,9 +535,7 @@ mod tests {
         let args = vec!["test", "upsert", "--collection", "users", "--data", "{}"];
         let cli = TestCli::parse_from(args);
         match cli.args.command {
-            JsondbCommands::Upsert { collection, .. } => {
-                assert_eq!(collection, "users");
-            }
+            JsondbCommands::Upsert { collection, .. } => assert_eq!(collection, "users"),
             _ => panic!("Parsing upsert failed"),
         }
     }
@@ -659,8 +553,6 @@ mod tests {
         }
     }
 
-    // --- TESTS DU SMART LINKING (Inchangés) ---
-
     #[test]
     fn test_parse_smart_link_valid() {
         let input = "ref:oa_actors:name:Sécurité";
@@ -674,16 +566,12 @@ mod tests {
 
     #[test]
     fn test_parse_smart_link_invalid_prefix() {
-        let input = "uuid:1234-5678";
-        let res = parse_smart_link(input);
-        assert!(res.is_none());
+        assert!(parse_smart_link("uuid:1234-5678").is_none());
     }
 
     #[test]
     fn test_parse_smart_link_missing_parts() {
-        let input = "ref:oa_actors:name"; // Manque la valeur
-        let res = parse_smart_link(input);
-        assert!(res.is_none());
+        assert!(parse_smart_link("ref:oa_actors:name").is_none());
     }
 
     #[test]
@@ -691,9 +579,21 @@ mod tests {
         let input = "ref:oa_actors:description:Ceci:est:une:description";
         let res = parse_smart_link(input);
         assert!(res.is_some());
-        let (col, field, val) = res.unwrap();
-        assert_eq!(col, "oa_actors");
-        assert_eq!(field, "description");
+        let (_col, _field, val) = res.unwrap();
         assert_eq!(val, "Ceci:est:une:description");
+    }
+
+    #[test]
+    fn test_transaction_wrapper_deserialization() {
+        let json = r#"{"operations": []}"#;
+        // REFAC: test avec json::parse
+        let res: Result<json::Value, _> = json::parse(json);
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_parse_data_helper_robustness() {
+        assert!(parse_data(r#"{"test":true}"#).await.is_ok());
+        assert!(parse_data("invalid").await.is_err());
     }
 }

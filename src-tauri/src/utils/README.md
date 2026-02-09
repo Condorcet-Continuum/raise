@@ -1,103 +1,195 @@
-# 🛠️ Module Utils (Fondations)
+# 📘 RAISE Utils - Façade Technique Unifiée
 
-Ce module fournit les briques techniques transversales nécessaires au fonctionnement du backend Rust.
-Il est conçu pour être **thread-safe**, **performant** et **facilement utilisable** par les autres modules (AI, JsonDB, Commands).
+Ce module est la **colonne vertébrale technique** de l'application RAISE.
+Il agit comme une **façade architecturale** pour isoler le code métier ("Core" et "CLI") des implémentations bas niveau et des librairies tierces (`std`, `tokio`, `serde`, `anyhow`, `reqwest`).
 
-## 📂 Structure
+## ⚠️ Règles d'Or (The Golden Rules)
 
-| Fichier         | Rôle                                                                      |
-| :-------------- | :------------------------------------------------------------------------ |
-| **`config.rs`** | Gestion de la configuration globale via un Singleton (env vars, chemins). |
-| **`error.rs`**  | Gestion centralisée des erreurs avec sérialisation pour le Frontend.      |
-| **`logger.rs`** | Configuration du système de logs structurés (`tracing`).                  |
-| **`mod.rs`**    | Point d'entrée et re-exports.                                             |
+1. **Interdiction d'utiliser `std::fs**`: Tout accès fichier doit passer par`raise::utils::fs`.
+2. **Interdiction d'utiliser `std::env**`: Toute configuration doit passer par`raise::utils::config`ou`raise::utils::env`.
+3. **Interdiction d'utiliser `serde_json` directement** : Utilisez `raise::utils::json`.
+4. **Pas d'erreurs `unwrap()` sauvages** : Utilisez les macros de gestion d'erreur et `AppError`.
 
 ---
 
-## ⚙️ Configuration (`config.rs`)
+## 📦 1. Primitives Standards (`mod.rs`)
 
-La configuration est chargée une seule fois au démarrage (dans `main.rs`) via `dotenvy` et stockée dans un `OnceLock` (Singleton). Elle est ensuite accessible partout dans le code sans avoir à passer l'objet en paramètre.
-
-### Variables d'Environnement (.env)
-
-Le système priorise les variables définies dans le fichier `.env` ou l'environnement système.
-
-| Variable            | Description                                 | Valeur par défaut       |
-| :------------------ | :------------------------------------------ | :---------------------- |
-| `APP_ENV`           | Environnement d'exécution (`dev`, `prod`)   | `"development"`         |
-| `PATH_RAISE_DOMAIN` | Dossier racine pour la base de données JSON | `~/raise_domain`        |
-| `RAISE_LOCAL_URL`   | URL du LLM local (Llama.cpp)                | `http://localhost:8081` |
-| `RAISE_GEMINI_KEY`  | Clé API pour le mode Cloud (Optionnel)      | `None`                  |
-
-### Utilisation dans le code
+Centralisation des types Rust essentiels pour éviter la pollution des imports `std`.
 
 ```rust
-use crate::utils::AppConfig;
+use raise::utils::{Arc, Future, Pin};
 
-fn ma_fonction() {
-    // Accès thread-safe et instantané (lecture mémoire)
-    let config = AppConfig::get();
+// Remplace : std::sync::Arc, std::future::Future, std::pin::Pin
 
-    println!("Mode : {}", config.env_mode);
-    println!("DB Path : {:?}", config.database_root);
+```
+
+---
+
+## 📂 2. Système de Fichiers (`utils::fs`)
+
+Gestion **asynchrone**, **atomique** et **instrumentée** (logs) des fichiers.
+
+```rust
+use raise::utils::fs::{self, Path, PathBuf};
+
+// Lecture typée (Désérialisation auto)
+let data: MyStruct = fs::read_json(&path).await?;
+
+// Écriture Atomique (Crée .tmp, flush, et rename) -> Sécurité crash
+fs::write_json_atomic(&path, &data).await?;
+
+// Utilitaires
+fs::ensure_dir(&path).await?;      // mkdir -p
+fs::exists(&path).await;           // bool
+fs::remove_file(&path).await?;     // safe delete
+
+```
+
+---
+
+## ⚙️ 3. JSON & Sérialisation (`utils::json`)
+
+Abstraction complète de `serde` et `serde_json`. Garantit un formatage cohérent et des erreurs typées `AppError`.
+
+```rust
+use raise::utils::json::{self, json, Value, Map, Serialize, Deserialize};
+
+// Parsing
+let obj: MyObj = json::parse(content_str)?;
+
+// Conversion dynamique
+let obj: MyObj = json::from_value(json_value)?;
+
+// Stringify (Pretty Print par défaut dans RAISE)
+let json_str = json::stringify_pretty(&obj)?;
+
+// Fusion profonde (Deep Merge)
+json::merge(&mut target_json, source_json);
+
+```
+
+---
+
+## 🌍 4. Environnement (`utils::env`)
+
+Accès typé et sécurisé aux variables d'environnement (`.env` ou Système).
+
+```rust
+use raise::utils::env;
+
+// Récupération stricte (Erreur si manquant)
+let api_key = env::get("API_KEY")?;
+
+// Récupération optionnelle
+let model = env::get_optional("MODEL_NAME"); // Option<String>
+
+// Récupération avec défaut
+let host = env::get_or("HOST", "localhost");
+
+// Feature Flags (Supporte "true", "1", "yes", "on")
+if env::is_enabled("DEBUG_MODE") { ... }
+
+```
+
+---
+
+## 🚨 5. Gestion d'Erreurs (`utils::error`)
+
+Système unifié. Distingue l'usage interne (bibliothèque) de l'usage externe (CLI/App).
+
+```rust
+use raise::utils::error::{AppError, Result, AnyResult, Context, anyhow};
+
+// 1. Usage Interne (Bibliothèque / Core)
+// Retourne toujours un AppError structuré
+fn core_logic() -> Result<String> {
+    if problem {
+        return Err(AppError::NotFound("Item manquant".into()));
+    }
+    Ok("ok".into())
 }
-```
 
-> **Note :** Si `AppConfig::init()` n'a pas été appelé au début du `main`, l'appel à `get()` provoquera un panic pour éviter des comportements indéfinis.
-
----
-
-## 🚨 Gestion des Erreurs (`error.rs`)
-
-Nous utilisons le pattern `AppError` qui unifie toutes les erreurs possibles (IO, Parsing, Réseau) en un seul type.
-
-### Caractéristiques
-
-1.  **Interopérabilité Frontend** : L'énumération implémente manuellement `Serialize`. Lorsqu'une commande Tauri renvoie une `AppError`, elle est automatiquement convertie en chaîne de caractères (`String`) pour être affichée proprement dans l'UI React (via `console.error` ou un Toast).
-2.  **Conversion Automatique** : Grâce à `thiserror` et `From<T>`, les erreurs standards (`std::io::Error`, `serde_json::Error`) sont converties implicitement avec `?`.
-
-### Exemple
-
-```rust
-use crate::utils::Result; // Alias vers Result<T, AppError>
-
-fn lire_fichier() -> Result<String> {
-    // L'erreur IO est convertie automatiquement en AppError::Io
-    let content = std::fs::read_to_string("inconnu.txt")?;
-    Ok(content)
+// 2. Usage Externe (CLI / Main)
+// Flexible, permet d'utiliser le '?' sur n'importe quoi grâce à anyhow
+fn main_handler() -> AnyResult<()> {
+    core_logic().context("Le core a échoué")?;
+    Ok(())
 }
+
 ```
 
 ---
 
-## 🪵 Logging (`logger.rs`)
+## 🛠️ 6. Configuration (`utils::config`)
 
-Le système de log repose sur la crate **`tracing`**. Il offre des logs structurés, asynchrones et colorés.
-
-### Niveaux de Log
-
-Le niveau de verbosité est contrôlé par la variable `RUST_LOG`.
-
-```bash
-# Voir uniquement les infos importantes
-RUST_LOG=info cargo run
-
-# Voir tout ce qui se passe dans RAISE (très verbeux)
-RUST_LOG=raise=debug cargo run
-
-# Cibler un module spécifique
-RUST_LOG=raise::json_db=trace cargo run
-```
-
-### Utilisation
+Singleton global chargé au démarrage.
 
 ```rust
-// Au lieu de println!
-tracing::info!("Serveur démarré");
-tracing::warn!("Fichier de config absent, utilisation des défauts");
-tracing::error!("Échec critique de la base de données : {}", e);
-```
+use raise::utils::config::AppConfig;
+
+// Initialisation (au démarrage de l'app)
+AppConfig::init()?;
+
+// Accès partout dans le code
+let cfg = AppConfig::get();
+println!("DB Root: {:?}", cfg.database_root);
 
 ```
+
+---
+
+## 📢 7. Logging & Feedback (`utils::logger`)
+
+Macros unifiées pour parler à l'utilisateur (Console) tout en loguant les détails techniques (Fichier `.log` + Tracing).
+
+```rust
+use raise::{user_info, user_success, user_error};
+
+// Affiche "ℹ️ Traitement..." en console + Log structuré JSON avec module/ligne
+user_info!("PROCESS_START", "Fichier: {}", filename);
+
+// Affiche "✅ Succès..." en console
+user_success!("DONE");
+
+// Affiche "❌ Erreur..." en stderr
+user_error!("FATAL_ERROR", "Code: {}", 500);
+
+```
+
+---
+
+## 🗣️ 8. Internationalisation (`utils::i18n`)
+
+Système de traduction léger.
+
+```rust
+use raise::utils::i18n;
+
+// Initialisation
+i18n::init_i18n("fr");
+
+// Traduction
+let msg = i18n::t("WELCOME_MESSAGE");
+
+```
+
+---
+
+## 🌐 9. Réseau (`utils::net`)
+
+Client HTTP unique, optimisé (Keep-Alive) et résilient.
+
+```rust
+use raise::utils::net;
+
+// POST avec Retries exponentiels automatiques
+let response: MyResponse = net::post_json_with_retry(
+    "http://api.local/v1/chat",
+    &request_body,
+    3 // 3 tentatives max
+).await?;
+
+// GET simple
+let text = net::get_simple("http://google.com").await?;
 
 ```

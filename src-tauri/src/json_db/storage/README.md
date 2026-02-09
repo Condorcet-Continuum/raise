@@ -96,8 +96,7 @@ Lors de l'initialisation (`create_db`), il extrait automatiquement ces fichiers 
 
 ```rust
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-use serde_json::json;
-use std::path::PathBuf;
+
 
 fn main() -> anyhow::Result<()> {
     // 1. Configuration

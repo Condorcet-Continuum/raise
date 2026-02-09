@@ -3,13 +3,12 @@
 //! Primitives collections : gestion des dossiers et fichiers JSON d’une collection.
 //! Pas de logique x_compute/validate ici — uniquement persistance et I/O.
 
-use anyhow::{Context, Result};
-use serde_json::Value;
-use std::path::PathBuf;
-use tokio::fs;
+use crate::utils::{
+    error::AnyResult,
+    fs::{self, PathBuf}, // On utilise notre module fs enrichi
+    json::Value,         // Nos utilitaires JSON
+};
 
-// On utilise atomic_write depuis file_storage (qui est maintenant async)
-use crate::json_db::storage::file_storage::atomic_write;
 use crate::json_db::storage::JsonDbConfig;
 
 /// Racine des collections : {db_root}/collections/{collection}
@@ -28,13 +27,9 @@ pub async fn create_collection_if_missing(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<()> {
+) -> AnyResult<()> {
     let root = collection_root(cfg, space, db, collection);
-    if !root.exists() {
-        fs::create_dir_all(&root)
-            .await
-            .with_context(|| format!("create_dir_all {}", root.display()))?;
-    }
+    fs::ensure_dir(&root).await?;
     Ok(())
 }
 
@@ -45,20 +40,13 @@ pub async fn read_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> Result<Value> {
+) -> AnyResult<Value> {
     let path = doc_path(cfg, space, db, collection, id);
-    let content = fs::read_to_string(&path)
-        .await
-        .with_context(|| format!("Document introuvable : {}/{}", collection, id))?;
-
-    let doc: Value = serde_json::from_str(&content)
-        .with_context(|| format!("JSON invalide : {}", path.display()))?;
-
+    let doc = fs::read_json(&path).await?;
     Ok(doc)
 }
 
 // --- FONCTIONS CRUD ---
-
 pub async fn create_document(
     cfg: &JsonDbConfig,
     space: &str,
@@ -66,11 +54,10 @@ pub async fn create_document(
     collection: &str,
     id: &str,
     document: &Value,
-) -> Result<()> {
+) -> AnyResult<()> {
     create_collection_if_missing(cfg, space, db, collection).await?;
     let path = doc_path(cfg, space, db, collection, id);
-    let content = serde_json::to_string_pretty(document)?;
-    atomic_write(path, content.as_bytes()).await?;
+    fs::write_json_atomic(&path, document).await?;
     Ok(())
 }
 
@@ -81,7 +68,7 @@ pub async fn update_document(
     collection: &str,
     id: &str,
     document: &Value,
-) -> Result<()> {
+) -> AnyResult<()> {
     create_document(cfg, space, db, collection, id, document).await
 }
 
@@ -91,13 +78,9 @@ pub async fn delete_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> Result<()> {
+) -> AnyResult<()> {
     let path = doc_path(cfg, space, db, collection, id);
-    if path.exists() {
-        fs::remove_file(&path)
-            .await
-            .with_context(|| format!("Suppression {}", path.display()))?;
-    }
+    fs::remove_file(&path).await?;
     Ok(())
 }
 
@@ -107,13 +90,9 @@ pub async fn drop_collection(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<()> {
+) -> AnyResult<()> {
     let root = collection_root(cfg, space, db, collection);
-    if root.exists() {
-        fs::remove_dir_all(&root)
-            .await
-            .with_context(|| format!("Suppression collection {}", root.display()))?;
-    }
+    fs::remove_dir_all(&root).await?;
     Ok(())
 }
 
@@ -124,16 +103,18 @@ pub async fn list_document_ids(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<Vec<String>> {
+) -> AnyResult<Vec<String>> {
     let root = collection_root(cfg, space, db, collection);
     let mut out = Vec::new();
-
-    if !root.exists() {
+    if !fs::exists(&root).await {
         return Ok(out);
     }
-
     let mut entries = fs::read_dir(&root).await?;
-    while let Some(e) = entries.next_entry().await? {
+    while let Some(e) = entries
+        .next_entry()
+        .await
+        .map_err(crate::utils::AppError::Io)?
+    {
         let p = e.path();
         if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
@@ -152,7 +133,7 @@ pub async fn list_documents(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<Vec<Value>> {
+) -> AnyResult<Vec<Value>> {
     let ids = list_document_ids(cfg, space, db, collection).await?;
     let mut docs = Vec::with_capacity(ids.len());
     for id in ids {
@@ -167,14 +148,18 @@ pub async fn list_collection_names_fs(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
-) -> Result<Vec<String>> {
+) -> AnyResult<Vec<String>> {
     let root = cfg.db_root(space, db).join("collections");
     let mut out = Vec::new();
-    if !root.exists() {
+    if !fs::exists(&root).await {
         return Ok(out);
     }
-    let mut entries = fs::read_dir(root).await?;
-    while let Some(e) = entries.next_entry().await? {
+    let mut entries = fs::read_dir(&root).await?;
+    while let Some(e) = entries
+        .next_entry()
+        .await
+        .map_err(crate::utils::AppError::Io)?
+    {
         let ty = e.file_type().await?;
         if ty.is_dir() {
             if let Ok(name) = e.file_name().into_string() {
@@ -189,9 +174,7 @@ pub async fn list_collection_names_fs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use tempfile::tempdir;
-
+    use crate::utils::{fs::tempdir, json::json};
     #[tokio::test]
     async fn test_collection_crud_async() {
         let dir = tempdir().unwrap();

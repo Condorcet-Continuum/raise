@@ -3,29 +3,31 @@
 use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::StorageEngine;
-use std::fs;
+use raise::utils::{fs, json};
 
 #[tokio::test] // On garde tokio pour les appels asynchrones au manager
 async fn debug_import_exchange_item() {
-    // CORRECTION E0277 : Le compilateur indique que ces helpers sont synchrones.
-    // On retire donc le .await sur init_test_env et ensure_db_exists.
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, &env.space, &env.db);
+    ensure_db_exists(&env.cfg, &env.space, &env.db).await;
 
     let refreshed_storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&refreshed_storage, &env.space, &env.db);
 
     // Le fichier est créé par init_test_env dans le mod.rs
-    let data_path = get_dataset_file(&env.cfg, "arcadia/v1/data/exchange-items/position_gps.json");
+    let data_path =
+        get_dataset_file(&env.cfg, "arcadia/v1/data/exchange-items/position_gps.json").await;
 
     // Vérification de sécurité
-    if !data_path.exists() {
+    if !fs::exists(&data_path).await {
         panic!("❌ Fichier de test introuvable : {:?}", data_path);
     }
 
-    let json_content = fs::read_to_string(&data_path).expect("Lecture donnée impossible");
-    let mut json_doc: serde_json::Value =
-        serde_json::from_str(&json_content).expect("JSON malformé");
+    let json_content = fs::read_to_string(&data_path)
+        .await
+        .expect("Lecture donnée impossible");
+
+    // Utilisation de la variable définie juste au-dessus
+    let mut json_doc: json::Value = json::parse(&json_content).expect("JSON malformé");
 
     // On utilise un schéma qui existe réellement (copié par init_test_env)
     let schema_rel_path = "arcadia/data/exchange-item.schema.json";

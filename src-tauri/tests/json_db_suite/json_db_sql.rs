@@ -2,13 +2,11 @@
 
 use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::query::sql::{parse_sql, SqlRequest}; // Ajout de SqlRequest
+use raise::json_db::query::sql::{parse_sql, SqlRequest};
 use raise::json_db::query::QueryEngine;
 use raise::json_db::storage::JsonDbConfig;
-use serde_json::{json, Value};
-use std::fs;
+use raise::utils::{fs, json::json};
 
-// CORRECTION : Passage en async pour supporter les appels asynchrones au manager
 async fn seed_actors_from_dataset(mgr: &CollectionsManager<'_>, cfg: &JsonDbConfig) {
     // CORRECTION : URI absolue pour le schéma
     let schema_uri = format!(
@@ -33,22 +31,21 @@ async fn seed_actors_from_dataset(mgr: &CollectionsManager<'_>, cfg: &JsonDbConf
     for actor in actors_data {
         let handle = actor["handle"].as_str().unwrap();
         let rel_path = format!("actors/{}.json", handle);
-        let file_path = get_dataset_file(cfg, &rel_path);
+        let file_path = get_dataset_file(cfg, &rel_path).await;
 
         // IMPORTANT : Création du dossier parent (nécessaire car get_dataset_file pointe vers <tmp>/dataset/...)
         if let Some(parent) = file_path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).expect("Failed to create actor dataset dir");
+            if !fs::exists(parent).await {
+                fs::ensure_dir(parent)
+                    .await
+                    .expect("Failed to create actor dataset dir");
             }
         }
+        fs::write_json_atomic(&file_path, &actor)
+            .await
+            .expect("write dataset file");
 
-        let content = serde_json::to_string_pretty(&actor).unwrap();
-        fs::write(&file_path, &content).expect("write dataset file");
-
-        let loaded_doc: Value = serde_json::from_str(&content).expect("json parse");
-
-        // CORRECTION E0599 : Ajout de .await sur insert_with_schema
-        mgr.insert_with_schema("actors", loaded_doc)
+        mgr.insert_with_schema("actors", actor)
             .await
             .expect("Failed to insert actor");
     }
@@ -57,7 +54,7 @@ async fn seed_actors_from_dataset(mgr: &CollectionsManager<'_>, cfg: &JsonDbConf
 #[tokio::test]
 async fn test_sql_select_by_kind() {
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
 
     seed_actors_from_dataset(&mgr, &env.cfg).await;
@@ -81,7 +78,7 @@ async fn test_sql_select_by_kind() {
 #[tokio::test]
 async fn test_sql_numeric_comparison_x_props() {
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
     seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
@@ -103,7 +100,7 @@ async fn test_sql_numeric_comparison_x_props() {
 #[tokio::test]
 async fn test_sql_logical_and_mixed() {
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
     seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
@@ -125,7 +122,7 @@ async fn test_sql_logical_and_mixed() {
 #[tokio::test]
 async fn test_sql_like_display_name() {
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
     seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
@@ -148,7 +145,7 @@ async fn test_sql_like_display_name() {
 #[tokio::test]
 async fn test_sql_order_by_x_prop() {
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
     seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);
@@ -180,7 +177,7 @@ async fn test_sql_order_by_x_prop() {
 #[tokio::test]
 async fn test_sql_json_array_contains() {
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
     let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
     seed_actors_from_dataset(&mgr, &env.cfg).await;
     let engine = QueryEngine::new(&mgr);

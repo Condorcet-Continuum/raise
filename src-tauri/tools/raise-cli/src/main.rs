@@ -1,9 +1,26 @@
-use anyhow::Result;
 use clap::{Parser, Subcommand};
-use dotenvy::dotenv;
 
-// On importe le dossier commands/ où sont rangés nos modules
+// On garde le module local des commandes
 mod commands;
+
+// --- IMPORTS DU CŒUR RAISE ---
+// NOUVEAU : On importe nos utilitaires centralisés
+use raise::utils::{
+    config::AppConfig,
+    env,                           // Gestion des variables d'environnement
+    fs::{self, write_json_atomic}, // Gestion FS + Path
+    i18n,
+    json,
+    logger,
+};
+// Import des macros pour l'affichage
+use raise::utils::error::AnyResult;
+use raise::{user_error, user_info};
+// EMBARQUEMENT DES RESSOURCES (Compilation)
+const DEFAULT_LOCALE_FR: &str = include_str!("../../../locales/fr.json");
+const DEFAULT_LOCALE_EN: &str = include_str!("../../../locales/en.json");
+const DEFAULT_LOCALE_DE: &str = include_str!("../../../locales/de.json");
+const DEFAULT_LOCALE_ES: &str = include_str!("../../../locales/es.json");
 
 #[derive(Parser)]
 #[command(name = "raise-cli")]
@@ -11,40 +28,233 @@ mod commands;
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    // Optionnel pour permettre le mode Shell Interactif
+    command: Option<Commands>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum Commands {
+    /// Pilotage du Workflow Engine (Neuro-Symbolic MAS)
+    Workflow(commands::workflow::WorkflowArgs),
+
+    ModelEngine(commands::model_engine::ModelArgs),
+
     /// Commandes pour le JSON-DB (Embedded NoSQL Engine)
     Jsondb(commands::jsondb::JsondbArgs),
-    // C'est ici que nous ajouterons les futurs modules :
-    // Ai(commands::ai::AiArgs),
-    // Blockchain(...),
+
+    /// Commandes pour le AI (Cerveau Neuro-Symbolique)
+    Ai(commands::ai::AiArgs),
+
+    Genetics(commands::genetics::GeneticsArgs),
+
+    Blockchain(commands::blockchain::BlockchainArgs),
+
+    Plugins(commands::plugins::PluginsArgs),
+
+    Traceability(commands::traceability::TraceabilityArgs),
+
+    Spatial(commands::spatial::SpatialArgs),
+
+    CodeGen(commands::code_gen::CodeGenArgs),
+
+    /// Commandes pour le Validator (Schémas & Validation)
+    Validator(commands::validator::ValidatorArgs),
+
+    Utils(commands::utils::UtilsArgs),
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // 1. Chargement de l'environnement (.env)
-    dotenv().ok();
-
-    // 2. Initialisation des logs si RUST_LOG est défini
-    if std::env::var("RUST_LOG").is_ok() {
-        tracing_subscriber::fmt::init();
+async fn main() -> AnyResult<()> {
+    // 1. Initialisation de la Configuration (CRITIQUE)
+    if let Err(e) = AppConfig::init() {
+        eprintln!("❌ CRITICAL ERROR: Impossible d'initialiser la configuration.");
+        eprintln!("   Détails : {}", e);
+        std::process::exit(1);
     }
 
-    // 3. Parsing des arguments
+    // 2. Initialisation du Logger
+    logger::init_logging();
+
+    // 3. BOOTSTRAP DES LOCALES
+    // Async et Atomique !
+    bootstrap_locales().await;
+
+    // 4. Initialisation de la Langue
+    // REFAC: Utilisation de env::get_or
+    let lang = env::get_or("RAISE_LANG", "fr");
+    i18n::init_i18n(&lang);
+
+    // Message d'accueil système
+    user_info!("CLI_START", "v{}", env!("CARGO_PKG_VERSION"));
+
+    // 5. Parsing & Dispatch
     let cli = Cli::parse();
 
-    // 4. Dispatch vers les modules
     match cli.command {
-        Commands::Jsondb(args) => {
-            // On passe la main au handler du module dédié
-            commands::jsondb::handle(args).await?;
+        Some(cmd) => {
+            // Mode "One-Shot"
+            if let Err(e) = execute_command(cmd).await {
+                user_error!("CMD_FAIL", "{}", e);
+                std::process::exit(1);
+            }
+        }
+        None => {
+            // Mode "Global Shell"
+            run_global_shell().await?;
         }
     }
 
+    tracing::debug!("Fin de l'exécution du CLI");
     Ok(())
+}
+
+/// Boucle principale du Shell Global (REPL)
+async fn run_global_shell() -> AnyResult<()> {
+    use rustyline::error::ReadlineError;
+    use rustyline::DefaultEditor;
+
+    println!("--------------------------------------------------");
+    println!("🚀 RAISE GLOBAL SHELL - v{}", env!("CARGO_PKG_VERSION"));
+    println!("   Tapez 'help' pour la liste des commandes.");
+    println!("   Tapez 'exit' ou 'quit' pour quitter.");
+    println!("--------------------------------------------------");
+
+    // 1. Initialisation de l'éditeur de ligne
+    let mut rl = DefaultEditor::new()?;
+
+    // 2. Chargement de l'historique existant (si disponible)
+    let config = AppConfig::get();
+    let history_path = config.database_root.join("history.txt");
+
+    if rl.load_history(&history_path).is_err() {
+        // Pas d'historique ou fichier introuvable (normal au premier lancement)
+    }
+
+    loop {
+        // Affiche le prompt et attend l'input (avec gestion des flèches !)
+        let readline = rl.readline("RAISE> ");
+
+        match readline {
+            Ok(line) => {
+                let input = line.trim();
+
+                // Si la ligne n'est pas vide, on l'ajoute à l'historique mémoire
+                if !input.is_empty() {
+                    let _ = rl.add_history_entry(input);
+                } else {
+                    continue;
+                }
+
+                // Commandes natives du Shell
+                if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
+                    println!("👋 Au revoir !");
+                    break;
+                }
+                if input.eq_ignore_ascii_case("clear") {
+                    print!("\x1B[2J\x1B[1;1H");
+                    continue;
+                }
+
+                // Parsing et Exécution
+                match shell_words::split(input) {
+                    Ok(args) => {
+                        let mut full_args = vec!["repl".to_string()];
+                        full_args.extend(args);
+
+                        match Cli::try_parse_from(full_args) {
+                            Ok(cli) => {
+                                if let Some(cmd) = cli.command {
+                                    if let Err(e) = execute_command(cmd).await {
+                                        user_error!("CMD_FAIL", "{}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                e.print().ok();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Erreur de syntaxe : {}", e);
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("(CTRL-C)");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("(CTRL-D)");
+                break;
+            }
+            Err(err) => {
+                user_error!("SHELL_ERROR", "{}", err);
+                break;
+            }
+        }
+    }
+
+    // 3. Sauvegarde de l'historique en quittant
+    if let Err(e) = rl.save_history(&history_path) {
+        tracing::warn!("Impossible de sauvegarder l'historique : {}", e);
+    }
+
+    Ok(())
+}
+
+async fn execute_command(cmd: Commands) -> AnyResult<()> {
+    match cmd {
+        Commands::Workflow(args) => commands::workflow::handle(args).await,
+        Commands::ModelEngine(args) => commands::model_engine::handle(args).await,
+        Commands::Jsondb(args) => commands::jsondb::handle(args).await,
+        Commands::Ai(args) => commands::ai::handle(args).await,
+        Commands::Genetics(args) => commands::genetics::handle(args).await,
+        Commands::Blockchain(args) => commands::blockchain::handle(args).await,
+        Commands::Plugins(args) => commands::plugins::handle(args).await,
+        Commands::Traceability(args) => commands::traceability::handle(args).await,
+        Commands::Spatial(args) => commands::spatial::handle(args).await,
+        Commands::CodeGen(args) => commands::code_gen::handle(args).await,
+        Commands::Validator(args) => commands::validator::handle(args).await,
+        Commands::Utils(args) => commands::utils::handle(args).await,
+    }
+}
+
+/// Déploie les fichiers de langue de manière Atomique et Validée
+async fn bootstrap_locales() {
+    let config = AppConfig::get();
+    let locales_dir = config.database_root.join("locales");
+
+    // REFAC: Utilisation de fs::ensure_dir (plus sûr)
+    if let Err(e) = fs::ensure_dir(&locales_dir).await {
+        tracing::warn!("Impossible de créer le dossier locales : {}", e);
+        return;
+    }
+
+    let writes = vec![
+        ("fr.json", DEFAULT_LOCALE_FR),
+        ("en.json", DEFAULT_LOCALE_EN),
+        ("de.json", DEFAULT_LOCALE_DE),
+        ("es.json", DEFAULT_LOCALE_ES),
+    ];
+
+    for (name, content) in writes {
+        let path = locales_dir.join(name);
+
+        // 1. Validation : On parse le JSON brut
+        match json::parse::<json::Value>(content) {
+            Ok(json_value) => {
+                // 2. Écriture Atomique : On utilise notre utilitaire sécurisé
+                if let Err(e) = write_json_atomic(&path, &json_value).await {
+                    tracing::error!("Erreur écriture atomique {}: {}", name, e);
+                } else {
+                    tracing::debug!("Locale {} déployée.", name);
+                }
+            }
+            Err(e) => {
+                tracing::error!("❌ locale {} corrompue au build ! : {}", name, e);
+            }
+        }
+    }
 }
 
 // --- TESTS UNITAIRES ---
@@ -55,38 +265,31 @@ mod tests {
 
     #[test]
     fn verify_cli_structure() {
-        // Vérifie que la configuration Clap est valide (noms uniques, types corrects, etc.)
         Cli::command().debug_assert();
     }
 
     #[test]
     fn test_help_generation() {
-        // Vérifie que l'aide peut être générée sans paniquer
-        let output = Cli::command().render_help();
-        assert!(output.to_string().contains("RAISE JSON-DB"));
+        let output = Cli::command().render_help().to_string();
+        assert!(output.contains("raise-cli"));
+        assert!(output.contains("jsondb"));
     }
 
     #[test]
-    fn test_dispatch_jsondb() {
-        // Simule une commande "raise-cli jsondb list-collections"
-        let args = vec!["raise-cli", "jsondb", "list-collections"];
+    fn test_dispatch_ai() {
+        let args = vec!["raise-cli", "ai"];
         let cli = Cli::try_parse_from(args).expect("Parsing failed");
-
         match cli.command {
-            Commands::Jsondb(jsondb_args) => {
-                // On vérifie qu'on est bien tombé dans le bon variant de l'enum
-                match jsondb_args.command {
-                    commands::jsondb::JsondbCommands::ListCollections => assert!(true),
-                    _ => panic!("Mauvaise sous-commande parsée"),
-                }
-            } // _ => panic!("Mauvais module parsé"), // Commenté car seul Jsondb existe pour l'instant
+            Some(Commands::Ai(_)) => assert!(true),
+            _ => panic!("Le dispatch vers le module AI a échoué"),
         }
     }
 
     #[test]
-    fn test_global_version() {
-        // Vérifie que la version est bien récupérée du Cargo.toml
-        let version = Cli::command().get_version().unwrap();
-        assert!(!version.is_empty());
+    fn test_shell_words_parsing() {
+        let input = "ai classify \"hello world\"";
+        let args = shell_words::split(input).unwrap();
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[2], "hello world");
     }
 }

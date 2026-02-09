@@ -6,18 +6,19 @@ pub mod templates;
 
 use self::analyzers::dependency_analyzer::DependencyAnalyzer;
 use self::analyzers::injection_analyzer::InjectionAnalyzer;
-use self::analyzers::Analyzer;
 use self::generators::{
     cpp_gen::CppGenerator, rust_gen::RustGenerator, typescript_gen::TypeScriptGenerator,
     verilog_gen::VerilogGenerator, vhdl_gen::VhdlGenerator, LanguageGenerator,
 };
 use self::templates::template_engine::TemplateEngine;
-use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+
+// ✅ IMPORTS V2 (Architecture 100% Utils)
+use self::analyzers::Analyzer;
+use crate::utils::data::{Deserialize, Serialize, Value};
+use crate::utils::error::anyhow;
+use crate::utils::io::{Path, PathBuf, ProjectScope};
+use crate::utils::prelude::*; // Result, AppError, info, warn
+use crate::utils::sys;
 
 // AJOUT : Derive Serialize pour l'affichage JSON dans les outils
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -45,7 +46,7 @@ impl CodeGeneratorService {
         }
     }
 
-    pub fn generate_for_element(
+    pub async fn generate_for_element(
         &self,
         element: &Value,
         lang: TargetLanguage,
@@ -60,16 +61,16 @@ impl CodeGeneratorService {
             TargetLanguage::Vhdl => Box::new(VhdlGenerator::new()),
             TargetLanguage::Cpp => Box::new(CppGenerator::new()),
             TargetLanguage::TypeScript => Box::new(TypeScriptGenerator::new()),
-            TargetLanguage::Python => return Err(anyhow!("Générateur Python non implémenté")),
+            TargetLanguage::Python => {
+                return Err(anyhow!("Générateur Python non implémenté").into())
+            }
         };
 
         // 3. Génération "brute" (en mémoire)
         let mut files = generator.generate(element, &self.template_engine)?;
         let mut generated_paths = Vec::new();
 
-        if !self.root_path.exists() {
-            fs::create_dir_all(&self.root_path)?;
-        }
+        let scope = ProjectScope::new(&self.root_path)?;
 
         // Variable pour repérer la racine du Crate (pour Clippy)
         let mut crate_root: Option<PathBuf> = None;
@@ -86,11 +87,11 @@ impl CodeGeneratorService {
 
             // 4. Préservation du code (Fichier existant -> Injections)
             if full_path.exists() {
-                if let Ok(injections) = InjectionAnalyzer::extract_injections(&full_path) {
+                if let Ok(injections) = InjectionAnalyzer::extract_injections(&full_path).await {
                     for (key, user_code) in injections {
                         let marker = format!("AI_INJECTION_POINT: {}", key);
                         if file.content.contains(&marker) {
-                            println!(
+                            info!(
                                 "Réinjection trouvée pour {} : {} octets",
                                 key,
                                 user_code.len()
@@ -104,10 +105,7 @@ impl CodeGeneratorService {
             }
 
             // 5. Écriture finale
-            if let Some(parent) = full_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&full_path, &file.content)?;
+            scope.write(&file.path, file.content.as_bytes()).await?;
             generated_paths.push(full_path);
         }
 
@@ -123,78 +121,55 @@ impl CodeGeneratorService {
 
     /// Exécute `cargo clippy --fix` sur le dossier généré.
     fn apply_clippy(&self, crate_path: &Path) {
-        println!("🔧 Exécution de Clippy sur : {:?}", crate_path);
+        info!("🔧 Exécution de Clippy sur : {:?}", crate_path);
+        let args = [
+            "clippy",
+            "--fix",
+            "--allow-dirty",
+            "--allow-staged",
+            "--",
+            "-A",
+            "clippy::all",
+            "-D",
+            "warnings",
+        ];
 
-        // CORRECTION : On retire le '&' devant le tableau.
-        // .args([...]) au lieu de .args(&[...])
-        let output = Command::new("cargo")
-            .current_dir(crate_path)
-            .args([
-                "clippy",
-                "--fix",
-                "--allow-dirty",  // Autorise à tourner même si git est sale
-                "--allow-staged", // Autorise à tourner même si git a des fichiers stagés
-                "--",
-                "-A",
-                "clippy::all", // On désactive les erreurs bloquantes pour le fix
-                "-D",
-                "warnings", // On force les warnings à être traités
-            ])
-            .output();
-
-        match output {
-            Ok(o) => {
-                if !o.status.success() {
-                    eprintln!(
-                        "⚠️ Warning: Clippy n'a pas pu s'exécuter complètement (Probablement des dépendances manquantes). Stderr: {}",
-                        String::from_utf8_lossy(&o.stderr)
-                    );
-                } else {
-                    println!("✅ Clippy a nettoyé le code.");
-                }
-            }
-            Err(e) => eprintln!("⚠️ Impossible de lancer cargo: {}", e),
+        match sys::exec_command("cargo", &args, Some(crate_path)) {
+            Ok(_) => info!("✅ Code nettoyé par Clippy."),
+            Err(e) => warn!("⚠️ Clippy warning: {}", e),
         }
 
-        // On relance un formatage final car clippy --fix peut parfois casser l'indentation
-        let _ = Command::new("cargo")
-            .current_dir(crate_path)
-            .arg("fmt")
-            .output();
+        let _ = sys::exec_command("cargo", &["fmt"], Some(crate_path));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use std::io::Write;
-    use tempfile::tempdir;
+    use crate::utils::data::json;
+    use crate::utils::io::{read_to_string, tempdir, write_atomic};
 
-    #[test]
-    fn test_integration_analyzers() {
+    #[tokio::test]
+    async fn test_integration_analyzers() {
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let service = CodeGeneratorService::new(root.clone());
 
-        // 1. Création d'un fichier existant avec du code utilisateur
+        // 1. Création d'un fichier existant (Async + Secure)
         let existing_file = root.join("MyComponent.rs");
-        {
-            let mut f = fs::File::create(&existing_file).unwrap();
-            f.write_all(
-                r#"
+        let user_code = r#"
 // Généré par Raise
 struct MyComponent {}
 // AI_INJECTION_POINT: Logic
 fn custom() { println!("Preserved!"); }
 // END_AI_INJECTION_POINT
-            "#
-                .as_bytes(),
-            )
-            .unwrap();
-        }
+        "#;
 
-        // 2. Régénération du même composant
+        write_atomic(&existing_file, user_code.as_bytes())
+            .await
+            .unwrap();
+
+        // 2. Régénération (avec la macro json! de utils)
         let element = json!({
             "name": "MyComponent",
             "id": "A1",
@@ -203,11 +178,15 @@ fn custom() { println!("Preserved!"); }
 
         let paths = service
             .generate_for_element(&element, TargetLanguage::Rust)
+            .await
             .unwrap();
+
         assert_eq!(paths.len(), 1);
 
-        // Vérification basique
-        let new_content = fs::read_to_string(&paths[0]).unwrap();
+        // 3. Vérification (Async read)
+        let new_content = read_to_string(&paths[0]).await.unwrap();
+
         assert!(new_content.contains("pub struct MyComponent"));
+        assert!(new_content.contains("fn custom() { println!(\"Preserved!\"); }"));
     }
 }

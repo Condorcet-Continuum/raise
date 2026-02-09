@@ -1,10 +1,9 @@
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use anyhow::Result;
+use crate::utils::data::{ContextBuilder, Value}; // ✅
+use crate::utils::io::PathBuf;
+use crate::utils::Result;
 use heck::ToSnakeCase;
-use serde_json::Value;
-use std::path::PathBuf;
-use tera::Context;
 
 #[derive(Default)]
 pub struct VerilogGenerator;
@@ -21,8 +20,6 @@ impl LanguageGenerator for VerilogGenerator {
         element: &Value,
         template_engine: &TemplateEngine,
     ) -> Result<Vec<GeneratedFile>> {
-        let mut context = Context::new();
-
         let name = element
             .get("name")
             .and_then(|v| v.as_str())
@@ -33,14 +30,13 @@ impl LanguageGenerator for VerilogGenerator {
             .and_then(|v| v.as_str())
             .unwrap_or("No description");
 
-        context.insert("name", name);
-        context.insert("id", id);
-        context.insert("description", desc);
+        let context = ContextBuilder::new()
+            .with_part("name", &name)
+            .with_part("id", &id)
+            .with_part("description", &desc)
+            .build();
 
-        // Rendu du template
         let content = template_engine.render("verilog/module", &context)?;
-
-        // Nom de fichier en snake_case (ex: traffic_light.v)
         let filename = format!("{}.v", name.to_snake_case());
 
         Ok(vec![GeneratedFile {
@@ -53,7 +49,7 @@ impl LanguageGenerator for VerilogGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     #[test]
     fn test_verilog_gen() {

@@ -7,10 +7,7 @@ use raise::json_db::{
     storage::{JsonDbConfig, StorageEngine},
     transactions::{manager::TransactionManager, TransactionRequest},
 };
-use serde_json::json;
-use std::sync::Arc;
-use tempfile::tempdir;
-// Correction : Suppression de 'use tokio::fs;' qui était inutilisé
+use raise::utils::{fs::tempdir, json::json, Arc};
 
 #[tokio::test]
 async fn test_json_db_global_scenario() {

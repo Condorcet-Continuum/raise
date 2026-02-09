@@ -3,7 +3,7 @@
 //! Optimiseur de requêtes pour améliorer les performances
 
 use super::{ComparisonOperator, Condition, Query, QueryFilter};
-use anyhow::Result;
+use crate::utils::error::AnyResult;
 
 /// Optimiseur de requêtes
 #[derive(Debug, Default)]
@@ -39,7 +39,7 @@ impl QueryOptimizer {
     }
 
     /// Optimise une requête
-    pub fn optimize(&self, mut query: Query) -> Result<Query> {
+    pub fn optimize(&self, mut query: Query) -> AnyResult<Query> {
         // 1. Simplifier les filtres
         if self.config.simplify_filters {
             if let Some(ref mut filter) = query.filter {
@@ -60,7 +60,7 @@ impl QueryOptimizer {
         Ok(query)
     }
 
-    fn simplify_filter(&self, filter: QueryFilter) -> Result<QueryFilter> {
+    fn simplify_filter(&self, filter: QueryFilter) -> AnyResult<QueryFilter> {
         let mut simplified = filter.clone();
 
         // Déduplication basique
@@ -74,7 +74,7 @@ impl QueryOptimizer {
         Ok(simplified)
     }
 
-    fn reorder_conditions(&self, mut filter: QueryFilter) -> Result<QueryFilter> {
+    fn reorder_conditions(&self, mut filter: QueryFilter) -> AnyResult<QueryFilter> {
         // Trie par sélectivité estimée (plus petit score = plus sélectif/rapide = exécuté en premier)
         filter
             .conditions
@@ -127,7 +127,7 @@ impl QueryOptimizer {
         unique
     }
 
-    fn optimize_pagination(&self, mut query: Query) -> Result<Query> {
+    fn optimize_pagination(&self, mut query: Query) -> AnyResult<Query> {
         const MAX_REASONABLE_LIMIT: usize = 1000;
 
         // Plafonner la limite si elle est excessive
@@ -154,7 +154,7 @@ impl QueryOptimizer {
 mod tests {
     use super::*;
     use crate::json_db::query::{Condition, FilterOperator, Query, QueryFilter};
-    use serde_json::json;
+    use crate::utils::json::json;
 
     #[test]
     fn test_optimize_reorder() {

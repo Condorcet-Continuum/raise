@@ -3,21 +3,19 @@
 use crate::{ensure_db_exists, init_test_env}; // Imports nettoyés
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::StorageEngine;
-use serde_json::json;
-use std::fs;
+use raise::utils::{fs, json::json};
 
 #[tokio::test] // CORRECTION : Passage en test asynchrone
 async fn test_create_and_drop_index_lifecycle() {
     // CORRECTION E0277 : Ces helpers sont synchrones dans cette suite, pas de .await ici
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, &env.space, &env.db);
+    ensure_db_exists(&env.cfg, &env.space, &env.db).await;
 
     let storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&storage, &env.space, &env.db);
 
     let collection = "indexed_articles";
 
-    // CORRECTION E0599 : create_collection est désormais asynchrone
     mgr.create_collection(collection, None)
         .await
         .expect("create_collection failed");
@@ -48,7 +46,9 @@ async fn test_create_and_drop_index_lifecycle() {
         .cfg
         .db_collection_path(&env.space, &env.db, collection)
         .join("_meta.json");
-    let meta_content = fs::read_to_string(&meta_path).expect("Lecture _meta.json impossible");
+    let meta_content = fs::read_to_string(&meta_path)
+        .await
+        .expect("Lecture _meta.json impossible");
 
     assert!(
         meta_content.contains("\"name\": \"handle\""),
@@ -79,7 +79,8 @@ async fn test_create_and_drop_index_lifecycle() {
         .expect("drop_index failed");
 
     // VÉRIFICATION 3 : _meta.json nettoyé
-    let meta_content_after = fs::read_to_string(&meta_path).unwrap();
+    let meta_content_after = fs::read_to_string(&meta_path).await.unwrap();
+
     assert!(
         !meta_content_after.contains("\"name\": \"handle\""),
         "L'index ne doit plus apparaître dans _meta.json"

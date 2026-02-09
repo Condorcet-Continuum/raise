@@ -1,6 +1,6 @@
 use super::{AnalysisResult, Analyzer};
-use anyhow::Result;
-use serde_json::Value;
+use crate::utils::data::Value;
+use crate::utils::Result;
 
 #[derive(Default)]
 pub struct DependencyAnalyzer;
@@ -106,7 +106,7 @@ impl Analyzer for DependencyAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     #[test]
     fn test_component_dependencies_extraction() {

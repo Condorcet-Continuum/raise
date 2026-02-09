@@ -1,9 +1,10 @@
 // FICHIER : src-tauri/src/json_db/jsonld/context.rs
 
-use anyhow::Result; // CORRECTION : Suppression de 'anyhow' (macro) qui était inutilisé
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
+use crate::utils::{
+    error::AnyResult,
+    json::{Deserialize, Serialize, Value},
+    HashMap,
+};
 
 use super::{vocabulary::VocabularyRegistry, ContextValue};
 
@@ -99,7 +100,7 @@ impl ContextManager {
 
     /// Charge le contexte d'une couche spécifique depuis le Registre Sémantique
     /// C'est la clé pour que le Loader puisse résoudre "Class" ou "OperationalActor" sans préfixe.
-    pub fn load_layer_context(&mut self, layer: &str) -> Result<()> {
+    pub fn load_layer_context(&mut self, layer: &str) -> AnyResult<()> {
         let registry = VocabularyRegistry::global();
         if let Some(ctx_json) = registry.get_context_for_layer(layer) {
             self.parse_context_block(&ctx_json)
@@ -111,14 +112,14 @@ impl ContextManager {
     }
 
     /// Charge un contexte depuis un document JSON-LD (@context)
-    pub fn load_from_doc(&mut self, doc: &Value) -> Result<()> {
+    pub fn load_from_doc(&mut self, doc: &Value) -> AnyResult<()> {
         if let Some(ctx) = doc.get("@context") {
             self.parse_context_block(ctx)?;
         }
         Ok(())
     }
 
-    fn parse_context_block(&mut self, ctx: &Value) -> Result<()> {
+    fn parse_context_block(&mut self, ctx: &Value) -> AnyResult<()> {
         match ctx {
             Value::Object(map) => {
                 for (key, val) in map {
@@ -199,7 +200,7 @@ impl ContextManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::json::json;
 
     #[test]
     fn test_context_creation() {

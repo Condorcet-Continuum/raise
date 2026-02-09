@@ -8,8 +8,10 @@
 //! - Normalisation : produire des graphes RDF canoniques
 //! - Validation : vérifier la conformité avec les schémas
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::utils::{
+    json::{Deserialize, Serialize}, // Serde via la façade
+    HashMap,                        // Collection via la façade
+};
 
 pub mod context;
 pub mod processor;

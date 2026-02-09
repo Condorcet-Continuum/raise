@@ -1,11 +1,13 @@
 // FICHIER : src-tauri/src/json_db/schema/registry.rs
 
 use crate::json_db::storage::JsonDbConfig;
-use anyhow::Result;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::fs;
-use walkdir::WalkDir;
+use crate::utils::{
+    async_recursion,
+    error::AnyResult,
+    fs::{self, Path},
+    json::{self, Value},
+    HashMap,
+};
 
 #[derive(Debug, Clone)]
 pub struct SchemaRegistry {
@@ -28,7 +30,7 @@ impl SchemaRegistry {
         }
     }
 
-    pub fn from_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<Self> {
+    pub async fn from_db(config: &JsonDbConfig, space: &str, db: &str) -> AnyResult<Self> {
         // Préfixe standard : db://space/db/schemas/v1/
         let base_prefix = format!("db://{}/{}/schemas/v1/", space, db);
 
@@ -39,31 +41,49 @@ impl SchemaRegistry {
 
         let schemas_root = config.db_schemas_root(space, db).join("v1");
 
-        if !schemas_root.exists() {
+        if !fs::exists(&schemas_root).await {
             return Ok(registry);
         }
+        registry
+            .scan_directory(&schemas_root, &schemas_root)
+            .await?;
+        Ok(registry)
+    }
 
-        for entry in WalkDir::new(&schemas_root)
-            .into_iter()
-            .filter_map(|e| e.ok())
+    #[async_recursion]
+    async fn scan_directory(&mut self, root: &Path, current_dir: &Path) -> AnyResult<()> {
+        // Utilisation de read_dir de la façade
+        let mut entries = fs::read_dir(current_dir).await?;
+
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(crate::utils::error::AppError::Io)?
         {
             let path = entry.path();
-            if path.is_file() && path.extension().is_some_and(|e| e == "json") {
-                if let Ok(content) = fs::read_to_string(path) {
-                    if let Ok(schema) = serde_json::from_str::<Value>(&content) {
-                        if let Ok(rel_path) = path.strip_prefix(&schemas_root) {
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(crate::utils::error::AppError::Io)?;
+
+            if file_type.is_dir() {
+                // Récursion asynchrone via la macro de la façade
+                self.scan_directory(root, &path).await?;
+            } else if file_type.is_file() && path.extension().is_some_and(|e| e == "json") {
+                // Lecture asynchrone via la façade
+                if let Ok(content) = fs::read_to_string(&path).await {
+                    if let Ok(schema) = json::parse(&content) {
+                        if let Ok(rel_path) = path.strip_prefix(root) {
                             let rel_str = rel_path.to_string_lossy().replace("\\", "/");
-                            let uri = format!("{}{}", base_prefix, rel_str);
-                            registry.register(uri, schema);
+                            let uri = format!("{}{}", self.base_prefix, rel_str);
+                            self.register(uri, schema);
                         }
                     }
                 }
             }
         }
-
-        Ok(registry)
+        Ok(())
     }
-
     pub fn register(&mut self, uri: String, schema: Value) {
         self.by_uri.insert(uri, schema);
     }
@@ -90,11 +110,10 @@ impl SchemaRegistry {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::{fs::tempdir, json::json};
 
-    #[test]
-    fn test_registry_loading() {
+    #[tokio::test]
+    async fn test_registry_loading() -> AnyResult<()> {
         // 1. Setup environnement
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -105,26 +124,26 @@ mod tests {
 
         // Création structure : schemas/v1/users/user.schema.json
         let schema_dir = config.db_schemas_root(space, db).join("v1/users");
-        fs::create_dir_all(&schema_dir).unwrap();
+        fs::ensure_dir(&schema_dir)
+            .await
+            .expect("Échec création dossier");
 
         let schema_content = json!({
             "type": "object",
             "properties": { "name": { "type": "string" } }
         });
-        fs::write(
-            schema_dir.join("user.schema.json"),
-            serde_json::to_string(&schema_content).unwrap(),
-        )
-        .unwrap();
+        fs::write_json_atomic(&schema_dir.join("user.schema.json"), &schema_content)
+            .await
+            .expect("Échec écriture schéma");
 
         // 2. Chargement
-        let registry = SchemaRegistry::from_db(&config, space, db).unwrap();
+        let reg = SchemaRegistry::from_db(&config, space, db).await?;
 
         // 3. Vérification
         let expected_uri = format!("db://{}/{}/schemas/v1/users/user.schema.json", space, db);
-        assert!(registry.get_by_uri(&expected_uri).is_some());
+        assert!(reg.get_by_uri(&expected_uri).is_some());
+        assert_eq!(reg.uri("users/user.schema.json"), expected_uri);
 
-        // Test helper uri()
-        assert_eq!(registry.uri("users/user.schema.json"), expected_uri);
+        Ok(())
     }
 }

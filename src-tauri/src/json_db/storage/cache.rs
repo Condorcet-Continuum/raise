@@ -2,11 +2,7 @@
 
 //! Module de gestion de cache LRU (Least Recently Used) thread-safe.
 
-use lru::LruCache;
-use std::hash::Hash;
-use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use crate::utils::{Arc, Duration, Hash, Instant, LruCache, Mutex, NonZeroUsize};
 
 #[derive(Debug, Clone)]
 struct CacheEntry<V> {
@@ -90,7 +86,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
+    use crate::utils::thread;
 
     #[test]
     fn test_cache_lru_behavior() {

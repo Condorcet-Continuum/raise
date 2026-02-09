@@ -3,13 +3,13 @@
 use crate::{ensure_db_exists, init_test_env};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::StorageEngine;
-use serde_json::json;
+use raise::utils::json::json;
 
 #[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter les appels .await
 async fn query_get_article_by_id() {
     // CORRECTION E0277 : Ces helpers sont synchrones dans cette suite de tests
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, &env.space, &env.db);
+    ensure_db_exists(&env.cfg, &env.space, &env.db).await;
 
     let storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&storage, &env.space, &env.db);
@@ -52,7 +52,7 @@ async fn query_get_article_by_id() {
 #[tokio::test] // CORRECTION : Passage en test asynchrone
 async fn query_find_one_article_by_handle() {
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, &env.space, &env.db);
+    ensure_db_exists(&env.cfg, &env.space, &env.db).await;
 
     let storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&storage, &env.space, &env.db);
@@ -94,7 +94,7 @@ async fn query_find_one_article_by_handle() {
 #[tokio::test] // CORRECTION : Passage en test asynchrone
 async fn query_find_many_with_sort_and_limit_simulated() {
     let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, &env.space, &env.db);
+    ensure_db_exists(&env.cfg, &env.space, &env.db).await;
 
     let storage = StorageEngine::new(env.cfg.clone());
     let mgr = CollectionsManager::new(&storage, &env.space, &env.db);

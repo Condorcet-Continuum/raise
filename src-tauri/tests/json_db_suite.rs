@@ -2,10 +2,12 @@
 
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Once;
+use raise::utils::{
+    async_recursion,
+    error::AnyResult,
+    fs::{self, Path, PathBuf},
+    Once, // Exporté dans mod.rs
+};
 
 // --- DÉCLARATION EXPLICITE DES MODULES ---
 // On dit à Rust exactement où trouver chaque fichier dans le sous-dossier
@@ -61,7 +63,6 @@ pub struct TestEnv {
     pub _tmp_dir: tempfile::TempDir,
 }
 
-// CORRECTION E0599 : init_test_env doit devenir async pour pouvoir await init_db()
 pub async fn init_test_env() -> TestEnv {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
@@ -77,7 +78,7 @@ pub async fn init_test_env() -> TestEnv {
     };
 
     let db_root = cfg.db_root(TEST_SPACE, TEST_DB);
-    fs::create_dir_all(&db_root).expect("create db root");
+    fs::ensure_dir(&db_root).await.expect("create db root");
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let possible_paths = vec![
@@ -91,10 +92,12 @@ pub async fn init_test_env() -> TestEnv {
         .expect("❌ FATAL: Impossible de trouver 'schemas/v1'");
 
     let dest_schemas_root = cfg.db_schemas_root(TEST_SPACE, TEST_DB).join("v1");
-    if !dest_schemas_root.exists() {
-        fs::create_dir_all(&dest_schemas_root).unwrap();
+    if !fs::exists(&dest_schemas_root).await {
+        fs::ensure_dir(&dest_schemas_root).await.unwrap();
     }
-    copy_dir_recursive(&src_schemas, &dest_schemas_root).expect("copy schemas");
+    copy_dir_recursive(&src_schemas, &dest_schemas_root)
+        .await
+        .expect("copy schemas");
 
     let storage = StorageEngine::new(cfg.clone());
     let mgr = CollectionsManager::new(&storage, TEST_SPACE, TEST_DB);
@@ -104,19 +107,21 @@ pub async fn init_test_env() -> TestEnv {
 
     // Mock Datasets
     let dataset_dir = data_root.join("dataset/arcadia/v1/data/exchange-items");
-    fs::create_dir_all(&dataset_dir).unwrap();
-    fs::write(
-        dataset_dir.join("position_gps.json"),
-        r#"{ "name": "GPS", "exchangeMechanism": "Flow" }"#,
+    fs::ensure_dir(&dataset_dir).await.unwrap();
+    fs::write_atomic(
+        &dataset_dir.join("position_gps.json"),
+        br#"{ "name": "GPS", "exchangeMechanism": "Flow" }"#,
     )
+    .await
     .unwrap();
 
     let article_dir = data_root.join("dataset/arcadia/v1/data/articles");
-    fs::create_dir_all(&article_dir).unwrap();
-    fs::write(
-        article_dir.join("article.json"),
-        r#"{ "handle": "test", "displayName": "Test", "status": "draft" }"#,
+    fs::ensure_dir(&article_dir).await.unwrap();
+    fs::write_atomic(
+        &article_dir.join("article.json"),
+        br#"{ "handle": "test", "displayName": "Test", "status": "draft" }"#,
     )
+    .await
     .unwrap();
 
     TestEnv {
@@ -128,31 +133,35 @@ pub async fn init_test_env() -> TestEnv {
     }
 }
 
-pub fn ensure_db_exists(cfg: &JsonDbConfig, space: &str, db: &str) {
+pub async fn ensure_db_exists(cfg: &JsonDbConfig, space: &str, db: &str) {
     let p = cfg.db_root(space, db);
-    if !p.exists() {
-        fs::create_dir_all(p).unwrap();
+    if !fs::exists(&p).await {
+        fs::ensure_dir(&p).await.unwrap();
     }
 }
 
-pub fn get_dataset_file(cfg: &JsonDbConfig, rel_path: &str) -> PathBuf {
+pub async fn get_dataset_file(cfg: &JsonDbConfig, rel_path: &str) -> PathBuf {
     let path = cfg.data_root.join("dataset").join(rel_path);
     if let Some(p) = path.parent() {
-        fs::create_dir_all(p).unwrap();
+        fs::ensure_dir(p).await.unwrap();
     }
     path
 }
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    if !dst.exists() {
-        fs::create_dir_all(dst)?;
+#[async_recursion]
+async fn copy_dir_recursive(src: &Path, dst: &Path) -> AnyResult<()> {
+    if !fs::exists(dst).await {
+        fs::ensure_dir(dst).await?;
     }
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+    let mut entries = fs::read_dir(src).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let dest_path = dst.join(entry.file_name());
+
+        if entry.file_type().await?.is_dir() {
+            copy_dir_recursive(&path, &dest_path).await?;
         } else {
-            fs::copy(entry.path(), dst.join(entry.file_name()))?;
+            // Utilisation explicite de tokio pour la copie brute de fichier (hors façade)
+            tokio::fs::copy(path, dest_path).await?;
         }
     }
     Ok(())

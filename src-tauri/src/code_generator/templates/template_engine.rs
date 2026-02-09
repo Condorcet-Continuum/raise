@@ -1,6 +1,9 @@
-use anyhow::{Context, Result};
-use std::collections::HashMap;
-use tera::{to_value, try_get_value, Tera, Value};
+// FICHIER : src-tauri/src/code_generator/templates/template_engine.rs
+
+use crate::utils::data::{HashMap, Value};
+use crate::utils::io::{Path, ProjectScope};
+use crate::utils::prelude::*; // AppError, Result, info!
+use tera::{try_get_value, Tera};
 
 pub struct TemplateEngine {
     tera: Tera,
@@ -28,152 +31,53 @@ impl TemplateEngine {
         Self { tera }
     }
 
-    pub fn render(&self, template_name: &str, context: &tera::Context) -> Result<String> {
-        self.tera
-            .render(template_name, context)
-            .with_context(|| format!("Échec du rendu du template '{}'", template_name))
+    pub fn render(&self, template_name: &str, context: &Value) -> Result<String> {
+        let tera_ctx = tera::Context::from_value(context.clone())
+            .map_err(|e| AppError::System(anyhow::anyhow!("Tera Context Error: {}", e)))?;
+
+        self.tera.render(template_name, &tera_ctx).map_err(|e| {
+            AppError::System(anyhow::anyhow!(
+                "Tera Render Error [{}]: {}",
+                template_name,
+                e
+            ))
+        })
+    }
+
+    /// 🚀 GÉNÉRATION PHYSIQUE SÉCURISÉE
+    pub async fn generate(
+        &self,
+        scope: &ProjectScope,
+        template_name: &str,
+        context: &Value,
+        relative_path: impl AsRef<Path>,
+    ) -> Result<()> {
+        let content = self.render(template_name, context)?;
+        scope
+            .write(relative_path.as_ref(), content.as_bytes())
+            .await?;
+
+        info!(
+            target: "codegen",
+            "📝 Généré : {:?} (via {})",
+            relative_path.as_ref(),
+            template_name
+        );
+        Ok(())
     }
 
     pub fn add_raw_template(&mut self, name: &str, content: &str) -> Result<()> {
-        self.tera.add_raw_template(name, content)?;
+        self.tera
+            .add_raw_template(name, content)
+            .map_err(|e| AppError::System(anyhow::anyhow!("Invalid Template '{}': {}", name, e)))?;
         Ok(())
     }
-}
-
-fn register_default_templates(tera: &mut Tera) {
-    // --- RUST ---
-    tera.add_raw_template(
-        "rust/actor",
-        r#"
-// GÉNÉRÉ PAR RAISE
-use serde::{Deserialize, Serialize};
-
-/// {{ description }}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct {{ name | pascal_case }} {
-    pub id: String,
-}
-
-impl {{ name | pascal_case }} {
-    pub fn new() -> Self {
-        Self { id: "{{ id }}".to_string() }
-    }
-}
-"#,
-    )
-    .unwrap();
-
-    // --- VERILOG ---
-    tera.add_raw_template(
-        "verilog/module",
-        r#"
-module {{ name | snake_case }} (
-    input wire clk,
-    input wire rst_n
-);
-    // {{ description }}
-endmodule
-"#,
-    )
-    .unwrap();
-
-    // --- VHDL ---
-    tera.add_raw_template(
-        "vhdl/entity",
-        r#"
-entity {{ name | snake_case }} is
-    Port ( clk : in STD_LOGIC; rst_n : in STD_LOGIC );
-end {{ name | snake_case }};
-
-architecture Behavioral of {{ name | snake_case }} is
-begin
-    -- {{ description }}
-end Behavioral;
-"#,
-    )
-    .unwrap();
-
-    // --- C++ HEADER ---
-    tera.add_raw_template(
-        "cpp/header",
-        r#"
-/**
- * GÉNÉRÉ PAR RAISE
- * Module: {{ name }}
- * ID: {{ id }}
- */
-#pragma once
-
-#include <string>
-#include <iostream>
-
-class {{ name | pascal_case }} {
-public:
-    {{ name | pascal_case }}();
-    ~{{ name | pascal_case }}();
-
-    void init();
-    void step();
-
-private:
-    std::string id = "{{ id }}";
-};
-"#,
-    )
-    .unwrap();
-
-    // --- C++ SOURCE ---
-    tera.add_raw_template(
-        "cpp/source",
-        r#"
-#include "{{ name | pascal_case }}.hpp"
-
-{{ name | pascal_case }}::{{ name | pascal_case }}() {
-    // Constructor logic
-}
-
-{{ name | pascal_case }}::~{{ name | pascal_case }}() {
-    // Destructor logic
-}
-
-void {{ name | pascal_case }}::init() {
-    std::cout << "Initializing {{ name }}" << std::endl;
-}
-
-void {{ name | pascal_case }}::step() {
-    // Cyclic execution
-}
-"#,
-    )
-    .unwrap();
-
-    // --- TYPESCRIPT ---
-    tera.add_raw_template(
-        "ts/class",
-        r#"
-/**
- * GÉNÉRÉ PAR RAISE
- * {{ description }}
- */
-export class {{ name | pascal_case }} {
-    public id: string = "{{ id }}";
-
-    constructor() {
-        console.log("{{ name }} initialized");
-    }
-
-    public execute(): void {
-        // TODO: Implement logic
-    }
-}
-"#,
-    )
-    .unwrap();
 }
 
 mod filters {
     use super::*;
     use heck::{ToLowerCamelCase, ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
+    use tera::{to_value, Value};
 
     pub fn pascal_case_filter(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
         let s = try_get_value!("pascal_case", "value", String, value);
@@ -199,36 +103,123 @@ mod filters {
     }
 }
 
+fn register_default_templates(tera: &mut Tera) {
+    // --- RUST (Corrigé pour l'injection !) ---
+    tera.add_raw_template(
+        "rust/actor",
+        r#"
+// GÉNÉRÉ PAR RAISE
+use serde::{Deserialize, Serialize};
+
+/// {{ description | default(value="Aucune description") }}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct {{ name | pascal_case }} {
+    pub id: String,
+}
+
+impl {{ name | pascal_case }} {
+    pub fn new() -> Self {
+        Self { id: "{{ id }}".to_string() }
+    }
+
+    // AI_INJECTION_POINT: Logic
+    // END_AI_INJECTION_POINT
+}
+"#,
+    )
+    .unwrap();
+
+    // --- CPP HEADER ---
+    tera.add_raw_template(
+        "cpp/header",
+        r#"
+#pragma once
+#include <string>
+class {{ name | pascal_case }} {
+public:
+    {{ name | pascal_case }}();
+private:
+    std::string id = "{{ id }}";
+};
+"#,
+    )
+    .unwrap();
+
+    // --- CPP SOURCE ---
+    tera.add_raw_template(
+        "cpp/source",
+        r#"
+#include "{{ name | pascal_case }}.hpp"
+{{ name | pascal_case }}::{{ name | pascal_case }}() {}
+"#,
+    )
+    .unwrap();
+
+    // --- TYPESCRIPT ---
+    tera.add_raw_template(
+        "ts/class",
+        r#"
+export class {{ name | pascal_case }} {
+    public id: string = "{{ id }}";
+}
+"#,
+    )
+    .unwrap();
+
+    // --- VERILOG ---
+    tera.add_raw_template(
+        "verilog/module",
+        r#"
+module {{ name | snake_case }} (
+    input wire clk,
+    input wire rst_n
+);
+    // {{ description | default(value="") }}
+endmodule
+"#,
+    )
+    .unwrap();
+
+    // --- VHDL ---
+    tera.add_raw_template(
+        "vhdl/entity",
+        r#"
+entity {{ name | snake_case }} is
+    Port ( clk : in STD_LOGIC; rst_n : in STD_LOGIC );
+end {{ name | snake_case }};
+
+architecture Behavioral of {{ name | snake_case }} is
+begin
+    -- {{ description | default(value="") }}
+end Behavioral;
+"#,
+    )
+    .unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tera::Context;
+    use crate::utils::data::ContextBuilder;
+    use crate::utils::io::tempdir;
 
-    #[test]
-    fn test_cpp_rendering() {
+    #[tokio::test]
+    async fn test_secure_generation() {
         let engine = TemplateEngine::new();
-        let mut ctx = Context::new();
-        ctx.insert("name", "MotorController");
-        ctx.insert("id", "M_01");
+        let dir = tempdir().unwrap();
+        let scope = ProjectScope::new(dir.path()).unwrap();
 
-        let header = engine.render("cpp/header", &ctx).unwrap();
-        assert!(header.contains("class MotorController"));
-        assert!(header.contains("#pragma once"));
+        let ctx = ContextBuilder::new()
+            .with_part("name", &"SecureActor")
+            .with_part("id", &"SA_007")
+            .build();
 
-        let source = engine.render("cpp/source", &ctx).unwrap();
-        assert!(source.contains("MotorController::init()"));
-    }
+        let res = engine
+            .generate(&scope, "rust/actor", &ctx, "src/actors/secure_actor.rs")
+            .await;
+        assert!(res.is_ok());
 
-    #[test]
-    fn test_ts_rendering() {
-        let engine = TemplateEngine::new();
-        let mut ctx = Context::new();
-        ctx.insert("name", "DashboardWidget");
-        ctx.insert("id", "W_01");
-        ctx.insert("description", "A widget");
-
-        let ts = engine.render("ts/class", &ctx).unwrap();
-        assert!(ts.contains("export class DashboardWidget"));
-        assert!(ts.contains("public id: string"));
+        let file_path = dir.path().join("src/actors/secure_actor.rs");
+        assert!(file_path.exists());
     }
 }

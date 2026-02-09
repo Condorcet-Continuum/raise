@@ -1,12 +1,13 @@
 // FICHIER : src-tauri/src/json_db/storage/file_storage.rs
 
 use crate::json_db::storage::JsonDbConfig;
-use anyhow::{Context, Result};
-use include_dir::{include_dir, Dir};
-use serde_json::Value;
-use std::path::Path;
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
+
+use crate::user_info; // Macro de log
+use crate::utils::data::Value;
+use crate::utils::error::{AppError, Result};
+use crate::utils::io::Path;
+use crate::utils::io::{self, include_dir, Dir};
+use crate::utils::Utc;
 
 // --- EMBARQUEMENT DES SCHÉMAS ---
 static DEFAULT_SCHEMAS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../schemas/v1");
@@ -17,10 +18,13 @@ pub enum DropMode {
     Hard,
 }
 
-pub fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
+pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
     let db_path = config.db_root(space, db);
-    if !db_path.exists() {
-        return Err(anyhow::anyhow!("Database does not exist: {:?}", db_path));
+    if !io::exists(&db_path).await {
+        return Err(AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Database does not exist: {:?}", db_path),
+        )));
     }
     Ok(())
 }
@@ -28,28 +32,22 @@ pub fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
 /// Crée l'arborescence physique ET déploie les schémas par défaut (Async).
 pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
     let db_root = config.db_root(space, db);
-
-    if !db_root.exists() {
-        fs::create_dir_all(&db_root)
-            .await
-            .context("Failed to create DB root directory")?;
-    }
-
+    io::create_dir_all(&db_root).await?;
     let schemas_dest = config.db_schemas_root(space, db).join("v1");
 
-    if !schemas_dest.exists() {
+    if !io::exists(&schemas_dest).await {
         #[cfg(debug_assertions)]
-        println!(
-            "📦 Déploiement des schémas standards dans {:?}",
+        user_info!(
+            "DB_INIT",
+            "Déploiement des schémas standards dans {:?}",
             schemas_dest
         );
-
-        fs::create_dir_all(&schemas_dest).await?;
+        io::ensure_dir(&schemas_dest).await?;
 
         // Extraction synchrone (CPU bound), acceptable ici car ponctuelle à l'init.
         DEFAULT_SCHEMAS
             .extract(&schemas_dest)
-            .context("Failed to extract embedded schemas")?;
+            .map_err(|e| AppError::Io(std::io::Error::other(e)))?;
     }
 
     Ok(())
@@ -57,24 +55,21 @@ pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<(
 
 pub async fn drop_db(config: &JsonDbConfig, space: &str, db: &str, mode: DropMode) -> Result<()> {
     let db_path = config.db_root(space, db);
-    if !db_path.exists() {
+    if !io::exists(&db_path).await {
         return Ok(());
     }
 
     match mode {
         DropMode::Hard => {
-            fs::remove_dir_all(&db_path)
-                .await
-                .with_context(|| format!("Failed to remove DB {:?}", db_path))?;
+            io::remove_dir_all(&db_path).await?;
         }
         DropMode::Soft => {
-            let timestamp = chrono::Utc::now().timestamp();
-            let parent = db_path.parent().unwrap();
+            let timestamp = Utc::now().timestamp();
+            let parent = db_path.parent().unwrap_or(&db_path);
             let new_name = format!("{}.deleted-{}", db, timestamp);
             let new_path = parent.join(new_name);
-            fs::rename(&db_path, &new_path)
-                .await
-                .with_context(|| "Failed to soft drop DB")?;
+
+            io::rename(&db_path, &new_path).await?;
         }
     }
     Ok(())
@@ -89,12 +84,9 @@ pub async fn write_document(
     doc: &Value,
 ) -> Result<()> {
     let col_path = config.db_collection_path(space, db, collection);
-    if !col_path.exists() {
-        fs::create_dir_all(&col_path).await?;
-    }
+    io::create_dir_all(&col_path).await?;
     let file_path = col_path.join(format!("{}.json", id));
-    let content = serde_json::to_string_pretty(doc)?;
-    atomic_write(file_path, content.as_bytes()).await?;
+    io::write_json_atomic(&file_path, doc).await?;
     Ok(())
 }
 
@@ -109,12 +101,11 @@ pub async fn read_document(
         .db_collection_path(space, db, collection)
         .join(format!("{}.json", id));
 
-    if !file_path.exists() {
+    if !io::exists(&file_path).await {
         return Ok(None);
     }
 
-    let content = fs::read_to_string(file_path).await?;
-    let doc = serde_json::from_str(&content)?;
+    let doc: Value = io::read_json(&file_path).await?;
     Ok(Some(doc))
 }
 
@@ -129,44 +120,33 @@ pub async fn delete_document(
         .db_collection_path(space, db, collection)
         .join(format!("{}.json", id));
 
-    if file_path.exists() {
-        fs::remove_file(file_path).await?;
+    if io::exists(&file_path).await {
+        // Passage par référence (&file_path)
+        io::remove_file(&file_path).await?;
     }
     Ok(())
 }
 
-/// Écriture atomique sécurisée (write -> sync -> rename)
 pub async fn atomic_write<P: AsRef<Path>>(path: P, content: &[u8]) -> Result<()> {
-    let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).await?;
-        }
-    }
-
-    let temp_path = path.with_extension("tmp");
-
-    {
-        let mut file = fs::File::create(&temp_path).await?;
-        file.write_all(content).await?;
-        // On force l'écriture physique sur le plateau du disque
-        file.sync_all().await?;
-    }
-
-    fs::rename(&temp_path, path).await?;
+    // Délégation totale à la façade utils::fs
+    io::write_atomic(path.as_ref(), content).await?;
     Ok(())
 }
 
+/// Alias pour l'écriture binaire (utilisé par les index)
 pub async fn atomic_write_binary<P: AsRef<Path>>(path: P, content: &[u8]) -> Result<()> {
     atomic_write(path, content).await
+}
+
+pub async fn save_database_index(path: &io::Path, data: &Value) -> Result<()> {
+    // La primitive est maintenant ici, centralisée et testée
+    io::write_json_compressed_atomic(path, data).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use tempfile::tempdir;
-
+    use crate::utils::{io::tempdir, json::json};
     #[tokio::test]
     async fn test_atomic_write() {
         let dir = tempdir().unwrap();
@@ -175,7 +155,7 @@ mod tests {
         atomic_write(&file_path, b"Hello World").await.unwrap();
         assert!(file_path.exists());
 
-        let content = fs::read_to_string(&file_path).await.unwrap();
+        let content = io::read_to_string(&file_path).await.unwrap();
         assert_eq!(content, "Hello World");
     }
 
@@ -184,27 +164,31 @@ mod tests {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
 
-        let doc = json!({"name": "Test"});
+        let doc = json!({"name": "Refactor Test"});
 
         // Write
         write_document(&config, "s1", "d1", "c1", "doc1", &doc)
             .await
-            .unwrap();
+            .expect("Write failed");
 
         // Read
         let read = read_document(&config, "s1", "d1", "c1", "doc1")
             .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(read["name"], "Test");
+            .expect("Read failed")
+            .expect("Doc not found");
+        assert_eq!(read["name"], "Refactor Test");
+
+        // Physical check via utils
+        let path = config
+            .db_collection_path("s1", "d1", "c1")
+            .join("doc1.json");
+        assert!(io::exists(&path).await);
 
         // Delete
         delete_document(&config, "s1", "d1", "c1", "doc1")
             .await
-            .unwrap();
-        let deleted = read_document(&config, "s1", "d1", "c1", "doc1")
-            .await
-            .unwrap();
-        assert!(deleted.is_none());
+            .expect("Delete failed");
+
+        assert!(!io::exists(&path).await);
     }
 }

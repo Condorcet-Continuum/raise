@@ -1,12 +1,11 @@
 // FICHIER : src-tauri/tests/code_gen_suite/mod.rs
 
 use raise::ai::llm::client::LlmClient;
-use raise::json_db::collections::manager::CollectionsManager; // Ajout
+use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Once;
+use raise::utils::env;
+use raise::utils::io::{self, PathBuf};
+use raise::utils::Once;
 
 pub mod agent_tests;
 pub mod rust_tests;
@@ -43,7 +42,9 @@ pub async fn init_ai_test_env() -> AiTestEnv {
 
     // 1. Structure de base
     let db_root = config.db_root(&space, &db);
-    fs::create_dir_all(&db_root).expect("Failed to create db root");
+    io::create_dir_all(&db_root)
+        .await
+        .expect("Failed to create db root");
 
     // 2. COPIE ROBUSTE DES SCHÉMAS
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -59,12 +60,15 @@ pub async fn init_ai_test_env() -> AiTestEnv {
         .expect("❌ FATAL: Impossible de trouver 'schemas/v1' pour code_gen_suite.");
 
     let dest_schemas_root = config.db_schemas_root(&space, &db).join("v1");
-    if !dest_schemas_root.exists() {
-        fs::create_dir_all(&dest_schemas_root).expect("create schemas dir");
+    if !io::exists(&dest_schemas_root).await {
+        io::create_dir_all(&dest_schemas_root)
+            .await
+            .expect("create schemas dir");
     }
-
     // On copie TOUT le dossier récursivement
-    copy_dir_recursive(&src_schemas, &dest_schemas_root).expect("copy schemas");
+    io::copy_dir_all(&src_schemas, &dest_schemas_root)
+        .await
+        .expect("copy schemas");
 
     // 3. INITIALISATION PROPRE VIA LE MANAGER
     let storage = StorageEngine::new(config);
@@ -77,10 +81,9 @@ pub async fn init_ai_test_env() -> AiTestEnv {
         .expect("❌ init_db failed in code_gen_suite");
 
     // --- CLIENT IA ---
-    let gemini_key = env::var("RAISE_GEMINI_KEY").unwrap_or_default();
-    let model_name = env::var("RAISE_MODEL_NAME").ok();
-    let local_url =
-        env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let gemini_key = env::get_or("RAISE_GEMINI_KEY", "");
+    let model_name = env::get_optional("RAISE_MODEL_NAME");
+    let local_url = env::get_or("RAISE_LOCAL_URL", "http://localhost:8080");
 
     let client = LlmClient::new(&local_url, &gemini_key, model_name);
 
@@ -91,20 +94,4 @@ pub async fn init_ai_test_env() -> AiTestEnv {
         _db: db,
         _tmp_dir: tmp_dir,
     }
-}
-
-// Helper de copie
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    if !dst.exists() {
-        fs::create_dir_all(dst)?;
-    }
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
 }

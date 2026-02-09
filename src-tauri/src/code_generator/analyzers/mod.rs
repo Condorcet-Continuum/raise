@@ -1,9 +1,8 @@
 pub mod dependency_analyzer;
 pub mod injection_analyzer;
 
-use anyhow::Result;
-use serde_json::Value;
-use std::collections::HashSet;
+use crate::utils::data::{HashSet, Value};
+use crate::utils::Result;
 
 /// Résultat de l'analyse de dépendance pour un élément
 #[derive(Debug, Default, Clone)]

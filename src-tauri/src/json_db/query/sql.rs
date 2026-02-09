@@ -1,8 +1,10 @@
 // FICHIER : src-tauri/src/json_db/query/sql.rs
 
 use crate::json_db::transactions::TransactionRequest;
-use anyhow::{bail, Result};
-use serde_json::{Map, Value};
+use crate::utils::{
+    error::{anyhow, AnyResult},
+    json::{Map, Value},
+};
 use sqlparser::ast::{
     BinaryOperator, Expr, Insert, OrderByExpr, OrderByKind, Query as SqlQuery, SetExpr, Statement,
     TableFactor, Value as SqlValue,
@@ -21,12 +23,12 @@ pub enum SqlRequest {
     Write(Vec<TransactionRequest>),
 }
 
-pub fn parse_sql(sql: &str) -> Result<SqlRequest> {
+pub fn parse_sql(sql: &str) -> AnyResult<SqlRequest> {
     let dialect = GenericDialect {};
     let ast = Parser::parse_sql(&dialect, sql)?;
 
     if ast.len() != 1 {
-        bail!("Une seule requête SQL à la fois est supportée");
+        return Err(anyhow!("Une seule requête SQL à la fois est supportée"));
     }
 
     match &ast[0] {
@@ -39,13 +41,15 @@ pub fn parse_sql(sql: &str) -> Result<SqlRequest> {
             let tx = translate_insert(insert)?;
             Ok(SqlRequest::Write(tx))
         }
-        _ => bail!("Seuls SELECT et INSERT sont supportés pour le moment"),
+        _ => Err(anyhow!(
+            "Seuls SELECT et INSERT sont supportés pour le moment"
+        )),
     }
 }
 
 // --- TRADUCTION INSERT ---
 
-fn translate_insert(insert: &Insert) -> Result<Vec<TransactionRequest>> {
+fn translate_insert(insert: &Insert) -> AnyResult<Vec<TransactionRequest>> {
     // CORRECTION DÉFINITIVE : Utilisation du champ `table`
     let collection = insert.table.to_string();
 
@@ -58,18 +62,18 @@ fn translate_insert(insert: &Insert) -> Result<Vec<TransactionRequest>> {
 
     let rows = match query_body {
         SetExpr::Values(v) => &v.rows,
-        _ => bail!("Seul INSERT INTO ... VALUES (...) est supporté"),
+        _ => return Err(anyhow!("Seul INSERT INTO ... VALUES (...) est supporté")),
     };
 
     let mut operations = Vec::new();
 
     for row in rows {
         if row.len() != insert.columns.len() {
-            bail!(
+            return Err(anyhow!(
                 "Nombre de valeurs ({}) différent du nombre de colonnes ({})",
                 row.len(),
                 insert.columns.len()
-            );
+            ));
         }
 
         let mut doc_map = Map::new();
@@ -91,7 +95,7 @@ fn translate_insert(insert: &Insert) -> Result<Vec<TransactionRequest>> {
 
 // --- TRADUCTION SELECT ---
 
-fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
+fn translate_query(sql_query: &SqlQuery) -> AnyResult<Query> {
     let limit = None;
     let offset = None;
 
@@ -116,7 +120,7 @@ fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
 
     match &*sql_query.body {
         SetExpr::Select(select) => translate_select(select, limit, offset, sort),
-        _ => bail!("Syntaxe de requête non supportée"),
+        _ => Err(anyhow!("Syntaxe de requête non supportée")),
     }
 }
 
@@ -125,14 +129,14 @@ fn translate_select(
     limit: Option<usize>,
     offset: Option<usize>,
     sort: Option<Vec<SortField>>,
-) -> Result<Query> {
+) -> AnyResult<Query> {
     if select.from.len() != 1 {
-        bail!("SELECT doit cibler exactement une collection");
+        return Err(anyhow!("SELECT doit cibler exactement une collection"));
     }
 
     let collection = match &select.from[0].relation {
         TableFactor::Table { name, .. } => name.to_string(),
-        _ => bail!("Clause FROM invalide"),
+        _ => return Err(anyhow!("Clause FROM invalide")),
     };
 
     let projection = if select.projection.is_empty() {
@@ -186,7 +190,7 @@ fn translate_select(
     })
 }
 
-fn translate_order_by(expr: &OrderByExpr) -> Result<SortField> {
+fn translate_order_by(expr: &OrderByExpr) -> AnyResult<SortField> {
     let field = expr_to_field_name(&expr.expr)?;
     let order = match expr.options.asc {
         Some(false) => SortOrder::Desc,
@@ -195,7 +199,7 @@ fn translate_order_by(expr: &OrderByExpr) -> Result<SortField> {
     Ok(SortField { field, order })
 }
 
-fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
+fn translate_expr(expr: &Expr) -> AnyResult<QueryFilter> {
     match expr {
         Expr::Nested(inner) => translate_expr(inner),
         Expr::BinaryOp { left, op, right } => match op {
@@ -249,11 +253,11 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
                 }],
             })
         }
-        _ => bail!("Expression SQL non supportée : {:?}", expr),
+        _ => Err(anyhow!("Expression SQL non supportée : {:?}", expr)),
     }
 }
 
-fn expr_to_field_name(expr: &Expr) -> Result<String> {
+fn expr_to_field_name(expr: &Expr) -> AnyResult<String> {
     match expr {
         Expr::Identifier(ident) => Ok(ident.value.clone()),
         Expr::CompoundIdentifier(idents) => Ok(idents
@@ -261,11 +265,11 @@ fn expr_to_field_name(expr: &Expr) -> Result<String> {
             .map(|i| i.value.clone())
             .collect::<Vec<_>>()
             .join(".")),
-        _ => bail!("Identifiant attendu, obtenu : {:?}", expr),
+        _ => Err(anyhow!("Identifiant attendu, obtenu : {:?}", expr)),
     }
 }
 
-fn expr_to_value(expr: &Expr) -> Result<Value> {
+fn expr_to_value(expr: &Expr) -> AnyResult<Value> {
     match expr {
         Expr::Value(value_with_span) => sql_value_to_json(&value_with_span.value),
         Expr::UnaryOp {
@@ -278,16 +282,16 @@ fn expr_to_value(expr: &Expr) -> Result<Value> {
                 } else if let Some(i) = n.as_i64() {
                     Ok(Value::from(-i))
                 } else {
-                    bail!("Négation impossible")
+                    Err(anyhow!("Négation impossible"))
                 }
             }
-            _ => bail!("Négation impossible sur non-nombre"),
+            _ => Err(anyhow!("Négation impossible sur non-nombre")),
         },
-        _ => bail!("Valeur littérale simple attendue"),
+        _ => Err(anyhow!("Valeur littérale simple attendue")),
     }
 }
 
-fn sql_value_to_json(val: &SqlValue) -> Result<Value> {
+fn sql_value_to_json(val: &SqlValue) -> AnyResult<Value> {
     match val {
         SqlValue::Number(n, _) => {
             if let Ok(i) = n.parse::<i64>() {

@@ -1,10 +1,12 @@
 // FICHIER : src-tauri/src/json_db/schema/validator.rs
 
 use super::registry::SchemaRegistry;
-use anyhow::{anyhow, Result};
-use regex::Regex;
-use serde_json::Value;
-use std::path::{Component, Path, PathBuf};
+use crate::utils::{
+    error::{anyhow, AnyResult},
+    fs::{Component, Path, PathBuf},
+    json::Value,
+    Regex,
+};
 
 #[derive(Debug, Clone)]
 pub struct SchemaValidator {
@@ -14,7 +16,7 @@ pub struct SchemaValidator {
 }
 
 impl SchemaValidator {
-    pub fn compile_with_registry(root_uri: &str, reg: &SchemaRegistry) -> Result<Self> {
+    pub fn compile_with_registry(root_uri: &str, reg: &SchemaRegistry) -> AnyResult<Self> {
         let schema = reg
             .get_by_uri(root_uri)
             .cloned()
@@ -26,13 +28,13 @@ impl SchemaValidator {
         })
     }
 
-    pub fn compute_then_validate(&self, instance: &mut Value) -> Result<()> {
+    pub fn compute_then_validate(&self, instance: &mut Value) -> AnyResult<()> {
         // L'ancien moteur "x_compute" est désactivé.
         // Les calculs sont désormais gérés par le Rules Engine dans manager.rs avant d'arriver ici.
         self.validate(instance)
     }
 
-    pub fn validate(&self, instance: &Value) -> Result<()> {
+    pub fn validate(&self, instance: &Value) -> AnyResult<()> {
         validate_node(instance, &self.schema, &self.reg, &self.root_uri)
     }
 }
@@ -42,7 +44,7 @@ fn validate_node(
     schema: &Value,
     reg: &SchemaRegistry,
     current_uri: &str,
-) -> Result<()> {
+) -> AnyResult<()> {
     if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
         let (file_uri, fragment) = if ref_str.starts_with('#') {
             (current_uri.to_string(), Some(ref_str.to_string()))
@@ -117,7 +119,7 @@ fn validate_object(
     schema: &Value,
     reg: &SchemaRegistry,
     current_uri: &str,
-) -> Result<()> {
+) -> AnyResult<()> {
     let obj = instance.as_object().unwrap();
 
     // 1. Required
@@ -248,7 +250,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::json::json;
 
     #[test]
     fn test_simple_validation() {

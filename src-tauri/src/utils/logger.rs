@@ -1,59 +1,80 @@
-use std::env;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use crate::utils::config::AppConfig;
+use std::sync::Once;
+use tracing_appender::rolling;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
-/// Initialise le système de logging global.
-/// À appeler une seule fois au début du `main.rs`.
+// Sécurité pour éviter la double initialisation (crash fréquent en tests)
+static INIT: Once = Once::new();
+
 pub fn init_logging() {
-    // Si RUST_LOG n'est pas défini, on met un niveau par défaut raisonnable
-    // On filtre pour voir les logs de "raise" en debug, et le reste en info
-    if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "info,raise=debug");
-    }
+    INIT.call_once(|| {
+        // 1. Configuration des chemins via AppConfig
+        // Attention : AppConfig doit être initialisé avant d'appeler cette fonction !
+        let config = AppConfig::get();
+        let log_dir = config.database_root.join("logs");
 
-    // Configuration du formatteur (affichage compact pour le terminal)
-    let fmt_layer = fmt::layer()
-        .with_target(true) // Affiche le module source
-        .with_thread_ids(false)
-        .with_level(true)
-        .with_file(false)
-        .with_line_number(false)
-        .compact();
+        // Création silencieuse du dossier logs s'il n'existe pas
+        std::fs::create_dir_all(&log_dir).ok();
 
-    // Configuration du filtre (basé sur la variable d'env RUST_LOG)
-    let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
+        // 2. Layer Fichier : Rotation journalière + Format JSON
+        // Ce layer capture TOUT (Info, Warn, Error...) pour l'historique
+        let file_appender = rolling::daily(&log_dir, "raise.log");
 
-    // Initialisation du subscriber global
-    tracing_subscriber::registry()
-        .with(filter_layer)
-        .with(fmt_layer)
-        .try_init()
-        .ok(); // On ignore l'erreur si déjà initialisé (utile pour les tests)
+        let file_layer = fmt::layer()
+            .json() // Format JSON structuré
+            .with_writer(file_appender)
+            .with_target(true) // Affiche le module (ex: raise::utils::i18n)
+            .with_thread_ids(true) // Utile pour le debug async
+            .with_file(true) // Fichier source
+            .with_line_number(true); // Ligne du code
 
-    tracing::info!("🚀 Système de logging initialisé.");
+        // 3. Layer Console : Nettoyé pour l'UX
+        // Par défaut, on n'affiche que les WARNINGS et ERREURS techniques.
+        // Les infos "métier" passent désormais par les macros user_info! (println!)
+        // L'utilisateur peut forcer le mode verbeux via RUST_LOG=info
+        let env_filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+
+        let console_layer = fmt::layer()
+            .compact() // Format plus court
+            .with_target(false) // On cache le module technique à l'utilisateur
+            .with_filter(env_filter);
+
+        // 4. Assemblage et Initialisation (Sécurisée)
+        let registry = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(console_layer);
+
+        // CORRECTION : On utilise try_init() pour ne pas paniquer si un autre test
+        // a déjà initialisé le tracing globalement.
+        if let Err(_e) = registry.try_init() {
+            // Si on est ici, c'est que le logging est déjà actif.
+            // On utilise tracing::warn! au lieu de eprintln! car un subscriber existe forcément.
+            tracing::warn!("⚠️ [Logger] Tentative de ré-initialisation ignorée (Global subscriber déjà actif).");
+            return;
+        }
+
+        // Ce log partira dans le fichier (INFO), mais ne s'affichera pas en console (WARN par défaut)
+        tracing::info!(
+            "🚀 Logger initialisé. Logs disponibles dans : {:?}",
+            log_dir
+        );
+    });
 }
 
-// ... code existant ...
-
+// --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::config::AppConfig;
 
     #[test]
-    fn test_logger_init_does_not_panic() {
-        // On appelle init_logging.
-        // Comme pour la config, tracing s'initialise une seule fois globalement.
-        // On l'enveloppe pour ne pas faire échouer le test si c'est déjà fait.
+    fn test_logger_init_idempotency() {
+        // PRÉ-REQUIS : On doit initialiser AppConfig car le logger en a besoin.
+        let _ = AppConfig::init();
 
-        // Astuce : tracing::subscriber::set_global_default renvoie une erreur si déjà set.
-        // Notre fonction init_logging() utilise .try_init().ok(), donc elle est "safe" à appeler plusieurs fois.
-
+        // Le test réel commence ici
         init_logging();
-
-        // Si on arrive ici sans crash, c'est gagné.
-        tracing::info!(
-            "Test du logger : ce message devrait apparaître lors de 'cargo test -- --nocapture'"
-        );
+        init_logging(); // Le second appel ne doit plus paniquer grâce à try_init()
     }
 }

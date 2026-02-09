@@ -128,8 +128,8 @@ pub async fn jsondb_evaluate_draft(
     mut doc: Value,
 ) -> Result<Value, String> {
     let registry = SchemaRegistry::from_db(&storage.config, &space, &db)
+        .await
         .map_err(|e| format!("Erreur chargement registre: {}", e))?;
-
     let meta_path = storage
         .config
         .db_collection_path(&space, &db, &collection)

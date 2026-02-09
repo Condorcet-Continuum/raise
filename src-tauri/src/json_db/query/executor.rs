@@ -1,10 +1,9 @@
 // FICHIER : src-tauri/src/json_db/query/executor.rs
 
-use anyhow::Result;
-use serde_json::Value;
-use std::cmp::Ordering;
-use std::future::Future;
-use std::pin::Pin;
+use crate::utils::{
+    json::{self, Value},
+    AppError, Future, Ordering, Pin, Result,
+};
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::indexes::manager::IndexManager;
@@ -66,7 +65,12 @@ impl<'a> IndexProvider for RealIndexProvider<'a> {
         field: &'b str,
         value: &'b Value,
     ) -> BoxFuture<'b, Result<Vec<String>>> {
-        Box::pin(async move { self.manager.search(collection, field, value).await })
+        Box::pin(async move {
+            self.manager
+                .search(collection, field, value)
+                .await
+                .map_err(AppError::System)
+        })
     }
 }
 
@@ -523,7 +527,7 @@ impl<'a> QueryEngine<'a> {
 
     fn project_fields(&self, doc: &Value, projection: &Projection, collection_name: &str) -> Value {
         if let Value::Object(map) = doc {
-            let mut new_map = serde_json::Map::new();
+            let mut new_map = json::Map::new();
             match projection {
                 Projection::Include(fields) => {
                     if fields.is_empty() {
@@ -568,11 +572,7 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use serde_json::json;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use tempfile::tempdir;
-    use tokio::sync::Mutex;
+    use crate::utils::{fs::tempdir, json::json, Arc, HashMap, Mutex};
 
     fn setup_test_db() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -589,7 +589,10 @@ mod tests {
         fn has_index<'a>(&'a self, _c: &'a str, field: &'a str) -> BoxFuture<'a, bool> {
             let idx = self.indexes.clone();
             let f = field.to_string();
-            Box::pin(async move { idx.lock().await.contains_key(&f) })
+            Box::pin(async move {
+                let guard = idx.lock().unwrap();
+                guard.contains_key(&f)
+            })
         }
         fn search<'a>(
             &'a self,
@@ -599,7 +602,10 @@ mod tests {
         ) -> BoxFuture<'a, Result<Vec<String>>> {
             let idx = self.indexes.clone();
             let f = field.to_string();
-            Box::pin(async move { Ok(idx.lock().await.get(&f).cloned().unwrap_or_default()) })
+            Box::pin(async move {
+                let guard = idx.lock().unwrap();
+                Ok(guard.get(&f).cloned().unwrap_or_default())
+            })
         }
     }
 

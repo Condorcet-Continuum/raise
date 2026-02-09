@@ -5,8 +5,7 @@ pub mod optimizer;
 pub mod parser;
 pub mod sql;
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use crate::utils::json::{Deserialize, Serialize, Value};
 
 pub use executor::QueryEngine;
 
@@ -159,7 +158,7 @@ pub struct QueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::json::{self, json};
 
     #[test]
     fn test_condition_helpers() {
@@ -182,7 +181,7 @@ mod tests {
             projection: Some(Projection::Include(vec!["name".into()])),
         };
 
-        let json_str = serde_json::to_string(&query).unwrap();
+        let json_str = json::stringify(&query).unwrap();
         assert!(json_str.contains("\"users\""));
         assert!(json_str.contains("\"age\""));
         assert!(json_str.contains("\"Include\""));

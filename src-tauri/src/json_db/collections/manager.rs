@@ -6,15 +6,30 @@ use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
 use crate::json_db::storage::{file_storage, StorageEngine};
 use crate::rules_engine::{EvalError, Evaluator, Rule, RuleStore};
 
-use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
-use serde_json::{json, Value};
-use std::collections::HashSet;
-use tokio::fs;
-use uuid::Uuid;
-
 use super::collection;
 use super::data_provider::CachedDataProvider;
+
+// --- MIGRATION V2 : USAGE DES FAÇADES SÉMANTIQUES ---
+
+// 1. Le Prélude (Result, AppError, AppConfig...)
+use crate::utils::prelude::*;
+
+// 2. IO Sécurisée
+use crate::utils::io;
+
+// 3. Data Unifiée (Remplace json::* ET std::collections::*)
+use crate::utils::data;
+// Astuce : Tu pourras utiliser data::HashSet ou ajouter 'use crate::utils::data::HashSet;'
+
+// 4. Logging
+use crate::utils::warn;
+
+// 5. Compatibilité temporaire anyhow (le temps de migrer les .context())
+// On ré-importe anyhow pour que ton code existant continue de compiler
+use anyhow::{anyhow, Context};
+// On recrée l'alias AnyResult pour ne pas avoir à changer les 20 signatures de fonction
+
+use crate::utils::error::Result;
 
 #[derive(Debug)]
 pub struct CollectionsManager<'a> {
@@ -37,6 +52,24 @@ impl<'a> CollectionsManager<'a> {
         self.ensure_system_index().await
     }
 
+    pub async fn drop_db(&self) -> Result<bool> {
+        // On vérifie l'existence pour le retour booléen (pour le CLI)
+        let db_path = self.storage.config.db_root(&self.space, &self.db);
+        if !db_path.exists() {
+            return Ok(false);
+        }
+
+        // On délègue la suppression au module de stockage bas niveau
+        file_storage::drop_db(
+            &self.storage.config,
+            &self.space,
+            &self.db,
+            file_storage::DropMode::Hard,
+        )
+        .await?;
+
+        Ok(true)
+    }
     // --- MÉTHODES DE LECTURE ---
 
     pub async fn get_document(&self, collection: &str, id: &str) -> Result<Option<Value>> {
@@ -57,13 +90,13 @@ impl<'a> CollectionsManager<'a> {
                 .get_document(collection, id)
                 .await
                 .with_context(|| format!("Erreur I/O lors de la lecture de l'ID {}", id))?;
-
+            //                AppError::NotFound("Index _system.json introuvable".to_string())
             match doc_opt {
                 Some(doc) => docs.push(doc),
-                None => return Err(anyhow!(
+                None =>  return Err(AppError::Database(format!(
                     "DATABASE CORRUPTION: L'index pointe vers l'ID '{}' mais le fichier est introuvable dans '{}'", 
                     id, collection
-                )),
+                ))),
             }
         }
 
@@ -71,11 +104,15 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub async fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
-        collection::list_documents(&self.storage.config, &self.space, &self.db, collection).await
+        collection::list_documents(&self.storage.config, &self.space, &self.db, collection)
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn list_collections(&self) -> Result<Vec<String>> {
-        collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db).await
+        collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db)
+            .await
+            .map_err(Into::into)
     }
 
     // --- GESTION INDEX SYSTÈME ---
@@ -88,7 +125,7 @@ impl<'a> CollectionsManager<'a> {
             .join("_system.json");
 
         let mut system_doc = if sys_path.exists() {
-            serde_json::from_str(&fs::read_to_string(&sys_path).await?)?
+            io::read_json(&sys_path).await?
         } else {
             json!({
                 "space": self.space,
@@ -129,7 +166,7 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)?;
+        let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await?;
 
         let found_uri = if reg.get_by_uri(&expected_uri).is_some() {
             Some(expected_uri.clone())
@@ -142,12 +179,12 @@ impl<'a> CollectionsManager<'a> {
         if let Some(uri) = found_uri {
             if let Ok(validator) = SchemaValidator::compile_with_registry(&uri, &reg) {
                 if let Err(e) = validator.compute_then_validate(doc) {
-                    return Err(anyhow!("Index système invalide: {}", e));
+                    return Err(AppError::Database(format!("Index système invalide: {}", e)));
                 }
             }
         }
 
-        fs::write(&sys_path, serde_json::to_string_pretty(doc)?).await?;
+        io::write_json_atomic(&sys_path, doc).await?;
         Ok(())
     }
 
@@ -171,13 +208,13 @@ impl<'a> CollectionsManager<'a> {
             .config
             .db_collection_path(&self.space, &self.db, name);
         if !col_path.exists() {
-            fs::create_dir_all(&col_path).await?;
+            io::ensure_dir(&col_path).await?;
         }
 
         let meta = json!({ "schema": final_schema_uri, "indexes": [] });
         let meta_path = col_path.join("_meta.json");
 
-        fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
+        io::write_json_atomic(&meta_path, &meta).await?;
 
         self.update_system_index_collection(name, &final_schema_uri)
             .await?;
@@ -191,15 +228,20 @@ impl<'a> CollectionsManager<'a> {
     }
 
     // --- INDEXES SECONDAIRES ---
-
     pub async fn create_index(&self, collection: &str, field: &str, kind: &str) -> Result<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-        idx_mgr.create_index(collection, field, kind).await
+        idx_mgr
+            .create_index(collection, field, kind) // Vérifie bien les 3 arguments ici
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn drop_index(&self, collection: &str, field: &str) -> Result<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-        idx_mgr.drop_index(collection, field).await
+        idx_mgr
+            .drop_index(collection, field) // ✅ On appelle drop_index, pas create_index
+            .await
+            .map_err(Into::into) // ✅ On convertit l'erreur anyhow en AppError
     }
 
     // --- HELPER INDEX SYSTÈME ---
@@ -211,10 +253,11 @@ impl<'a> CollectionsManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
         if !sys_path.exists() {
-            return Err(anyhow!("Index _system.json introuvable"));
+            return Err(AppError::NotFound(
+                "Index _system.json introuvable".to_string(),
+            ));
         }
-        let content = fs::read_to_string(&sys_path).await?;
-        let sys_json: Value = serde_json::from_str(&content)?;
+        let sys_json: Value = io::read_json(&sys_path).await?;
         let ptr = format!("/collections/{}/schema", col_name);
 
         let raw_path = sys_json
@@ -244,7 +287,7 @@ impl<'a> CollectionsManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
         let mut system_doc = if sys_path.exists() {
-            serde_json::from_str(&fs::read_to_string(&sys_path).await?)?
+            io::read_json(&sys_path).await?
         } else {
             json!({ "space": self.space, "database": self.db, "version": 1, "collections": {} })
         };
@@ -276,8 +319,8 @@ impl<'a> CollectionsManager<'a> {
         if !sys_path.exists() {
             return Ok(());
         }
-        let content = fs::read_to_string(&sys_path).await?;
-        let mut system_doc: Value = serde_json::from_str(&content)?;
+        let content = io::read_to_string(&sys_path).await?;
+        let mut system_doc: Value = data::parse(&content)?;
         let mut changed = false;
         if let Some(cols) = system_doc
             .get_mut("collections")
@@ -300,7 +343,7 @@ impl<'a> CollectionsManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
         let mut system_doc = if sys_path.exists() {
-            serde_json::from_str(&fs::read_to_string(&sys_path).await?)?
+            io::read_json(&sys_path).await?
         } else {
             json!({ "space": self.space, "database": self.db, "version": 1, "collections": {} })
         };
@@ -366,7 +409,7 @@ impl<'a> CollectionsManager<'a> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         if let Err(_e) = idx_mgr.index_document(collection, doc).await {
             #[cfg(debug_assertions)]
-            eprintln!("⚠️ Indexation secondaire échouée: {}", _e);
+            warn!("⚠️ Indexation secondaire échouée: {}", _e);
         }
         Ok(())
     }
@@ -470,8 +513,8 @@ impl<'a> CollectionsManager<'a> {
         let mut resolved_uri = None;
 
         if meta_path.exists() {
-            if let Ok(content) = fs::read_to_string(&meta_path).await {
-                if let Ok(meta) = serde_json::from_str::<Value>(&content) {
+            if let Ok(content) = io::read_to_string(&meta_path).await {
+                if let Ok(meta) = data::parse::<Value>(&content) {
                     if let Some(s) = meta.get("schema").and_then(|v| v.as_str()) {
                         if !s.is_empty() {
                             resolved_uri = Some(s.to_string());
@@ -500,18 +543,17 @@ impl<'a> CollectionsManager<'a> {
                 obj.insert("$schema".to_string(), Value::String(uri.clone()));
             }
 
-            let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db)?;
-
+            let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await?;
             // CORRECTION CLIPPY : 'uri' au lieu de '&uri'
             if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, uri).await {
-                eprintln!("⚠️ Erreur règles métier (non bloquant): {}", e);
+                warn!("⚠️ Erreur règles métier (non bloquant): {}", e);
             }
 
             let validator = SchemaValidator::compile_with_registry(uri, &reg)?;
             validator.compute_then_validate(doc)?;
         } else {
             #[cfg(debug_assertions)]
-            eprintln!(
+            warn!(
                 "⚠️ ATTENTION: Aucun schéma trouvé pour la collection '{}'. Insertion schemaless.",
                 collection
             );
@@ -556,13 +598,13 @@ impl<'a> CollectionsManager<'a> {
                         obj.insert("@context".to_string(), layer_ctx);
                     } else {
                         let defaults = registry.get_default_context();
-                        if let Ok(val) = serde_json::to_value(defaults) {
+                        if let Ok(val) = data::to_value(defaults) {
                             obj.insert("@context".to_string(), val);
                         }
                     }
                 } else {
                     let defaults = registry.get_default_context();
-                    if let Ok(val) = serde_json::to_value(defaults) {
+                    if let Ok(val) = data::to_value(defaults) {
                         obj.insert("@context".to_string(), val);
                     }
                 }
@@ -633,7 +675,7 @@ pub async fn apply_business_rules(
     let mut store = RuleStore::new(manager);
 
     if let Err(e) = store.sync_from_db().await {
-        eprintln!(
+        warn!(
             "⚠️ Warning: Impossible de charger les règles système: {}",
             e
         );
@@ -642,14 +684,14 @@ pub async fn apply_business_rules(
     if let Some(schema) = registry.get_by_uri(schema_uri) {
         if let Some(rules_array) = schema.get("x_rules").and_then(|v| v.as_array()) {
             for (index, rule_val) in rules_array.iter().enumerate() {
-                match serde_json::from_value::<Rule>(rule_val.clone()) {
+                match data::from_value::<Rule>(rule_val.clone()) {
                     Ok(rule) => {
                         if let Err(e) = store.register_rule(collection_name, rule).await {
-                            eprintln!("⚠️ Erreur enregistrement règle (index {}): {}", index, e);
+                            warn!("⚠️ Erreur enregistrement règle (index {}): {}", index, e);
                         }
                     }
                     Err(e) => {
-                        eprintln!("⚠️ Règle invalide dans le schéma (index {}): {}", index, e)
+                        warn!("⚠️ Règle invalide dans le schéma (index {}): {}", index, e)
                     }
                 }
             }
@@ -667,7 +709,7 @@ pub async fn apply_business_rules(
             break;
         }
 
-        let mut next_changes = HashSet::new();
+        let mut next_changes = data::HashSet::new();
         for rule in rules {
             match Evaluator::evaluate(&rule.expr, doc, &provider).await {
                 Ok(result) => {
@@ -676,7 +718,12 @@ pub async fn apply_business_rules(
                     }
                 }
                 Err(EvalError::VarNotFound(_)) => continue,
-                Err(e) => return Err(anyhow!("Erreur calcul règle '{}': {}", rule.id, e)),
+                Err(e) => {
+                    return Err(AppError::Database(format!(
+                        "Erreur calcul règle '{}': {}",
+                        rule.id, e
+                    )))
+                }
             }
         }
         current_changes = next_changes;
@@ -685,8 +732,8 @@ pub async fn apply_business_rules(
     Ok(())
 }
 
-fn compute_diff(new_doc: &Value, old_doc: Option<&Value>) -> HashSet<String> {
-    let mut changes = HashSet::new();
+fn compute_diff(new_doc: &Value, old_doc: Option<&Value>) -> data::HashSet<String> {
+    let mut changes = data::HashSet::new();
     find_changes("", new_doc, old_doc, &mut changes);
     changes
 }
@@ -695,7 +742,7 @@ fn find_changes(
     path: &str,
     new_val: &Value,
     old_val: Option<&Value>,
-    changes: &mut HashSet<String>,
+    changes: &mut data::HashSet<String>,
 ) {
     if let Some(old) = old_val {
         if new_val == old {
@@ -766,7 +813,7 @@ fn set_value_by_path(doc: &mut Value, path: &str, value: Value) -> bool {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();

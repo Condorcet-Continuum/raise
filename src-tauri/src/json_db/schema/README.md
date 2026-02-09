@@ -64,7 +64,7 @@ Le validateur implémente une sous-partie stricte de JSON Schema Draft 2020-12 :
 
 ```rust
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
-use serde_json::json;
+
 
 // 1. Initialisation (Scan du disque)
 let registry = SchemaRegistry::from_db(&config, "my_space", "my_db")?;

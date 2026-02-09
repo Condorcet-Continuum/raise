@@ -7,10 +7,11 @@
 //! - Normalisation RDF
 //! - Validation
 
-use anyhow::{anyhow, Result};
-use serde_json::{Map, Value};
-
 use super::context::ContextManager;
+use crate::utils::{
+    error::{anyhow, AnyResult}, // Gestion erreur unifiée
+    json::{Map, Value},         // JSON unifié
+};
 
 /// Représentation simple d'un nœud RDF pour l'export
 #[derive(Debug, Clone)]
@@ -70,14 +71,14 @@ impl JsonLdProcessor {
         Self { context_manager }
     }
 
-    pub fn with_doc_context(mut self, doc: &Value) -> Result<Self> {
+    pub fn with_doc_context(mut self, doc: &Value) -> AnyResult<Self> {
         self.context_manager.load_from_doc(doc)?;
         Ok(self)
     }
 
     /// Charge le contexte d'une couche spécifique (OA, SA...) pour la résolution sémantique.
     /// Indispensable pour que le ModelLoader puisse comprendre les types sans préfixe.
-    pub fn load_layer_context(&mut self, layer: &str) -> Result<()> {
+    pub fn load_layer_context(&mut self, layer: &str) -> AnyResult<()> {
         self.context_manager.load_layer_context(layer)
     }
 
@@ -171,7 +172,7 @@ impl JsonLdProcessor {
         None
     }
 
-    pub fn validate_required_fields(&self, doc: &Value, required: &[&str]) -> Result<()> {
+    pub fn validate_required_fields(&self, doc: &Value, required: &[&str]) -> AnyResult<()> {
         let expanded = self.expand(doc);
         for &field in required {
             let iri = self.context_manager.expand_term(field);
@@ -182,7 +183,7 @@ impl JsonLdProcessor {
         Ok(())
     }
 
-    pub fn to_ntriples(&self, doc: &Value) -> Result<String> {
+    pub fn to_ntriples(&self, doc: &Value) -> AnyResult<String> {
         let expanded = self.expand(doc);
         let id = self
             .get_id(&expanded)
@@ -224,7 +225,7 @@ impl JsonLdProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::json::json;
 
     #[test]
     fn test_get_id() {

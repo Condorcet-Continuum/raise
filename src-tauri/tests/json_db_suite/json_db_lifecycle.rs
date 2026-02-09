@@ -1,17 +1,16 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_lifecycle.rs
 
 use crate::{init_test_env, TEST_DB, TEST_SPACE};
-use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
-use std::fs;
-
-// --- AJOUTS CORRECTS ---
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-use serde_json::json;
-use serde_json::Value;
+use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
+use raise::utils::{
+    fs,
+    json::{self, json, Value},
+};
 // -----------------------
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone
+#[tokio::test]
 async fn db_lifecycle_minimal() {
     let env = init_test_env().await;
     let cfg = &env.cfg;
@@ -33,8 +32,7 @@ async fn db_lifecycle_minimal() {
     assert!(schemas_path.exists(), "le dossier schemas doit exister");
 
     // OPEN
-    // Note : open_db reste synchrone dans cette suite
-    open_db(cfg, space, db).expect("open_db doit réussir");
+    open_db(cfg, space, db).await.expect("open_db doit réussir");
 
     // DROP (Soft)
     // CORRECTION E0599 : drop_db est asynchrone, ajout de .await
@@ -49,9 +47,11 @@ async fn db_lifecycle_minimal() {
     // Vérifie qu’un dossier renommé existe
     let mut found_soft = false;
     let space_root = cfg.data_root.join(space);
-    for entry in fs::read_dir(&space_root).expect("ls space_root") {
-        let p = entry.expect("dirent").path();
+    let mut entries = fs::read_dir(&space_root).await.expect("ls space_root");
+    while let Some(entry) = entries.next_entry().await.expect("entry") {
+        let p = entry.path();
         let name = p.file_name().unwrap().to_string_lossy().to_string();
+        // Vérification dossier renommé
         if name.starts_with(db) && name.contains(".deleted-") && p.is_dir() {
             found_soft = true;
             break;
@@ -87,15 +87,14 @@ async fn db_lifecycle_create_open_drop() {
 
     // Nettoyage manuel au cas où
     let root = cfg.db_root(space, db);
-    if root.exists() {
-        fs::remove_dir_all(&root).unwrap();
+    if fs::exists(&root).await {
+        fs::remove_dir_all(&root).await.unwrap();
     }
-
     // 1. Création
     create_db(cfg, space, db).await.expect("create");
 
     // 2. Ouverture (Sync)
-    open_db(cfg, space, db).expect("open");
+    open_db(cfg, space, db).await.expect("open");
 
     // 3. Soft drop
     drop_db(cfg, space, db, DropMode::Soft)
@@ -131,9 +130,12 @@ async fn test_collection_drop_cleans_system_index() {
 
     // 3. Vérification : Elle doit être dans _system.json
     let sys_path = cfg.db_root(space, db).join("_system.json");
-    let content = fs::read_to_string(&sys_path).expect("read _system.json");
-    let sys_json: Value = serde_json::from_str(&content).expect("parse _system.json");
+    let content_after = fs::read_to_string(&sys_path)
+        .await
+        .expect("read _system.json");
 
+    // CORRECTION : Parsing via utils::json
+    let sys_json: Value = json::parse(&content_after).expect("parse");
     assert!(
         sys_json
             .pointer(&format!("/collections/{}", collection))
@@ -142,7 +144,6 @@ async fn test_collection_drop_cleans_system_index() {
     );
 
     // 4. Suppression (Drop)
-    // CORRECTION E0599 : drop_collection est asynchrone
     mgr.drop_collection(collection)
         .await
         .expect("drop collection failed");
@@ -154,9 +155,10 @@ async fn test_collection_drop_cleans_system_index() {
     );
 
     // 6. Vérification CRITIQUE : Elle ne doit plus être dans _system.json
-    let content_after = fs::read_to_string(&sys_path).expect("read _system.json after");
-    let sys_json_after: Value =
-        serde_json::from_str(&content_after).expect("parse _system.json after");
+    let content_after = fs::read_to_string(&sys_path)
+        .await
+        .expect("read _system.json");
+    let sys_json_after: Value = json::parse(&content_after).expect("parse");
 
     assert!(
         sys_json_after
@@ -184,7 +186,9 @@ async fn test_system_index_strict_conformance() {
         "❌ Le fichier index.schema.json n'a pas été copié !"
     );
 
-    let schema_content = fs::read_to_string(&schema_path).expect("Lecture schéma échouée");
+    let schema_content = fs::read_to_string(&schema_path)
+        .await
+        .expect("Lecture schéma");
 
     if !schema_content.contains("base.schema.json") {
         println!("🔥 CONTENU DU SCHÉMA INCORRECT :\n{}", schema_content);
@@ -199,7 +203,9 @@ async fn test_system_index_strict_conformance() {
         "Le fichier _system.json doit exister physiquement"
     );
 
-    let content = fs::read_to_string(&sys_path).expect("Lecture impossible de _system.json");
+    let content = fs::read_to_string(&sys_path)
+        .await
+        .expect("Lecture _system.json");
     let doc: Value = serde_json::from_str(&content).expect("JSON malformé");
 
     // 3. Vérifications strictes
@@ -217,7 +223,9 @@ async fn test_system_index_strict_conformance() {
     assert_eq!(doc.get("$schema"), Some(&json!(expected_schema)));
 
     // 4. Validation finale
-    let registry = SchemaRegistry::from_db(cfg, space, db).expect("Chargement registre");
+    let registry = SchemaRegistry::from_db(cfg, space, db)
+        .await
+        .expect("Chargement registre");
     let validator = SchemaValidator::compile_with_registry(&expected_schema, &registry)
         .expect("Compilation validateur");
 

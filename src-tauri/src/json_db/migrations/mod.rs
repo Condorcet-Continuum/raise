@@ -5,7 +5,7 @@
 pub mod migrator;
 pub mod version;
 
-use serde::{Deserialize, Serialize};
+use crate::utils::json::{self, Deserialize, Serialize};
 
 pub use migrator::Migrator;
 
@@ -24,7 +24,7 @@ pub struct Migration {
 pub enum MigrationStep {
     CreateCollection {
         name: String,
-        schema: serde_json::Value,
+        schema: json::Value,
     },
     DropCollection {
         name: String,
@@ -32,7 +32,7 @@ pub enum MigrationStep {
     AddField {
         collection: String,
         field: String,
-        default: Option<serde_json::Value>,
+        default: Option<json::Value>,
     },
     RemoveField {
         collection: String,
@@ -60,7 +60,7 @@ pub enum MigrationStep {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::json::json;
 
     #[test]
     fn test_migration_step_serialization() {
@@ -70,7 +70,7 @@ mod tests {
             default: Some(json!(true)),
         };
 
-        let serialized = serde_json::to_string(&step).unwrap();
+        let serialized = json::stringify(&step).unwrap();
         // Vérifie la présence du tag "type" ajouté par #[serde(tag = "type")]
         assert!(serialized.contains("\"type\":\"AddField\""));
         assert!(serialized.contains("\"field\":\"active\""));

@@ -1,9 +1,5 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_query_integration.rs
 
-use serde_json::json;
-use serde_json::Value;
-use std::fs;
-
 use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
 use raise::json_db::{
     collections::manager::CollectionsManager,
@@ -13,14 +9,18 @@ use raise::json_db::{
     },
     storage::JsonDbConfig,
 };
+use raise::utils::{
+    fs,
+    json::{self, json, Value},
+};
 
-fn load_test_doc(cfg: &JsonDbConfig) -> Value {
-    let path = get_dataset_file(cfg, "arcadia/v1/data/articles/article.json");
-    if !path.exists() {
-        panic!("❌ Dataset article.json introuvable : {}", path.display());
+async fn load_test_doc(cfg: &JsonDbConfig) -> Value {
+    let path = get_dataset_file(cfg, "arcadia/v1/data/articles/article.json").await;
+    if !fs::exists(&path).await {
+        panic!("❌ Dataset article.json introuvable : {:?}", path);
     }
-    let raw = fs::read_to_string(&path).expect("Lecture impossible");
-    serde_json::from_str(&raw).expect("JSON invalide")
+    let raw = fs::read_to_string(&path).await.expect("Lecture impossible");
+    json::parse(&raw).expect("JSON invalide")
 }
 
 // CORRECTION : Passage en async pour supporter les appels asynchrones au manager
@@ -71,10 +71,10 @@ async fn seed_article<'a>(
 async fn query_get_article_by_id() {
     // CORRECTION E0277 : Ces helpers sont synchrones dans cette suite
     let test_env = init_test_env().await;
-    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB).await;
 
     let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    let base_doc = load_test_doc(&test_env.cfg);
+    let base_doc = load_test_doc(&test_env.cfg).await;
 
     let handle = "query-get-id";
     // CORRECTION : seed_article est désormais asynchrone
@@ -89,10 +89,10 @@ async fn query_get_article_by_id() {
 #[tokio::test]
 async fn query_find_one_article_by_handle() {
     let test_env = init_test_env().await;
-    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB).await;
 
     let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    let base_doc = load_test_doc(&test_env.cfg);
+    let base_doc = load_test_doc(&test_env.cfg).await;
 
     let handle = "query-find-one";
     // CORRECTION : .await sur seed_article
@@ -127,10 +127,10 @@ async fn query_find_one_article_by_handle() {
 #[tokio::test]
 async fn query_find_many_with_sort_and_limit() {
     let test_env = init_test_env().await;
-    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB);
+    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB).await;
 
     let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    let base_doc = load_test_doc(&test_env.cfg);
+    let base_doc = load_test_doc(&test_env.cfg).await;
 
     // On insère 10 articles : sort-0 ... sort-9
     for i in 0..10 {

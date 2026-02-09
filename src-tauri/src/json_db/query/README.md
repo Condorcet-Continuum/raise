@@ -98,7 +98,6 @@ println!("Trouvé {} utilisateurs", result.total_count);
 
 ```rust
 use crate::json_db::query::{parser::QueryBuilder, Condition};
-use serde_json::json;
 
 // Construction fluide et typée avec les nouveaux helpers
 let query = QueryBuilder::new("products")

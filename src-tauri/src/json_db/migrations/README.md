@@ -77,7 +77,7 @@ Voici comment déclarer et exécuter des migrations au démarrage de l'applicati
 
 ```rust
 use crate::json_db::migrations::{Migration, MigrationStep, Migrator};
-use serde_json::json;
+
 
 pub fn init_database_migrations(storage: &StorageEngine, space: &str, db: &str) -> Result<()> {
     let migrator = Migrator::new(storage, space, db);

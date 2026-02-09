@@ -11,9 +11,8 @@ async fn open_missing_db_fails() {
     let db_missing = "db_introuvable_123";
 
     // 1. open sur DB inexistante → Err
-    // CORRECTION E0277 : On retire le .await car open_db renvoie un Result immédiat
     assert!(
-        open_db(cfg, space, db_missing).is_err(),
+        open_db(cfg, space, db_missing).await.is_err(),
         "open_db devrait échouer si la DB n'existe pas"
     );
 }

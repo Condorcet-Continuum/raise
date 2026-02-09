@@ -1,16 +1,18 @@
 // FICHIER : src-tauri/src/json_db/query/parser.rs
 
-use anyhow::{bail, Result};
-use serde_json::Value;
+use crate::utils::{
+    error::{anyhow, AnyResult},
+    json::Value,
+};
 
 use super::{
     ComparisonOperator, Condition, FilterOperator, Projection, Query, QueryFilter, SortField,
     SortOrder,
 };
 
-pub fn parse_projection(fields: &[String]) -> Result<Projection> {
+pub fn parse_projection(fields: &[String]) -> AnyResult<Projection> {
     if fields.is_empty() {
-        bail!("Empty projection");
+        return Err(anyhow!("message"));
     }
 
     let is_exclude = fields[0].starts_with('-');
@@ -67,7 +69,7 @@ impl QueryBuilder {
         }
     }
 
-    pub fn select(mut self, fields: Vec<String>) -> Result<Self> {
+    pub fn select(mut self, fields: Vec<String>) -> AnyResult<Self> {
         self.query.projection = Some(parse_projection(&fields)?);
         Ok(self)
     }
@@ -100,7 +102,7 @@ impl QueryBuilder {
     }
 }
 
-pub fn parse_sort_specs(specs: &[String]) -> Result<Vec<SortField>> {
+pub fn parse_sort_specs(specs: &[String]) -> AnyResult<Vec<SortField>> {
     let mut out = Vec::new();
     for spec in specs {
         out.push(parse_single_sort_spec(spec)?);
@@ -108,7 +110,7 @@ pub fn parse_sort_specs(specs: &[String]) -> Result<Vec<SortField>> {
     Ok(out)
 }
 
-fn parse_single_sort_spec(spec: &str) -> Result<SortField> {
+fn parse_single_sort_spec(spec: &str) -> AnyResult<SortField> {
     let spec = spec.trim();
     if let Some(f) = spec.strip_prefix('+') {
         return Ok(SortField {
@@ -139,7 +141,7 @@ fn parse_single_sort_spec(spec: &str) -> Result<SortField> {
     })
 }
 
-pub fn parse_filter_from_json(value: &Value) -> Result<QueryFilter> {
+pub fn parse_filter_from_json(value: &Value) -> AnyResult<QueryFilter> {
     let obj = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("Not an object"))?;
@@ -212,7 +214,7 @@ pub fn parse_filter_from_json(value: &Value) -> Result<QueryFilter> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::json::json;
 
     #[test]
     fn test_parse_filter_full() {

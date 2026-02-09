@@ -2,12 +2,10 @@
 
 use crate::{ensure_db_exists, init_test_env, TEST_DB, TEST_SPACE};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-// use raise::json_db::storage::file_storage; // Plus nécessaire
-use serde_json::json;
+use raise::utils::json::json;
 
 #[tokio::test]
 async fn schema_instantiate_validate_minimal() {
-    // init_test_env et ensure_db_exists sont synchrones dans cette suite
     let test_env = init_test_env().await;
     let cfg = &test_env.cfg;
 
@@ -15,10 +13,12 @@ async fn schema_instantiate_validate_minimal() {
     let db = TEST_DB;
 
     // 1) S'assurer que la DB existe et contient les schémas
-    ensure_db_exists(cfg, space, db);
+    ensure_db_exists(cfg, space, db).await;
 
     // 2) Charger le registre
-    let reg = SchemaRegistry::from_db(cfg, space, db).expect("registry from DB");
+    let reg = SchemaRegistry::from_db(cfg, space, db)
+        .await
+        .expect("registry from DB");
 
     // URI du schéma à tester
     let root_uri = reg.uri("actors/actor.schema.json");

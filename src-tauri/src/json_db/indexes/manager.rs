@@ -2,11 +2,11 @@
 
 use super::{btree, hash, text, IndexDefinition, IndexType};
 use crate::json_db::storage::StorageEngine;
-use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::path::PathBuf;
-use tokio::fs;
+use crate::utils::{
+    error::{anyhow, AnyResult, Context},
+    fs::{self, Path, PathBuf},
+    json::{self, Deserialize, Serialize, Value},
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CollectionMeta {
@@ -36,7 +36,7 @@ impl<'a> IndexManager<'a> {
         collection: &str,
         field: &str,
         kind_str: &str,
-    ) -> Result<()> {
+    ) -> AnyResult<()> {
         let kind = match kind_str.to_lowercase().as_str() {
             "hash" => IndexType::Hash,
             "btree" => IndexType::BTree,
@@ -62,7 +62,7 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub async fn drop_index(&mut self, collection: &str, field: &str) -> Result<()> {
+    pub async fn drop_index(&mut self, collection: &str, field: &str) -> AnyResult<()> {
         let meta_path = self.get_meta_path(collection);
         if !meta_path.exists() {
             return Err(anyhow!("Collection introuvable"));
@@ -71,7 +71,7 @@ impl<'a> IndexManager<'a> {
         let mut meta = self.load_meta(&meta_path).await?;
         if let Some(pos) = meta.indexes.iter().position(|i| i.name == field) {
             let removed = meta.indexes.remove(pos);
-            fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
+            fs::write(&meta_path, json::stringify_pretty(&meta)?).await?;
 
             let index_filename = match removed.index_type {
                 IndexType::Hash => format!("{}.hash.idx", removed.name),
@@ -87,7 +87,7 @@ impl<'a> IndexManager<'a> {
                 .join(index_filename);
 
             if index_path.exists() {
-                fs::remove_file(index_path).await?;
+                fs::remove_file(&index_path).await?;
             }
         } else {
             return Err(anyhow!("Index introuvable: {}", field));
@@ -108,7 +108,7 @@ impl<'a> IndexManager<'a> {
         collection: &str,
         field: &str,
         value: &Value,
-    ) -> Result<Vec<String>> {
+    ) -> AnyResult<Vec<String>> {
         // Chargement async des définitions d'index
         let indexes = self.load_indexes(collection).await?;
 
@@ -131,7 +131,7 @@ impl<'a> IndexManager<'a> {
         }
     }
 
-    async fn rebuild_index(&self, collection: &str, def: &IndexDefinition) -> Result<()> {
+    async fn rebuild_index(&self, collection: &str, def: &IndexDefinition) -> AnyResult<()> {
         let col_path = self
             .storage
             .config
@@ -149,7 +149,7 @@ impl<'a> IndexManager<'a> {
                 }
 
                 let content = fs::read_to_string(&path).await?;
-                if let Ok(doc) = serde_json::from_str::<Value>(&content) {
+                if let Ok(doc) = json::parse::<Value>(&content) {
                     let doc_id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     if !doc_id.is_empty() {
                         self.dispatch_update(collection, def, doc_id, None, Some(&doc))
@@ -161,7 +161,7 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub async fn index_document(&mut self, collection: &str, new_doc: &Value) -> Result<()> {
+    pub async fn index_document(&mut self, collection: &str, new_doc: &Value) -> AnyResult<()> {
         let doc_id = new_doc
             .get("id")
             .and_then(|v| v.as_str())
@@ -184,7 +184,7 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub async fn remove_document(&mut self, collection: &str, old_doc: &Value) -> Result<()> {
+    pub async fn remove_document(&mut self, collection: &str, old_doc: &Value) -> AnyResult<()> {
         let doc_id = old_doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
         if doc_id.is_empty() {
             return Ok(());
@@ -197,7 +197,7 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    async fn load_indexes(&self, collection: &str) -> Result<Vec<IndexDefinition>> {
+    async fn load_indexes(&self, collection: &str) -> AnyResult<Vec<IndexDefinition>> {
         let meta_path = self.get_meta_path(collection);
         if !meta_path.exists() {
             return Ok(Vec::new());
@@ -212,9 +212,9 @@ impl<'a> IndexManager<'a> {
             .join("_meta.json")
     }
 
-    async fn load_meta(&self, path: &PathBuf) -> Result<CollectionMeta> {
+    async fn load_meta(&self, path: &Path) -> AnyResult<CollectionMeta> {
         let content = fs::read_to_string(path).await?;
-        Ok(serde_json::from_str(&content)?)
+        Ok(json::parse(&content)?)
     }
 
     async fn dispatch_update(
@@ -224,7 +224,7 @@ impl<'a> IndexManager<'a> {
         id: &str,
         old: Option<&Value>,
         new: Option<&Value>,
-    ) -> Result<()> {
+    ) -> AnyResult<()> {
         let cfg = &self.storage.config;
         let s = &self.space;
         let d = &self.db;
@@ -243,14 +243,14 @@ pub async fn add_index_definition(
     db: &str,
     collection: &str,
     def: IndexDefinition,
-) -> Result<()> {
+) -> AnyResult<()> {
     let meta_path = storage
         .config
         .db_collection_path(space, db, collection)
         .join("_meta.json");
     let mut meta: CollectionMeta = if meta_path.exists() {
         let content = fs::read_to_string(&meta_path).await?;
-        serde_json::from_str(&content)?
+        json::parse(&content)?
     } else {
         CollectionMeta {
             schema: None,
@@ -260,7 +260,7 @@ pub async fn add_index_definition(
 
     if !meta.indexes.iter().any(|i| i.name == def.name) {
         meta.indexes.push(def);
-        fs::write(&meta_path, serde_json::to_string_pretty(&meta)?).await?;
+        fs::write(&meta_path, json::stringify_pretty(&meta)?).await?;
     }
     Ok(())
 }
@@ -273,8 +273,8 @@ pub async fn add_index_definition(
 mod tests {
     use super::*;
     use crate::json_db::storage::JsonDbConfig;
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::fs::tempdir;
+    use crate::utils::json::json;
 
     #[tokio::test]
     async fn test_manager_lifecycle() {

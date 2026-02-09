@@ -115,7 +115,11 @@ impl McpTool for CodeGenTool {
 
         // 3. Génération (Service)
         // Note: Le service gère l'écriture disque si dry_run est faux (comportement par défaut du service)
-        match self.service.generate_for_element(&component_doc, lang) {
+        match self
+            .service
+            .generate_for_element(&component_doc, lang)
+            .await
+        {
             Ok(paths) => {
                 let file_list: Vec<String> = paths
                     .iter()
