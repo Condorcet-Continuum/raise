@@ -1,6 +1,5 @@
 use clap::{Args, Subcommand};
-use raise::utils::error::AnyResult;
-use raise::{user_info, user_success};
+use raise::{user_info, user_success, utils::prelude::*};
 
 // Imports du Core (chemin relatif à l'arborescence src-tauri)
 use raise::genetics::engine::GeneticConfig;
@@ -39,7 +38,7 @@ pub enum GeneticsCommands {
     },
 }
 
-pub async fn handle(args: GeneticsArgs) -> AnyResult<()> {
+pub async fn handle(args: GeneticsArgs) -> Result<()> {
     match args.command {
         GeneticsCommands::Evolve {
             population,

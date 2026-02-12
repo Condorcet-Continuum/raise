@@ -14,13 +14,8 @@ pub use manager::IndexManager;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IndexType {
-    /// Index exact (HashMap). Idéal pour les IDs, emails, codes uniques.
     Hash,
-
-    /// Index ordonné (BTree). Idéal pour les dates, nombres, tris (Range).
     BTree,
-
-    /// Index de recherche textuelle (Inverted Index). Pour la recherche de mots-clés.
     Text,
 }
 

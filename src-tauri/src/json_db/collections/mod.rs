@@ -7,11 +7,8 @@ pub mod data_provider;
 pub mod manager;
 
 // FAÇADE UNIQUE
-use crate::utils::{
-    error::{AnyResult, Context}, // Gestion erreurs unifiée
-    fs::PathBuf,                 // Gestion FS unifiée
-    json::Value,                 // Gestion JSON unifiée
-};
+use crate::utils::io::PathBuf;
+use crate::utils::prelude::*;
 
 use crate::json_db::{
     collections::manager::CollectionsManager,
@@ -20,7 +17,6 @@ use crate::json_db::{
 };
 
 // --- Helpers privés ---
-
 fn collection_from_schema_rel(schema_rel: &str) -> String {
     let first_part = schema_rel.split('/').next().unwrap_or("default");
 
@@ -40,7 +36,7 @@ pub async fn create_collection(
     space: &str,
     db: &str,
     collection: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     collection::create_collection_if_missing(cfg, space, db, collection).await
 }
 
@@ -49,7 +45,7 @@ pub async fn drop_collection(
     space: &str,
     db: &str,
     collection: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     collection::drop_collection(cfg, space, db, collection).await
 }
 
@@ -59,7 +55,7 @@ pub async fn insert_with_schema(
     db: &str,
     schema_rel: &str,
     mut doc: Value,
-) -> AnyResult<Value> {
+) -> Result<Value> {
     let reg = SchemaRegistry::from_db(cfg, space, db).await?;
     let root_uri = reg.uri(schema_rel);
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)?;
@@ -72,14 +68,14 @@ pub async fn insert_with_schema(
     // Migration async : ajout de .await
     manager::apply_business_rules(&manager, &collection_name, &mut doc, None, &reg, &root_uri)
         .await
-        .context("Rules Engine Execution")?;
+        .map_err(|e| AppError::Database(format!("Rules Engine Execution: {}", e)))?;
 
     validator.compute_then_validate(&mut doc)?;
 
     let id = doc
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Document ID manquant"))?;
+        .ok_or_else(|| AppError::Validation("Document ID manquant".to_string()))?;
 
     collection::update_document(cfg, space, db, &collection_name, id, &doc).await?;
     Ok(doc)
@@ -91,11 +87,11 @@ pub async fn insert_raw(
     db: &str,
     collection: &str,
     doc: &Value,
-) -> AnyResult<()> {
+) -> Result<()> {
     let id = doc
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Document sans ID"))?;
+        .ok_or_else(|| AppError::Validation("Document sans ID".to_string()))?;
 
     collection::create_document(cfg, space, db, collection, id, doc).await
 }
@@ -106,7 +102,7 @@ pub async fn update_with_schema(
     db: &str,
     schema_rel: &str,
     mut doc: Value,
-) -> AnyResult<Value> {
+) -> Result<Value> {
     let reg = SchemaRegistry::from_db(cfg, space, db).await?;
     let root_uri = reg.uri(schema_rel);
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)?;
@@ -117,7 +113,7 @@ pub async fn update_with_schema(
     let id = doc
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Document ID manquant"))?;
+        .ok_or_else(|| AppError::Validation("Document ID manquant".to_string()))?;
 
     collection::update_document(cfg, space, db, &collection_name, id, &doc).await?;
     Ok(doc)
@@ -129,11 +125,11 @@ pub async fn update_raw(
     db: &str,
     collection: &str,
     doc: &Value,
-) -> AnyResult<()> {
+) -> Result<()> {
     let id = doc
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Document ID manquant"))?;
+        .ok_or_else(|| AppError::Validation("Document ID manquant".to_string()))?;
 
     collection::update_document(cfg, space, db, collection, id, doc).await
 }
@@ -144,7 +140,7 @@ pub async fn get(
     db: &str,
     collection: &str,
     id: &str,
-) -> AnyResult<Value> {
+) -> Result<Value> {
     collection::read_document(cfg, space, db, collection, id).await
 }
 
@@ -154,7 +150,7 @@ pub async fn delete(
     db: &str,
     collection: &str,
     id: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     collection::delete_document(cfg, space, db, collection, id).await
 }
 
@@ -163,7 +159,7 @@ pub async fn list_ids(
     space: &str,
     db: &str,
     collection: &str,
-) -> AnyResult<Vec<String>> {
+) -> Result<Vec<String>> {
     collection::list_document_ids(cfg, space, db, collection).await
 }
 
@@ -172,7 +168,7 @@ pub async fn list_all(
     space: &str,
     db: &str,
     collection: &str,
-) -> AnyResult<Vec<Value>> {
+) -> Result<Vec<Value>> {
     collection::list_documents(cfg, space, db, collection).await
 }
 

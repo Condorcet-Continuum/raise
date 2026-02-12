@@ -4,7 +4,7 @@ pub mod cache;
 pub mod file_storage;
 
 use crate::utils::error::Result;
-use crate::utils::fs::PathBuf;
+use crate::utils::io::PathBuf;
 use crate::utils::json::{Deserialize, Serialize, Value};
 
 // --- CONFIGURATION ---
@@ -121,10 +121,7 @@ impl StorageEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{
-        fs::tempdir, // Ré-exporté depuis utils::fs
-        json::json,  // Ré-exporté depuis utils::json
-    };
+    use crate::utils::{io::tempdir, json::json};
 
     #[tokio::test]
     async fn test_storage_engine_cache_hit() {

@@ -73,8 +73,8 @@ impl<'a> DataProvider for CachedDataProvider<'a> {
 mod tests {
     use super::*;
     use crate::utils::{
-        fs::{self, tempdir}, // tempdir et fs:: sont exportés ici
-        json::{self, json},  // La macro json! et le module json sont ici
+        io::{self, tempdir},
+        json::{self, json},
     };
 
     #[tokio::test]
@@ -85,12 +85,12 @@ mod tests {
         let db = "test_db";
 
         let col_path = config.db_collection_path(space, db, "users");
-        fs::create_dir_all(&col_path).await.unwrap();
+        io::create_dir_all(&col_path).await.unwrap();
 
         // Préparation du document disque
         let id = "u1";
         let initial_json = json!({ "id": id, "score": 100 });
-        fs::write(
+        io::write(
             col_path.join(format!("{}.json", id)),
             json::stringify(&initial_json).expect("Erreur de sérialisation"),
         )
@@ -104,7 +104,7 @@ mod tests {
         assert_eq!(val, Some(json!(100)));
 
         // Altération physique du fichier
-        fs::write(
+        io::write(
             col_path.join(format!("{}.json", id)),
             json::stringify(&json!({ "id": id, "score": 999 })).expect("Erreur de sérialisation"),
         )

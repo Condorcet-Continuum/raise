@@ -1,9 +1,8 @@
 // FICHIER : src-tauri/src/json_db/query/executor.rs
 
-use crate::utils::{
-    json::{self, Value},
-    AppError, Future, Ordering, Pin, Result,
-};
+use crate::utils::json;
+use crate::utils::prelude::*;
+use crate::utils::{Future, Ordering, Pin};
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::indexes::manager::IndexManager;
@@ -13,7 +12,6 @@ use crate::json_db::query::{
 };
 
 // --- TRAIT ASYNC POUR L'INDEX ---
-
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub trait IndexProvider: Send + Sync {
@@ -65,12 +63,7 @@ impl<'a> IndexProvider for RealIndexProvider<'a> {
         field: &'b str,
         value: &'b Value,
     ) -> BoxFuture<'b, Result<Vec<String>>> {
-        Box::pin(async move {
-            self.manager
-                .search(collection, field, value)
-                .await
-                .map_err(AppError::System)
-        })
+        Box::pin(async move { self.manager.search(collection, field, value).await })
     }
 }
 
@@ -572,7 +565,7 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{fs::tempdir, json::json, Arc, HashMap, Mutex};
+    use crate::utils::{io::tempdir, json::json, Arc, HashMap, Mutex};
 
     fn setup_test_db() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();

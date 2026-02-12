@@ -1,0 +1,27 @@
+FROM ubuntu:22.04
+
+# 1. Installation des dépendances (CRUCIAL : libgomp1 pour le moteur CPU)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates libvulkan1 vulkan-tools libgomp1 tar \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/local/bin
+
+# 2. Téléchargement et extraction
+RUN curl -L "https://github.com/ggerganov/llama.cpp/releases/download/b7993/llama-b7993-bin-ubuntu-vulkan-x64.tar.gz" -o llama.tar.gz \
+    && tar -xzvf llama.tar.gz \
+    && mv llama-b7993/* . \
+    && rm -rf llama-b7993 llama.tar.gz
+
+# 3. LA MÉTHODE FORTE : On copie le moteur Zen4 pour qu'il soit le défaut
+RUN cp libggml-cpu-zen4.so libggml-cpu.so
+
+# 4. On s'assure que tout est exécutable
+RUN chmod +x llama-server *.so
+
+# 5. On configure l'environnement pour qu'il trouve les fichiers
+ENV LD_LIBRARY_PATH=/usr/local/bin
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/llama-server"]

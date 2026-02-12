@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use std::io::{self, Write}; // On garde std::io pour flush/read_line (interactivité CLI)
+use std::io::{self as std_io, Write}; // On garde std::io pour flush/read_line (interactivité CLI)
 
 // --- IMPORTS MÉTIER RAISE ---
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
@@ -10,11 +10,11 @@ use raise::ai::agents::{
 };
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use raise::utils::config::AppConfig;
-// NOUVEAU : Imports utils optimisés
-use raise::utils::error::AnyResult;
-use raise::utils::{env, fs, Arc};
-use raise::{user_error, user_info, user_success};
+
+use raise::{
+    user_error, user_info, user_success,
+    utils::{context, io, prelude::*, Arc},
+};
 
 #[derive(Args, Debug, Clone)]
 pub struct AiArgs {
@@ -37,7 +37,7 @@ pub enum AiCommands {
     },
 }
 
-pub async fn handle(args: AiArgs) -> AnyResult<()> {
+pub async fn handle(args: AiArgs) -> Result<()> {
     // 1. CONFIGURATION
     let app_config = AppConfig::get();
 
@@ -46,23 +46,23 @@ pub async fn handle(args: AiArgs) -> AnyResult<()> {
     let local_url = app_config.llm_api_url.clone();
 
     // REFAC: Utilisation de env::get_optional
-    let model_name = env::get_optional("RAISE_MODEL_NAME");
+    let model_name = context::get_optional("RAISE_MODEL_NAME");
 
     // Paramètres Contexte
     // REFAC: Utilisation de env::get_or
-    let space = env::get_or("RAISE_DEFAULT_SPACE", "default_space");
-    let db = env::get_or("RAISE_DEFAULT_DB", "default_db");
+    let space = context::get_or("RAISE_DEFAULT_SPACE", "default_space");
+    let db = context::get_or("RAISE_DEFAULT_DB", "default_db");
 
     // Chemins
     let domain_path = app_config.database_root.clone();
 
-    // REFAC: Utilisation de fs::PathBuf et std::env::current_dir est OK ici ou via config
-    let dataset_path = env::get_optional("PATH_RAISE_DATASET")
-        .map(fs::PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap().join("dataset"));
+    // REFAC: Utilisation de io::PathBuf et std::env::current_dir est OK ici ou via config
+    let dataset_path = context::get_optional("PATH_RAISE_DATASET")
+        .map(io::PathBuf::from)
+        .unwrap_or_else(|| context::current_dir().unwrap().join("dataset"));
 
     // CORRECTION : Création de dossier via utils::fs
-    fs::ensure_dir(&domain_path).await?;
+    io::ensure_dir(&domain_path).await?;
 
     // 2. MOTEURS
     let client = LlmClient::new(&local_url, &gemini_key, model_name.clone());
@@ -94,7 +94,7 @@ async fn run_interactive_mode(
     ctx: &AgentContext,
     client: LlmClient,
     url_display: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     user_info!("AI_INTERACTIVE_WELCOME");
     user_info!("AI_INTERACTIVE_SEPARATOR");
     user_info!("AI_LLM_CONNECTED", "{}", url_display);
@@ -103,10 +103,10 @@ async fn run_interactive_mode(
 
     loop {
         print!("RAISE-AI> ");
-        io::stdout().flush()?;
+        std_io::stdout().flush()?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        std_io::stdin().read_line(&mut input)?;
         let input = input.trim();
 
         if input.eq_ignore_ascii_case("exit") {

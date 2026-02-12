@@ -1,13 +1,10 @@
 // FICHIER : src-tauri/src/json_db/indexes/driver.rs
 
-use crate::utils::{
-    error::{AnyResult, Context},
-    fs::{self, Path},
-    json::{self, DeserializeOwned, Serialize},
-    BTreeMap, HashMap,
-};
-
 use super::{IndexDefinition, IndexRecord};
+use crate::utils::data::{BTreeMap, HashMap};
+use crate::utils::io::{self, Path};
+use crate::utils::json::{self, DeserializeOwned};
+use crate::utils::prelude::*;
 
 /// Trait définissant le comportement d'une structure d'index en mémoire
 pub trait IndexMap: Default + Serialize + DeserializeOwned {
@@ -102,33 +99,29 @@ impl IndexMap for BTreeMap<String, Vec<String>> {
 
 // --- Logique I/O Générique (Async) ---
 
-pub async fn load<T: IndexMap>(path: &Path) -> AnyResult<T> {
-    if !fs::exists(path).await {
+pub async fn load<T: IndexMap>(path: &Path) -> Result<T> {
+    if !io::exists(path).await {
         return Ok(T::default());
     }
-    let content = tokio::fs::read(path)
+    let content = io::read(path)
         .await
-        .map_err(crate::utils::AppError::Io)
-        .with_context(|| format!("Lecture index {}", path.display()))?;
+        .map_err(|e| AppError::Database(format!("Lecture index {}: {}", path.display(), e)))?;
 
     if content.is_empty() {
         return Ok(T::default());
     }
 
-    let (records, _): (Vec<IndexRecord>, usize) =
-        bincode::serde::decode_from_slice(&content, bincode::config::standard())
-            .with_context(|| format!("Désérialisation Bincode index {}", path.display()))?;
+    let records: Vec<IndexRecord> = crate::utils::io::read_bincode_compressed(path).await?;
     Ok(T::from_records(records))
 }
 
-pub async fn save<T: IndexMap>(path: &Path, index: &T) -> AnyResult<()> {
+pub async fn save<T: IndexMap>(path: &Path, index: &T) -> Result<()> {
     let records = index.to_records();
-    let encoded: Vec<u8> = bincode::serde::encode_to_vec(&records, bincode::config::standard())?;
-    fs::write_atomic(path, &encoded).await?;
+    crate::utils::io::write_bincode_compressed_atomic(path, &records).await?;
     Ok(())
 }
 
-pub async fn search<T: IndexMap>(path: &Path, key: &str) -> AnyResult<Vec<String>> {
+pub async fn search<T: IndexMap>(path: &Path, key: &str) -> Result<Vec<String>> {
     let index: T = load(path).await?;
     Ok(index.get_doc_ids(key).cloned().unwrap_or_default())
 }
@@ -139,7 +132,7 @@ pub async fn update<T: IndexMap>(
     doc_id: &str,
     old_doc: Option<&json::Value>,
     new_doc: Option<&json::Value>,
-) -> AnyResult<()> {
+) -> Result<()> {
     let mut index: T = load(path).await?;
     let mut changed = false;
 
@@ -160,11 +153,10 @@ pub async fn update<T: IndexMap>(
             if def.unique {
                 if let Some(ids) = index.get_doc_ids(&key_str) {
                     if !ids.is_empty() && (ids.len() > 1 || ids[0] != doc_id) {
-                        anyhow::bail!(
+                        return Err(AppError::Database(format!(
                             "Index unique constraint violation: {} = {}",
-                            def.name,
-                            key_str
-                        );
+                            def.name, key_str
+                        )));
                     }
                 }
             }
@@ -184,7 +176,7 @@ pub async fn update<T: IndexMap>(
 mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
-    use crate::utils::fs::tempdir;
+    use crate::utils::io::tempdir;
 
     #[test]
     fn test_driver_map_logic() {

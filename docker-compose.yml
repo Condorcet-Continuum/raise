@@ -38,13 +38,13 @@ services:
       # Si LEANN doit utiliser un modèle d'embedding spécifique ou une clé API
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
 
-  # 🤖 LLM LOCAL (Llama.cpp Server)
+  # 🤖 LLM LOCAL (Version stable pré-compilée pour CUDA)
   llm:
-    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    build:
+      context: ./llm
+      dockerfile: Dockerfile.llm
     container_name: raise_llm
-    # --- INTERRUPTEUR ON/OFF ---
     profiles: ["core", "llm"]
-    # ---------------------------
     restart: unless-stopped
     ports:
       - "${PORT_LLM:-8081}:8080"
@@ -54,19 +54,26 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [gpu, compute]
     volumes:
       - ${PATH_LLM_MODELS}:/models:ro
+    environment:
+      # On garde tes variables ici pour la propreté...
+      - MODEL=/models/${LLM_MODEL_FILE}
+      - HOST=0.0.0.0
+      - PORT=8080
+      - N_GPU_LAYERS=99
+      - N_CTX=4096
+      - N_BATCH=512
+    # ...MAIS on les injecte ici dans la commande de lancement !
     command: >
       -m /models/${LLM_MODEL_FILE}
-      -c 8192
       --host 0.0.0.0
       --port 8080
       --n-gpu-layers 99
-      --ctx-size 8192
+      --ctx-size 4096
       --batch-size 512
-
-  # ⛓️ BLOCKCHAIN (Hyperledger Fabric & Chaincode)
+      
   chaincode:
     # On construit depuis la racine (.) pour avoir accès à 'shared'
     build:
@@ -74,7 +81,7 @@ services:
       dockerfile: blockchain-engine/chaincode/Dockerfile
     container_name: raise_chaincode
     # --- INTERRUPTEUR ON/OFF ---
-    profiles: ["blockchain", "core"]
+    profiles: ["blockchain"]
     # ---------------------------
     restart: unless-stopped
     ports:

@@ -17,11 +17,9 @@ pub mod transactions;
 pub mod test_utils {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use async_recursion::async_recursion;
-    use std::env;
-    use std::path::{Path, PathBuf};
-    use std::sync::Once;
-    use tokio::fs; // Utilisation de tokio::fs // Pour la copie récursive async
+    use crate::utils::io::{self, PathBuf};
+    use crate::utils::prelude::*;
+    use crate::utils::{async_recursion, Once};
 
     static INIT: Once = Once::new();
 
@@ -55,7 +53,7 @@ pub mod test_utils {
 
         // 1. Création de la structure de base
         let db_root = cfg.db_root(TEST_SPACE, TEST_DB);
-        fs::create_dir_all(&db_root).await.expect("create db root");
+        io::create_dir_all(&db_root).await.expect("create db root");
 
         // 2. COPIE DES SCHÉMAS RÉELS
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -81,7 +79,7 @@ pub mod test_utils {
 
         let dest_schemas_root = cfg.db_schemas_root(TEST_SPACE, TEST_DB).join("v1");
         if !dest_schemas_root.exists() {
-            fs::create_dir_all(&dest_schemas_root)
+            io::create_dir_all(&dest_schemas_root)
                 .await
                 .expect("create schema dir");
         }
@@ -100,13 +98,13 @@ pub mod test_utils {
 
         // 4. CRÉATION DES DATASETS MOCKS
         let dataset_root = data_root.join("dataset");
-        fs::create_dir_all(&dataset_root).await.unwrap();
+        io::create_dir_all(&dataset_root).await.unwrap();
 
         // Mock Article
         let article_rel = "arcadia/v1/data/articles/article.json";
         let article_path = dataset_root.join(article_rel);
         if let Some(p) = article_path.parent() {
-            fs::create_dir_all(p).await.unwrap();
+            io::create_dir_all(p).await.unwrap();
         }
 
         let mock_article = r#"{
@@ -117,15 +115,15 @@ pub mod test_utils {
             "status": "draft",
             "authorId": "00000000-0000-0000-0000-000000000000"
         }"#;
-        fs::write(&article_path, mock_article).await.unwrap();
+        io::write(&article_path, mock_article).await.unwrap();
 
         // Mock Exchange Item
         let ex_item_rel = "arcadia/v1/data/exchange-items/position_gps.json";
         let ex_item_path = dataset_root.join(ex_item_rel);
         if let Some(p) = ex_item_path.parent() {
-            fs::create_dir_all(p).await.unwrap();
+            io::create_dir_all(p).await.unwrap();
         }
-        fs::write(
+        io::write(
             &ex_item_path,
             r#"{ "name": "GPS Position", "mechanism": "Flow" }"#,
         )
@@ -144,7 +142,7 @@ pub mod test_utils {
     pub async fn ensure_db_exists(cfg: &JsonDbConfig, space: &str, db: &str) {
         let db_path = cfg.db_root(space, db);
         if !db_path.exists() {
-            fs::create_dir_all(&db_path).await.unwrap();
+            io::create_dir_all(&db_path).await.unwrap();
         }
     }
 
@@ -154,7 +152,7 @@ pub mod test_utils {
 
         if let Some(parent) = path.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent)
+                io::create_dir_all(parent)
                     .await
                     .expect("Failed to create dataset parent dir");
             }
@@ -163,11 +161,11 @@ pub mod test_utils {
     }
 
     #[async_recursion]
-    async fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         if !dst.exists() {
-            fs::create_dir_all(dst).await?;
+            io::create_dir_all(dst).await?;
         }
-        let mut entries = fs::read_dir(src).await?;
+        let mut entries = io::read_dir(src).await?;
         while let Some(entry) = entries.next_entry().await? {
             let ty = entry.file_type().await?;
             let src_path = entry.path();
@@ -176,7 +174,7 @@ pub mod test_utils {
             if ty.is_dir() {
                 copy_dir_recursive(&src_path, &dst_path).await?;
             } else if src_path.extension().is_some_and(|e| e == "json") {
-                fs::copy(&src_path, &dst_path).await?;
+                io::copy(&src_path, &dst_path).await?;
             }
         }
         Ok(())

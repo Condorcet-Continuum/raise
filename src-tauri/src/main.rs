@@ -14,6 +14,10 @@ use futures::StreamExt;
 use tauri::Manager;
 use tokio::sync::Mutex as AsyncMutex;
 
+use libp2p::gossipsub;
+use libp2p::swarm::SwarmEvent;
+use serde_json::Value;
+
 // --- IMPORTS RAISE ---
 use raise::ai::training::dataset;
 use raise::blockchain::p2p::swarm::create_swarm;
@@ -27,8 +31,6 @@ use raise::commands::{
 };
 
 // --- BRIDGE, CONSENSUS & P2P ---
-use libp2p::gossipsub;
-use libp2p::swarm::SwarmEvent;
 use raise::blockchain::bridge::ArcadiaBridge;
 use raise::blockchain::consensus::{ConsensusEngine, Vote};
 use raise::blockchain::p2p::behavior::ArcadiaBehaviorEvent;
@@ -42,7 +44,6 @@ use raise::json_db::jsonld::VocabularyRegistry;
 use raise::json_db::migrations::migrator::Migrator;
 use raise::json_db::migrations::{Migration, MigrationStep};
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use serde_json::Value;
 
 use raise::plugins::manager::PluginManager;
 
@@ -66,10 +67,18 @@ use raise::spatial_engine;
 fn main() {
     // 1. CHARGEMENT ENV
     dotenvy::dotenv().ok();
-
+    if let Err(e) = raise::utils::config::AppConfig::init() {
+        eprintln!("❌ Erreur fatale de configuration : {}", e);
+        std::process::exit(1);
+    }
     println!("🚀 Démarrage de RAISE...");
     raise::utils::init_logging();
-    let _ = raise::utils::AppConfig::init();
+    // 3. VÉRIFICATION (SANS ERREUR DE SYNTAXE)
+    let config = raise::utils::config::AppConfig::get();
+    println!(
+        "✅ Configuration chargée (Env: {}, DB: {:?})",
+        config.env_mode, config.database_root
+    );
 
     tauri::Builder::default()
         .manage(NativeLlmState(std::sync::Mutex::new(None)))
@@ -101,8 +110,10 @@ fn main() {
                 .join(default_db)
                 .join("schemas/v1/arcadia/@context");
 
-            load_arcadia_ontologies(&ontology_path);
-
+            //load_arcadia_ontologies(&ontology_path) ;
+            tauri::async_runtime::spawn(async move {
+                load_arcadia_ontologies(&ontology_path).await;
+            });
             // 4. GRAPH STORE
             let graph_path = db_root.join("graph_store");
             let graph_store_result =
@@ -399,7 +410,7 @@ async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> a
 
 // --- LOGIQUE DE CHARGEMENT DES ONTOLOGIES ---
 
-fn load_arcadia_ontologies(ontology_root: &Path) {
+async fn load_arcadia_ontologies(ontology_root: &Path) {
     let registry = VocabularyRegistry::global();
     let layers = ["oa", "sa", "la", "pa", "epbs", "data", "transverse"];
 
@@ -412,7 +423,7 @@ fn load_arcadia_ontologies(ontology_root: &Path) {
         let path = ontology_root.join(format!("{}.jsonld", layer));
 
         if path.exists() {
-            if let Err(e) = registry.load_layer_from_file(layer, &path) {
+            if let Err(e) = registry.load_layer_from_file(layer, &path).await {
                 eprintln!(
                     "⚠️ [Ontology] Erreur lors du chargement de {}: {}",
                     layer, e
@@ -440,8 +451,8 @@ mod tests {
     use std::io::Write;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_load_ontologies_from_directory_success() {
+    #[tokio::test]
+    async fn test_load_ontologies_from_directory_success() {
         let dir = tempdir().unwrap();
         let path = dir.path();
 
@@ -457,7 +468,7 @@ mod tests {
         let mut f_trans = File::create(&trans_path).unwrap();
         write!(f_trans, "{}", transverse_content).unwrap();
 
-        load_arcadia_ontologies(path);
+        load_arcadia_ontologies(path).await;
 
         let registry = VocabularyRegistry::global();
         assert!(registry.get_context_for_layer("oa").is_some());

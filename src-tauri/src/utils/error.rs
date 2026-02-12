@@ -40,6 +40,9 @@ pub enum AppError {
 
     #[error("Erreur de sérialisation : {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("Validation Error: {0}")]
+    Validation(String),
 }
 
 // Implémentation manuelle de Serialize pour renvoyer l'erreur au Frontend

@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
-use raise::utils::error::AnyResult;
-use raise::{user_info, user_success};
+
+use raise::{user_info, user_success, utils::prelude::*};
 
 // Imports depuis le cœur : Traçabilité + Modèle
 use raise::model_engine::ProjectModel;
@@ -26,7 +26,7 @@ pub enum TraceabilityCommands {
     History,
 }
 
-pub async fn handle(args: TraceabilityArgs) -> AnyResult<()> {
+pub async fn handle(args: TraceabilityArgs) -> Result<()> {
     match args.command {
         TraceabilityCommands::Audit => {
             user_info!("TRACE_START", "Initialisation du moteur de traçage...");

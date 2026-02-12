@@ -1,11 +1,7 @@
 // FICHIER : src-tauri/src/json_db/transactions/lock_manager.rs
 
-use crate::utils::{
-    Arc,         // std::sync::Arc
-    AsyncRwLock, // tokio::sync::RwLock
-    HashMap,     // std::collections::HashMap
-    RwLock,      // std::sync::RwLock
-};
+use crate::utils::data::HashMap;
+use crate::utils::{Arc, AsyncRwLock, RwLock};
 
 /// Gestionnaire de verrous simple (granularité : Collection)
 /// Utilise des verrous ASYNCHRONES (Tokio) pour être compatible avec .await

@@ -12,24 +12,9 @@ use super::data_provider::CachedDataProvider;
 // --- MIGRATION V2 : USAGE DES FAÇADES SÉMANTIQUES ---
 
 // 1. Le Prélude (Result, AppError, AppConfig...)
-use crate::utils::prelude::*;
-
-// 2. IO Sécurisée
+use crate::utils::data::{self, HashSet};
 use crate::utils::io;
-
-// 3. Data Unifiée (Remplace json::* ET std::collections::*)
-use crate::utils::data;
-// Astuce : Tu pourras utiliser data::HashSet ou ajouter 'use crate::utils::data::HashSet;'
-
-// 4. Logging
-use crate::utils::warn;
-
-// 5. Compatibilité temporaire anyhow (le temps de migrer les .context())
-// On ré-importe anyhow pour que ton code existant continue de compiler
-use anyhow::{anyhow, Context};
-// On recrée l'alias AnyResult pour ne pas avoir à changer les 20 signatures de fonction
-
-use crate::utils::error::Result;
+use crate::utils::prelude::*;
 
 #[derive(Debug)]
 pub struct CollectionsManager<'a> {
@@ -89,8 +74,8 @@ impl<'a> CollectionsManager<'a> {
             let doc_opt = self
                 .get_document(collection, id)
                 .await
-                .with_context(|| format!("Erreur I/O lors de la lecture de l'ID {}", id))?;
-            //                AppError::NotFound("Index _system.json introuvable".to_string())
+                .map_err(|e| AppError::Database(format!("Erreur I/O lecture ID {}: {}", id, e)))?;
+
             match doc_opt {
                 Some(doc) => docs.push(doc),
                 None =>  return Err(AppError::Database(format!(
@@ -104,19 +89,14 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub async fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
-        collection::list_documents(&self.storage.config, &self.space, &self.db, collection)
-            .await
-            .map_err(Into::into)
+        collection::list_documents(&self.storage.config, &self.space, &self.db, collection).await
     }
 
     pub async fn list_collections(&self) -> Result<Vec<String>> {
-        collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db)
-            .await
-            .map_err(Into::into)
+        collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db).await
     }
 
     // --- GESTION INDEX SYSTÈME ---
-
     pub async fn ensure_system_index(&self) -> Result<()> {
         let sys_path = self
             .storage
@@ -233,7 +213,6 @@ impl<'a> CollectionsManager<'a> {
         idx_mgr
             .create_index(collection, field, kind) // Vérifie bien les 3 arguments ici
             .await
-            .map_err(Into::into)
     }
 
     pub async fn drop_index(&self, collection: &str, field: &str) -> Result<()> {
@@ -241,7 +220,6 @@ impl<'a> CollectionsManager<'a> {
         idx_mgr
             .drop_index(collection, field) // ✅ On appelle drop_index, pas create_index
             .await
-            .map_err(Into::into) // ✅ On convertit l'erreur anyhow en AppError
     }
 
     // --- HELPER INDEX SYSTÈME ---
@@ -253,7 +231,7 @@ impl<'a> CollectionsManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
         if !sys_path.exists() {
-            return Err(AppError::NotFound(
+            return Err(AppError::Database(
                 "Index _system.json introuvable".to_string(),
             ));
         }
@@ -263,7 +241,7 @@ impl<'a> CollectionsManager<'a> {
         let raw_path = sys_json
             .pointer(&ptr)
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Collection '{}' inconnue", col_name))?;
+            .ok_or_else(|| AppError::Database(format!("Collection '{}' inconnue", col_name)))?;
 
         if raw_path.is_empty() {
             return Ok(String::new());
@@ -389,7 +367,7 @@ impl<'a> CollectionsManager<'a> {
         let id = doc
             .get("id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("ID manquant"))?;
+            .ok_or_else(|| AppError::Validation("ID manquant dans le document".to_string()))?;
         let meta_path = self
             .storage
             .config
@@ -427,7 +405,8 @@ impl<'a> CollectionsManager<'a> {
         patch_data: Value,
     ) -> Result<Value> {
         let old_doc_opt = self.get_document(collection, id).await?;
-        let mut doc = old_doc_opt.ok_or_else(|| anyhow!("Document introuvable pour update"))?;
+        let mut doc = old_doc_opt
+            .ok_or_else(|| AppError::Database("Document introuvable pour update".to_string()))?;
 
         json_merge(&mut doc, patch_data);
 
@@ -561,7 +540,7 @@ impl<'a> CollectionsManager<'a> {
 
         // 4. Logique Sémantique (CORRIGÉ : passage de resolved_uri)
         self.apply_semantic_logic(doc, resolved_uri.as_deref())
-            .context("Validation sémantique")?;
+            .map_err(|e| AppError::Validation(format!("Validation sémantique échouée: {}", e)))?;
         Ok(())
     }
 
@@ -709,7 +688,7 @@ pub async fn apply_business_rules(
             break;
         }
 
-        let mut next_changes = data::HashSet::new();
+        let mut next_changes = HashSet::new();
         for rule in rules {
             match Evaluator::evaluate(&rule.expr, doc, &provider).await {
                 Ok(result) => {

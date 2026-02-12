@@ -1,7 +1,5 @@
 use clap::{Args, Subcommand};
-use raise::utils::config::AppConfig;
-use raise::utils::error::AnyResult;
-use raise::{user_info, user_success};
+use raise::{user_info, user_success, utils::prelude::*};
 
 /// Outils de maintenance et d'inspection système pour RAISE.
 #[derive(Args, Clone, Debug)]
@@ -18,7 +16,7 @@ pub enum UtilsCommands {
     Ping,
 }
 
-pub async fn handle(args: UtilsArgs) -> AnyResult<()> {
+pub async fn handle(args: UtilsArgs) -> Result<()> {
     match args.command {
         UtilsCommands::Info => {
             // Singleton Config

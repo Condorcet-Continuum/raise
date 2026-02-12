@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
-use raise::utils::error::AnyResult;
-use raise::{user_info, user_success};
+
+use raise::{user_info, user_success, utils::prelude::*};
 
 // Note: L'import de PluginManager est retiré pour satisfaire Clippy.
 // Le branchement réel nécessitera l'instanciation de StorageEngine.
@@ -27,7 +27,7 @@ pub enum PluginsCommands {
     Info { name: String },
 }
 
-pub async fn handle(args: PluginsArgs) -> AnyResult<()> {
+pub async fn handle(args: PluginsArgs) -> Result<()> {
     match args.command {
         PluginsCommands::List => {
             user_info!("PLUGINS", "Interrogation du catalogue actif...");

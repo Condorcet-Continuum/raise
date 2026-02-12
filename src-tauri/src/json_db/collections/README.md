@@ -147,7 +147,7 @@ let all_users = collections::list_all(&config, "space", "db", "users")?;
 
 ## 🚨 Gestion des Erreurs
 
-Le module utilise `anyhow::Result` pour la propagation des erreurs. Les erreurs courantes incluent :
+Le module utilise `Result` pour la propagation des erreurs. Les erreurs courantes incluent :
 
 - **Validation Error** : Le document ne respecte pas le schéma JSON.
 - **Rule Error** : Une règle métier a échoué ou une dépendance est introuvable.

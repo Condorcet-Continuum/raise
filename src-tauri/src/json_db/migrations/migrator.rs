@@ -5,11 +5,8 @@ use super::{Migration, MigrationStep};
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
 
-use crate::utils::{
-    error::AnyResult,
-    json::{json, Value},
-    HashSet, Utc,
-};
+use crate::utils::data::HashSet;
+use crate::utils::prelude::*;
 
 pub struct Migrator<'a> {
     manager: CollectionsManager<'a>,
@@ -23,7 +20,7 @@ impl<'a> Migrator<'a> {
     }
 
     /// Initialise la table de suivi des migrations (_migrations) - ASYNC
-    pub async fn init(&self) -> AnyResult<()> {
+    pub async fn init(&self) -> Result<()> {
         let exists = self
             .manager
             .list_collections()
@@ -38,7 +35,7 @@ impl<'a> Migrator<'a> {
     }
 
     /// Exécute les migrations en attente - ASYNC
-    pub async fn run_migrations(&self, declared_migrations: Vec<Migration>) -> AnyResult<()> {
+    pub async fn run_migrations(&self, declared_migrations: Vec<Migration>) -> Result<()> {
         self.init().await?;
 
         // 1. Récupérer les migrations déjà appliquées
@@ -76,7 +73,7 @@ impl<'a> Migrator<'a> {
         Ok(())
     }
 
-    async fn apply_migration(&self, migration: &Migration) -> AnyResult<()> {
+    async fn apply_migration(&self, migration: &Migration) -> Result<()> {
         // Exécution atomique des étapes (Up)
         for step in &migration.up {
             self.execute_step(step).await?;
@@ -95,7 +92,7 @@ impl<'a> Migrator<'a> {
         Ok(())
     }
 
-    async fn execute_step(&self, step: &MigrationStep) -> AnyResult<()> {
+    async fn execute_step(&self, step: &MigrationStep) -> Result<()> {
         match step {
             MigrationStep::CreateCollection { name, schema } => {
                 let schema_str = schema.as_str().map(|s| s.to_string());
@@ -171,11 +168,7 @@ impl<'a> Migrator<'a> {
         Ok(())
     }
 
-    async fn transform_all_documents<F>(
-        &self,
-        collection: &str,
-        mut transformer: F,
-    ) -> AnyResult<()>
+    async fn transform_all_documents<F>(&self, collection: &str, mut transformer: F) -> Result<()>
     where
         F: FnMut(&mut Value) -> bool,
     {
@@ -204,7 +197,7 @@ mod tests {
     use super::*;
     use crate::json_db::migrations::{Migration, MigrationStep};
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{fs::tempdir, json::json};
+    use crate::utils::{io::tempdir, json::json};
 
     fn create_test_env() -> (StorageEngine, tempfile::TempDir) {
         let temp_dir = tempdir().expect("Impossible de créer dossier temp DB");

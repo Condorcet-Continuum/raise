@@ -1,7 +1,12 @@
 use clap::{Args, Subcommand};
-use raise::utils::error::AnyResult;
-use raise::utils::fs;
-use raise::{user_error, user_info, user_success};
+
+use raise::{
+    user_error, user_info, user_success,
+    utils::{
+        io::{self},
+        prelude::*,
+    },
+};
 
 // Nettoyage des imports inutilisés (ModelValidator)
 use raise::model_engine::{ConsistencyChecker, Severity, TransformationDomain};
@@ -29,13 +34,13 @@ pub enum ModelCommands {
     },
 }
 
-pub async fn handle(args: ModelArgs) -> AnyResult<()> {
+pub async fn handle(args: ModelArgs) -> Result<()> {
     match args.command {
         ModelCommands::Load { path } => {
             user_info!("MODEL_LOAD", "Lecture du fichier source : {}", path);
-            let path_ref = fs::Path::new(&path);
+            let path_ref = io::Path::new(&path);
 
-            if !fs::exists(path_ref).await {
+            if !io::exists(path_ref).await {
                 user_error!("FS_ERROR", "Fichier introuvable.");
                 return Ok(());
             }

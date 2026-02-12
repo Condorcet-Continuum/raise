@@ -1,5 +1,5 @@
 use crate::utils::prelude::*;
-use std::io::{Read, Write}; // Traits standards ré-exportés par utils
+use std::io::{Read, Write};
 
 pub fn compress(data: &[u8]) -> Result<Vec<u8>> {
     let mut encoder = zstd::Encoder::new(Vec::new(), 3).map_err(AppError::Io)?;
@@ -20,8 +20,6 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Utilisation du prélude pour Result, debug! et les types de base
-    use crate::utils::prelude::*;
 
     #[test]
     fn test_compression_roundtrip() {

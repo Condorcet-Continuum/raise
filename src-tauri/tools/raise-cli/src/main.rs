@@ -3,19 +3,17 @@ use clap::{Parser, Subcommand};
 // On garde le module local des commandes
 mod commands;
 
-// --- IMPORTS DU CŒUR RAISE ---
-// NOUVEAU : On importe nos utilitaires centralisés
-use raise::utils::{
-    config::AppConfig,
-    env,                           // Gestion des variables d'environnement
-    fs::{self, write_json_atomic}, // Gestion FS + Path
-    i18n,
-    json,
-    logger,
+use raise::{
+    user_error,
+    user_info, // Les macros à la racine
+    utils::{
+        context,    // Remplace env, i18n, logger (Config & Environnement)
+        data,       // Remplace json (Manipulation de données)
+        io,         // Remplace fs (Entrées/Sorties sécurisées)
+        prelude::*, // Types communs (Result, AppError, etc.)
+    },
 };
-// Import des macros pour l'affichage
-use raise::utils::error::AnyResult;
-use raise::{user_error, user_info};
+
 // EMBARQUEMENT DES RESSOURCES (Compilation)
 const DEFAULT_LOCALE_FR: &str = include_str!("../../../locales/fr.json");
 const DEFAULT_LOCALE_EN: &str = include_str!("../../../locales/en.json");
@@ -64,7 +62,7 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> AnyResult<()> {
+async fn main() -> Result<()> {
     // 1. Initialisation de la Configuration (CRITIQUE)
     if let Err(e) = AppConfig::init() {
         eprintln!("❌ CRITICAL ERROR: Impossible d'initialiser la configuration.");
@@ -73,7 +71,7 @@ async fn main() -> AnyResult<()> {
     }
 
     // 2. Initialisation du Logger
-    logger::init_logging();
+    context::init_logging();
 
     // 3. BOOTSTRAP DES LOCALES
     // Async et Atomique !
@@ -81,8 +79,8 @@ async fn main() -> AnyResult<()> {
 
     // 4. Initialisation de la Langue
     // REFAC: Utilisation de env::get_or
-    let lang = env::get_or("RAISE_LANG", "fr");
-    i18n::init_i18n(&lang);
+    let lang = context::get_or("RAISE_LANG", "fr");
+    context::init_i18n(&lang);
 
     // Message d'accueil système
     user_info!("CLI_START", "v{}", env!("CARGO_PKG_VERSION"));
@@ -109,7 +107,7 @@ async fn main() -> AnyResult<()> {
 }
 
 /// Boucle principale du Shell Global (REPL)
-async fn run_global_shell() -> AnyResult<()> {
+async fn run_global_shell() -> Result<()> {
     use rustyline::error::ReadlineError;
     use rustyline::DefaultEditor;
 
@@ -120,8 +118,7 @@ async fn run_global_shell() -> AnyResult<()> {
     println!("--------------------------------------------------");
 
     // 1. Initialisation de l'éditeur de ligne
-    let mut rl = DefaultEditor::new()?;
-
+    let mut rl = DefaultEditor::new().map_err(|e| e.to_string())?;
     // 2. Chargement de l'historique existant (si disponible)
     let config = AppConfig::get();
     let history_path = config.database_root.join("history.txt");
@@ -202,7 +199,7 @@ async fn run_global_shell() -> AnyResult<()> {
     Ok(())
 }
 
-async fn execute_command(cmd: Commands) -> AnyResult<()> {
+async fn execute_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::Workflow(args) => commands::workflow::handle(args).await,
         Commands::ModelEngine(args) => commands::model_engine::handle(args).await,
@@ -225,7 +222,7 @@ async fn bootstrap_locales() {
     let locales_dir = config.database_root.join("locales");
 
     // REFAC: Utilisation de fs::ensure_dir (plus sûr)
-    if let Err(e) = fs::ensure_dir(&locales_dir).await {
+    if let Err(e) = io::ensure_dir(&locales_dir).await {
         tracing::warn!("Impossible de créer le dossier locales : {}", e);
         return;
     }
@@ -241,10 +238,10 @@ async fn bootstrap_locales() {
         let path = locales_dir.join(name);
 
         // 1. Validation : On parse le JSON brut
-        match json::parse::<json::Value>(content) {
+        match data::parse::<data::Value>(content) {
             Ok(json_value) => {
                 // 2. Écriture Atomique : On utilise notre utilitaire sécurisé
-                if let Err(e) = write_json_atomic(&path, &json_value).await {
+                if let Err(e) = io::write_json_atomic(&path, &json_value).await {
                     tracing::error!("Erreur écriture atomique {}: {}", name, e);
                 } else {
                     tracing::debug!("Locale {} déployée.", name);

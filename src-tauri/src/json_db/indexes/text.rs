@@ -2,13 +2,9 @@
 
 use super::{driver, paths, IndexDefinition};
 use crate::json_db::storage::JsonDbConfig;
-// FAÇADE UNIQUE
-use crate::utils::{
-    error::AnyResult, // Gestion erreur unifiée
-    json::Value,      // JSON unifié
-    HashMap,
-    HashSet, // Collections unifiées
-};
+
+use crate::utils::data::{HashMap, HashSet};
+use crate::utils::prelude::*;
 
 /// Découpe un texte en tokens normalisés (minuscules, alphanumériques)
 fn tokenize(text: &str) -> HashSet<String> {
@@ -29,7 +25,7 @@ pub async fn update_text_index(
     doc_id: &str,
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
-) -> AnyResult<()> {
+) -> Result<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
 
     // On charge manuellement car la logique de mise à jour est spécifique (Multi-clés par document)
@@ -85,7 +81,7 @@ pub async fn search_text_index(
     collection: &str,
     def: &IndexDefinition,
     query: &str,
-) -> AnyResult<Vec<String>> {
+) -> Result<Vec<String>> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
 
     // Normalisation de la requête pour matcher les tokens stockés
@@ -101,7 +97,7 @@ mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
     use crate::utils::{
-        fs::{self, tempdir}, // fs enrichi + tempdir
+        io::{self, tempdir}, // fs enrichi + tempdir
         json::json,          // macro json!
     };
 
@@ -115,7 +111,7 @@ mod tests {
     async fn test_text_lifecycle() {
         let (dir, cfg) = setup_env();
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
-        fs::ensure_dir(&idx_dir).await.unwrap();
+        io::ensure_dir(&idx_dir).await.unwrap();
 
         let def = IndexDefinition {
             name: "bio".into(),

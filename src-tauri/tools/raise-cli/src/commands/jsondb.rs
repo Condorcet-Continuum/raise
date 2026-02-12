@@ -1,11 +1,6 @@
 use clap::{Args, Subcommand};
 
 // --- IMPORTS RAISE ---
-use raise::utils::fs::{read_json, Path, PathBuf};
-use raise::utils::{Arc, Future, Pin};
-// NOUVEAU : On utilise exclusivement notre module JSON centralisé
-use raise::utils::error::{AnyResult, Context};
-use raise::utils::json::{self, Deserialize, Map, Value};
 
 use raise::json_db::{
     collections::manager::CollectionsManager,
@@ -15,8 +10,15 @@ use raise::json_db::{
     storage::{JsonDbConfig, StorageEngine},
     transactions::{manager::TransactionManager, TransactionRequest},
 };
-use raise::utils::config::AppConfig;
-use raise::{user_error, user_info, user_success};
+use raise::{
+    user_error, user_info, user_success,
+    utils::{
+        data::{self, Deserialize, Map, Value},
+        io::{self, Path, PathBuf},
+        prelude::*,
+        Arc, Future, Pin,
+    },
+};
 
 // --- DÉFINITION DES ARGUMENTS ---
 
@@ -144,7 +146,7 @@ pub enum JsondbCommands {
 
 // --- HANDLER PRINCIPAL ---
 
-pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
+pub async fn handle(args: JsondbArgs) -> Result<()> {
     if let JsondbCommands::Usage = args.command {
         print_examples();
         return Ok(());
@@ -156,7 +158,7 @@ pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
         .root
         .unwrap_or_else(|| app_config.database_root.clone());
 
-    bootstrap_ontologies(&root_dir, &args.space);
+    bootstrap_ontologies(&root_dir, &args.space).await;
 
     let config = Arc::new(JsonDbConfig {
         data_root: root_dir.clone(),
@@ -201,7 +203,7 @@ pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
         }
         JsondbCommands::CreateCollection { name, schema } => {
             let raw_schema = schema.ok_or_else(|| {
-                anyhow::anyhow!("⛔ ERREUR : Le paramètre --schema est OBLIGATOIRE.")
+                AppError::from("⛔ ERREUR : Le paramètre --schema est OBLIGATOIRE.")
             })?;
             let schema_uri = if raw_schema.starts_with("db://") {
                 raw_schema
@@ -219,8 +221,8 @@ pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
         }
         JsondbCommands::ListCollections => {
             let cols = col_mgr.list_collections().await?;
-            // REFAC: Utilisation de json::stringify_pretty
-            println!("{}", json::stringify_pretty(&cols)?);
+            // REFAC: Utilisation de data::stringify_pretty
+            println!("{}", data::stringify_pretty(&cols)?);
         }
         JsondbCommands::CreateIndex {
             collection,
@@ -236,8 +238,8 @@ pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
         }
         JsondbCommands::List { collection } | JsondbCommands::ListAll { collection } => {
             let docs = col_mgr.list_all(&collection).await?;
-            // REFAC: Utilisation de json::stringify_pretty
-            println!("{}", json::stringify_pretty(&docs)?);
+            // REFAC: Utilisation de data::stringify_pretty
+            println!("{}", data::stringify_pretty(&docs)?);
         }
         JsondbCommands::Insert { collection, data } => {
             let json_val = parse_data(&data).await?;
@@ -297,18 +299,20 @@ pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
             query.limit = limit;
             query.offset = offset;
             let result = QueryEngine::new(&col_mgr).execute_query(query).await?;
-            // REFAC: Utilisation de json::stringify_pretty
-            println!("{}", json::stringify_pretty(&result.documents)?);
+            // REFAC: Utilisation de data::stringify_pretty
+            println!("{}", data::stringify_pretty(&result.documents)?);
         }
         JsondbCommands::Sql { query } => {
             use raise::json_db::query::sql::{parse_sql, SqlRequest};
-            match parse_sql(&query).context("Erreur de parsing SQL")? {
+            match parse_sql(&query)
+                .map_err(|e| AppError::from(format!("Erreur de parsing SQL : {}", e)))?
+            {
                 SqlRequest::Read(query_struct) => {
                     let result = QueryEngine::new(&col_mgr)
                         .execute_query(query_struct)
                         .await?;
-                    // REFAC: Utilisation de json::stringify_pretty
-                    println!("{}", json::stringify_pretty(&result.documents)?);
+                    // REFAC: Utilisation de data::stringify_pretty
+                    println!("{}", data::stringify_pretty(&result.documents)?);
                 }
                 SqlRequest::Write(requests) => {
                     tx_mgr.execute_smart(requests).await?;
@@ -317,7 +321,7 @@ pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
             }
         }
         JsondbCommands::Import { collection, path } => {
-            let json: Value = read_json(&path).await?;
+            let json: Value = io::read_json(&path).await?;
 
             let docs = if let Some(arr) = json.as_array() {
                 arr.to_vec()
@@ -331,20 +335,21 @@ pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
             user_success!("JSONDB_IMPORT_SUCCESS");
         }
         JsondbCommands::Transaction { file } => {
-            let json_val: Value = read_json(&file).await?;
+            let json_val: Value = io::read_json(&file).await?;
 
             #[derive(Deserialize)]
             struct Wrapper {
                 operations: Vec<TransactionRequest>,
             }
 
-            // REFAC: Utilisation de json::from_value
+            // REFAC: Utilisation de data::from_value
             let reqs: Vec<TransactionRequest> =
-                if let Ok(w) = json::from_value::<Wrapper>(json_val.clone()) {
+                if let Ok(w) = data::from_value::<Wrapper>(json_val.clone()) {
                     w.operations
                 } else {
-                    json::from_value::<Vec<TransactionRequest>>(json_val)
-                        .context("Format de transaction invalide")?
+                    data::from_value::<Vec<TransactionRequest>>(json_val).map_err(|e| {
+                        AppError::from(format!("Format de transaction invalide : {}", e))
+                    })?
                 };
 
             user_info!("JSONDB_TX_START", "{}", reqs.len());
@@ -357,18 +362,18 @@ pub async fn handle(args: JsondbArgs) -> AnyResult<()> {
 
 // --- HELPERS ---
 
-async fn parse_data(input: &str) -> AnyResult<Value> {
+async fn parse_data(input: &str) -> Result<Value> {
     if let Some(path_str) = input.strip_prefix('@') {
         let path = Path::new(path_str);
-        let data = read_json(path).await?;
+        let data = io::read_json(path).await?;
         Ok(data)
     } else {
-        // REFAC: Utilisation de json::parse
-        Ok(json::parse(input)?)
+        // REFAC: Utilisation de data::parse
+        Ok(data::parse(input)?)
     }
 }
 
-fn bootstrap_ontologies(root_dir: &Path, space: &str) {
+async fn bootstrap_ontologies(root_dir: &Path, space: &str) {
     let space_path = root_dir
         .join(space)
         .join("_system/schemas/v1/arcadia/@context");
@@ -382,7 +387,9 @@ fn bootstrap_ontologies(root_dir: &Path, space: &str) {
     if target.exists() {
         let registry = VocabularyRegistry::global();
         for layer in ["oa", "sa", "la", "pa", "epbs", "data", "transverse"] {
-            let _ = registry.load_layer_from_file(layer, &target.join(format!("{}.jsonld", layer)));
+            let _ = registry
+                .load_layer_from_file(layer, &target.join(format!("{}.jsonld", layer)))
+                .await;
         }
     }
 }
@@ -406,7 +413,7 @@ fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
 fn resolve_references<'a>(
     data: Value,
     col_mgr: &'a CollectionsManager,
-) -> Pin<Box<dyn Future<Output = AnyResult<Value>> + Send + 'a>> {
+) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
     Box::pin(async move {
         match data {
             Value::String(s) => {
@@ -586,8 +593,8 @@ mod tests {
     #[test]
     fn test_transaction_wrapper_deserialization() {
         let json = r#"{"operations": []}"#;
-        // REFAC: test avec json::parse
-        let res: Result<json::Value, _> = json::parse(json);
+        // REFAC: test avec data::parse
+        let res: Result<data::Value> = data::parse(json);
         assert!(res.is_ok());
     }
 

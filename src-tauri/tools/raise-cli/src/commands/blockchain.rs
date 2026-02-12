@@ -1,9 +1,7 @@
 use clap::{Args, Subcommand};
-use raise::utils::error::AnyResult;
-use raise::{user_info, user_success};
-
-// Imports depuis raise-core (blockchain/mod.rs)
 use raise::blockchain::VpnConfig;
+
+use raise::{user_info, user_success, utils::prelude::*};
 
 /// Pilotage du module Blockchain (Fabric & Innernet VPN)
 #[derive(Args, Clone, Debug)]
@@ -24,7 +22,7 @@ pub enum BlockchainCommands {
     },
 }
 
-pub async fn handle(args: BlockchainArgs) -> AnyResult<()> {
+pub async fn handle(args: BlockchainArgs) -> Result<()> {
     match args.command {
         BlockchainCommands::Status => {
             user_info!("BLOCKCHAIN", "Interrogation des états globaux...");

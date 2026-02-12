@@ -1,10 +1,10 @@
 // FICHIER : src-tauri/src/json_db/query/sql.rs
 
 use crate::json_db::transactions::TransactionRequest;
-use crate::utils::{
-    error::{anyhow, AnyResult},
-    json::{Map, Value},
-};
+
+use crate::utils::data::Map;
+use crate::utils::prelude::*;
+
 use sqlparser::ast::{
     BinaryOperator, Expr, Insert, OrderByExpr, OrderByKind, Query as SqlQuery, SetExpr, Statement,
     TableFactor, Value as SqlValue,
@@ -23,12 +23,16 @@ pub enum SqlRequest {
     Write(Vec<TransactionRequest>),
 }
 
-pub fn parse_sql(sql: &str) -> AnyResult<SqlRequest> {
+pub fn parse_sql(sql: &str) -> Result<SqlRequest> {
     let dialect = GenericDialect {};
-    let ast = Parser::parse_sql(&dialect, sql)?;
+
+    let ast = Parser::parse_sql(&dialect, sql)
+        .map_err(|e| AppError::Validation(format!("Erreur de syntaxe SQL : {}", e)))?;
 
     if ast.len() != 1 {
-        return Err(anyhow!("Une seule requête SQL à la fois est supportée"));
+        return Err(AppError::Database(
+            "Une seule requête SQL à la fois est supportée".to_string(),
+        ));
     }
 
     match &ast[0] {
@@ -41,39 +45,43 @@ pub fn parse_sql(sql: &str) -> AnyResult<SqlRequest> {
             let tx = translate_insert(insert)?;
             Ok(SqlRequest::Write(tx))
         }
-        _ => Err(anyhow!(
-            "Seuls SELECT et INSERT sont supportés pour le moment"
+        _ => Err(AppError::Database(
+            "Seuls SELECT et INSERT sont supportés pour le moment".to_string(),
         )),
     }
 }
 
 // --- TRADUCTION INSERT ---
 
-fn translate_insert(insert: &Insert) -> AnyResult<Vec<TransactionRequest>> {
+fn translate_insert(insert: &Insert) -> Result<Vec<TransactionRequest>> {
     // CORRECTION DÉFINITIVE : Utilisation du champ `table`
     let collection = insert.table.to_string();
 
     let query_body = insert
         .source
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Clause VALUES manquante"))?
+        .ok_or_else(|| AppError::Validation("Clause VALUES manquante".to_string()))?
         .body
         .as_ref();
 
     let rows = match query_body {
         SetExpr::Values(v) => &v.rows,
-        _ => return Err(anyhow!("Seul INSERT INTO ... VALUES (...) est supporté")),
+        _ => {
+            return Err(AppError::Database(
+                "Seul INSERT INTO ... VALUES (...) est supporté".to_string(),
+            ))
+        }
     };
 
     let mut operations = Vec::new();
 
     for row in rows {
         if row.len() != insert.columns.len() {
-            return Err(anyhow!(
+            return Err(AppError::Database(format!(
                 "Nombre de valeurs ({}) différent du nombre de colonnes ({})",
                 row.len(),
                 insert.columns.len()
-            ));
+            )));
         }
 
         let mut doc_map = Map::new();
@@ -95,7 +103,7 @@ fn translate_insert(insert: &Insert) -> AnyResult<Vec<TransactionRequest>> {
 
 // --- TRADUCTION SELECT ---
 
-fn translate_query(sql_query: &SqlQuery) -> AnyResult<Query> {
+fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
     let limit = None;
     let offset = None;
 
@@ -120,7 +128,9 @@ fn translate_query(sql_query: &SqlQuery) -> AnyResult<Query> {
 
     match &*sql_query.body {
         SetExpr::Select(select) => translate_select(select, limit, offset, sort),
-        _ => Err(anyhow!("Syntaxe de requête non supportée")),
+        _ => Err(AppError::Database(
+            "Syntaxe de requête non supportée".to_string(),
+        )),
     }
 }
 
@@ -129,14 +139,16 @@ fn translate_select(
     limit: Option<usize>,
     offset: Option<usize>,
     sort: Option<Vec<SortField>>,
-) -> AnyResult<Query> {
+) -> Result<Query> {
     if select.from.len() != 1 {
-        return Err(anyhow!("SELECT doit cibler exactement une collection"));
+        return Err(AppError::Database(
+            "SELECT doit cibler exactement une collection".to_string(),
+        ));
     }
 
     let collection = match &select.from[0].relation {
         TableFactor::Table { name, .. } => name.to_string(),
-        _ => return Err(anyhow!("Clause FROM invalide")),
+        _ => return Err(AppError::Database("Clause FROM invalide".to_string())),
     };
 
     let projection = if select.projection.is_empty() {
@@ -190,7 +202,7 @@ fn translate_select(
     })
 }
 
-fn translate_order_by(expr: &OrderByExpr) -> AnyResult<SortField> {
+fn translate_order_by(expr: &OrderByExpr) -> Result<SortField> {
     let field = expr_to_field_name(&expr.expr)?;
     let order = match expr.options.asc {
         Some(false) => SortOrder::Desc,
@@ -199,7 +211,7 @@ fn translate_order_by(expr: &OrderByExpr) -> AnyResult<SortField> {
     Ok(SortField { field, order })
 }
 
-fn translate_expr(expr: &Expr) -> AnyResult<QueryFilter> {
+fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
     match expr {
         Expr::Nested(inner) => translate_expr(inner),
         Expr::BinaryOp { left, op, right } => match op {
@@ -253,11 +265,14 @@ fn translate_expr(expr: &Expr) -> AnyResult<QueryFilter> {
                 }],
             })
         }
-        _ => Err(anyhow!("Expression SQL non supportée : {:?}", expr)),
+        _ => Err(AppError::Database(format!(
+            "Expression SQL non supportée : {:?}",
+            expr
+        ))),
     }
 }
 
-fn expr_to_field_name(expr: &Expr) -> AnyResult<String> {
+fn expr_to_field_name(expr: &Expr) -> Result<String> {
     match expr {
         Expr::Identifier(ident) => Ok(ident.value.clone()),
         Expr::CompoundIdentifier(idents) => Ok(idents
@@ -265,11 +280,14 @@ fn expr_to_field_name(expr: &Expr) -> AnyResult<String> {
             .map(|i| i.value.clone())
             .collect::<Vec<_>>()
             .join(".")),
-        _ => Err(anyhow!("Identifiant attendu, obtenu : {:?}", expr)),
+        _ => Err(AppError::Database(format!(
+            "Identifiant attendu, obtenu : {:?}",
+            expr
+        ))),
     }
 }
 
-fn expr_to_value(expr: &Expr) -> AnyResult<Value> {
+fn expr_to_value(expr: &Expr) -> Result<Value> {
     match expr {
         Expr::Value(value_with_span) => sql_value_to_json(&value_with_span.value),
         Expr::UnaryOp {
@@ -282,16 +300,20 @@ fn expr_to_value(expr: &Expr) -> AnyResult<Value> {
                 } else if let Some(i) = n.as_i64() {
                     Ok(Value::from(-i))
                 } else {
-                    Err(anyhow!("Négation impossible"))
+                    Err(AppError::Database("Négation impossible".to_string()))
                 }
             }
-            _ => Err(anyhow!("Négation impossible sur non-nombre")),
+            _ => Err(AppError::Database(
+                "Négation impossible sur non-nombre".to_string(),
+            )),
         },
-        _ => Err(anyhow!("Valeur littérale simple attendue")),
+        _ => Err(AppError::Database(
+            "Valeur littérale simple attendue".to_string(),
+        )),
     }
 }
 
-fn sql_value_to_json(val: &SqlValue) -> AnyResult<Value> {
+fn sql_value_to_json(val: &SqlValue) -> Result<Value> {
     match val {
         SqlValue::Number(n, _) => {
             if let Ok(i) = n.parse::<i64>() {
@@ -299,7 +321,7 @@ fn sql_value_to_json(val: &SqlValue) -> AnyResult<Value> {
             } else {
                 let f: f64 = n
                     .parse()
-                    .map_err(|e| anyhow::anyhow!("Float invalide: {}", e))?;
+                    .map_err(|e| AppError::Database(format!("Float invalide: {}", e)))?;
                 Ok(Value::from(f))
             }
         }

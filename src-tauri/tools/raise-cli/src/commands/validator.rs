@@ -1,17 +1,17 @@
 use clap::Args;
 
-// Imports internes RAISE
-// NOUVEAU : On utilise nos utilitaires sécurisés (env, fs, json)
-use raise::utils::env;
-use raise::utils::fs::{read_json, PathBuf};
-use raise::utils::json::Value;
-// NOUVEAU : On utilise notre gestion d'erreur centralisée
-use raise::utils::error::{AnyResult, Context};
+use raise::{
+    user_error, user_info, user_success,
+    utils::{
+        context,
+        data::Value,
+        io::{self, PathBuf},
+        prelude::*,
+    },
+};
 
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::json_db::storage::JsonDbConfig;
-use raise::utils::config::AppConfig;
-use raise::{user_error, user_info, user_success};
 
 #[derive(Args, Debug, Clone)]
 pub struct ValidatorArgs {
@@ -24,7 +24,7 @@ pub struct ValidatorArgs {
     pub schema: String,
 }
 
-pub async fn handle(args: ValidatorArgs) -> AnyResult<()> {
+pub async fn handle(args: ValidatorArgs) -> Result<()> {
     // 1. RÉCUPÉRATION DE LA CONFIGURATION
     let app_config = AppConfig::get();
 
@@ -32,22 +32,22 @@ pub async fn handle(args: ValidatorArgs) -> AnyResult<()> {
     let domain_root = app_config.database_root.clone();
 
     // Chemin DATASET (Reste spécifique à l'environnement local pour l'instant)
-    // REFAC: env::get renvoie une AppError, mais on utilise le ? anyhow pour la convertir
-    let dataset_path_str = env::get("PATH_RAISE_DATASET")?;
+    // REFAC: context::get renvoie une AppError, mais on utilise le ?  pour la convertir
+    let dataset_path_str = context::get("PATH_RAISE_DATASET")?;
     let dataset_root = PathBuf::from(&dataset_path_str);
 
     // Vérification physique des dossiers racines
     if !dataset_root.exists() {
-        return Err(raise::utils::error::anyhow!(
+        return Err(AppError::Database(format!(
             "❌ Dossier Dataset introuvable : {:?}",
             dataset_root
-        ));
+        )));
     }
     if !domain_root.exists() {
-        return Err(raise::utils::error::anyhow!(
+        return Err(AppError::Database(format!(
             "❌ Dossier Domain introuvable : {:?}",
             domain_root
-        ));
+        )));
     }
 
     // 2. CONFIGURATION DE LA DB (Logique patrimoniale un2)
@@ -67,14 +67,18 @@ pub async fn handle(args: ValidatorArgs) -> AnyResult<()> {
 
     let registry = SchemaRegistry::from_db(&cfg, space, db_name)
         .await
-        .context("Impossible de charger le registre des schémas depuis la DB")?;
+        .map_err(|_| {
+            AppError::Database(
+                "Impossible de charger le registre des schémas depuis la DB".to_string(),
+            )
+        })?;
 
     // 4. CHARGEMENT DE LA DONNÉE
     let data_full_path = dataset_root.join(&args.data);
 
     // REFACTOR : Lecture asynchrone, typée et sécurisée
     // Plus besoin de fs::read_to_string manuel ni de serde_json::from_str
-    let mut doc: Value = read_json(&data_full_path).await?;
+    let mut doc: Value = io::read_json(&data_full_path).await?;
 
     // 5. VALIDATION
     let target_uri = &args.schema;
@@ -82,8 +86,9 @@ pub async fn handle(args: ValidatorArgs) -> AnyResult<()> {
 
     user_info!("VALIDATOR_START", "{}", full_uri);
 
-    let validator = SchemaValidator::compile_with_registry(&full_uri, &registry)
-        .context("Échec de la compilation du SchemaValidator")?;
+    let validator = SchemaValidator::compile_with_registry(&full_uri, &registry).map_err(|_| {
+        AppError::Database("Échec de la compilation du SchemaValidator".to_string())
+    })?;
 
     match validator.compute_then_validate(&mut doc) {
         Ok(_) => {
@@ -95,9 +100,7 @@ pub async fn handle(args: ValidatorArgs) -> AnyResult<()> {
         }
         Err(e) => {
             user_error!("VALIDATOR_FAILURE");
-            // On propage l'erreur pour qu'elle remonte proprement dans le main
-            // On utilise raise::utils::error::anyhow! explicitement
-            Err(raise::utils::error::anyhow!("{}", e))
+            Err(AppError::Database(format!("{}", e)))
         }
     }
 }

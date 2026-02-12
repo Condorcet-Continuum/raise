@@ -38,37 +38,28 @@ pub mod sys {
 pub mod io {
     pub use super::compression::{compress, decompress};
     pub use super::fs::{
-        copy_dir_all, create_dir_all, ensure_dir, exists, include_dir, read_compressed, read_json,
-        read_json_compressed, read_to_string, remove_dir_all, remove_file, rename, tempdir,
-        write_atomic, write_compressed_atomic, write_json_atomic, write_json_compressed_atomic,
-        Dir, DirEntry, Path, PathBuf, ProjectScope, TempDir,
+        copy, copy_dir_all, create_dir_all, ensure_dir, exists, include_dir, read,
+        read_bincode_compressed, read_compressed, read_dir, read_json, read_json_compressed,
+        read_to_string, remove_dir_all, remove_file, rename, tempdir, write, write_atomic,
+        write_bincode_compressed_atomic, write_compressed_atomic, write_json_atomic,
+        write_json_compressed_atomic, Component, Dir, DirEntry, Path, PathBuf, ProjectScope,
+        TempDir,
     };
 }
 /// **Data Abstraction** : Manipulation JSON et Contextes.
 pub mod data {
     pub use super::json::{
-        // Parsing & Conversion
-        from_value,
-        // Types
-        json,
-        // Fusion & Construction
-        merge,
-        parse,
-        stringify,
-        stringify_pretty,
-        to_value,
-        ContextBuilder,
-        Map,
-        Value,
+        from_binary, from_value, json, merge, parse, stringify, stringify_pretty, to_binary,
+        to_value, ContextBuilder, Map, Value,
     };
     pub use serde::{Deserialize, Serialize};
-    pub use std::collections::{HashMap, HashSet};
+    pub use std::collections::{BTreeMap, HashMap, HashSet};
 }
 
 /// **Application Context** : Accès global Config/Log/Env.
 pub mod context {
     pub use super::config::AppConfig;
-    pub use super::env::{get, get_or, is_enabled};
+    pub use super::env::{current_dir, get, get_optional, get_or, is_enabled};
     pub use super::i18n::{init_i18n, t};
     pub use super::logger::init_logging;
 }
@@ -83,6 +74,8 @@ pub mod prelude {
     pub use super::context::AppConfig;
     pub use super::core::{AppError, Result, Utc, Uuid};
     pub use super::data::{json, Deserialize, Serialize, Value};
+    pub use super::io::Path;
+    pub use crate::{user_error, user_info, user_success};
     pub use tracing::{debug, error, info, instrument, warn};
 }
 

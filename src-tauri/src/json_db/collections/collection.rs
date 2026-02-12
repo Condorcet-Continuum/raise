@@ -3,11 +3,8 @@
 //! Primitives collections : gestion des dossiers et fichiers JSON d’une collection.
 //! Pas de logique x_compute/validate ici — uniquement persistance et I/O.
 
-use crate::utils::{
-    error::AnyResult,
-    fs::{self, PathBuf}, // On utilise notre module fs enrichi
-    json::Value,         // Nos utilitaires JSON
-};
+use crate::utils::io::{self, PathBuf};
+use crate::utils::prelude::*;
 
 use crate::json_db::storage::JsonDbConfig;
 
@@ -27,9 +24,9 @@ pub async fn create_collection_if_missing(
     space: &str,
     db: &str,
     collection: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     let root = collection_root(cfg, space, db, collection);
-    fs::ensure_dir(&root).await?;
+    io::ensure_dir(&root).await?;
     Ok(())
 }
 
@@ -40,9 +37,9 @@ pub async fn read_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> AnyResult<Value> {
+) -> Result<Value> {
     let path = doc_path(cfg, space, db, collection, id);
-    let doc = fs::read_json(&path).await?;
+    let doc = io::read_json(&path).await?;
     Ok(doc)
 }
 
@@ -54,10 +51,10 @@ pub async fn create_document(
     collection: &str,
     id: &str,
     document: &Value,
-) -> AnyResult<()> {
+) -> Result<()> {
     create_collection_if_missing(cfg, space, db, collection).await?;
     let path = doc_path(cfg, space, db, collection, id);
-    fs::write_json_atomic(&path, document).await?;
+    io::write_json_atomic(&path, document).await?;
     Ok(())
 }
 
@@ -68,7 +65,7 @@ pub async fn update_document(
     collection: &str,
     id: &str,
     document: &Value,
-) -> AnyResult<()> {
+) -> Result<()> {
     create_document(cfg, space, db, collection, id, document).await
 }
 
@@ -78,9 +75,9 @@ pub async fn delete_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     let path = doc_path(cfg, space, db, collection, id);
-    fs::remove_file(&path).await?;
+    io::remove_file(&path).await?;
     Ok(())
 }
 
@@ -90,9 +87,9 @@ pub async fn drop_collection(
     space: &str,
     db: &str,
     collection: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     let root = collection_root(cfg, space, db, collection);
-    fs::remove_dir_all(&root).await?;
+    io::remove_dir_all(&root).await?;
     Ok(())
 }
 
@@ -103,13 +100,13 @@ pub async fn list_document_ids(
     space: &str,
     db: &str,
     collection: &str,
-) -> AnyResult<Vec<String>> {
+) -> Result<Vec<String>> {
     let root = collection_root(cfg, space, db, collection);
     let mut out = Vec::new();
-    if !fs::exists(&root).await {
+    if !io::exists(&root).await {
         return Ok(out);
     }
-    let mut entries = fs::read_dir(&root).await?;
+    let mut entries = io::read_dir(&root).await?;
     while let Some(e) = entries
         .next_entry()
         .await
@@ -133,7 +130,7 @@ pub async fn list_documents(
     space: &str,
     db: &str,
     collection: &str,
-) -> AnyResult<Vec<Value>> {
+) -> Result<Vec<Value>> {
     let ids = list_document_ids(cfg, space, db, collection).await?;
     let mut docs = Vec::with_capacity(ids.len());
     for id in ids {
@@ -148,13 +145,13 @@ pub async fn list_collection_names_fs(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
-) -> AnyResult<Vec<String>> {
+) -> Result<Vec<String>> {
     let root = cfg.db_root(space, db).join("collections");
     let mut out = Vec::new();
-    if !fs::exists(&root).await {
+    if !io::exists(&root).await {
         return Ok(out);
     }
-    let mut entries = fs::read_dir(&root).await?;
+    let mut entries = io::read_dir(&root).await?;
     while let Some(e) = entries
         .next_entry()
         .await
@@ -174,7 +171,7 @@ pub async fn list_collection_names_fs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{fs::tempdir, json::json};
+    use crate::utils::{io::tempdir, json::json};
     #[tokio::test]
     async fn test_collection_crud_async() {
         let dir = tempdir().unwrap();

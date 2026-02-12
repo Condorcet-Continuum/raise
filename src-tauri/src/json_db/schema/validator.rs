@@ -1,12 +1,10 @@
 // FICHIER : src-tauri/src/json_db/schema/validator.rs
 
 use super::registry::SchemaRegistry;
-use crate::utils::{
-    error::{anyhow, AnyResult},
-    fs::{Component, Path, PathBuf},
-    json::Value,
-    Regex,
-};
+
+use crate::utils::io::{Component, Path, PathBuf};
+use crate::utils::prelude::*;
+use crate::utils::Regex;
 
 #[derive(Debug, Clone)]
 pub struct SchemaValidator {
@@ -16,11 +14,10 @@ pub struct SchemaValidator {
 }
 
 impl SchemaValidator {
-    pub fn compile_with_registry(root_uri: &str, reg: &SchemaRegistry) -> AnyResult<Self> {
-        let schema = reg
-            .get_by_uri(root_uri)
-            .cloned()
-            .ok_or_else(|| anyhow!("Schema not found in registry: {}", root_uri))?;
+    pub fn compile_with_registry(root_uri: &str, reg: &SchemaRegistry) -> Result<Self> {
+        let schema = reg.get_by_uri(root_uri).cloned().ok_or_else(|| {
+            AppError::NotFound(format!("Schema not found in registry: {}", root_uri))
+        })?;
         Ok(Self {
             root_uri: root_uri.to_string(),
             schema,
@@ -28,13 +25,13 @@ impl SchemaValidator {
         })
     }
 
-    pub fn compute_then_validate(&self, instance: &mut Value) -> AnyResult<()> {
+    pub fn compute_then_validate(&self, instance: &mut Value) -> Result<()> {
         // L'ancien moteur "x_compute" est désactivé.
         // Les calculs sont désormais gérés par le Rules Engine dans manager.rs avant d'arriver ici.
         self.validate(instance)
     }
 
-    pub fn validate(&self, instance: &Value) -> AnyResult<()> {
+    pub fn validate(&self, instance: &Value) -> Result<()> {
         validate_node(instance, &self.schema, &self.reg, &self.root_uri)
     }
 }
@@ -44,7 +41,7 @@ fn validate_node(
     schema: &Value,
     reg: &SchemaRegistry,
     current_uri: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
         let (file_uri, fragment) = if ref_str.starts_with('#') {
             (current_uri.to_string(), Some(ref_str.to_string()))
@@ -56,13 +53,13 @@ fn validate_node(
 
         let target_root = reg
             .get_by_uri(&file_uri)
-            .ok_or_else(|| anyhow!("Ref schema not found: {}", file_uri))?;
+            .ok_or_else(|| AppError::NotFound(format!("Ref schema not found: {}", file_uri)))?;
 
         let target_schema = if let Some(frag) = fragment {
             let pointer = frag.replace('#', "");
-            target_root
-                .pointer(&pointer)
-                .ok_or_else(|| anyhow!("Pointer {} not found in {}", pointer, file_uri))?
+            target_root.pointer(&pointer).ok_or_else(|| {
+                AppError::NotFound(format!("Pointer {} not found in {}", pointer, file_uri))
+            })?
         } else {
             target_root
         };
@@ -74,38 +71,41 @@ fn validate_node(
         match t {
             "object" => {
                 if !instance.is_object() {
-                    return Err(anyhow!("Expected object, got {:?}", instance));
+                    return Err(AppError::Database(format!(
+                        "Expected object, got {:?}",
+                        instance
+                    )));
                 }
                 validate_object(instance, schema, reg, current_uri)?;
             }
             "string" => {
                 if !instance.is_string() {
-                    return Err(anyhow!("Expected string"));
+                    return Err(AppError::Validation("Expected string".to_string()));
                 }
             }
             "number" => {
                 if !instance.is_number() {
-                    return Err(anyhow!("Expected number"));
+                    return Err(AppError::Validation("Expected number".to_string()));
                 }
             }
             "integer" => {
                 if !instance.is_i64() && !instance.is_u64() {
-                    return Err(anyhow!("Expected integer"));
+                    return Err(AppError::Validation("Expected integer".to_string()));
                 }
             }
             "boolean" => {
                 if !instance.is_boolean() {
-                    return Err(anyhow!("Expected boolean"));
+                    return Err(AppError::Validation("Expected boolean".to_string()));
                 }
             }
             "array" => {
                 if !instance.is_array() {
-                    return Err(anyhow!("Expected array"));
+                    return Err(AppError::Validation("Expected array".to_string()));
                 }
             }
             "null" => {
                 if !instance.is_null() {
-                    return Err(anyhow!("Expected null"));
+                    return Err(AppError::Validation("Expected null".to_string()));
                 }
             }
             _ => {}
@@ -119,7 +119,7 @@ fn validate_object(
     schema: &Value,
     reg: &SchemaRegistry,
     current_uri: &str,
-) -> AnyResult<()> {
+) -> Result<()> {
     let obj = instance.as_object().unwrap();
 
     // 1. Required
@@ -127,7 +127,10 @@ fn validate_object(
         for r in req {
             if let Some(key) = r.as_str() {
                 if !obj.contains_key(key) {
-                    return Err(anyhow!("Missing required property: {}", key));
+                    return Err(AppError::Validation(format!(
+                        "Missing required property: {}",
+                        key
+                    )));
                 }
             }
         }
@@ -138,7 +141,7 @@ fn validate_object(
         for (key, sub_schema) in props {
             if let Some(val) = obj.get(key) {
                 validate_node(val, sub_schema, reg, current_uri)
-                    .map_err(|e| anyhow!("Property '{}': {}", key, e))?;
+                    .map_err(|e| AppError::Validation(format!("Property '{}': {}", key, e)))?;
             }
         }
     }
@@ -148,14 +151,19 @@ fn validate_object(
     if let Some(patterns) = schema.get("patternProperties").and_then(|v| v.as_object()) {
         for (pattern, sub_schema) in patterns {
             // On compile le regex
-            let re = Regex::new(pattern)
-                .map_err(|e| anyhow!("Invalid regex in patternProperties '{}': {}", pattern, e))?;
+            let re = Regex::new(pattern).map_err(|e| {
+                AppError::Validation(format!(
+                    "Invalid regex in patternProperties '{}': {}",
+                    pattern, e
+                ))
+            })?;
 
             // On valide toutes les clés qui matchent
             for (key, val) in obj {
                 if re.is_match(key) {
-                    validate_node(val, sub_schema, reg, current_uri)
-                        .map_err(|e| anyhow!("Pattern property '{}': {}", key, e))?;
+                    validate_node(val, sub_schema, reg, current_uri).map_err(|e| {
+                        AppError::Validation(format!("Pattern property '{}': {}", key, e))
+                    })?;
                 }
             }
             compiled_patterns.push(re);
@@ -182,7 +190,10 @@ fn validate_object(
                 // Si ni l'un ni l'autre (et pas $schema/id qui sont souvent implicites ou injectés)
                 // Note: On tolère $schema et id s'ils sont injectés par le système, mais idéalement ils devraient être dans le schéma.
                 if !is_defined && !matches_pattern && k != "$schema" {
-                    return Err(anyhow!("Additional property not allowed: {}", k));
+                    return Err(AppError::Validation(format!(
+                        "Additional property not allowed: {}",
+                        k
+                    )));
                 }
             }
         }

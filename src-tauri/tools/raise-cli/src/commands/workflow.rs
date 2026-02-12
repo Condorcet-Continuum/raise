@@ -1,7 +1,12 @@
 use clap::{Args, Subcommand};
-use raise::utils::error::AnyResult;
-use raise::utils::fs;
-use raise::{user_error, user_info, user_success};
+
+use raise::{
+    user_error, user_info, user_success,
+    utils::{
+        io::{self},
+        prelude::*,
+    },
+};
 
 // Imports étendus depuis le cœur Raise
 use raise::workflow_engine::ExecutionStatus;
@@ -39,13 +44,13 @@ pub enum WorkflowCommands {
     Status { instance_id: String },
 }
 
-pub async fn handle(args: WorkflowArgs) -> AnyResult<()> {
+pub async fn handle(args: WorkflowArgs) -> Result<()> {
     match args.command {
         WorkflowCommands::SubmitMandate { path } => {
             user_info!("MANDATE", "Chargement du mandat : {}", path);
-            let path_ref = fs::Path::new(&path);
+            let path_ref = io::Path::new(&path);
 
-            if !fs::exists(path_ref).await {
+            if !io::exists(path_ref).await {
                 user_error!("FS_ERROR", "Fichier de mandat introuvable.");
                 return Ok(());
             }

@@ -1,11 +1,9 @@
 // FICHIER : src-tauri/src/json_db/indexes/btree.rs
 
 // FAÇADE UNIQUE
-use crate::utils::{
-    error::AnyResult, // Gestion erreur unifiée
-    json::Value,      // JSON unifié
-    BTreeMap,
-};
+
+use crate::utils::data::BTreeMap;
+use crate::utils::prelude::*;
 
 use super::{driver, paths, IndexDefinition};
 use crate::json_db::storage::JsonDbConfig;
@@ -20,7 +18,7 @@ pub async fn update_btree_index(
     doc_id: &str,
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
-) -> AnyResult<()> {
+) -> Result<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     // Appel au driver qui doit être async
     driver::update::<BTreeMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
@@ -36,7 +34,7 @@ pub async fn search_btree_index(
     collection: &str,
     def: &IndexDefinition,
     value: &Value,
-) -> AnyResult<Vec<String>> {
+) -> Result<Vec<String>> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     let key = value.to_string();
     // Appel au driver qui doit être async
@@ -48,8 +46,8 @@ mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
     use crate::utils::{
-        fs::{self, tempdir}, // tempdir et fs:: sont exportés ici
-        json::json,          // La macro json! et le module json sont ici
+        io::{self, tempdir},
+        json::json,
     };
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
@@ -62,7 +60,7 @@ mod tests {
     async fn test_btree_lifecycle() {
         let (dir, cfg) = setup_env();
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
-        fs::create_dir_all(&idx_dir).await.unwrap();
+        io::create_dir_all(&idx_dir).await.unwrap();
 
         let def = IndexDefinition {
             name: "age".into(),

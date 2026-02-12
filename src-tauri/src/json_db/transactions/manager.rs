@@ -9,12 +9,12 @@ use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
 use crate::json_db::storage::{file_storage, JsonDbConfig, StorageEngine};
 use crate::json_db::transactions::lock_manager::LockManager;
 use crate::json_db::transactions::{Operation, Transaction, TransactionRequest};
-use crate::utils::{
-    error::{anyhow, AnyResult, Context},
-    fs::{self, Path},
-    json::{self, json, Value},
-    HashSet,
-};
+
+use crate::utils::data::HashSet;
+use crate::utils::io::{self, Path};
+use crate::utils::json;
+use crate::utils::prelude::*;
+
 /// Structure pour stocker l'inverse d'une opération réalisée (Undo Log en mémoire)
 enum UndoAction {
     Insert {
@@ -53,7 +53,7 @@ impl<'a> TransactionManager<'a> {
     }
 
     /// API PUBLIQUE INTELLIGENTE (ASYNCHRONE)
-    pub async fn execute_smart(&self, requests: Vec<TransactionRequest>) -> AnyResult<()> {
+    pub async fn execute_smart(&self, requests: Vec<TransactionRequest>) -> Result<()> {
         let mut prepared_ops = Vec::new();
 
         let storage = StorageEngine::new(self.config.clone());
@@ -190,15 +190,15 @@ impl<'a> TransactionManager<'a> {
         .await
     }
 
-    async fn load_dataset_file(&self, path: &str) -> AnyResult<Value> {
-        let dataset_root = std::env::var("PATH_RAISE_DATASET")
-            .map_err(|_| anyhow!("❌ Configuration : PATH_RAISE_DATASET manquant."))?;
+    async fn load_dataset_file(&self, path: &str) -> Result<Value> {
+        let dataset_root = std::env::var("PATH_RAISE_DATASET").map_err(|_| {
+            AppError::Validation("❌ Configuration : PATH_RAISE_DATASET manquant.".to_string())
+        })?;
         let resolved_path = path.replace("$PATH_RAISE_DATASET", &dataset_root);
-        let content = fs::read_to_string(Path::new(&resolved_path))
+        let content = io::read_to_string(Path::new(&resolved_path))
             .await
-            .with_context(|| format!("Fichier introuvable : {}", resolved_path))?;
-
-        Ok(json::parse(&content)?)
+            .map_err(|_| AppError::NotFound(format!("Fichier introuvable : {}", resolved_path)))?;
+        json::parse(&content)
     }
 
     async fn resolve_id(
@@ -207,7 +207,7 @@ impl<'a> TransactionManager<'a> {
         collection: &str,
         id: Option<String>,
         handle: Option<String>,
-    ) -> AnyResult<String> {
+    ) -> Result<String> {
         if let Some(i) = id {
             return Ok(i);
         }
@@ -232,22 +232,23 @@ impl<'a> TransactionManager<'a> {
                 return Ok(doc.get("id").and_then(|v| v.as_str()).unwrap().to_string());
             }
         }
-        Err(anyhow!(
+
+        Err(AppError::NotFound(format!(
             "Impossible de résoudre l'identité (ni ID ni Handle) dans '{}'",
             collection
-        ))
+        )))
     }
 
-    pub async fn execute<F>(&self, op_block: F) -> AnyResult<()>
+    pub async fn execute<F>(&self, op_block: F) -> Result<()>
     where
-        F: FnOnce(&mut Transaction) -> AnyResult<()>,
+        F: FnOnce(&mut Transaction) -> Result<()>,
     {
         self.execute_internal(op_block).await
     }
 
-    async fn execute_internal<F>(&self, op_block: F) -> AnyResult<()>
+    async fn execute_internal<F>(&self, op_block: F) -> Result<()>
     where
-        F: FnOnce(&mut Transaction) -> AnyResult<()>,
+        F: FnOnce(&mut Transaction) -> Result<()>,
     {
         let mut tx = Transaction::new();
         op_block(&mut tx)?;
@@ -296,18 +297,18 @@ impl<'a> TransactionManager<'a> {
         }
     }
 
-    async fn write_wal(&self, tx: &Transaction) -> AnyResult<()> {
+    async fn write_wal(&self, tx: &Transaction) -> Result<()> {
         let wal_path = self.config.db_root(&self.space, &self.db).join("wal");
 
-        fs::ensure_dir(&wal_path).await?;
+        io::ensure_dir(&wal_path).await?;
 
         let tx_file = wal_path.join(format!("{}.json", tx.id));
-        fs::write_json_atomic(&tx_file, tx).await?;
+        io::write_json_atomic(&tx_file, tx).await?;
         Ok(())
     }
 
     /// Applique les opérations et gère le rollback "runtime" des index et fichiers
-    async fn apply_transaction(&self, tx: &Transaction) -> AnyResult<()> {
+    async fn apply_transaction(&self, tx: &Transaction) -> Result<()> {
         let storage = StorageEngine::new(self.config.clone());
         let mut idx = IndexManager::new(&storage, &self.space, &self.db);
 
@@ -316,7 +317,7 @@ impl<'a> TransactionManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
         let mut system_index = if sys_path.exists() {
-            let c = fs::read_to_string(&sys_path).await?;
+            let c = io::read_to_string(&sys_path).await?;
             json::parse::<Value>(&c).unwrap_or(json!({ "collections": {} }))
         } else {
             json!({ "collections": {} })
@@ -357,7 +358,7 @@ impl<'a> TransactionManager<'a> {
                     .await
                     {
                         self.rollback_runtime(&mut idx, undo_stack).await?;
-                        return Err(e.into());
+                        return Err(e);
                     }
 
                     // C. Mise à jour Index
@@ -400,7 +401,7 @@ impl<'a> TransactionManager<'a> {
                         Ok(d) => d,
                         Err(e) => {
                             self.rollback_runtime(&mut idx, undo_stack).await?;
-                            return Err(e.into());
+                            return Err(e);
                         }
                     };
 
@@ -408,11 +409,10 @@ impl<'a> TransactionManager<'a> {
                         Some(d) => d,
                         None => {
                             self.rollback_runtime(&mut idx, undo_stack).await?;
-                            return Err(anyhow!(
+                            return Err(AppError::NotFound(format!(
                                 "Update échoué : doc {}/{} introuvable",
-                                collection,
-                                id
-                            ));
+                                collection, id
+                            )));
                         }
                     };
 
@@ -440,7 +440,7 @@ impl<'a> TransactionManager<'a> {
                     .await
                     {
                         self.rollback_runtime(&mut idx, undo_stack).await?;
-                        return Err(e.into());
+                        return Err(e);
                     }
 
                     if let Err(e) = idx.remove_document(collection, &old_doc_clone).await {
@@ -505,7 +505,7 @@ impl<'a> TransactionManager<'a> {
                         .await
                         {
                             self.rollback_runtime(&mut idx, undo_stack).await?;
-                            return Err(e.into());
+                            return Err(e);
                         }
 
                         if let Err(e) = idx.remove_document(collection, &old_doc).await {
@@ -534,7 +534,7 @@ impl<'a> TransactionManager<'a> {
             }
         }
 
-        fs::write_json_atomic(&sys_path, &system_index).await?;
+        io::write_json_atomic(&sys_path, &system_index).await?;
         Ok(())
     }
 
@@ -542,7 +542,7 @@ impl<'a> TransactionManager<'a> {
         &self,
         idx: &mut IndexManager<'_>,
         undo_stack: Vec<UndoAction>,
-    ) -> AnyResult<()> {
+    ) -> Result<()> {
         #[cfg(debug_assertions)]
         println!(
             "⚠️ Rollback en cours ({} opérations à annuler)...",
@@ -608,7 +608,7 @@ impl<'a> TransactionManager<'a> {
         Ok(())
     }
 
-    async fn apply_schema_logic(&self, collection: &str, doc: &mut Value) -> AnyResult<()> {
+    async fn apply_schema_logic(&self, collection: &str, doc: &mut Value) -> Result<()> {
         let meta_path = self
             .config
             .db_collection_path(&self.space, &self.db, collection)
@@ -616,7 +616,7 @@ impl<'a> TransactionManager<'a> {
         let mut resolved_uri = None;
 
         if meta_path.exists() {
-            if let Ok(content) = fs::read_to_string(&meta_path).await {
+            if let Ok(content) = io::read_to_string(&meta_path).await {
                 if let Ok(meta) = json::parse::<Value>(&content) {
                     if let Some(s) = meta.get("schema").and_then(|v| v.as_str()) {
                         if !s.is_empty() {
@@ -633,7 +633,7 @@ impl<'a> TransactionManager<'a> {
             }
             let reg = SchemaRegistry::from_db(self.config, &self.space, &self.db).await?;
             let validator = SchemaValidator::compile_with_registry(&uri, &reg)
-                .context(format!("Schema error: {}", uri))?;
+                .map_err(|_| AppError::Database(format!("Schema error: {}", uri)))?;
             validator.compute_then_validate(doc)?;
         }
         Ok(())
@@ -645,7 +645,7 @@ impl<'a> TransactionManager<'a> {
         collection: &str,
         id: &str,
         is_delete: bool,
-    ) -> AnyResult<()> {
+    ) -> Result<()> {
         let filename = format!("{}.json", id);
         if let Some(cols) = system_index
             .get_mut("collections")
@@ -678,19 +678,19 @@ impl<'a> TransactionManager<'a> {
         Ok(())
     }
 
-    async fn commit_wal(&self, tx: &Transaction) -> AnyResult<()> {
+    async fn commit_wal(&self, tx: &Transaction) -> Result<()> {
         let path = self
             .config
             .db_root(&self.space, &self.db)
             .join("wal")
             .join(format!("{}.json", tx.id));
-        if fs::exists(&path).await {
-            fs::remove_file(&path).await?;
+        if io::exists(&path).await {
+            io::remove_file(&path).await?;
         }
         Ok(())
     }
 
-    async fn rollback_wal(&self, tx: &Transaction) -> AnyResult<()> {
+    async fn rollback_wal(&self, tx: &Transaction) -> Result<()> {
         self.commit_wal(tx).await
     }
 }
@@ -713,7 +713,7 @@ fn json_merge(a: &mut Value, b: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::fs::{self, tempdir, Path};
+    use crate::utils::io::{self, tempdir, Path};
 
     async fn setup_test_db() -> (tempfile::TempDir, JsonDbConfig, String, String) {
         let dir = tempdir().unwrap();
@@ -724,8 +724,8 @@ mod tests {
         let db = "test_db";
         let db_path = config.db_root(space, db);
 
-        fs::ensure_dir(&db_path).await.unwrap();
-        fs::write_json_atomic(&db_path.join("_system.json"), &json!({ "collections": {} }))
+        io::ensure_dir(&db_path).await.unwrap();
+        io::write_json_atomic(&db_path.join("_system.json"), &json!({ "collections": {} }))
             .await
             .unwrap();
 
@@ -735,9 +735,9 @@ mod tests {
     async fn create_dataset_file(root: &Path, rel_path: &str, content: Value) {
         let full_path = root.join(rel_path);
         if let Some(parent) = full_path.parent() {
-            fs::ensure_dir(parent).await.unwrap();
+            io::ensure_dir(parent).await.unwrap();
         }
-        fs::write_json_atomic(&full_path, &content).await.unwrap();
+        io::write_json_atomic(&full_path, &content).await.unwrap();
     }
 
     #[tokio::test]
@@ -748,7 +748,7 @@ mod tests {
         };
         let (space, db) = ("test_space", "test_db");
 
-        fs::ensure_dir(&config.db_root(space, db).join("users"))
+        io::ensure_dir(&config.db_root(space, db).join("users"))
             .await
             .unwrap();
         let tm = TransactionManager::new(&config, space, db);
@@ -760,7 +760,7 @@ mod tests {
             .await;
         assert!(res.is_ok());
         assert!(
-            fs::exists(
+            io::exists(
                 &config
                     .db_collection_path(&space, &db, "users")
                     .join("user1.json")
@@ -777,7 +777,7 @@ mod tests {
         };
         let (space, db) = ("test_space", "test_db");
 
-        fs::ensure_dir(&config.db_root(space, db).join("users"))
+        io::ensure_dir(&config.db_root(space, db).join("users"))
             .await
             .unwrap();
 
@@ -785,7 +785,7 @@ mod tests {
         let res = tm
             .execute(|tx| {
                 tx.add_insert("users", "user2", json!({"name": "Bob"}));
-                Err(anyhow::anyhow!("Oups"))
+                Err(AppError::Database("Oups".to_string()))
             })
             .await;
         assert!(res.is_err());
@@ -799,7 +799,7 @@ mod tests {
     async fn test_smart_insert_injects_metadata() {
         let (_dir, config, space, db) = setup_test_db().await;
         let tm = TransactionManager::new(&config, &space, &db);
-        fs::ensure_dir(&config.db_collection_path(&space, &db, "users"))
+        io::ensure_dir(&config.db_collection_path(&space, &db, "users"))
             .await
             .unwrap();
         let req = vec![TransactionRequest::Insert {
@@ -825,7 +825,7 @@ mod tests {
         let storage = StorageEngine::new(config.clone());
         let mut idx_mgr = IndexManager::new(&storage, &space, &db);
 
-        fs::ensure_dir(&config.db_collection_path(&space, &db, "items"))
+        io::ensure_dir(&config.db_collection_path(&space, &db, "items"))
             .await
             .unwrap();
         // On crée un index pour vérifier qu'il est nettoyé après rollback
@@ -871,7 +871,7 @@ mod tests {
     async fn test_upsert_workflow() {
         let (_dir, config, space, db) = setup_test_db().await;
         let tm = TransactionManager::new(&config, &space, &db);
-        fs::ensure_dir(&config.db_collection_path(&space, &db, "actors"))
+        io::ensure_dir(&config.db_collection_path(&space, &db, "actors"))
             .await
             .unwrap();
 

@@ -1,6 +1,13 @@
 use crate::utils::{AppError, Result};
 use std::env;
+use std::path::PathBuf;
 use std::str::FromStr;
+
+/// Retourne le répertoire de travail courant.
+/// Encapsule std::env::current_dir avec gestion d'erreur AppError.
+pub fn current_dir() -> Result<PathBuf> {
+    std::env::current_dir().map_err(AppError::from)
+}
 
 /// Récupère une variable d'environnement (Requis).
 /// Renvoie une erreur explicite si la clé est manquante.

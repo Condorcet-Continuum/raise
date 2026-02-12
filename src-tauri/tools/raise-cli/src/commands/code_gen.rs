@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand, ValueEnum};
-use raise::utils::error::AnyResult;
-use raise::{user_info, user_success};
+
+use raise::{user_info, user_success, utils::prelude::*};
 
 // Imports depuis le cœur code_generator
 use raise::code_generator::TargetLanguage;
@@ -46,7 +46,7 @@ impl From<CliTargetLanguage> for TargetLanguage {
     }
 }
 
-pub async fn handle(args: CodeGenArgs) -> AnyResult<()> {
+pub async fn handle(args: CodeGenArgs) -> Result<()> {
     match args.command {
         CodeGenCommands::Generate { element_id, lang } => {
             let target: TargetLanguage = lang.into();

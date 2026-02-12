@@ -85,6 +85,18 @@ pub async fn write(
         .map_err(|e| crate::utils::AppError::System(anyhow::anyhow!(e)))
 }
 
+/// Lit l'intégralité d'un fichier sous forme d'octets (Vec<u8>).
+/// Wrapper sécurisé pour tokio::fs::read.
+#[instrument(skip(path), fields(path = ?path.as_ref()))]
+pub async fn read(path: impl AsRef<Path>) -> Result<Vec<u8>> {
+    tokio::fs::read(path).await.map_err(AppError::Io)
+}
+
+/// Copie un fichier de manière asynchrone (Wrapper de tokio::fs::copy)
+pub async fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<u64> {
+    tokio::fs::copy(from, to).await.map_err(AppError::Io) // Conversion automatique vers ton système d'erreur
+}
+
 #[instrument(skip(path), fields(path = ?path))]
 pub async fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     debug!("Lecture du fichier JSON");
@@ -315,6 +327,30 @@ pub async fn read_json_compressed<T: DeserializeOwned>(path: &Path) -> Result<T>
 
     crate::utils::json::parse(&content)
 }
+
+#[instrument(skip(data, path), fields(path = ?path))]
+pub async fn write_bincode_compressed_atomic<T: Serialize>(path: &Path, data: &T) -> Result<()> {
+    debug!("Sérialisation binaire et compression pour écriture atomique");
+
+    // 1. Transformation en binaire via notre utilitaire json.rs
+    let binary_data = crate::utils::json::to_binary(data)?;
+
+    // 2. Compression et écriture atomique via la primitive existante
+    write_compressed_atomic(path, &binary_data).await
+}
+
+/// Lit un objet en Bincode compressé.
+#[instrument(skip(path), fields(path = ?path))]
+pub async fn read_bincode_compressed<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    debug!("Lecture et décompression binaire");
+
+    // 1. Lecture et décompression via la primitive existante
+    let decompressed_binary = read_compressed(path).await?;
+
+    // 2. Désérialisation via notre utilitaire json.rs
+    crate::utils::json::from_binary(&decompressed_binary)
+}
+
 // --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {

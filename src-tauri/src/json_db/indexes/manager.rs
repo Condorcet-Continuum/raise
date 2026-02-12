@@ -2,11 +2,10 @@
 
 use super::{btree, hash, text, IndexDefinition, IndexType};
 use crate::json_db::storage::StorageEngine;
-use crate::utils::{
-    error::{anyhow, AnyResult, Context},
-    fs::{self, Path, PathBuf},
-    json::{self, Deserialize, Serialize, Value},
-};
+
+use crate::utils::io::{self, Path, PathBuf};
+use crate::utils::json;
+use crate::utils::prelude::*;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CollectionMeta {
@@ -36,12 +35,17 @@ impl<'a> IndexManager<'a> {
         collection: &str,
         field: &str,
         kind_str: &str,
-    ) -> AnyResult<()> {
+    ) -> Result<()> {
         let kind = match kind_str.to_lowercase().as_str() {
             "hash" => IndexType::Hash,
             "btree" => IndexType::BTree,
             "text" => IndexType::Text,
-            _ => return Err(anyhow!("Type d'index inconnu: {}", kind_str)),
+            _ => {
+                return Err(AppError::Validation(format!(
+                    "Type d'index inconnu: {}",
+                    kind_str
+                )))
+            }
         };
 
         let field_path = if field.starts_with('/') {
@@ -62,16 +66,16 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub async fn drop_index(&mut self, collection: &str, field: &str) -> AnyResult<()> {
+    pub async fn drop_index(&mut self, collection: &str, field: &str) -> Result<()> {
         let meta_path = self.get_meta_path(collection);
         if !meta_path.exists() {
-            return Err(anyhow!("Collection introuvable"));
+            return Err(AppError::NotFound("Collection introuvable".to_string()));
         }
 
         let mut meta = self.load_meta(&meta_path).await?;
         if let Some(pos) = meta.indexes.iter().position(|i| i.name == field) {
             let removed = meta.indexes.remove(pos);
-            fs::write(&meta_path, json::stringify_pretty(&meta)?).await?;
+            io::write(&meta_path, json::stringify_pretty(&meta)?).await?;
 
             let index_filename = match removed.index_type {
                 IndexType::Hash => format!("{}.hash.idx", removed.name),
@@ -87,10 +91,10 @@ impl<'a> IndexManager<'a> {
                 .join(index_filename);
 
             if index_path.exists() {
-                fs::remove_file(&index_path).await?;
+                io::remove_file(&index_path).await?;
             }
         } else {
-            return Err(anyhow!("Index introuvable: {}", field));
+            return Err(AppError::NotFound(format!("Index introuvable: {}", field)));
         }
         Ok(())
     }
@@ -108,14 +112,13 @@ impl<'a> IndexManager<'a> {
         collection: &str,
         field: &str,
         value: &Value,
-    ) -> AnyResult<Vec<String>> {
+    ) -> Result<Vec<String>> {
         // Chargement async des définitions d'index
         let indexes = self.load_indexes(collection).await?;
 
-        let def = indexes
-            .iter()
-            .find(|i| i.name == field)
-            .ok_or_else(|| anyhow!("Index introuvable sur le champ '{}'", field))?;
+        let def = indexes.iter().find(|i| i.name == field).ok_or_else(|| {
+            AppError::NotFound(format!("Index introuvable sur le champ '{}'", field))
+        })?;
 
         let cfg = &self.storage.config;
         let s = &self.space;
@@ -131,15 +134,15 @@ impl<'a> IndexManager<'a> {
         }
     }
 
-    async fn rebuild_index(&self, collection: &str, def: &IndexDefinition) -> AnyResult<()> {
+    async fn rebuild_index(&self, collection: &str, def: &IndexDefinition) -> Result<()> {
         let col_path = self
             .storage
             .config
             .db_collection_path(&self.space, &self.db, collection);
         let indexes_dir = col_path.join("_indexes");
-        fs::create_dir_all(&indexes_dir).await?;
+        io::create_dir_all(&indexes_dir).await?;
 
-        let mut entries = fs::read_dir(&col_path).await?;
+        let mut entries = io::read_dir(&col_path).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
@@ -148,7 +151,7 @@ impl<'a> IndexManager<'a> {
                     continue;
                 }
 
-                let content = fs::read_to_string(&path).await?;
+                let content = io::read_to_string(&path).await?;
                 if let Ok(doc) = json::parse::<Value>(&content) {
                     let doc_id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     if !doc_id.is_empty() {
@@ -161,11 +164,11 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub async fn index_document(&mut self, collection: &str, new_doc: &Value) -> AnyResult<()> {
+    pub async fn index_document(&mut self, collection: &str, new_doc: &Value) -> Result<()> {
         let doc_id = new_doc
             .get("id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("ID manquant"))?;
+            .ok_or_else(|| AppError::Validation("ID manquant".to_string()))?;
         let indexes = self.load_indexes(collection).await?;
 
         if !indexes.is_empty() {
@@ -174,7 +177,7 @@ impl<'a> IndexManager<'a> {
                 .config
                 .db_collection_path(&self.space, &self.db, collection)
                 .join("_indexes");
-            fs::create_dir_all(idx_dir).await?;
+            io::create_dir_all(idx_dir).await?;
         }
 
         for def in indexes {
@@ -184,7 +187,7 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub async fn remove_document(&mut self, collection: &str, old_doc: &Value) -> AnyResult<()> {
+    pub async fn remove_document(&mut self, collection: &str, old_doc: &Value) -> Result<()> {
         let doc_id = old_doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
         if doc_id.is_empty() {
             return Ok(());
@@ -197,7 +200,7 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    async fn load_indexes(&self, collection: &str) -> AnyResult<Vec<IndexDefinition>> {
+    async fn load_indexes(&self, collection: &str) -> Result<Vec<IndexDefinition>> {
         let meta_path = self.get_meta_path(collection);
         if !meta_path.exists() {
             return Ok(Vec::new());
@@ -212,9 +215,9 @@ impl<'a> IndexManager<'a> {
             .join("_meta.json")
     }
 
-    async fn load_meta(&self, path: &Path) -> AnyResult<CollectionMeta> {
-        let content = fs::read_to_string(path).await?;
-        Ok(json::parse(&content)?)
+    async fn load_meta(&self, path: &Path) -> Result<CollectionMeta> {
+        let content = io::read_to_string(path).await?;
+        json::parse(&content)
     }
 
     async fn dispatch_update(
@@ -224,7 +227,7 @@ impl<'a> IndexManager<'a> {
         id: &str,
         old: Option<&Value>,
         new: Option<&Value>,
-    ) -> AnyResult<()> {
+    ) -> Result<()> {
         let cfg = &self.storage.config;
         let s = &self.space;
         let d = &self.db;
@@ -233,7 +236,10 @@ impl<'a> IndexManager<'a> {
             IndexType::BTree => btree::update_btree_index(cfg, s, d, col, def, id, old, new).await,
             IndexType::Text => text::update_text_index(cfg, s, d, col, def, id, old, new).await,
         }
-        .with_context(|| format!("Erreur mise à jour index '{}'", def.name))
+        .map_err(|e| {
+            AppError::Database(format!("Erreur mise à jour index '{}': {}", def.name, e))
+        })?;
+        Ok(())
     }
 }
 
@@ -243,13 +249,13 @@ pub async fn add_index_definition(
     db: &str,
     collection: &str,
     def: IndexDefinition,
-) -> AnyResult<()> {
+) -> Result<()> {
     let meta_path = storage
         .config
         .db_collection_path(space, db, collection)
         .join("_meta.json");
     let mut meta: CollectionMeta = if meta_path.exists() {
-        let content = fs::read_to_string(&meta_path).await?;
+        let content = io::read_to_string(&meta_path).await?;
         json::parse(&content)?
     } else {
         CollectionMeta {
@@ -260,7 +266,7 @@ pub async fn add_index_definition(
 
     if !meta.indexes.iter().any(|i| i.name == def.name) {
         meta.indexes.push(def);
-        fs::write(&meta_path, json::stringify_pretty(&meta)?).await?;
+        io::write(&meta_path, json::stringify_pretty(&meta)?).await?;
     }
     Ok(())
 }
@@ -273,7 +279,7 @@ pub async fn add_index_definition(
 mod tests {
     use super::*;
     use crate::json_db::storage::JsonDbConfig;
-    use crate::utils::fs::tempdir;
+    use crate::utils::io::tempdir;
     use crate::utils::json::json;
 
     #[tokio::test]
@@ -284,7 +290,7 @@ mod tests {
         let mut mgr = IndexManager::new(&storage, "s", "d");
 
         let col_path = dir.path().join("s/d/collections/users");
-        fs::create_dir_all(&col_path).await.unwrap();
+        io::create_dir_all(&col_path).await.unwrap();
 
         mgr.create_index("users", "email", "hash").await.unwrap();
         assert!(col_path.join("_meta.json").exists());
@@ -307,7 +313,7 @@ mod tests {
         let mut mgr = IndexManager::new(&storage, "s", "d");
 
         let col_path = dir.path().join("s/d/collections/products");
-        fs::create_dir_all(&col_path).await.unwrap();
+        io::create_dir_all(&col_path).await.unwrap();
 
         mgr.create_index("products", "category", "hash")
             .await

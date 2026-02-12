@@ -1,12 +1,21 @@
+# --- CONFIGURATION OPTIMISÉE POUR CONDORCET (RYZEN 9) ---
+
 [env]
-RUST_TEST_THREADS = "1"
+# On supprime la limite de threads pour les tests.
+# Le Ryzen 9 peut gérer des centaines de tests en parallèle.
+# RUST_TEST_THREADS = "1"  <-- SUPPRIMÉ (Laisser par défaut)
 
 [build]
-jobs = 1
+# On laisse Cargo utiliser tous les cœurs (Auto-détection = 32 threads)
+# jobs = 1  <-- SUPPRIMÉ (C'était le frein à main !)
 
+# Optionnel : Pour compiler encore plus vite en mode debug
+rustflags = ["-C", "target-cpu=native"]
 
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=mold"] # Si tu as installé mold
-# Si tu n'as pas mold, utilise lld qui est moins gourmand que le défaut :
+# Utilisation de Mold (indispensable) + Instructions CPU natives
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "target-cpu=native"]
+
+# Si jamais Mold n'est pas installé, commentez la ligne au-dessus et décommentez celle-ci :
 # rustflags = ["-C", "link-arg=-fuse-ld=lld"]

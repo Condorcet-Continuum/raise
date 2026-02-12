@@ -3,7 +3,8 @@
 //! Optimiseur de requêtes pour améliorer les performances
 
 use super::{ComparisonOperator, Condition, Query, QueryFilter};
-use crate::utils::error::AnyResult;
+
+use crate::utils::prelude::*;
 
 /// Optimiseur de requêtes
 #[derive(Debug, Default)]
@@ -39,7 +40,7 @@ impl QueryOptimizer {
     }
 
     /// Optimise une requête
-    pub fn optimize(&self, mut query: Query) -> AnyResult<Query> {
+    pub fn optimize(&self, mut query: Query) -> Result<Query> {
         // 1. Simplifier les filtres
         if self.config.simplify_filters {
             if let Some(ref mut filter) = query.filter {
@@ -60,7 +61,7 @@ impl QueryOptimizer {
         Ok(query)
     }
 
-    fn simplify_filter(&self, filter: QueryFilter) -> AnyResult<QueryFilter> {
+    fn simplify_filter(&self, filter: QueryFilter) -> Result<QueryFilter> {
         let mut simplified = filter.clone();
 
         // Déduplication basique
@@ -74,7 +75,7 @@ impl QueryOptimizer {
         Ok(simplified)
     }
 
-    fn reorder_conditions(&self, mut filter: QueryFilter) -> AnyResult<QueryFilter> {
+    fn reorder_conditions(&self, mut filter: QueryFilter) -> Result<QueryFilter> {
         // Trie par sélectivité estimée (plus petit score = plus sélectif/rapide = exécuté en premier)
         filter
             .conditions
@@ -127,7 +128,7 @@ impl QueryOptimizer {
         unique
     }
 
-    fn optimize_pagination(&self, mut query: Query) -> AnyResult<Query> {
+    fn optimize_pagination(&self, mut query: Query) -> Result<Query> {
         const MAX_REASONABLE_LIMIT: usize = 1000;
 
         // Plafonner la limite si elle est excessive

@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
-use raise::utils::error::AnyResult;
-use raise::{user_info, user_success};
+
+use raise::{user_info, user_success, utils::prelude::*};
 
 // Import de la fonction principale de topologie
 use raise::spatial_engine::get_spatial_topology;
@@ -20,7 +20,7 @@ pub enum SpatialCommands {
     Health,
 }
 
-pub async fn handle(args: SpatialArgs) -> AnyResult<()> {
+pub async fn handle(args: SpatialArgs) -> Result<()> {
     match args.command {
         SpatialCommands::Topology => {
             user_info!(

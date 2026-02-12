@@ -1,11 +1,11 @@
 // FICHIER : src-tauri/src/json_db/jsonld/vocabulary.rs
 
-use crate::utils::{
-    error::AnyResult,
-    fs::Path,
-    json::{self, Deserialize, Serialize, Value},
-    Arc, HashMap, OnceLock, RwLock,
-};
+use crate::utils::data::HashMap;
+use crate::utils::io;
+use crate::utils::json;
+use crate::utils::prelude::*;
+use crate::utils::{Arc, OnceLock, RwLock};
+
 // --- NAMESPACES ---
 pub mod namespaces {
     pub const ARCADIA: &str = "https://raise.io/ontology/arcadia#";
@@ -489,8 +489,9 @@ impl VocabularyRegistry {
         }
     }
 
-    pub fn load_layer_from_file(&self, layer: &str, path: &Path) -> AnyResult<(), String> {
-        let content = std::fs::read_to_string(path)
+    pub async fn load_layer_from_file(&self, layer: &str, path: &Path) -> Result<()> {
+        let content = io::read_to_string(path)
+            .await
             .map_err(|e| format!("Impossible de lire le fichier {}: {}", path.display(), e))?;
 
         let json: Value = json::parse(&content)
@@ -502,7 +503,10 @@ impl VocabularyRegistry {
             #[cfg(debug_assertions)]
             println!("✅ Ontologie chargée : {} -> {:?}", layer, path);
         } else {
-            return Err(format!("Pas de champ @context dans {}", path.display()));
+            return Err(AppError::Validation(format!(
+                "Pas de champ @context dans {}",
+                path.display()
+            )));
         }
         Ok(())
     }
@@ -630,12 +634,12 @@ mod tests {
         assert!(reg.get_default_context().contains_key("transverse"));
     }
 
-    #[test]
-    fn test_load_errors() {
+    #[tokio::test]
+    async fn test_load_errors() {
         let reg = VocabularyRegistry::new();
         let path = Path::new("inconnu.jsonld");
-        let res = reg.load_layer_from_file("test", path);
+        let res = reg.load_layer_from_file("test", path).await;
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Impossible de lire"));
+        assert!(res.unwrap_err().to_string().contains("Impossible de lire"));
     }
 }

@@ -1,11 +1,7 @@
 // FICHIER : src-tauri/src/json_db/migrations/version.rs
 
-use crate::utils::{
-    error::AnyResult,
-    fmt,                            // pub use std::fmt
-    json::{Deserialize, Serialize}, //
-    Ordering,                       // pub use std::cmp::Ordering
-};
+use crate::utils::prelude::*;
+use crate::utils::{fmt, Ordering};
 
 /// Représente une version de migration (Semantic Versioning simplifié)
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -17,13 +13,13 @@ pub struct MigrationVersion {
 }
 
 impl MigrationVersion {
-    pub fn parse(version_str: &str) -> AnyResult<Self, String> {
+    pub fn parse(version_str: &str) -> Result<Self> {
         let parts: Vec<&str> = version_str.split('.').collect();
         if parts.len() != 3 {
-            return Err(format!(
+            return Err(AppError::Validation(format!(
                 "Format de version invalide (attendu x.y.z): {}",
                 version_str
-            ));
+            )));
         }
 
         let major = parts[0].parse().map_err(|_| "Majeur non numérique")?;

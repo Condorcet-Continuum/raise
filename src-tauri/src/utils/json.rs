@@ -46,6 +46,18 @@ pub fn stringify_pretty<T: Serialize>(value: &T) -> Result<String> {
         .map_err(|e| AppError::System(anyhow!("JSON Serialize Error: {}", e)))
 }
 
+/// Sérialise un objet en binaire via Bincode (Format compact)
+pub fn to_binary<T: Serialize>(data: &T) -> Result<Vec<u8>> {
+    bincode::serde::encode_to_vec(data, bincode::config::standard())
+        .map_err(|e| AppError::System(anyhow::anyhow!("Bincode Serialization Error: {}", e)))
+}
+
+/// Désérialise un objet binaire via Bincode
+pub fn from_binary<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    bincode::serde::decode_from_slice(bytes, bincode::config::standard())
+        .map_err(|e| AppError::System(anyhow::anyhow!("Bincode Deserialization Error: {}", e)))
+        .map(|(data, _len)| data)
+}
 /// Effectue un "Deep Merge" de deux objets JSON.
 /// 'a' est modifié sur place avec les valeurs de 'b'.
 pub fn merge(a: &mut Value, b: Value) {

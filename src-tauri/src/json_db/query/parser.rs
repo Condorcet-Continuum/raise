@@ -1,18 +1,15 @@
 // FICHIER : src-tauri/src/json_db/query/parser.rs
 
-use crate::utils::{
-    error::{anyhow, AnyResult},
-    json::Value,
-};
-
 use super::{
     ComparisonOperator, Condition, FilterOperator, Projection, Query, QueryFilter, SortField,
     SortOrder,
 };
 
-pub fn parse_projection(fields: &[String]) -> AnyResult<Projection> {
+use crate::utils::prelude::*;
+
+pub fn parse_projection(fields: &[String]) -> Result<Projection> {
     if fields.is_empty() {
-        return Err(anyhow!("message"));
+        return Err(AppError::NotFound("message".to_string()));
     }
 
     let is_exclude = fields[0].starts_with('-');
@@ -69,7 +66,7 @@ impl QueryBuilder {
         }
     }
 
-    pub fn select(mut self, fields: Vec<String>) -> AnyResult<Self> {
+    pub fn select(mut self, fields: Vec<String>) -> Result<Self> {
         self.query.projection = Some(parse_projection(&fields)?);
         Ok(self)
     }
@@ -102,7 +99,7 @@ impl QueryBuilder {
     }
 }
 
-pub fn parse_sort_specs(specs: &[String]) -> AnyResult<Vec<SortField>> {
+pub fn parse_sort_specs(specs: &[String]) -> Result<Vec<SortField>> {
     let mut out = Vec::new();
     for spec in specs {
         out.push(parse_single_sort_spec(spec)?);
@@ -110,7 +107,7 @@ pub fn parse_sort_specs(specs: &[String]) -> AnyResult<Vec<SortField>> {
     Ok(out)
 }
 
-fn parse_single_sort_spec(spec: &str) -> AnyResult<SortField> {
+fn parse_single_sort_spec(spec: &str) -> Result<SortField> {
     let spec = spec.trim();
     if let Some(f) = spec.strip_prefix('+') {
         return Ok(SortField {
@@ -141,10 +138,10 @@ fn parse_single_sort_spec(spec: &str) -> AnyResult<SortField> {
     })
 }
 
-pub fn parse_filter_from_json(value: &Value) -> AnyResult<QueryFilter> {
+pub fn parse_filter_from_json(value: &Value) -> Result<QueryFilter> {
     let obj = value
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("Not an object"))?;
+        .ok_or_else(|| AppError::Validation("Not an object".to_string()))?;
 
     let op = match obj
         .get("operator")
