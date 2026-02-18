@@ -482,11 +482,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_migrations_list_integrity() {
-        // ✅ ÉTAPE CRUCIALE : Initialisation manuelle de la config pour le test.
-        // Puisque config.test.json est obligatoire, .expect() nous dira
-        // immédiatement s'il y a un problème de chemin ou de syntaxe.
-        raise::utils::config::AppConfig::init()
-            .expect("❌ Impossible d'initialiser AppConfig pour le test de migration");
+        // ✅ CORRECTION : Utilisation du Mock Mémoire au lieu de l'init réel
+        // Cela évite de chercher les fichiers "configs", "workstations" sur le disque
+        // et résout l'erreur "Config système introuvable".
+        raise::utils::config::test_mocks::inject_mock_config();
 
         let dir = tempdir().unwrap();
         // On force le stockage sur un dossier temporaire pour ne pas polluer le disque réel
@@ -494,7 +493,7 @@ mod tests {
         let storage = StorageEngine::new(config);
 
         // run_app_migrations appelle Migrator, qui appelle create_db,
-        // qui fait maintenant un AppConfig::get().
+        // qui utilise maintenant AppConfig::get().
         let res = run_app_migrations(&storage, "test_space", "test_db").await;
 
         assert!(
