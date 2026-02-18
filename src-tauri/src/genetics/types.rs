@@ -1,6 +1,4 @@
-use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-
+use crate::utils::{prelude::*, Ordering};
 /// Structure représentant la performance d'un individu.
 /// Conçue pour l'optimisation multi-objectifs (NSGA-II).
 #[derive(Clone, Debug, Serialize, Deserialize)]

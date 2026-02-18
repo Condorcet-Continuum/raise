@@ -1,4 +1,5 @@
 // FICHIER : src-tauri/src/workflow_engine/scheduler.rs
+use crate::utils::{prelude::*, Arc, AsyncMutex, HashMap};
 
 use super::{
     executor::WorkflowExecutor, state_machine::WorkflowStateMachine, ExecutionStatus,
@@ -8,25 +9,21 @@ use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::collections::manager::CollectionsManager;
 // AJOUT : Import du manager de plugins pour la cohérence avec l'executor
 use crate::plugins::manager::PluginManager;
-use crate::utils::Result;
 
 use super::tools::{AgentTool, SystemMonitorTool};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// Le Scheduler pilote l'exécution des workflows et assure le pont avec l'IA.
 pub struct WorkflowScheduler {
     pub executor: WorkflowExecutor,
     pub definitions: HashMap<String, WorkflowDefinition>,
-    pub orchestrator: Arc<Mutex<AiOrchestrator>>,
+    pub orchestrator: Arc<AsyncMutex<AiOrchestrator>>,
     /// Référence vers le gestionnaire de plugins
     pub plugin_manager: Arc<PluginManager>,
 }
 
 impl WorkflowScheduler {
     pub fn new(
-        orchestrator: Arc<Mutex<AiOrchestrator>>,
+        orchestrator: Arc<AsyncMutex<AiOrchestrator>>,
         plugin_manager: Arc<PluginManager>,
     ) -> Self {
         // CORRECTION E0061 : passage du deuxième argument requis par WorkflowExecutor::new

@@ -39,6 +39,10 @@ pub fn stringify<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value)
         .map_err(|e| AppError::System(anyhow!("JSON Serialize Error: {}", e)))
 }
+pub fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    // ✅ Result<Vec<u8>> au lieu de Result<String>
+    serde_json::to_vec(value).map_err(|e| AppError::System(anyhow!("JSON To Vec Error: {}", e)))
+}
 
 /// Sérialise en String (Pretty Print - Standard pour RAISE)
 pub fn stringify_pretty<T: Serialize>(value: &T) -> Result<String> {

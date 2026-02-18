@@ -11,10 +11,7 @@ use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 use candle_nn::VarMap;
 
 use crate::json_db::storage::StorageEngine;
-use anyhow::{anyhow, Context, Result};
-use std::env;
-use std::path::PathBuf;
-use std::sync::Arc;
+use crate::utils::{io::PathBuf, prelude::*, Arc};
 
 // --- IMPORTS AGENTS ---
 use crate::ai::agents::intent_classifier::IntentClassifier;
@@ -46,20 +43,32 @@ impl AiOrchestrator {
         llm_url: &str,
         storage_engine: Option<Arc<StorageEngine>>,
     ) -> Result<Self> {
-        let domain_path =
-            env::var("PATH_RAISE_DOMAIN").unwrap_or_else(|_| ".raise_storage".to_string());
-        let base_path = PathBuf::from(&domain_path);
+        let app_config = AppConfig::get();
+        let domain_path = app_config
+            .get_path("PATH_RAISE_DOMAIN")
+            .ok_or_else(|| AppError::Config("PATH_RAISE_DOMAIN manquant".into()))?;
+
+        let base_path = domain_path;
         let chats_path = base_path.join("chats");
         let brain_path = base_path.join("world_model.safetensors");
 
         let rag = RagRetriever::new(qdrant_url, base_path.clone()).await?;
         let symbolic = SimpleRetriever::new(model);
-        let gemini_key = env::var("RAISE_GEMINI_KEY").unwrap_or_default();
-        let model_name = env::var("RAISE_MODEL_NAME").ok();
+
+        // Récupération des clés depuis la config fusionnée
+        let gemini_key = app_config
+            .ai_engines
+            .get("cloud_gemini")
+            .and_then(|e| e.api_key.clone())
+            .unwrap_or_default();
+        let model_name = app_config
+            .ai_engines
+            .get("primary_local")
+            .map(|e| e.model_name.clone());
+
         let llm = LlmClient::new(llm_url, &gemini_key, model_name);
 
         let vocab_size = 10;
-        // CORRECTION CRITIQUE : Alignement avec l'encodeur V2 (8 layers + 8 categories)
         let embedding_dim = 16;
         let action_dim = 5;
         let hidden_dim = 32;
@@ -86,10 +95,15 @@ impl AiOrchestrator {
             NeuroSymbolicEngine::new(vocab_size, embedding_dim, action_dim, hidden_dim, vm)?
         };
 
-        let memory_store = MemoryStore::new(&chats_path)
-            .context("Impossible d'initialiser le stockage des chats")?;
+        let memory_store = MemoryStore::new(&chats_path).await.map_err(|e| {
+            AppError::Config(format!(
+                "Impossible d'initialiser le stockage des chats: {}",
+                e
+            ))
+        })?;
+
         let session_id = "main_session";
-        let session = memory_store.load_or_create(session_id)?;
+        let session = memory_store.load_or_create(session_id).await?;
 
         Ok(Self {
             rag,
@@ -132,15 +146,19 @@ impl AiOrchestrator {
         let global_session_id =
             AgentContext::generate_default_session_id("orchestrator", session_scope);
 
-        let domain_path = env::var("PATH_RAISE_DOMAIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(".raise_storage"));
-        let dataset_path = domain_path.join("dataset");
+        let app_config = AppConfig::get(); //
+        let domain_path = app_config
+            .get_path("PATH_RAISE_DOMAIN")
+            .expect("❌ [SSOT] PATH_RAISE_DOMAIN manquant"); //
+
+        let dataset_path = app_config
+            .get_path("PATH_RAISE_DATASET")
+            .unwrap_or_else(|| domain_path.join("dataset")); //
 
         let storage_arc = self
             .storage
             .clone()
-            .ok_or_else(|| anyhow!("StorageEngine manquant"))?;
+            .ok_or_else(|| AppError::Validation("StorageEngine manquant".into()))?;
 
         let mut hop_count = 0;
         const MAX_HOPS: i32 = 5;
@@ -196,14 +214,16 @@ impl AiOrchestrator {
         self.session.add_user_message(query);
         let prompt = format!("Expert Arcadia: {}", query);
 
+        // ✅ Plus besoin de map_err, l'erreur est déjà du bon type !
         let response = self
             .llm
             .ask(LlmBackend::LocalLlama, "Tu es un expert.", &prompt)
-            .await
-            .map_err(|e| anyhow!(e))?;
+            .await?;
 
         self.session.add_ai_message(&response);
-        let _ = self.memory_store.save_session(&self.session);
+        // Note: tu avais passé save_session en async précédemment,
+        // n'oublie pas le .await si ce n'est pas déjà fait !
+        let _ = self.memory_store.save_session(&self.session).await;
         Ok(response)
     }
 
@@ -213,8 +233,13 @@ impl AiOrchestrator {
         intent: CommandType,
         state_after: &ArcadiaElement,
     ) -> Result<f64> {
-        let mut trainer = WorldTrainer::new(&self.world_engine, 0.01)?;
-        let loss = trainer.train_step(state_before, WorldAction { intent }, state_after)?;
+        let mut trainer = WorldTrainer::new(&self.world_engine, 0.01)
+            .map_err(|e| AppError::Config(format!("Erreur Trainer: {}", e)))?;
+
+        let loss = trainer
+            .train_step(state_before, WorldAction { intent }, state_after)
+            .map_err(|e| AppError::Validation(format!("Erreur TrainStep: {}", e)))?;
+
         let _ = self
             .world_engine
             .save_to_file(&self.world_engine_path)
@@ -223,12 +248,16 @@ impl AiOrchestrator {
     }
 
     pub async fn learn_document(&mut self, content: &str, source: &str) -> Result<usize> {
-        self.rag.index_document(content, source).await
+        self.rag
+            .index_document(content, source)
+            .await
+            .map_err(|e| AppError::Validation(format!("Erreur d'indexation RAG : {}", e)))
+        // ✅ Conversion explicite
     }
 
-    pub fn clear_history(&mut self) -> Result<()> {
+    pub async fn clear_history(&mut self) -> Result<()> {
         self.session = ConversationSession::new(self.session.id.clone());
-        let _ = self.memory_store.save_session(&self.session);
+        let _ = self.memory_store.save_session(&self.session).await;
         Ok(())
     }
 }
@@ -242,19 +271,21 @@ mod tests {
     use super::*;
     use crate::ai::protocols::acl::{AclMessage, Performative};
     use crate::model_engine::types::NameType;
-    use std::collections::HashMap;
-    use tempfile::tempdir;
+    use crate::utils::{data::HashMap, io::tempdir, Once};
 
+    static INIT_TEST: Once = Once::new();
     struct TestContext {
         _dir: tempfile::TempDir,
     }
     impl TestContext {
         fn new() -> (Self, PathBuf) {
-            let dir = tempdir().unwrap();
-            let path = dir.path().to_path_buf();
-            unsafe {
-                env::set_var("PATH_RAISE_DOMAIN", path.to_str().unwrap());
-            }
+            let dir = tempdir().expect("create temp dir");
+            INIT_TEST.call_once(|| {
+                if let Err(e) = AppConfig::init() {
+                    panic!("Impossible d'initialiser AppConfig pour les tests: {}", e);
+                }
+            });
+            let path = AppConfig::get().get_path("PATH_RAISE_DOMAIN").unwrap();
             (Self { _dir: dir }, path)
         }
     }
@@ -273,7 +304,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_orchestrator_robust_init() {
-        let (_ctx, _path) = TestContext::new();
+        let (_ctx, _path) = TestContext::new(); // On initialise la sandbox via TestContext
+
+        // ✅ On appelle avec 4 arguments (le path est géré en interne via AppConfig::get())
         let orch = AiOrchestrator::new(
             ProjectModel::default(),
             "http://dummy",
@@ -282,6 +315,7 @@ mod tests {
         )
         .await
         .expect("Init failed");
+
         assert_eq!(orch.session.id, "main_session");
     }
 

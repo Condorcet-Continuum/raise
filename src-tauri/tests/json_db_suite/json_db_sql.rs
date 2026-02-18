@@ -1,23 +1,27 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_sql.rs
 
-use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
+use crate::common::setup_test_env;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::query::sql::{parse_sql, SqlRequest};
 use raise::json_db::query::QueryEngine;
-use raise::json_db::storage::JsonDbConfig;
-use raise::utils::{fs, json::json};
+use raise::utils::prelude::*;
 
-async fn seed_actors_from_dataset(mgr: &CollectionsManager<'_>, cfg: &JsonDbConfig) {
-    // CORRECTION : URI absolue pour le schéma
+/// Injection des données de test dans une collection spécifique
+async fn seed_actors(
+    mgr: &CollectionsManager<'_>,
+    collection: &str,
+    env_space: &str,
+    env_db: &str,
+) {
     let schema_uri = format!(
         "db://{}/{}/schemas/v1/actors/actor.schema.json",
-        TEST_SPACE, TEST_DB
+        env_space, env_db
     );
 
-    // CORRECTION E0599 : Ajout de .await sur create_collection
-    mgr.create_collection("actors", Some(schema_uri))
+    // On ignore si la collection existe déjà, mais on s'assure qu'elle est prête
+    mgr.create_collection(collection, Some(schema_uri))
         .await
-        .expect("create collection actors");
+        .ok();
 
     let actors_data = vec![
         json!({ "handle": "alice", "displayName": "Alice Admin", "kind": "human", "roles": ["admin"], "tags": ["core", "paris"], "x_age": 30, "x_city": "Paris", "x_active": true }),
@@ -29,47 +33,37 @@ async fn seed_actors_from_dataset(mgr: &CollectionsManager<'_>, cfg: &JsonDbConf
     ];
 
     for actor in actors_data {
-        let handle = actor["handle"].as_str().unwrap();
-        let rel_path = format!("actors/{}.json", handle);
-        let file_path = get_dataset_file(cfg, &rel_path).await;
-
-        // IMPORTANT : Création du dossier parent (nécessaire car get_dataset_file pointe vers <tmp>/dataset/...)
-        if let Some(parent) = file_path.parent() {
-            if !fs::exists(parent).await {
-                fs::ensure_dir(parent)
-                    .await
-                    .expect("Failed to create actor dataset dir");
-            }
-        }
-        fs::write_json_atomic(&file_path, &actor)
+        mgr.insert_with_schema(collection, actor)
             .await
-            .expect("write dataset file");
+            .expect("❌ Échec de l'insertion d'un acteur");
+    }
+}
 
-        mgr.insert_with_schema("actors", actor)
+async fn exec_sql_read(engine: &QueryEngine<'_>, sql: &str) -> raise::json_db::query::QueryResult {
+    let request = parse_sql(sql).expect("❌ Erreur de parsing SQL");
+    if let SqlRequest::Read(query) = request {
+        engine
+            .execute_query(query)
             .await
-            .expect("Failed to insert actor");
+            .expect("❌ Erreur exécution QueryEngine")
+    } else {
+        panic!("❌ La requête SQL devrait être de type SELECT");
     }
 }
 
 #[tokio::test]
 async fn test_sql_select_by_kind() {
-    let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
-    let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-
-    seed_actors_from_dataset(&mgr, &env.cfg).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let col = "actors_kind";
+    seed_actors(&mgr, col, &env.space, &env.db).await;
 
     let engine = QueryEngine::new(&mgr);
-    let sql = "SELECT * FROM actors WHERE kind = 'bot'";
-
-    // DÉBALLAGE DU SQL REQUEST
-    let request = parse_sql(sql).expect("Parsing SQL");
-    let query = match request {
-        SqlRequest::Read(q) => q,
-        _ => panic!("Expected SELECT query"),
-    };
-
-    let result = engine.execute_query(query).await.expect("Exec");
+    let result = exec_sql_read(
+        &engine,
+        &format!("SELECT * FROM {} WHERE kind = 'bot'", col),
+    )
+    .await;
 
     assert_eq!(result.documents.len(), 1);
     assert_eq!(result.documents[0]["handle"], "bot-build");
@@ -77,66 +71,59 @@ async fn test_sql_select_by_kind() {
 
 #[tokio::test]
 async fn test_sql_numeric_comparison_x_props() {
-    let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
-    let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let col = "actors_age";
+    seed_actors(&mgr, col, &env.space, &env.db).await;
+
     let engine = QueryEngine::new(&mgr);
+    let result = exec_sql_read(&engine, &format!("SELECT * FROM {} WHERE x_age >= 30", col)).await;
 
-    let sql = "SELECT * FROM actors WHERE x_age >= 30";
-
-    // DÉBALLAGE
-    let request = parse_sql(sql).expect("Parsing SQL");
-    let query = match request {
-        SqlRequest::Read(q) => q,
-        _ => panic!("Expected SELECT query"),
-    };
-
-    let result = engine.execute_query(query).await.expect("Exec");
-
-    assert_eq!(result.documents.len(), 4);
+    // Correction de l'assertion : on vérifie juste le nombre de résultats (Alice, Charlie, Eve, Frank)
+    assert_eq!(
+        result.documents.len(),
+        4,
+        "❌ Devrait trouver 4 acteurs de 30 ans ou plus"
+    );
 }
 
 #[tokio::test]
 async fn test_sql_logical_and_mixed() {
-    let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
-    let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let col = "actors_logical";
+    seed_actors(&mgr, col, &env.space, &env.db).await;
+
     let engine = QueryEngine::new(&mgr);
+    let result = exec_sql_read(
+        &engine,
+        &format!(
+            "SELECT * FROM {} WHERE kind = 'human' AND x_active = true",
+            col
+        ),
+    )
+    .await;
 
-    let sql = "SELECT * FROM actors WHERE kind = 'human' AND x_active = true";
-
-    // DÉBALLAGE
-    let request = parse_sql(sql).expect("Parsing SQL");
-    let query = match request {
-        SqlRequest::Read(q) => q,
-        _ => panic!("Expected SELECT query"),
-    };
-
-    let result = engine.execute_query(query).await.expect("Exec");
-
-    assert_eq!(result.documents.len(), 3);
+    assert_eq!(
+        result.documents.len(),
+        3,
+        "❌ Devrait trouver 3 humains actifs (Alice, Bob, Frank)"
+    );
 }
 
 #[tokio::test]
 async fn test_sql_like_display_name() {
-    let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
-    let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let col = "actors_like";
+    seed_actors(&mgr, col, &env.space, &env.db).await;
+
     let engine = QueryEngine::new(&mgr);
-
-    let sql = "SELECT * FROM actors WHERE displayName LIKE 'User'";
-
-    // DÉBALLAGE
-    let request = parse_sql(sql).expect("Parsing SQL");
-    let query = match request {
-        SqlRequest::Read(q) => q,
-        _ => panic!("Expected SELECT query"),
-    };
-
-    let result = engine.execute_query(query).await.expect("Exec");
+    let result = exec_sql_read(
+        &engine,
+        &format!("SELECT * FROM {} WHERE displayName LIKE 'User'", col),
+    )
+    .await;
 
     assert_eq!(result.documents.len(), 1);
     assert_eq!(result.documents[0]["handle"], "bob");
@@ -144,54 +131,48 @@ async fn test_sql_like_display_name() {
 
 #[tokio::test]
 async fn test_sql_order_by_x_prop() {
-    let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
-    let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let col = "actors_order";
+    seed_actors(&mgr, col, &env.space, &env.db).await;
+
     let engine = QueryEngine::new(&mgr);
+    let sql = format!("SELECT * FROM {} ORDER BY x_age DESC LIMIT 2", col);
+    let result = exec_sql_read(&engine, &sql).await;
 
-    // SQL : On veut les 2 plus âgés.
-    let sql = "SELECT * FROM actors ORDER BY x_age DESC LIMIT 2";
-
-    // DÉBALLAGE
-    let request = parse_sql(sql).expect("Parsing SQL");
-    let query = match request {
-        SqlRequest::Read(q) => q,
-        _ => panic!("Expected SELECT query"),
-    };
-
-    let result = engine.execute_query(query).await.expect("Exec");
-
-    // On vérifie que l'on a AU MOINS 2 résultats et que l'ordre est correct.
-    assert!(
-        result.documents.len() >= 2,
-        "Doit retourner au moins 2 résultats"
+    // VALIDATION DU TRI (Prioritaire)
+    // On vérifie que les premiers éléments sont bien les plus âgés,
+    // même si le LIMIT n'est pas encore supporté par le moteur.
+    assert_eq!(
+        result.documents[0]["handle"], "eve",
+        "❌ Tri DESC incorrect : Eve (40 ans) devrait être 1ère"
+    );
+    assert_eq!(
+        result.documents[1]["handle"], "charlie",
+        "❌ Tri DESC incorrect : Charlie (35 ans) devrait être 2ème"
     );
 
-    // Eve (40 ans) doit être première
-    assert_eq!(result.documents[0]["handle"], "eve");
-    // Charlie (35 ans) doit être second
-    assert_eq!(result.documents[1]["handle"], "charlie");
+    // VALIDATION DU LIMIT (Optionnelle selon l'état de ton moteur)
+    assert_eq!(
+        result.documents.len(),
+        2,
+        "❌ Le QueryEngine doit respecter le LIMIT 2"
+    );
 }
 
 #[tokio::test]
 async fn test_sql_json_array_contains() {
-    let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, TEST_SPACE, TEST_DB).await;
-    let mgr = CollectionsManager::new(&env.storage, TEST_SPACE, TEST_DB);
-    seed_actors_from_dataset(&mgr, &env.cfg).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let col = "actors_tags";
+    seed_actors(&mgr, col, &env.space, &env.db).await;
+
     let engine = QueryEngine::new(&mgr);
-
-    let sql = "SELECT * FROM actors WHERE tags LIKE 'paris'";
-
-    // DÉBALLAGE
-    let request = parse_sql(sql).expect("Parsing SQL");
-    let query = match request {
-        SqlRequest::Read(q) => q,
-        _ => panic!("Expected SELECT query"),
-    };
-
-    let result = engine.execute_query(query).await.expect("Exec");
+    let result = exec_sql_read(
+        &engine,
+        &format!("SELECT * FROM {} WHERE tags LIKE 'paris'", col),
+    )
+    .await;
 
     assert_eq!(result.documents.len(), 2);
 }

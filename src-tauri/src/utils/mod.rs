@@ -10,7 +10,6 @@
 
 pub mod compression;
 pub mod config;
-pub mod env;
 pub mod error;
 pub mod fs;
 pub mod i18n;
@@ -42,7 +41,7 @@ pub mod io {
         read_bincode_compressed, read_compressed, read_dir, read_json, read_json_compressed,
         read_to_string, remove_dir_all, remove_file, rename, tempdir, write, write_atomic,
         write_bincode_compressed_atomic, write_compressed_atomic, write_json_atomic,
-        write_json_compressed_atomic, Component, Dir, DirEntry, Path, PathBuf, ProjectScope,
+        write_json_compressed_atomic, Component, Dir, DirEntry, File, Path, PathBuf, ProjectScope,
         TempDir,
     };
 }
@@ -50,7 +49,7 @@ pub mod io {
 pub mod data {
     pub use super::json::{
         from_binary, from_value, json, merge, parse, stringify, stringify_pretty, to_binary,
-        to_value, ContextBuilder, Map, Value,
+        to_value, to_vec, ContextBuilder, Map, Value,
     };
     pub use serde::{Deserialize, Serialize};
     pub use std::collections::{BTreeMap, HashMap, HashSet};
@@ -59,7 +58,6 @@ pub mod data {
 /// **Application Context** : Accès global Config/Log/Env.
 pub mod context {
     pub use super::config::AppConfig;
-    pub use super::env::{current_dir, get, get_optional, get_or, is_enabled};
     pub use super::i18n::{init_i18n, t};
     pub use super::logger::init_logging;
 }
@@ -92,6 +90,7 @@ pub use logger::init_logging;
 
 // --> Domaine (Requis par migrator.rs et autres)
 pub use chrono::{DateTime, Utc};
+pub use std::str::FromStr;
 pub use uuid::Uuid;
 
 // --> Logging (Requis par manager.rs)
@@ -104,9 +103,9 @@ pub use std::sync::{
     Arc, Mutex, MutexGuard, Once, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 pub use tokio::sync::mpsc;
+pub use tokio::sync::Mutex as AsyncMutex;
 pub use tokio::sync::RwLock as AsyncRwLock;
 pub use tokio::time::sleep;
-
 // --> Macros externes
 pub use async_recursion::async_recursion;
 pub use async_trait::async_trait;
@@ -114,6 +113,7 @@ pub use async_trait::async_trait;
 // --> I/O
 pub use std::io::{BufRead, Read, Seek, Write};
 pub use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+pub use tokio::process;
 
 // --> Collections & Types
 pub use lru::LruCache;
@@ -123,7 +123,7 @@ pub use std::fmt;
 pub use std::hash::Hash;
 pub use std::num::NonZeroUsize;
 pub use std::thread;
-pub use std::time::{Duration, Instant};
+pub use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // --> Regex
 pub use regex::Regex;

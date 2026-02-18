@@ -1,6 +1,5 @@
-use anyhow::Result;
-use serde_json::Value;
-use std::path::PathBuf;
+use crate::utils::{data, io::PathBuf, prelude::*};
+
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::Surreal;
 
@@ -12,8 +11,14 @@ pub struct SurrealClient {
 impl SurrealClient {
     pub async fn init(data_dir: PathBuf) -> Result<Self> {
         let db_path = data_dir.join("raise_graph.db");
-        let db = Surreal::new::<SurrealKv>(db_path).await?;
-        db.use_ns("raise").use_db("graph").await?;
+        let db = Surreal::new::<SurrealKv>(db_path)
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
+
+        db.use_ns("raise")
+            .use_db("graph")
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(Self { db })
     }
 
@@ -24,7 +29,7 @@ impl SurrealClient {
         id: &str,
         content: Value,
     ) -> Result<Option<Value>> {
-        let json_content = serde_json::to_string(&content)?;
+        let json_content = data::stringify(&content)?;
 
         // 1. TENTATIVE DE CRÉATION
         // "RETURN *, <string>id as id" force l'ID en format "table:id" (String) pour la compatibilité JSON
@@ -56,8 +61,14 @@ impl SurrealClient {
             table, id, json_content
         );
 
-        let mut res_update = self.db.query(&update_sql).await?;
-        let updated: Option<Value> = res_update.take(0)?;
+        let mut res_update = self
+            .db
+            .query(&update_sql)
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
+        let updated: Option<Value> = res_update
+            .take(0)
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(updated)
     }
 
@@ -66,14 +77,22 @@ impl SurrealClient {
             "SELECT *, <string>id as id FROM type::thing('{}', '{}');",
             table, id
         );
-        let mut res = self.db.query(&sql).await?;
-        let record: Option<Value> = res.take(0)?;
+        let mut res = self
+            .db
+            .query(&sql)
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
+        let record: Option<Value> = res.take(0).map_err(|e| AppError::from(e.to_string()))?;
         Ok(record)
     }
 
     pub async fn delete_node(&self, table: &str, id: &str) -> Result<()> {
         let sql = format!("DELETE type::thing('{}', '{}');", table, id);
-        let _ = self.db.query(&sql).await?;
+        let _ = self
+            .db
+            .query(&sql)
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(())
     }
 
@@ -91,7 +110,11 @@ impl SurrealClient {
             from_record, relation, to_record
         );
 
-        let _ = self.db.query(sql).await?;
+        let _ = self
+            .db
+            .query(sql)
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(())
     }
 
@@ -101,7 +124,7 @@ impl SurrealClient {
         vector: Vec<f32>,
         limit: usize,
     ) -> Result<Vec<Value>> {
-        let vector_json = serde_json::to_string(&vector)?;
+        let vector_json = data::stringify(&vector)?;
 
         let sql = format!(
             "SELECT *, <string>id as id, vector::similarity::cosine(embedding, {}) AS score 
@@ -111,15 +134,25 @@ impl SurrealClient {
             vector_json, table, limit
         );
 
-        let mut response = self.db.query(sql).await?;
-        let results: Vec<Value> = response.take(0)?;
+        let mut response = self
+            .db
+            .query(sql)
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
+        let results: Vec<Value> = response
+            .take(0)
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(results)
     }
 
     #[allow(dead_code)]
     pub async fn raw_query(&self, query: &str) -> Result<Vec<Value>> {
-        let mut res = self.db.query(query).await?;
-        let results: Vec<Value> = res.take(0)?;
+        let mut res = self
+            .db
+            .query(query)
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
+        let results: Vec<Value> = res.take(0).map_err(|e| AppError::from(e.to_string()))?;
         Ok(results)
     }
 }
@@ -130,9 +163,8 @@ impl SurrealClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::io::{self, PathBuf};
     use std::env;
-    use std::fs;
 
     // Helper pour créer une DB isolée pour chaque test
     async fn setup_test_db(test_name: &str) -> (SurrealClient, PathBuf) {
@@ -142,9 +174,11 @@ mod tests {
 
         // Nettoyage préalable
         if temp_path.exists() {
-            let _ = fs::remove_dir_all(&temp_path);
+            let _ = io::remove_dir_all(&temp_path).await;
         }
-        fs::create_dir_all(&temp_path).expect("Impossible de créer le dossier temp");
+        io::create_dir_all(&temp_path)
+            .await
+            .expect("Impossible de créer le dossier temp");
 
         let client = SurrealClient::init(temp_path.clone())
             .await
@@ -154,7 +188,7 @@ mod tests {
 
     // Helper pour nettoyer après le test
     fn teardown_test_db(path: PathBuf) {
-        let _ = fs::remove_dir_all(path);
+        let _ = io::remove_dir_all(&path);
     }
 
     #[tokio::test]

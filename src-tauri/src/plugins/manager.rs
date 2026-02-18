@@ -1,18 +1,14 @@
 // FICHIER : src-tauri/src/plugins/manager.rs
+use crate::utils::{io, prelude::*, Arc, AsyncMutex, HashMap, Mutex};
 
 use super::runtime::CognitivePlugin;
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::storage::StorageEngine;
-use anyhow::{anyhow, Result};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::fs;
-use std::sync::{Arc, Mutex};
 
 pub struct PluginManager {
     storage: StorageEngine,
     ai_orchestrator: Option<Arc<Mutex<AiOrchestrator>>>,
-    plugins: Arc<Mutex<HashMap<String, CognitivePlugin>>>,
+    plugins: Arc<AsyncMutex<HashMap<String, CognitivePlugin>>>,
 }
 
 impl PluginManager {
@@ -23,11 +19,11 @@ impl PluginManager {
         Self {
             storage: storage.clone(),
             ai_orchestrator,
-            plugins: Arc::new(Mutex::new(HashMap::new())),
+            plugins: Arc::new(AsyncMutex::new(HashMap::new())),
         }
     }
 
-    pub fn load_plugin(
+    pub async fn load_plugin(
         &self,
         plugin_id: &str,
         file_path: &str,
@@ -36,8 +32,9 @@ impl PluginManager {
     ) -> Result<()> {
         println!("🔌 Chargement du plugin : {} ({})", plugin_id, file_path);
 
-        let binary = fs::read(file_path)
-            .map_err(|e| anyhow!("Impossible de lire le fichier wasm : {}", e))?;
+        let binary = io::read(file_path).await.map_err(|e| {
+            AppError::Validation(format!("Impossible de lire le fichier wasm : {}", e))
+        })?;
 
         let plugin = CognitivePlugin::new(
             &binary,
@@ -49,17 +46,17 @@ impl PluginManager {
 
         self.plugins
             .lock()
-            .unwrap()
+            .await
             .insert(plugin_id.to_string(), plugin);
         Ok(())
     }
 
-    pub fn run_plugin_with_context(
+    pub async fn run_plugin_with_context(
         &self,
         plugin_id: &str,
         mandate: Option<Value>,
     ) -> Result<(i32, Vec<Value>)> {
-        let mut map = self.plugins.lock().unwrap();
+        let mut map = self.plugins.lock().await;
         if let Some(plugin) = map.get_mut(plugin_id) {
             if let Some(m) = mandate {
                 plugin.set_mandate(m);
@@ -70,12 +67,15 @@ impl PluginManager {
 
             Ok((result, signals))
         } else {
-            Err(anyhow!("Plugin introuvable : {}", plugin_id))
+            Err(AppError::Validation(format!(
+                "Plugin introuvable : {}",
+                plugin_id
+            )))
         }
     }
 
-    pub fn list_active_plugins(&self) -> Vec<String> {
-        self.plugins.lock().unwrap().keys().cloned().collect()
+    pub async fn list_active_plugins(&self) -> Vec<String> {
+        self.plugins.lock().await.keys().cloned().collect()
     }
 }
 
@@ -87,8 +87,7 @@ impl PluginManager {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     fn create_test_env() -> (PluginManager, StorageEngine, tempfile::TempDir) {
         let dir = tempdir().unwrap();
@@ -117,16 +116,18 @@ mod tests {
 
         let wasm_bytes = generate_minimal_wasm();
         let wasm_path = _tmp_dir.path().join("workflow_spy.wasm");
-        fs::write(&wasm_path, wasm_bytes).unwrap();
+        io::write(&wasm_path, wasm_bytes).await.unwrap();
 
         manager
             .load_plugin("workflow_spy", wasm_path.to_str().unwrap(), "s", "d")
+            .await
             .expect("Le chargement a échoué");
 
         // Test d'exécution avec injection de mandat (même si le binaire minimal l'ignore)
         let mandate = json!({ "id": "test_mandate" });
         let (result_code, signals) = manager
             .run_plugin_with_context("workflow_spy", Some(mandate))
+            .await
             .expect("L'exécution a échoué");
 
         assert_eq!(result_code, 1, "Le plugin minimal doit retourner 1");
@@ -138,10 +139,10 @@ mod tests {
         println!("✅ Test de cycle de vie Manager passé avec succès.");
     }
 
-    #[test]
-    fn test_plugin_not_found() {
+    #[tokio::test]
+    async fn test_plugin_not_found() {
         let (manager, _, _) = create_test_env();
-        let res = manager.run_plugin_with_context("unknown", None);
+        let res = manager.run_plugin_with_context("unknown", None).await;
         assert!(res.is_err());
     }
 }

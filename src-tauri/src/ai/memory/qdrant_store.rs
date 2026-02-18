@@ -1,6 +1,6 @@
+use crate::utils::{async_trait, data, prelude::*, HashMap, Uuid};
+
 use super::{MemoryRecord, VectorStore};
-use anyhow::Result;
-use async_trait::async_trait;
 use qdrant_client::{
     qdrant::{
         point_id::PointIdOptions, vectors_config::Config, Condition, CreateCollection, Distance,
@@ -9,9 +9,6 @@ use qdrant_client::{
     },
     Payload, Qdrant,
 };
-use serde_json::json;
-use std::collections::HashMap;
-use uuid::Uuid;
 
 pub struct QdrantMemory {
     client: Qdrant,
@@ -26,8 +23,9 @@ impl QdrantMemory {
         config.check_compatibility = false;
 
         // 3. On construit le client avec cette configuration modifiée
-        let client = config.build()?;
-
+        let client = config
+            .build()
+            .map_err(|e| AppError::from(format!("Erreur Init Qdrant: {}", e)))?;
         Ok(Self { client })
     }
 }
@@ -47,7 +45,14 @@ fn point_id_to_string(point_id: Option<PointId>) -> String {
 #[async_trait]
 impl VectorStore for QdrantMemory {
     async fn init_collection(&self, collection_name: &str, vector_size: u64) -> Result<()> {
-        if !self.client.collection_exists(collection_name).await? {
+        // ✅ Conversion de QdrantError vers AppError
+        let exists = self
+            .client
+            .collection_exists(collection_name)
+            .await
+            .map_err(|e| AppError::from(format!("Erreur vérification collection: {}", e)))?;
+
+        if !exists {
             self.client
                 .create_collection(CreateCollection {
                     collection_name: collection_name.to_string(),
@@ -60,7 +65,9 @@ impl VectorStore for QdrantMemory {
                     }),
                     ..Default::default()
                 })
-                .await?;
+                .await
+                .map_err(|e| AppError::from(format!("Erreur création collection: {}", e)))?;
+            // ✅
         }
         Ok(())
     }
@@ -80,13 +87,17 @@ impl VectorStore for QdrantMemory {
                 payload,
             ));
         }
+
+        // ✅ Conversion de QdrantError vers AppError
         self.client
             .upsert_points(UpsertPoints {
                 collection_name: collection_name.to_string(),
                 points,
                 ..Default::default()
             })
-            .await?;
+            .await
+            .map_err(|e| AppError::from(format!("Erreur insertion Qdrant: {}", e)))?;
+
         Ok(())
     }
 
@@ -107,6 +118,7 @@ impl VectorStore for QdrantMemory {
             filter = Some(Filter::all(conditions));
         }
 
+        // ✅ Conversion de QdrantError vers AppError
         let search_result = self
             .client
             .search_points(SearchPoints {
@@ -122,7 +134,8 @@ impl VectorStore for QdrantMemory {
                 }),
                 ..Default::default()
             })
-            .await?;
+            .await
+            .map_err(|e| AppError::from(format!("Erreur recherche Qdrant: {}", e)))?;
 
         Ok(search_result
             .result
@@ -131,7 +144,7 @@ impl VectorStore for QdrantMemory {
                 let id_str = point_id_to_string(point.id);
                 // Conversion robuste du Payload Qdrant vers JSON
                 let payload_struct = Payload::from(point.payload);
-                let json_meta: serde_json::Value = payload_struct.into();
+                let json_meta: data::Value = payload_struct.into();
 
                 let content = json_meta
                     .get("content")

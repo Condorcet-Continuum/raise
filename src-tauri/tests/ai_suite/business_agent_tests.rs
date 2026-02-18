@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/business_agent_tests.rs
 
-use crate::common::init_ai_test_env;
+use crate::common::setup_test_env;
 // On importe uniquement ce dont on a besoin
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{business_agent::BusinessAgent, Agent, AgentContext};
@@ -13,7 +13,7 @@ async fn test_business_agent_generates_oa_entities() {
     dotenvy::dotenv().ok();
 
     // CORRECTION E0609 : init_ai_test_env() est désormais async, on doit l'attendre
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     let local_url =
@@ -83,25 +83,23 @@ async fn test_business_agent_generates_oa_entities() {
 
     let mut found_cap = false;
     if capabilities_dir.exists() {
-        for entry in std::fs::read_dir(&capabilities_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
+        for e in std::fs::read_dir(&capabilities_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
 
-                if content.contains("crédit")
-                    || content.contains("instruction")
-                    || content.contains("immo")
-                {
-                    found_cap = true;
-                    println!("✅ Capacité trouvée : {:?}", e.file_name());
-                    break;
-                } else {
-                    println!(
-                        "   ℹ️ Fichier ignoré (contenu non matché) : {:?}",
-                        e.file_name()
-                    );
-                }
+            if content.contains("crédit")
+                || content.contains("instruction")
+                || content.contains("immo")
+            {
+                found_cap = true;
+                println!("✅ Capacité trouvée : {:?}", e.file_name());
+                break;
+            } else {
+                println!(
+                    "   ℹ️ Fichier ignoré (contenu non matché) : {:?}",
+                    e.file_name()
+                );
             }
         }
     } else {
@@ -122,17 +120,15 @@ async fn test_business_agent_generates_oa_entities() {
     let mut found_advisor = false;
 
     if actors_dir.exists() {
-        for entry in std::fs::read_dir(&actors_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
-                if content.contains("analyste") {
-                    found_analyst = true;
-                }
-                if content.contains("conseiller") {
-                    found_advisor = true;
-                }
+        for e in std::fs::read_dir(&actors_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
+            if content.contains("analyste") {
+                found_analyst = true;
+            }
+            if content.contains("conseiller") {
+                found_advisor = true;
             }
         }
     }

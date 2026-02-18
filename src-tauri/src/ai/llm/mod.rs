@@ -1,5 +1,5 @@
 use self::candle_engine::CandleLlmEngine;
-use std::sync::Mutex;
+use crate::utils::Mutex;
 
 pub mod candle_engine;
 pub mod client;

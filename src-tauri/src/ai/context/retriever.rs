@@ -188,7 +188,7 @@ impl SimpleRetriever {
 mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
-    use std::collections::HashMap;
+    use crate::utils::data::HashMap;
 
     // Helper pour créer un élément factice
     fn mock_el(name: &str) -> ArcadiaElement {

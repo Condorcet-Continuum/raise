@@ -1,11 +1,9 @@
 // FICHIER : src-tauri/src/model_engine/transformers/dialogue_to_model.rs
 
+use crate::utils::{data::Value, prelude::*, HashMap, Uuid};
+
 use crate::model_engine::arcadia; // <-- La source de vérité
 use crate::model_engine::types::{ArcadiaElement, NameType};
-use anyhow::{anyhow, Result};
-use serde_json::Value;
-use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Transformateur spécialisé pour convertir une intention IA (JSON) en Élément Arcadia
 pub struct DialogueToModelTransformer;
@@ -17,12 +15,11 @@ impl DialogueToModelTransformer {
         let name_str = intent
             .get("name")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Le champ 'name' est requis dans l'intention."))?;
+            .ok_or_else(|| AppError::from("Le champ 'name' est requis dans l'intention."))?;
 
-        let type_str = intent
-            .get("type")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Le champ 'type' est requis (ex: Component, Function)."))?;
+        let type_str = intent.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+            AppError::from("Le champ 'type' est requis (ex: Component, Function).")
+        })?;
 
         // 2. Déduction de la couche (Layer) par défaut si manquante
         let layer_str = intent
@@ -53,11 +50,10 @@ impl DialogueToModelTransformer {
 
             // Fallback ou erreur
             (l, t) => {
-                return Err(anyhow!(
+                return Err(AppError::Validation(format!(
                     "Combinaison Layer/Type non supportée : {} / {}",
-                    l,
-                    t
-                ))
+                    l, t
+                )))
             }
         };
 

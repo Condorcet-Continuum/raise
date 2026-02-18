@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/ai/training/mod.rs
 
+use crate::utils::prelude::*;
+
 pub mod dataset;
 pub mod lora;
 
@@ -15,12 +17,12 @@ pub async fn ai_train_domain_native(
     domain: String,
     epochs: usize,
     lr: f64,
-) -> Result<String, String> {
+) -> Result<String> {
     let _device = Device::new_cuda(0).unwrap_or(Device::Cpu);
     let examples = dataset::extract_domain_data(storage, &space, &db_name, &domain).await?;
 
     if examples.is_empty() {
-        return Err("Aucune donnée pour ce domaine.".into());
+        return Err(AppError::from("Aucune donnée pour ce domaine.".to_string()));
     }
 
     let varmap = VarMap::new();
@@ -32,14 +34,17 @@ pub async fn ai_train_domain_native(
             ..Default::default()
         },
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| AppError::from(e.to_string()))?;
 
     for epoch in 1..=epochs {
         println!("Epoch {}/{} - Domaine: {}", epoch, epochs, domain);
     }
 
     let save_path = format!("{}_adapter.safetensors", domain);
-    varmap.save(&save_path).map_err(|e| e.to_string())?;
+
+    varmap
+        .save(&save_path)
+        .map_err(|e| AppError::from(format!("Erreur sauvegarde poids: {}", e)))?;
 
     Ok(format!("Adaptateur {} sauvegardé avec succès.", save_path))
 }
@@ -50,7 +55,7 @@ pub async fn ai_train_domain_native(
 mod tests {
     use super::*;
     use crate::json_db::storage::JsonDbConfig;
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     #[tokio::test]
     async fn test_ai_train_domain_native_empty_data() {
@@ -70,6 +75,7 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Aucune donnée pour ce domaine.");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Aucune donnée pour ce domaine."));
     }
 }

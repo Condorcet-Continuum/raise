@@ -1,9 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/data_agent.rs
 
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use serde_json::json;
-use uuid::Uuid;
+use crate::utils::{async_trait, data, prelude::*, Uuid};
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -49,15 +46,15 @@ impl DataAgent {
         user: &str,
         doc_type: &str,
         original_name: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         let response = ctx
             .llm
             .ask(LlmBackend::LocalLlama, sys, user)
             .await
-            .map_err(|e| anyhow!("LLM Err: {}", e))?;
+            .map_err(|e| AppError::Validation(format!("LLM Err: {}", e)))?;
 
         let clean = extract_json_from_llm(&response);
-        let mut doc: serde_json::Value = serde_json::from_str(&clean).unwrap_or(json!({}));
+        let mut doc: Value = data::parse(&clean).unwrap_or(json!({}));
 
         // --- BLINDAGE TOTAL ---
         doc["name"] = json!(original_name);
@@ -77,7 +74,7 @@ impl DataAgent {
         ctx: &AgentContext,
         name: &str,
         history_context: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -140,7 +137,7 @@ impl Agent for DataAgent {
                     _ => (self.enrich_class(ctx, name, &history_str).await?, "classes"),
                 };
 
-                let artifact = save_artifact(ctx, "data", collection, &doc)?;
+                let artifact = save_artifact(ctx, "data", collection, &doc).await?;
 
                 // 2. ROUTAGE DYNAMIQUE (Data -> All Layers)
                 let (target_agent, msg_content) = self.determine_target_agent(name);

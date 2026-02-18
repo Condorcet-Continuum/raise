@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/src/traceability/reporting/trace_matrix.rs
+use crate::utils::prelude::*;
 
 use crate::model_engine::types::{NameType, ProjectModel};
 use crate::traceability::tracer::Tracer;
-use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct TraceabilityMatrix {
@@ -70,8 +70,7 @@ impl MatrixGenerator {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
-    use serde_json::json;
-    use std::collections::HashMap;
+    use crate::utils::{data::json, HashMap};
 
     // Helper pour créer des éléments mockés
     fn create_element(id: &str, name: &str, props: serde_json::Value) -> ArcadiaElement {

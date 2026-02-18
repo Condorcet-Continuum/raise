@@ -58,8 +58,7 @@ impl ComplianceChecker for Iso26262Checker {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use serde_json::json;
-    use std::collections::HashMap;
+    use crate::utils::{data::json, HashMap};
 
     fn create_comp(id: &str, props: serde_json::Value) -> ArcadiaElement {
         let mut properties = HashMap::new();

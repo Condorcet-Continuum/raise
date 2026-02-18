@@ -1,5 +1,4 @@
-use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
+use crate::utils::{fmt::Debug, prelude::*};
 
 /// Le trait Genome définit la structure manipulable par l'AG.
 /// Doit être sérialisable pour le stockage et le passage Frontend/Backend.

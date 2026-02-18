@@ -1,14 +1,10 @@
 // FICHIER : src-tauri/src/ai/tools/codegen_tool.rs
 
-use async_trait::async_trait;
-use serde_json::{json, Value};
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use crate::ai::protocols::mcp::{McpTool, McpToolCall, McpToolResult, ToolDefinition};
 use crate::code_generator::{CodeGeneratorService, TargetLanguage};
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
+use crate::utils::{async_trait, io::PathBuf, prelude::*, Arc};
 
 /// Outil MCP qui fait le pont entre l'IA, la Base de Données et le Générateur de Code.
 pub struct CodeGenTool {
@@ -34,7 +30,7 @@ impl CodeGenTool {
 
     /// Récupère le document complet depuis la base de données via son ID interne.
     /// Parcourt les collections probables car l'ID est unique globalement.
-    async fn fetch_component(&self, id: &str) -> Result<Value, String> {
+    async fn fetch_component(&self, id: &str) -> Result<Value> {
         let manager = CollectionsManager::new(&self.db, &self.space, &self.db_name);
 
         // Liste des collections où peuvent se trouver les composants générables
@@ -49,14 +45,14 @@ impl CodeGenTool {
             }
         }
 
-        Err(format!(
+        Err(AppError::from(format!(
             "Composant '{}' introuvable dans les collections {:?} (Space: {}/{})",
             id, collections, self.space, self.db_name
-        ))
+        )))
     }
 
     /// Détermine le langage cible depuis le JSON du composant
-    fn determine_language(&self, component: &Value) -> Result<TargetLanguage, String> {
+    fn determine_language(&self, component: &Value) -> Result<TargetLanguage> {
         let tech = component
             .get("implementation")
             .and_then(|i| i.get("technology"))
@@ -70,10 +66,10 @@ impl CodeGenTool {
             "Python_Module" | "python" => Ok(TargetLanguage::Python),
             "Verilog_Module" | "verilog" => Ok(TargetLanguage::Verilog),
             "VHDL_Entity" | "vhdl" => Ok(TargetLanguage::Vhdl),
-            _ => Err(format!(
+            _ => Err(AppError::from(format!(
                 "Technologie non supportée ou manquante : '{}'",
                 tech
-            )),
+            ))),
         }
     }
 }
@@ -150,7 +146,7 @@ impl McpTool for CodeGenTool {
 mod tests {
     use super::*;
     use crate::json_db::storage::JsonDbConfig;
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     #[tokio::test]
     async fn test_codegen_tool_full_integration() {

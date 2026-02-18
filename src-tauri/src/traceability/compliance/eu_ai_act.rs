@@ -65,8 +65,7 @@ impl ComplianceChecker for EuAiActChecker {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use serde_json::json;
-    use std::collections::HashMap;
+    use crate::utils::{data::json, HashMap};
 
     fn create_ai(id: &str, props: serde_json::Value) -> ArcadiaElement {
         let mut properties = HashMap::new();

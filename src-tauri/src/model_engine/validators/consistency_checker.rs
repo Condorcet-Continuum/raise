@@ -4,8 +4,7 @@ use super::{ModelValidator, Severity, ValidationIssue};
 use crate::json_db::jsonld::vocabulary::VocabularyRegistry; // Accès à l'ontologie
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
-use async_trait::async_trait;
-use serde_json::Value;
+use crate::utils::{async_trait, prelude::*};
 
 /// Validateur de cohérence technique et sémantique.
 #[derive(Default)]

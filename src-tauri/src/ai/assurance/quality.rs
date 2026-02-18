@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use crate::utils::prelude::*;
 
 /// Catégorie de la métrique mesurée
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

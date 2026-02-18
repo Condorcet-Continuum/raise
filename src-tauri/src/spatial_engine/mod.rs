@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use crate::utils::prelude::*;
 use std::f32::consts::PI;
 
 // --- DÉFINITION DES TYPES ---

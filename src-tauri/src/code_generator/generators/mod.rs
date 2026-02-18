@@ -1,8 +1,6 @@
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use crate::utils::data::Value;
-use crate::utils::io::PathBuf;
-use crate::utils::Result;
 
+use crate::utils::{data::Value, io::PathBuf, prelude::*};
 // Liste complète des générateurs
 pub mod cpp_gen; // NOUVEAU
 pub mod rust_gen;

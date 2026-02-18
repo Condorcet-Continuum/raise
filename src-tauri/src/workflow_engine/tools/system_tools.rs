@@ -1,9 +1,7 @@
 // FICHIER : src-tauri/src/workflow_engine/tools/system_tools.rs
+use crate::utils::{async_trait, fmt::Debug, prelude::*, Mutex, Result};
 
 use super::AgentTool;
-use crate::utils::Result;
-use serde_json::{json, Value};
-use std::sync::Mutex;
 
 // --- JUMEAU NUMÉRIQUE (État Global Simulé) ---
 // Cette variable est accessible publiquement pour être modifiée par les commandes Tauri
@@ -13,7 +11,7 @@ pub static VIBRATION_SENSOR: Mutex<f64> = Mutex::new(0.0);
 #[derive(Debug)]
 pub struct SystemMonitorTool;
 
-#[async_trait::async_trait]
+#[async_trait]
 impl AgentTool for SystemMonitorTool {
     fn name(&self) -> &str {
         "read_system_metrics"

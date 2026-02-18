@@ -9,9 +9,7 @@ pub mod state_machine;
 pub mod tools;
 pub mod wasm_host;
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
+use crate::utils::{prelude::*, HashMap};
 
 // --- RE-EXPORTS (L'API Publique du Moteur) ---
 pub use compiler::WorkflowCompiler;

@@ -1,5 +1,8 @@
 // FICHIER : src-tauri/tests/json_db_suite.rs
-
+// Module commun (Setup, Helpers, Environnement asynchrone)
+#[path = "common/mod.rs"]
+mod common;
+/*
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use raise::utils::{
@@ -8,7 +11,7 @@ use raise::utils::{
     fs::{self, Path, PathBuf},
     Once, // Exporté dans mod.rs
 };
-
+*/
 // --- DÉCLARATION EXPLICITE DES MODULES ---
 // On dit à Rust exactement où trouver chaque fichier dans le sous-dossier
 
@@ -49,7 +52,7 @@ pub mod workunits_x_compute;
 pub mod integration_suite;
 
 // --- ENVIRONNEMENT DE TEST (Commun à tous) ---
-
+/*
 static INIT: Once = Once::new();
 
 pub const TEST_SPACE: &str = "un2";
@@ -166,3 +169,4 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> AnyResult<()> {
     }
     Ok(())
 }
+ */

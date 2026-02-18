@@ -4,9 +4,7 @@
 //! Ce fichier permet de parser le YAML standard (Common Connection Profile - CCP)
 //! utilisé par les SDKs Fabric pour identifier les pairs, les CAs et les MSPs.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
+use crate::utils::{prelude::*, HashMap};
 /// Racine du Connection Profile
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionProfile {

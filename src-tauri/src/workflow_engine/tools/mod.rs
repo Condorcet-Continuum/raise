@@ -1,8 +1,6 @@
 // FICHIER : src-tauri/src/workflow_engine/tools/mod.rs
 
-use crate::utils::Result;
-use serde_json::Value;
-use std::fmt::Debug;
+use crate::utils::{fmt::Debug, prelude::*, Result};
 
 /// Définition d'un Outil que l'Agent (ou le Workflow) peut appeler.
 /// Inspiré par le standard MCP (Model Context Protocol).

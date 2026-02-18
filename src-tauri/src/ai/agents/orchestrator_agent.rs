@@ -1,7 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/orchestrator_agent.rs
 
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
+use crate::utils::{async_trait, prelude::*};
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{load_session, save_session};
@@ -24,7 +23,7 @@ impl OrchestratorAgent {
         ctx.llm
             .ask(LlmBackend::LocalLlama, sys, &user)
             .await
-            .map_err(|e| anyhow!("{}", e))
+            .map_err(|e| AppError::Validation(e.to_string()))
     }
 }
 
@@ -81,8 +80,7 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use std::sync::Arc;
-    use tempfile::tempdir;
+    use crate::utils::{io::tempdir, Arc};
 
     #[test]
     fn test_orchestrator_id() {

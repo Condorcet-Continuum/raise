@@ -1,9 +1,10 @@
 // FICHIER : src-tauri/tests/rules_suite/stdlib_tests.rs
 
 use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider};
-use serde_json::json;
+use raise::utils::prelude::*;
 
 #[tokio::test] // CORRECTION : Passage en test asynchrone
+#[allow(clippy::approx_constant)]
 async fn test_math_extensions() {
     let provider = NoOpDataProvider;
     let ctx = json!({});
@@ -21,11 +22,10 @@ async fn test_math_extensions() {
 
     // Round
     let r1 = Expr::Round {
-        value: Box::new(Expr::Val(json!(3.14159))),
+        value: Box::new(Expr::Val(json!(std::f64::consts::PI))),
         precision: Box::new(Expr::Val(json!(2))),
     };
     assert_eq!(
-        // CORRECTION : Ajout de .await
         Evaluator::evaluate(&r1, &ctx, &provider)
             .await
             .unwrap()

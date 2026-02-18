@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/data_agent_tests.rs
 
-use crate::common::init_ai_test_env;
+use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{data_agent::DataAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
@@ -13,7 +13,7 @@ async fn test_data_agent_creates_class_and_enum() {
 
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone dans ai_suite/mod.rs.
     // On doit l'attendre pour récupérer l'environnement de test concret.
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     let local_url =
@@ -77,24 +77,22 @@ async fn test_data_agent_creates_class_and_enum() {
     let mut found_class = false;
 
     if classes_dir.exists() {
-        for entry in std::fs::read_dir(&classes_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
+        for e in std::fs::read_dir(&classes_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
 
-                // CORRECTION : On vérifie juste le nom "client"
-                // On retire l'exigence "attributes" qui fait échouer les petits modèles
-                if content.contains("client") {
-                    found_class = true;
-                    println!(
-                        "✅ Classe validée : {:?} (Contenu: {})",
-                        e.file_name(),
-                        content
-                    );
-                } else if content.contains("errorfallback") {
-                    println!("❌ Fichier ERREUR trouvé : {:?}", e.file_name());
-                }
+            // CORRECTION : On vérifie juste le nom "client"
+            // On retire l'exigence "attributes" qui fait échouer les petits modèles
+            if content.contains("client") {
+                found_class = true;
+                println!(
+                    "✅ Classe validée : {:?} (Contenu: {})",
+                    e.file_name(),
+                    content
+                );
+            } else if content.contains("errorfallback") {
+                println!("❌ Fichier ERREUR trouvé : {:?}", e.file_name());
             }
         }
     }
@@ -108,17 +106,15 @@ async fn test_data_agent_creates_class_and_enum() {
     let mut found_enum = false;
 
     if types_dir.exists() {
-        for entry in std::fs::read_dir(&types_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
+        for e in std::fs::read_dir(&types_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
 
-                if content.contains("statutcommande") {
-                    found_enum = true;
-                    println!("✅ Enum validée : {:?}", e.file_name());
-                    break;
-                }
+            if content.contains("statutcommande") {
+                found_enum = true;
+                println!("✅ Enum validée : {:?}", e.file_name());
+                break;
             }
         }
     }

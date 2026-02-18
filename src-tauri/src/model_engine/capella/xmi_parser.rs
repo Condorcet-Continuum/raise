@@ -1,20 +1,22 @@
 // FICHIER : src-tauri/src/model_engine/capella/xmi_parser.rs
 
+use crate::utils::{prelude::*, HashMap};
+
 use crate::model_engine::arcadia; // <-- Import du vocabulaire cible
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
-use anyhow::{Context, Result};
+
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
-use std::collections::HashMap;
-use std::path::Path;
 
 pub struct CapellaXmiParser;
 
 impl CapellaXmiParser {
     /// Parse un fichier .capella et remplit le ProjectModel donné
     pub fn parse_file(path: &Path, model: &mut ProjectModel) -> Result<()> {
-        let mut reader =
-            Reader::from_file(path).context("Impossible d'ouvrir le fichier .capella")?;
+        let mut reader = Reader::from_file(path).map_err(|e| {
+            crate::utils::AppError::from(format!("Impossible de lire le fichier XMI : {}", e))
+        })?;
+
         reader.config_mut().trim_text(true);
 
         Self::parse_xml(&mut reader, model)
@@ -69,11 +71,11 @@ impl CapellaXmiParser {
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
+                    return Err(AppError::Validation(format!(
                         "Erreur XML à la position {}: {:?}",
                         reader.buffer_position(),
                         e
-                    ))
+                    )))
                 }
                 _ => (),
             }

@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/code_gen_suite/agent_tests.rs
 
-use crate::common::init_ai_test_env; // REVERSION : Retour à l'import fonctionnel depuis common
+use crate::common::setup_test_env; // REVERSION : Retour à l'import fonctionnel depuis common
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
@@ -11,8 +11,8 @@ use raise::utils::Arc;
 async fn test_software_agent_creates_component_end_to_end() {
     dotenvy::dotenv().ok();
 
-    // CORRECTION : init_ai_test_env() est asynchrone, on l'attend pour obtenir AiTestEnv.
-    let env = init_ai_test_env().await;
+    // CORRECTION : setup_test_env() est asynchrone, on l'attend pour obtenir AiTestEnv.
+    let env = setup_test_env().await;
 
     // --- CONFIGURATION ROBUSTE ---
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
@@ -74,13 +74,11 @@ async fn test_software_agent_creates_component_end_to_end() {
     let mut found = false;
     if components_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(&components_dir) {
-            for entry in entries {
-                if let Ok(e) = entry {
-                    let content = std::fs::read_to_string(e.path()).unwrap_or_default();
-                    if content.contains("TestAuthService") {
-                        found = true;
-                        break;
-                    }
+            for e in entries.flatten() {
+                let content = std::fs::read_to_string(e.path()).unwrap_or_default();
+                if content.contains("TestAuthService") {
+                    found = true;
+                    break;
                 }
             }
         }
@@ -92,7 +90,7 @@ async fn test_software_agent_creates_component_end_to_end() {
 #[ignore]
 async fn test_intent_classification_integration() {
     dotenvy::dotenv().ok();
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     if !env.client.ping_local().await && api_key.is_empty() {

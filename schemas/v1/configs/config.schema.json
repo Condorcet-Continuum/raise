@@ -1,92 +1,159 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raise.local/schemas/v1/configs/config.schema.json",
-  "title": "Config",
-  "description": "Paramètre de configuration typé.",
-  "x_schemaVersion": "1.0.0",
+  "$id": "https://raise.local/schemas/v1/system/configuration.schema.json",
+  "title": "RAISE System Configuration V2",
+  "description": "Configuration dynamique du continuum RAISE avec support multi-modèles et multi-serveurs.",
+  "x_schemaVersion": "2.0.0",
   "x_label": {
-    "fr": "Config",
-    "en": "Config"
+    "fr": "Configuration Système RAISE",
+    "en": "RAISE System Configuration"
   },
   "x_description": {
-    "fr": "Paramètre de configuration typé.",
-    "en": "Typed configuration entry."
+    "fr": "Paramètres critiques incluant les chemins de données, les ports serveurs et les clés d'API cloud.",
+    "en": "Critical parameters including data paths, server ports, and cloud API keys."
   },
   "type": "object",
-  "additionalProperties": false,
   "unevaluatedProperties": false,
+  "allOf": [
+    {
+      "$ref": "../../common/types/base.schema.json"
+    }
+  ],
   "properties": {
-    "$schema": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/instanceSchemaUri"
-    },
-    "id": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/_id"
-    },
-    "createdAt": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/createdAt"
-    },
-    "updatedAt": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/updatedAt"
-    },
-    "handle": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/slug",
-      "description": "Identifiant court lisible unique dans l’espace."
-    },
-    "displayName": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
-    },
-    "label": {
+    "name": {
       "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
     },
-    "emoji": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/x_emoji"
+    "default_domain": {
+      "type": "string",
+      "description": "Domaine (Espace de travail) par défaut (ex: mbse2).",
+      "default": "_system"
     },
-    "domain": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/DomainName"
+    "default_db": {
+      "type": "string",
+      "description": "Base de données métier par défaut (ex: drones).",
+      "default": "_system"
     },
-    "description": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/i18nNonEmptyString"
-    },
-    "tags": {
-      "type": "array",
-      "items": {
-        "$ref": "../common/types/primitive-types.schema.json#/$defs/nonEmptyString"
-      },
-      "default": []
-    },
-    "metadata": {
+    "core": {
       "type": "object",
-      "additionalProperties": true,
-      "description": "Métadonnées libres."
-    },
-    "links": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "../common/types/primitive-types.schema.json#/$defs/uri"
+      "x_label": { "fr": "Contexte & Noyau", "en": "Core & Context" },
+      "required": ["env_mode", "log_level", "vector_store_provider"],
+      "properties": {
+        "env_mode": {
+          "type": "string",
+          "enum": ["development", "staging", "production", "test"]
+        },
+        "graph_mode": {
+          "type": "string",
+          "enum": ["none", "internal", "db", "test"]
+        },
+        "log_level": { "type": "string", "default": "info" },
+        "vector_store_provider": { "type": "string", "default": "qdrant" },
+        "language": {
+          "type": "string",
+          "enum": ["fr", "en", "de", "es", "it"],
+          "default": "fr",
+          "description": "Langue par défaut du système."
+        }
       }
     },
-    "key": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/slug"
+    "paths": {
+      "type": "array",
+      "x_label": { "fr": "Chemins Physiques", "en": "Physical Paths" },
+      "description": "Liste des chemins physiques utilisés par l'application.",
+      "items": {
+        "type": "object",
+        "required": ["id", "value"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "PATH_RAISE_DOMAIN",
+              "PATH_LLM_MODELS",
+              "PATH_PLUGINS",
+              "PATH_LOGS",
+              "PATH_TEMP",
+              "PATH_RAISE_DATASET"
+            ],
+            "description": "Identifiant standardisé du chemin."
+          },
+          "value": {
+            "type": "string",
+            "description": "Chemin absolu ou relatif sur le disque."
+          }
+        }
+      }
     },
-    "scope": {
-      "enum": ["system", "space", "project", "user"]
+    "services": {
+      "type": "object",
+      "x_label": { "fr": "Services & Serveurs", "en": "Services & Servers" },
+      "patternProperties": {
+        "^[a-zA-Z0-9_-]+$": {
+          "type": "object",
+          "required": ["kind", "host", "port"],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["enabled", "disabled"],
+              "default": "enabled"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["qdrant", "llm_gateway", "leann_api", "custom"]
+            },
+            "host": { "type": "string", "default": "127.0.0.1" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "protocol": {
+              "type": "string",
+              "enum": ["http", "grpc", "tcp", "ws"]
+            }
+          }
+        }
+      }
     },
-    "value": {
-      "type": ["string", "number", "boolean", "object", "array", "null"]
+    "ai_engines": {
+      "type": "object",
+      "x_label": { "fr": "Moteurs IA (LLMs)", "en": "AI Engines (LLMs)" },
+      "patternProperties": {
+        "^[a-zA-Z0-9_-]+$": {
+          "type": "object",
+          "required": ["provider", "model_name"],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["enabled", "disabled"],
+              "default": "enabled"
+            },
+            "provider": {
+              "type": "string",
+              "enum": ["local_gguf", "gemini", "openai", "anthropic", "ollama"]
+            },
+            "model_name": { "type": "string" },
+            "api_url": { "type": "string", "format": "uri" },
+            "api_key": { "type": ["string", "null"] },
+            "rust_repo_id": { "type": "string" },
+            "rust_model_file": { "type": "string" }
+          }
+        }
+      }
     },
-    "version": {
-      "$ref": "../common/types/primitive-types.schema.json#/$defs/version"
+    "integrations": {
+      "type": "object",
+      "x_label": {
+        "fr": "Intégrations Tiers",
+        "en": "Third-Party Integrations"
+      },
+      "properties": {
+        "github_token": { "type": ["string", "null"] },
+        "compose_profiles": { "type": "string" }
+      }
     }
   },
-  "required": ["id", "handle", "displayName", "createdAt", "key", "value"],
-  "examples": [
-    {
-      "id": "00000000-0000-0000-0000-000000000000",
-      "handle": "sample-slug",
-      "displayName": "example",
-      "createdAt": "1970-01-01T00:00:00Z",
-      "key": "sample-slug",
-      "value": {}
-    }
+  "required": [
+    "default_domain",
+    "default_db",
+    "core",
+    "paths",
+    "services",
+    "ai_engines"
   ]
 }

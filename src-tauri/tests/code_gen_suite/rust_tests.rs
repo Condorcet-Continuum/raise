@@ -1,16 +1,16 @@
 // FICHIER : src-tauri/tests/code_gen_suite/rust_tests.rs
 
-use crate::common::init_ai_test_env; // REVERSION : Retour à l'import fonctionnel depuis common
+use crate::common::setup_test_env; // REVERSION : Retour à l'import fonctionnel depuis common
 use raise::code_generator::{CodeGeneratorService, TargetLanguage};
 use raise::utils::data::json;
 use raise::utils::io;
 
 #[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter .await
 async fn test_rust_skeleton_generation() {
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     // On utilise le dossier temporaire de l'environnement comme sortie
-    let service = CodeGeneratorService::new(env._tmp_dir.path().to_path_buf());
+    let service = CodeGeneratorService::new(env.domain_path.clone());
 
     // 1. Donnée Mock (Acteur)
     // Note : On utilise "type" pour matcher la sérialisation interne

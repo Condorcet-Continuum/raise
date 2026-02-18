@@ -1,4 +1,4 @@
-use regex::Regex;
+use crate::utils::Regex;
 
 /// Structure représentant une entité extraite du texte.
 #[derive(Debug, PartialEq, Clone)]

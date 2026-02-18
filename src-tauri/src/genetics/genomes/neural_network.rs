@@ -1,7 +1,7 @@
 use crate::genetics::operators::{crossover, mutation};
 use crate::genetics::traits::Genome;
+use crate::utils::prelude::*;
 use rand::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NeuralNetworkGenome {

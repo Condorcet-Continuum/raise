@@ -1,7 +1,6 @@
 // FICHIER : src-tauri/src/rules_engine/ast.rs
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use crate::utils::prelude::*;
 
 /// Représentation en mémoire d'une règle définie dans 'quality-rule.schema.json'.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -111,7 +110,7 @@ pub enum Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     #[test]
     fn test_ast_serialization_primitive() {

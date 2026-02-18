@@ -118,7 +118,7 @@ Les fichiers sont sauvegardés au format JSON dans :
 
 ```rust
 use crate::ai::assurance::persistence;
-use std::path::Path;
+
 
 let domain_root = Path::new("/path/to/project");
 

@@ -1,7 +1,7 @@
 // src-tauri/src/blockchain/fabric/mod.rs
 
 pub mod client;
-pub mod config; // <--- Nouveau module
+pub mod config;
 
 // On ré-exporte le client pour l'utiliser facilement dans le reste de l'app
 pub use client::FabricClient;

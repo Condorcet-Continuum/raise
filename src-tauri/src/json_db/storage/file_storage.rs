@@ -26,8 +26,11 @@ pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()>
 }
 
 /// Crée l'arborescence physique ET déploie les schémas par défaut (Async).
-pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
+pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<bool> {
     let db_root = config.db_root(space, db);
+    if io::exists(&db_root).await {
+        return Ok(false);
+    }
     io::create_dir_all(&db_root).await?;
     let schemas_dest = config.db_schemas_root(space, db).join("v1");
 
@@ -46,7 +49,7 @@ pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<(
             .map_err(|e| AppError::Io(std::io::Error::other(e)))?;
     }
 
-    Ok(())
+    Ok(true)
 }
 
 pub async fn drop_db(config: &JsonDbConfig, space: &str, db: &str, mode: DropMode) -> Result<()> {

@@ -1,23 +1,24 @@
 // FICHIER : src-tauri/tests/json_db_suite/schema_consistency.rs
 
-use crate::{init_test_env, TEST_DB, TEST_SPACE};
+use crate::common::setup_test_env; // Notre socle SSOT
 use raise::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-use raise::utils::{
-    fs::{self, WalkDir},
-    json::{self, json, Value},
-};
+use raise::utils::io;
+use raise::utils::prelude::*;
+use walkdir::WalkDir; // Pour explorer les schémas récursivement
+
 #[tokio::test]
 async fn test_structural_integrity_json_schema() {
-    let env = init_test_env().await;
-    let cfg = &env.cfg;
+    // 1. Initialisation de l'environnement isolé (copie les schémas auto)
+    let env = setup_test_env().await;
+    let cfg = &env.storage.config;
 
-    let schemas_root = cfg.db_schemas_root(TEST_SPACE, TEST_DB).join("v1");
+    let schemas_root = cfg.db_schemas_root(&env.space, &env.db).join("v1");
 
-    // Le chargement du registre à partir des fichiers est synchrone
-    let registry = SchemaRegistry::from_db(cfg, TEST_SPACE, TEST_DB)
+    // 2. Chargement du registre à partir des schémas copiés dans le sandbox
+    let registry = SchemaRegistry::from_db(cfg, &env.space, &env.db)
         .await
-        .expect("Impossible de charger le registre des schémas");
+        .expect("❌ Impossible de charger le registre des schémas");
 
     let mut error_count = 0;
     let mut checked_count = 0;
@@ -27,6 +28,7 @@ async fn test_structural_integrity_json_schema() {
         schemas_root
     );
 
+    // 3. Parcours récursif de tous les fichiers .json
     for entry in WalkDir::new(&schemas_root)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -36,13 +38,14 @@ async fn test_structural_integrity_json_schema() {
             let rel_path = path.strip_prefix(&schemas_root).unwrap();
             let rel_str = rel_path.to_string_lossy().replace("\\", "/");
 
-            // CORRECTION : Construction manuelle de l'URI au lieu de registry.uri()
-            let uri = format!("db://{}/{}/schemas/v1/{}", TEST_SPACE, TEST_DB, rel_str);
+            // Construction de l'URI interne db://
+            let uri = format!("db://{}/{}/schemas/v1/{}", env.space, env.db, rel_str);
 
+            // Tentative de compilation (vérifie les $ref et la syntaxe)
             match SchemaValidator::compile_with_registry(&uri, &registry) {
                 Ok(_) => {}
                 Err(e) => {
-                    println!("❌ ERREUR sur '{}': {}", rel_str, e);
+                    println!("❌ ERREUR de compilation sur '{}': {}", rel_str, e);
                     error_count += 1;
                 }
             }
@@ -52,16 +55,14 @@ async fn test_structural_integrity_json_schema() {
 
     println!("✅ {} schémas vérifiés.", checked_count);
     if error_count > 0 {
-        panic!(
-            "🚨 {} erreurs de compilation de schéma détectées.",
-            error_count
-        );
+        panic!("🚨 {} erreurs de compilation de schéma détectées. Vérifiez la syntaxe et les dépendances ($ref).", error_count);
     }
 }
 
 #[tokio::test]
 async fn test_semantic_consistency_json_ld() {
-    let _env = init_test_env().await;
+    // On initialise juste pour le logging et les utilitaires
+    let _env = setup_test_env().await;
 
     let processor = JsonLdProcessor::new();
     let vocab_registry = VocabularyRegistry::new();
@@ -95,12 +96,13 @@ async fn test_semantic_consistency_json_ld() {
             "name": "Test Semantic"
         });
 
-        // L'expansion JSON-LD et l'accès au vocabulaire sont synchrones
+        // Expansion JSON-LD
         let expanded = processor.expand(&doc);
         let type_uri = processor.get_type(&expanded);
 
         match type_uri {
             Some(uri) => {
+                // Vérifie si l'URI expansée est connue de l'ontologie Rust
                 if !vocab_registry.has_class(&uri) {
                     warnings.push(format!(
                         "⚠️  Désynchronisation : Le type '{}' (Schéma {}) s'étend en '{}' qui est INCONNU du code Rust.", 
@@ -121,41 +123,43 @@ async fn test_semantic_consistency_json_ld() {
         for w in warnings {
             println!("{}", w);
         }
-        panic!("🚨 Incohérences sémantiques détectées (voir logs ci-dessus).");
+        panic!("🚨 Incohérences sémantiques détectées entre les schémas JSON et l'ontologie Rust.");
     }
 }
 
 #[tokio::test]
 async fn test_detect_actor_duality() {
-    let env = init_test_env().await;
-    let cfg = &env.cfg;
-    let schemas_root = cfg.db_schemas_root(TEST_SPACE, TEST_DB).join("v1");
+    let env = setup_test_env().await;
+    let cfg = &env.storage.config;
+    let schemas_root = cfg.db_schemas_root(&env.space, &env.db).join("v1");
 
     let generic_path = schemas_root.join("actors/actor.schema.json");
     let arcadia_path = schemas_root.join("arcadia/oa/actor.schema.json");
 
-    if generic_path.exists() && arcadia_path.exists() {
+    if io::exists(&generic_path).await && io::exists(&arcadia_path).await {
         println!("\n⚠️  [AUDIT] Vérification de la distinction Acteur Générique vs Arcadia");
 
-        let gen_content = fs::read_to_string(&generic_path)
+        let gen_json: Value = io::read_json(&generic_path)
             .await
-            .expect("Erreur lecture générique");
-        let arc_content = fs::read_to_string(&arcadia_path)
+            .expect("❌ JSON générique illisible");
+        let arc_json: Value = io::read_json(&arcadia_path)
             .await
-            .expect("Erreur lecture arcadia");
+            .expect("❌ JSON arcadia illisible");
 
-        let gen_json: Value = json::parse(&gen_content).expect("JSON générique invalide");
-        let arc_json: Value = json::parse(&arc_content).expect("JSON arcadia invalide");
+        let gen_props = gen_json["properties"]
+            .as_object()
+            .expect("❌ Manque 'properties' dans acteur générique");
+        let arc_props = arc_json["properties"]
+            .as_object()
+            .expect("❌ Manque 'properties' dans acteur arcadia");
 
-        let gen_props = gen_json["properties"].as_object().unwrap();
-        let arc_props = arc_json["properties"].as_object().unwrap();
-
+        // Vérification de la distinction métier stricte
         let distinct =
             gen_props.contains_key("email") && arc_props.contains_key("allocatedActivities");
 
-        assert!(distinct, "RISQUE MAJEUR : Les schémas d'acteurs semblent avoir fusionné ou perdu leurs distinctions !");
-        println!("✅ Distinction confirmée : 'email' vs 'allocatedActivities'.");
+        assert!(distinct, "🚨 RISQUE MAJEUR : Les schémas d'acteurs ont perdu leurs distinctions (email vs allocatedActivities) !");
+        println!("✅ Distinction métier confirmée.");
     } else {
-        println!("ℹ️  Pas de dualité détectée (fichiers manquants ?).");
+        println!("ℹ️  Audit de dualité ignoré (fichiers non présents dans le dataset de test).");
     }
 }

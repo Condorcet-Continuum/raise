@@ -1,11 +1,11 @@
 // FICHIER : src-tauri/src/plugins/runtime.rs
 
+use crate::utils::{prelude::*, Arc, Mutex, Result};
+
 use super::cognitive;
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::storage::StorageEngine;
-use anyhow::{anyhow, Result};
-use serde_json::Value;
-use std::sync::{Arc, Mutex};
+
 use wasmtime::*;
 
 /// Le contexte partagé accessible par toutes les "Host Functions".
@@ -83,7 +83,7 @@ impl CognitivePlugin {
         let run_func = self
             .instance
             .get_typed_func::<(), i32>(&mut self.store, "run")
-            .map_err(|_| anyhow!("Fonction 'run' introuvable dans le plugin"))?;
+            .map_err(|_| AppError::from("Fonction 'run' introuvable dans le plugin"))?;
 
         let result = run_func.call(&mut self.store, ())?;
         Ok(result)
@@ -98,8 +98,7 @@ impl CognitivePlugin {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     fn create_dummy_wasm() -> Vec<u8> {
         vec![

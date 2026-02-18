@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/workflow_engine/critic.rs
+use crate::utils::prelude::*;
 
 use crate::ai::assurance::xai::XaiFrame;
-use serde::{Deserialize, Serialize};
 
 /// Résultat de l'évaluation d'une action par le critique
 #[derive(Debug, Clone, Serialize, Deserialize)]

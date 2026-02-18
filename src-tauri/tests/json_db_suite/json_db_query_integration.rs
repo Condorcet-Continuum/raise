@@ -1,102 +1,99 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_query_integration.rs
 
-use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
+use crate::common::{seed_mock_datasets, setup_test_env};
 use raise::json_db::{
     collections::manager::CollectionsManager,
     query::{
         ComparisonOperator, Condition, FilterOperator, Query, QueryEngine, QueryFilter, SortField,
         SortOrder,
     },
-    storage::JsonDbConfig,
 };
-use raise::utils::{
-    fs,
-    json::{self, json, Value},
-};
+use raise::utils::io::{self};
+use raise::utils::prelude::*;
 
-async fn load_test_doc(cfg: &JsonDbConfig) -> Value {
-    let path = get_dataset_file(cfg, "arcadia/v1/data/articles/article.json").await;
-    if !fs::exists(&path).await {
-        panic!("❌ Dataset article.json introuvable : {:?}", path);
-    }
-    let raw = fs::read_to_string(&path).await.expect("Lecture impossible");
-    json::parse(&raw).expect("JSON invalide")
+/// Helper local pour charger un document de test depuis le mock dataset isolé
+async fn load_test_doc(domain_path: &Path) -> Value {
+    // On s'assure que les données de test sont présentes dans CE domaine isolé
+    let dataset_file = seed_mock_datasets(domain_path)
+        .await
+        .expect("❌ Échec de la génération des mock datasets");
+
+    io::read_json(&dataset_file)
+        .await
+        .expect("❌ Lecture du mock JSON impossible")
 }
 
-// CORRECTION : Passage en async pour supporter les appels asynchrones au manager
-async fn seed_article<'a>(
-    mgr: &'a CollectionsManager<'a>,
+/// Helper pour insérer un article avec un handle spécifique
+async fn seed_article(
+    mgr: &CollectionsManager<'_>,
     handle: &str,
     doc_template: &Value,
+    env_space: &str,
+    env_db: &str,
 ) -> String {
     let mut doc = doc_template.clone();
     if let Some(obj) = doc.as_object_mut() {
         obj.remove("id");
-        obj.insert("handle".to_string(), Value::String(handle.to_string()));
-        obj.insert("slug".to_string(), Value::String(handle.to_string()));
+        obj.remove("name");
+        obj.remove("exchangeMechanism");
+
+        obj.insert("handle".to_string(), json!(handle));
+        obj.insert("slug".to_string(), json!(handle));
         obj.insert(
             "displayName".to_string(),
-            Value::String(format!("Display {}", handle)),
+            json!(format!("Display {}", handle)),
         );
-        obj.insert(
-            "title".to_string(),
-            Value::String(format!("Titre de l'article {}", handle)),
-        );
+        obj.insert("title".to_string(), json!(format!("Titre {}", handle)));
         obj.insert(
             "authorId".to_string(),
-            Value::String("00000000-0000-0000-0000-000000000000".to_string()),
+            json!("00000000-0000-0000-0000-000000000000"),
         );
     }
 
     let schema_uri = format!(
         "db://{}/{}/schemas/v1/articles/article.schema.json",
-        TEST_SPACE, TEST_DB
+        env_space, env_db
     );
 
-    // CORRECTION E0599 : Ajout de .await sur create_collection
+    // On s'assure que la collection existe
     mgr.create_collection("articles", Some(schema_uri))
         .await
         .ok();
 
-    // CORRECTION E0599 : Ajout de .await sur insert_with_schema
     let stored = mgr
         .insert_with_schema("articles", doc)
         .await
-        .expect("insert failed");
+        .expect("❌ Échec insertion article de test");
 
-    stored.get("id").unwrap().as_str().unwrap().to_string()
+    stored["id"].as_str().unwrap().to_string()
 }
 
 #[tokio::test]
 async fn query_get_article_by_id() {
-    // CORRECTION E0277 : Ces helpers sont synchrones dans cette suite
-    let test_env = init_test_env().await;
-    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB).await;
-
-    let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    let base_doc = load_test_doc(&test_env.cfg).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let base_doc = load_test_doc(&env.domain_path).await;
 
     let handle = "query-get-id";
-    // CORRECTION : seed_article est désormais asynchrone
-    let id = seed_article(&mgr, handle, &base_doc).await;
+    let id = seed_article(&mgr, handle, &base_doc, &env.space, &env.db).await;
 
-    // CORRECTION E0599 : get() est désormais asynchrone
-    let loaded_opt = mgr.get("articles", &id).await.expect("get failed");
-    let loaded = loaded_opt.expect("Document non trouvé");
-    assert_eq!(loaded.get("handle").unwrap().as_str(), Some(handle));
+    let loaded = mgr
+        .get("articles", &id)
+        .await
+        .expect("❌ Échec get")
+        .expect("❌ Document non trouvé après insertion");
+
+    assert_eq!(loaded["handle"], handle);
 }
 
 #[tokio::test]
 async fn query_find_one_article_by_handle() {
-    let test_env = init_test_env().await;
-    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB).await;
-
-    let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    let base_doc = load_test_doc(&test_env.cfg).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let base_doc = load_test_doc(&env.domain_path).await;
 
     let handle = "query-find-one";
-    // CORRECTION : .await sur seed_article
-    seed_article(&mgr, handle, &base_doc).await;
+    seed_article(&mgr, handle, &base_doc, &env.space, &env.db).await;
 
     let engine = QueryEngine::new(&mgr);
     let filter = QueryFilter {
@@ -116,33 +113,29 @@ async fn query_find_one_article_by_handle() {
         projection: None,
     };
 
-    let result = engine.execute_query(query).await.expect("query failed");
-    assert!(!result.documents.is_empty());
-    assert_eq!(
-        result.documents[0].get("handle").unwrap().as_str(),
-        Some(handle)
-    );
+    let result = engine
+        .execute_query(query)
+        .await
+        .expect("❌ Requête find_one échouée");
+    assert!(!result.documents.is_empty(), "❌ Aucun document retourné");
+    assert_eq!(result.documents[0]["handle"], handle);
 }
 
 #[tokio::test]
 async fn query_find_many_with_sort_and_limit() {
-    let test_env = init_test_env().await;
-    ensure_db_exists(&test_env.cfg, TEST_SPACE, TEST_DB).await;
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let base_doc = load_test_doc(&env.domain_path).await;
 
-    let mgr = CollectionsManager::new(&test_env.storage, TEST_SPACE, TEST_DB);
-    let base_doc = load_test_doc(&test_env.cfg).await;
-
-    // On insère 10 articles : sort-0 ... sort-9
+    // Insertion de 10 articles : sort-0 à sort-9
     for i in 0..10 {
-        // CORRECTION : .await sur seed_article dans la boucle
-        seed_article(&mgr, &format!("sort-{}", i), &base_doc).await;
+        seed_article(&mgr, &format!("sort-{}", i), &base_doc, &env.space, &env.db).await;
     }
 
     let engine = QueryEngine::new(&mgr);
     let q = Query {
         collection: "articles".to_string(),
         filter: None,
-        // CORRECTION : Tri sur "handle" (Descendant) au lieu de "x_price"
         sort: Some(vec![SortField {
             field: "handle".to_string(),
             order: SortOrder::Desc,
@@ -152,13 +145,19 @@ async fn query_find_many_with_sort_and_limit() {
         projection: None,
     };
 
-    let result = engine.execute_query(q).await.expect("query failed");
+    let result = engine
+        .execute_query(q)
+        .await
+        .expect("❌ Requête sort/limit échouée");
 
-    assert_eq!(result.documents.len(), 3);
-
-    // "sort-9" est le plus grand alphabétiquement
     assert_eq!(
-        result.documents[0].get("handle").unwrap().as_str(),
-        Some("sort-9")
+        result.documents.len(),
+        3,
+        "❌ La limite de 3 n'est pas respectée"
+    );
+    // "sort-9" est le premier dans un tri descendant alphabétique
+    assert_eq!(
+        result.documents[0]["handle"], "sort-9",
+        "❌ Le tri descendant a échoué"
     );
 }

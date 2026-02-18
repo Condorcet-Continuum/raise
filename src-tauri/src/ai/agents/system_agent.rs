@@ -1,9 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/system_agent.rs
 
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use serde_json::json;
-use uuid::Uuid;
+use crate::utils::{async_trait, data, prelude::*, Uuid};
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -29,7 +26,7 @@ impl SystemAgent {
         name: &str,
         element_type: &str,
         history_context: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -52,10 +49,10 @@ impl SystemAgent {
             .llm
             .ask(LlmBackend::LocalLlama, system_prompt, &user_prompt)
             .await
-            .map_err(|e| anyhow!("LLM Error: {}", e))?;
+            .map_err(|e| AppError::Validation(format!("LLM Error: {}", e)))?;
 
         let clean_json = extract_json_from_llm(&response);
-        let mut data: serde_json::Value = serde_json::from_str(&clean_json)
+        let mut data: Value = data::parse(&clean_json)
             .unwrap_or(json!({ "name": name, "description": "Auto-generated" }));
 
         data["id"] = json!(Uuid::new_v4().to_string());
@@ -119,7 +116,7 @@ impl Agent for SystemAgent {
                     _ => "functions",
                 };
 
-                let artifact = save_artifact(ctx, "sa", collection, &doc)?;
+                let artifact = save_artifact(ctx, "sa", collection, &doc).await?;
 
                 // 5. DÉCISION DE DÉLÉGATION (Logique ACL)
                 // Si on crée un COMPOSANT, on déclenche l'Agent Logiciel

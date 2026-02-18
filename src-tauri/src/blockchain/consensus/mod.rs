@@ -2,9 +2,7 @@
 
 use crate::blockchain::storage::commit::ArcadiaCommit;
 use crate::blockchain::vpn::innernet_client::Peer;
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-
+use crate::utils::{prelude::*, HashSet};
 // Déclaration des sous-modules
 pub mod leader;
 pub mod pending;
@@ -53,12 +51,12 @@ impl ConsensusEngine {
     }
 
     /// Vérifie l'autorité et mémorise le commit s'il est valide.
-    pub fn register_proposal(&mut self, commit: ArcadiaCommit) -> Result<(), String> {
+    pub fn register_proposal(&mut self, commit: ArcadiaCommit) -> Result<()> {
         if !self.config.authorized_validators.contains(&commit.author) {
-            return Err(format!(
+            return Err(AppError::Validation(format!(
                 "Commit rejeté : auteur {} non autorisé",
                 commit.author
-            ));
+            )));
         }
 
         // Stockage temporaire en attendant les votes
@@ -67,16 +65,16 @@ impl ConsensusEngine {
     }
 
     /// Enregistre un vote. Si le quorum est atteint, retourne le commit finalisé.
-    pub fn process_vote(&mut self, vote: Vote) -> Result<Option<ArcadiaCommit>, String> {
+    pub fn process_vote(&mut self, vote: Vote) -> Result<Option<ArcadiaCommit>> {
         if !self
             .config
             .authorized_validators
             .contains(&vote.validator_key)
         {
-            return Err(format!(
+            return Err(AppError::Validation(format!(
                 "Vote rejeté : validateur {} non autorisé",
                 vote.validator_key
-            ));
+            )));
         }
 
         if self.collector.add_vote(vote.clone()) {
@@ -107,7 +105,7 @@ impl ConsensusEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use crate::utils::Utc;
 
     fn mock_peer(key: &str) -> Peer {
         Peer {

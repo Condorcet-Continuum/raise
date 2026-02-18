@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/commands/workflow_commands.rs
 
+use crate::utils::{prelude::*, HashMap};
+
 use crate::workflow_engine::{
     ExecutionStatus, Mandate, WorkflowCompiler, WorkflowDefinition, WorkflowInstance,
     WorkflowScheduler,
@@ -7,8 +9,6 @@ use crate::workflow_engine::{
 // AJOUT : Import du capteur simulé (Jumeau Numérique) pour le contrôle via Slider UI
 use crate::workflow_engine::tools::system_tools::VIBRATION_SENSOR;
 
-use serde::Serialize;
-use std::collections::HashMap;
 use tauri::{command, State};
 use tokio::sync::Mutex;
 
@@ -46,7 +46,7 @@ impl From<&WorkflowInstance> for WorkflowView {
 /// Met à jour la valeur du capteur de vibration (Jumeau Numérique).
 /// Appelée quand l'utilisateur bouge le slider dans l'interface.
 #[command]
-pub async fn set_sensor_value(value: f64) -> Result<String, String> {
+pub async fn set_sensor_value(value: f64) -> Result<String> {
     // On verrouille le Mutex global pour mettre à jour la valeur simulée
     // Cela affectera immédiatement les lectures faites par SystemMonitorTool
     let mut sensor = VIBRATION_SENSOR.lock().map_err(|_| "Mutex Poisoned")?;
@@ -59,7 +59,7 @@ pub async fn set_sensor_value(value: f64) -> Result<String, String> {
 pub async fn submit_mandate(
     state: State<'_, Mutex<WorkflowStore>>,
     mandate: Mandate,
-) -> Result<String, String> {
+) -> Result<String> {
     let mut store = state.lock().await;
 
     // 1. (Optionnel) Vérification de signature
@@ -78,7 +78,9 @@ pub async fn submit_mandate(
             mandate.meta.version, wf_id
         ))
     } else {
-        Err("Le moteur d'IA n'est pas encore initialisé.".to_string())
+        Err(AppError::from(
+            "Le moteur d'IA n'est pas encore initialisé.".to_string(),
+        ))
     }
 }
 
@@ -87,14 +89,16 @@ pub async fn submit_mandate(
 pub async fn register_workflow(
     state: State<'_, Mutex<WorkflowStore>>,
     definition: WorkflowDefinition,
-) -> Result<String, String> {
+) -> Result<String> {
     let mut store = state.lock().await;
     if let Some(scheduler) = &mut store.scheduler {
         let id = definition.id.clone();
         scheduler.register_workflow(definition);
         Ok(format!("Workflow '{}' enregistré avec succès.", id))
     } else {
-        Err("Le moteur de workflow n'est pas encore prêt (IA en chargement).".to_string())
+        Err(AppError::from(
+            "Le moteur de workflow n'est pas encore prêt (IA en chargement).".to_string(),
+        ))
     }
 }
 
@@ -103,11 +107,11 @@ pub async fn register_workflow(
 pub async fn start_workflow(
     state: State<'_, Mutex<WorkflowStore>>,
     workflow_id: String,
-) -> Result<WorkflowView, String> {
+) -> Result<WorkflowView> {
     let instance_id = {
         let mut store = state.lock().await;
         if store.scheduler.is_none() {
-            return Err("Le moteur de workflow n'est pas prêt.".to_string());
+            return Err(AppError::from("Le moteur de workflow n'est pas prêt."));
         }
         // Création de l'instance avec un contexte vide
         let instance = WorkflowInstance::new(&workflow_id, HashMap::new());
@@ -126,7 +130,7 @@ pub async fn resume_workflow(
     instance_id: String,
     node_id: String,
     approved: bool,
-) -> Result<WorkflowView, String> {
+) -> Result<WorkflowView> {
     {
         let mut guard = state.lock().await;
         let WorkflowStore {
@@ -154,7 +158,7 @@ pub async fn resume_workflow(
 pub async fn get_workflow_state(
     state: State<'_, Mutex<WorkflowStore>>,
     instance_id: String,
-) -> Result<WorkflowView, String> {
+) -> Result<WorkflowView> {
     let store = state.lock().await;
     let instance = store
         .instances
@@ -169,7 +173,7 @@ pub async fn get_workflow_state(
 async fn run_workflow_loop(
     state: State<'_, Mutex<WorkflowStore>>,
     instance_id: String,
-) -> Result<WorkflowView, String> {
+) -> Result<WorkflowView> {
     loop {
         // 1. On verrouille pour accéder au scheduler et à l'instance
         let mut guard = state.lock().await;

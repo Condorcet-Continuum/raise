@@ -1,7 +1,8 @@
 // FICHIER : src-tauri/src/rules_engine/analyzer.rs
 
+use crate::utils::{prelude::*, HashSet};
+
 use crate::rules_engine::ast::Expr;
-use std::collections::HashSet;
 
 pub struct Analyzer;
 
@@ -13,7 +14,7 @@ impl Analyzer {
         deps
     }
 
-    pub fn validate_depth(expr: &Expr, max_depth: usize) -> Result<(), String> {
+    pub fn validate_depth(expr: &Expr, max_depth: usize) -> Result<()> {
         Self::check_depth(expr, 0, max_depth)
     }
 
@@ -122,9 +123,12 @@ impl Analyzer {
         }
     }
 
-    fn check_depth(expr: &Expr, current: usize, max: usize) -> Result<(), String> {
+    fn check_depth(expr: &Expr, current: usize, max: usize) -> Result<()> {
         if current > max {
-            return Err(format!("Profondeur maximale dépassée ({})", max));
+            return Err(AppError::Validation(format!(
+                "Profondeur maximale dépassée ({})",
+                max
+            )));
         }
 
         match expr {
@@ -220,7 +224,7 @@ impl Analyzer {
 mod tests {
     use super::*;
     use crate::rules_engine::ast::Expr;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     #[test]
     fn test_new_functions_depth() {

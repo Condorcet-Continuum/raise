@@ -1,9 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/hardware_agent.rs
 
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use serde_json::json;
-use uuid::Uuid;
+use crate::utils::{async_trait, data, io, prelude::*, Uuid};
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -71,7 +68,7 @@ impl HardwareAgent {
         name: &str,
         element_type: &str,
         history_context: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         let category = self.determine_category(name, element_type);
         let instruction = if category == "Electronics" {
             "Contexte: Design Électronique (VHDL/Verilog)."
@@ -98,11 +95,10 @@ impl HardwareAgent {
             .llm
             .ask(LlmBackend::LocalLlama, system_prompt, &user_prompt)
             .await
-            .map_err(|e| anyhow!("Erreur LLM Hardware: {}", e))?;
+            .map_err(|e| AppError::Validation(format!("Erreur LLM Hardware: {}", e)))?;
 
         let clean_json = extract_json_from_llm(&response);
-        let mut data: serde_json::Value =
-            serde_json::from_str(&clean_json).unwrap_or(json!({ "name": name }));
+        let mut data: Value = data::parse(&clean_json).unwrap_or(json!({ "name": name }));
 
         data["id"] = json!(Uuid::new_v4().to_string());
         data["layer"] = json!("PA");
@@ -153,7 +149,7 @@ impl Agent for HardwareAgent {
                     .await?;
                 let nature = doc["nature"].as_str().unwrap_or("Hardware").to_string();
 
-                let artifact = save_artifact(ctx, "pa", "physical_nodes", &doc)?;
+                let artifact = save_artifact(ctx, "pa", "physical_nodes", &doc).await?;
 
                 // Délégation -> EPBS (Configuration Manager)
                 let transition_msg = format!(
@@ -195,10 +191,9 @@ impl Agent for HardwareAgent {
                 );
 
                 // A. Recherche ID
-                let component_id = self
-                    .find_component_id(ctx, context)
-                    .await
-                    .ok_or_else(|| anyhow!("Composant matériel '{}' introuvable.", context))?;
+                let component_id = self.find_component_id(ctx, context).await.ok_or_else(|| {
+                    AppError::Validation(format!("Composant matériel '{}' introuvable.", context))
+                })?;
 
                 // B. Appel Outil MCP
                 let gen_path = ctx.paths.domain_root.join("src-gen");
@@ -215,7 +210,10 @@ impl Agent for HardwareAgent {
                 let result = tool.execute(call).await;
 
                 if result.is_error {
-                    return Err(anyhow!("Erreur CodeGen Hardware: {}", result.content));
+                    return Err(AppError::Validation(format!(
+                        "Erreur CodeGen Hardware: {}",
+                        result.content
+                    )));
                 }
 
                 let file_list = result.content["files"]
@@ -231,7 +229,7 @@ impl Agent for HardwareAgent {
                     .iter()
                     .map(|path| CreatedArtifact {
                         id: format!("gen_{}", Uuid::new_v4()),
-                        name: std::path::Path::new(path)
+                        name: io::Path::new(path)
                             .file_name()
                             .unwrap_or_default()
                             .to_string_lossy()
@@ -281,8 +279,7 @@ mod tests {
     use crate::ai::llm::client::LlmClient;
     use crate::ai::protocols::acl::Performative;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use std::sync::Arc;
-    use tempfile::tempdir;
+    use crate::utils::{io::tempdir, Arc};
 
     #[test]
     fn test_category_detection() {
@@ -386,8 +383,9 @@ mod tests {
     async fn generate_hardware_in_user_domain() {
         // 1. Définition du chemin réel de votre environnement
         // On récupère le HOME (ex: /home/zair) et on ajoute "raise_domain"
-        let home = std::env::var("HOME").expect("Variable HOME non définie");
-        let domain_root = std::path::PathBuf::from(home).join("raise_domain");
+        let domain_root = crate::utils::config::AppConfig::get()
+            .get_path("PATH_RAISE_DOMAIN")
+            .expect("PATH_RAISE_DOMAIN doit être défini dans la config ou la sandbox");
 
         // On vérifie que le dossier existe (créé par vos précédents tests)
         if !domain_root.exists() {

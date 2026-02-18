@@ -1,10 +1,8 @@
 // FICHIER : src-tauri/src/model_engine/capella/model_reader.rs
+use crate::utils::{io::Path, prelude::*};
 
 use super::xmi_parser::CapellaXmiParser;
 use crate::model_engine::types::{ProjectMeta, ProjectModel};
-use anyhow::Result;
-use chrono::Utc;
-use std::path::Path;
 
 pub struct CapellaReader;
 

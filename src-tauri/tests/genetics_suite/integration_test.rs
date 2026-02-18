@@ -10,8 +10,7 @@ use raise::genetics::GeneticEngine;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use raise::model_engine::loader::ModelLoader;
-use serde_json::json;
-use tempfile::tempdir;
+use raise::utils::{io::tempdir, prelude::*};
 
 #[tokio::test] // CORRECTION : Passage en test asynchrone
 async fn test_genetics_integration_with_json_db() {

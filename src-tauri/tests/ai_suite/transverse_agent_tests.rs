@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/transverse_agent_tests.rs
 
-use crate::common::init_ai_test_env;
+use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{transverse_agent::TransverseAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
@@ -13,7 +13,7 @@ async fn test_transverse_agent_ivvq_cycle() {
 
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit l'attendre pour obtenir l'objet AiTestEnv concret.
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     // Config Robuste
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
@@ -82,18 +82,16 @@ async fn test_transverse_agent_ivvq_cycle() {
     let req_dir = test_root.join("un2/transverse/collections/requirements");
     let mut found_req = false;
     if req_dir.exists() {
-        for entry in std::fs::read_dir(&req_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
-                if content.contains("req-sys")
-                    || content.contains("exigence")
-                    || content.contains("performance")
-                {
-                    found_req = true;
-                    println!("✅ Exigence validée : {:?}", e.file_name());
-                }
+        for e in std::fs::read_dir(&req_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
+            if content.contains("req-sys")
+                || content.contains("exigence")
+                || content.contains("performance")
+            {
+                found_req = true;
+                println!("✅ Exigence validée : {:?}", e.file_name());
             }
         }
     }
@@ -103,17 +101,15 @@ async fn test_transverse_agent_ivvq_cycle() {
     let proc_dir = test_root.join("un2/transverse/collections/test_procedures");
     let mut found_proc = false;
     if proc_dir.exists() {
-        for entry in std::fs::read_dir(&proc_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
+        for e in std::fs::read_dir(&proc_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
 
-                // MODIFICATION : On vérifie seulement la clé structurelle "steps"
-                if content.contains("steps") {
-                    found_proc = true;
-                    println!("✅ Procédure validée : {:?}", e.file_name());
-                }
+            // MODIFICATION : On vérifie seulement la clé structurelle "steps"
+            if content.contains("steps") {
+                found_proc = true;
+                println!("✅ Procédure validée : {:?}", e.file_name());
             }
         }
     }
@@ -127,17 +123,15 @@ async fn test_transverse_agent_ivvq_cycle() {
     let camp_dir = test_root.join("un2/transverse/collections/test_campaigns");
     let mut found_camp = false;
     if camp_dir.exists() {
-        for entry in std::fs::read_dir(&camp_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
+        for e in std::fs::read_dir(&camp_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
 
-                // On vérifie seulement la clé structurelle "scenarios"
-                if content.contains("scenarios") {
-                    found_camp = true;
-                    println!("✅ Campagne validée : {:?}", e.file_name());
-                }
+            // On vérifie seulement la clé structurelle "scenarios"
+            if content.contains("scenarios") {
+                found_camp = true;
+                println!("✅ Campagne validée : {:?}", e.file_name());
             }
         }
     }

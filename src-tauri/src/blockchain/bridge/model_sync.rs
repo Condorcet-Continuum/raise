@@ -2,8 +2,8 @@
 
 use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
+use crate::utils::{data, prelude::*};
 use crate::AppState;
-use anyhow::{anyhow, Result};
 
 /// Synchroniseur responsable de la mise à jour du modèle symbolique en mémoire.
 pub struct ModelSync<'a> {
@@ -21,7 +21,7 @@ impl<'a> ModelSync<'a> {
             .app_state
             .model
             .lock()
-            .map_err(|_| anyhow!("Mutex du ProjectModel empoisonné"))?;
+            .map_err(|_| AppError::from("Mutex du ProjectModel empoisonné"))?;
 
         for mutation in &commit.mutations {
             // Utilisation de l'auto-deref pour la garde du Mutex (Validation Clippy)
@@ -33,8 +33,10 @@ impl<'a> ModelSync<'a> {
     fn apply_mutation(&self, model: &mut ProjectModel, mutation: &Mutation) -> Result<()> {
         match mutation.operation {
             MutationOp::Create | MutationOp::Update => {
-                let element: ArcadiaElement = serde_json::from_value(mutation.payload.clone())
-                    .map_err(|e| anyhow!("Payload invalide pour ArcadiaElement: {}", e))?;
+                let element: ArcadiaElement =
+                    data::from_value(mutation.payload.clone()).map_err(|e| {
+                        AppError::from(format!("Payload invalide pour ArcadiaElement: {}", e))
+                    })?;
 
                 self.upsert_element(model, element)?;
             }
@@ -72,7 +74,10 @@ impl<'a> ModelSync<'a> {
                 return Ok(());
             }
         }
-        Err(anyhow!("Élément {} introuvable pour suppression", id))
+        Err(AppError::Validation(format!(
+            "Élément {} introuvable pour suppression",
+            id
+        )))
     }
 
     fn resolve_model_vector<'b>(
@@ -87,7 +92,10 @@ impl<'a> ModelSync<'a> {
             "SystemFunction" => Ok(&mut model.sa.functions),
             "LogicalComponent" => Ok(&mut model.la.components),
             "PhysicalComponent" => Ok(&mut model.pa.components),
-            _ => Err(anyhow!("Type Arcadia '{}' non géré par le ModelSync", kind)),
+            _ => Err(AppError::Validation(format!(
+                "Type Arcadia '{}' non géré par le ModelSync",
+                kind
+            ))),
         }
     }
 
@@ -101,8 +109,7 @@ impl<'a> ModelSync<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use std::sync::Mutex;
+    use crate::utils::Mutex;
 
     fn create_test_state() -> AppState {
         AppState {

@@ -2,7 +2,7 @@
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
-use serde::{Deserialize, Serialize};
+use crate::utils::prelude::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TrainingExample {
@@ -18,7 +18,7 @@ pub async fn extract_domain_data(
     space: &str,
     db_name: &str,
     domain: &str,
-) -> Result<Vec<TrainingExample>, String> {
+) -> Result<Vec<TrainingExample>> {
     let manager = CollectionsManager::new(storage, space, db_name);
     let mut dataset = Vec::new();
 
@@ -62,7 +62,7 @@ pub async fn ai_export_dataset(
     space: String,
     db_name: String,
     domain: String,
-) -> Result<Vec<TrainingExample>, String> {
+) -> Result<Vec<TrainingExample>> {
     // Cette commande permet au frontend de prévisualiser ou d'exporter les données
     // CORRECTION : Ajout de .await car extract_domain_data est désormais async
     extract_domain_data(storage.inner(), &space, &db_name, &domain).await

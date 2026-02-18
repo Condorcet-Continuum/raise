@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/src/workflow_engine/compiler.rs
+use crate::utils::prelude::*;
 
 use super::mandate::Mandate;
 use super::{NodeType, WorkflowDefinition, WorkflowEdge, WorkflowNode};
-use serde_json::json;
 
 pub struct WorkflowCompiler;
 

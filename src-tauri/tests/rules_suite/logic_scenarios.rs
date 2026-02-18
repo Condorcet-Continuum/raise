@@ -2,7 +2,7 @@
 
 use raise::rules_engine::ast::Expr;
 use raise::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
-use serde_json::json;
+use raise::utils::prelude::*;
 
 #[tokio::test] // CORRECTION : Passage en test asynchrone
 async fn test_complex_access_control() {

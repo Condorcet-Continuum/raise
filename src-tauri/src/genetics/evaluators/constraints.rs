@@ -1,6 +1,6 @@
 use super::architecture::ArchitectureCostModel;
 use crate::genetics::genomes::arcadia_arch::SystemAllocationGenome;
-use std::fmt::Debug;
+use crate::utils::fmt::Debug;
 
 /// Trait pour définir une règle métier qui doit être respectée.
 /// Retourne un score de violation (0.0 = Respecté, >0.0 = Violé).

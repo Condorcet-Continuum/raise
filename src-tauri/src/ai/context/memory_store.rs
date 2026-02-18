@@ -1,7 +1,10 @@
+use crate::utils::{
+    data,
+    io::{self, PathBuf},
+    prelude::*,
+};
+
 use super::conversation_manager::ConversationSession;
-use anyhow::{Context, Result};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 /// Gère la sauvegarde/chargement des sessions de chat sur disque
 pub struct MemoryStore {
@@ -10,10 +13,11 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     /// Initialise le store dans un dossier donné (ex: .raise/chats/)
-    pub fn new(base_path: &Path) -> Result<Self> {
+    pub async fn new(base_path: &Path) -> Result<Self> {
         if !base_path.exists() {
-            fs::create_dir_all(base_path)
-                .context("Impossible de créer le dossier de stockage des chats")?;
+            io::create_dir_all(base_path).await.map_err(|e| {
+                AppError::custom_io(format!("Impossible de créer le dossier des chats : {}", e))
+            })?;
         }
         Ok(Self {
             storage_path: base_path.to_path_buf(),
@@ -21,21 +25,22 @@ impl MemoryStore {
     }
 
     /// Sauvegarde une session
-    pub fn save_session(&self, session: &ConversationSession) -> Result<()> {
+    pub async fn save_session(&self, session: &ConversationSession) -> Result<()> {
         let file_path = self.get_path(&session.id);
-        let json = serde_json::to_string_pretty(session)?;
-        fs::write(file_path, json).context("Échec écriture session chat")?;
+        let json = data::stringify_pretty(session)?;
+        io::write(file_path, json)
+            .await
+            .map_err(|e| AppError::custom_io(format!("Échec écriture session : {}", e)))?;
         Ok(())
     }
 
     /// Charge une session existante ou en crée une nouvelle si absente
-    pub fn load_or_create(&self, session_id: &str) -> Result<ConversationSession> {
+    pub async fn load_or_create(&self, session_id: &str) -> Result<ConversationSession> {
         let file_path = self.get_path(session_id);
 
         if file_path.exists() {
-            let content = fs::read_to_string(file_path)?;
-            let session: ConversationSession =
-                serde_json::from_str(&content).context("Fichier session corrompu")?;
+            let content = io::read_to_string(&file_path).await?;
+            let session: ConversationSession = data::parse(&content)?;
             Ok(session)
         } else {
             Ok(ConversationSession::new(session_id.to_string()))
@@ -43,11 +48,13 @@ impl MemoryStore {
     }
 
     /// Liste toutes les sessions disponibles
-    pub fn list_sessions(&self) -> Result<Vec<String>> {
+    pub async fn list_sessions(&self) -> Result<Vec<String>> {
         let mut sessions = Vec::new();
         if self.storage_path.exists() {
-            for entry in fs::read_dir(&self.storage_path)? {
-                let entry = entry?;
+            let mut dir = io::read_dir(&self.storage_path).await.map_err(|e| {
+                AppError::custom_io(format!("Impossible de lire le dossier : {}", e))
+            })?;
+            while let Ok(Some(entry)) = dir.next_entry().await {
                 let path = entry.path();
                 if path.extension().and_then(|s| s.to_str()) == Some("json") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {

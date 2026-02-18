@@ -1,11 +1,12 @@
 // FICHIER : src-tauri/src/commands/json_db_commands.rs
 
+use crate::utils::prelude::*;
+
 use crate::json_db::collections::manager::{self, CollectionsManager};
 use crate::json_db::query::{sql::SqlRequest, Query, QueryEngine, QueryResult};
 use crate::json_db::schema::SchemaRegistry;
 use crate::json_db::storage::{file_storage, StorageEngine};
 use crate::json_db::transactions::manager::TransactionManager;
-use serde_json::{json, Value};
 use tauri::{command, State};
 
 // Helper pour instancier le manager rapidement
@@ -13,7 +14,7 @@ fn mgr<'a>(
     storage: &'a State<'_, StorageEngine>,
     space: &str,
     db: &str,
-) -> Result<CollectionsManager<'a>, String> {
+) -> Result<CollectionsManager<'a>> {
     Ok(CollectionsManager::new(storage, space, db))
 }
 
@@ -24,12 +25,15 @@ pub async fn jsondb_create_db(
     storage: State<'_, StorageEngine>,
     space: String,
     db: String,
-) -> Result<(), String> {
+) -> Result<bool> {
     file_storage::create_db(&storage.config, &space, &db)
         .await
         .map_err(|e| e.to_string())?;
     let manager = mgr(&storage, &space, &db)?;
-    manager.init_db().await.map_err(|e| e.to_string())
+    manager
+        .init_db()
+        .await
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -37,10 +41,10 @@ pub async fn jsondb_drop_db(
     storage: State<'_, StorageEngine>,
     space: String,
     db: String,
-) -> Result<(), String> {
+) -> Result<()> {
     file_storage::drop_db(&storage.config, &space, &db, file_storage::DropMode::Hard)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 // --- GESTION COLLECTIONS ---
@@ -52,12 +56,12 @@ pub async fn jsondb_create_collection(
     db: String,
     collection: String,
     schema_uri: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .create_collection(&collection, schema_uri)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -65,9 +69,12 @@ pub async fn jsondb_list_collections(
     storage: State<'_, StorageEngine>,
     space: String,
     db: String,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>> {
     let manager = mgr(&storage, &space, &db)?;
-    manager.list_collections().await.map_err(|e| e.to_string())
+    manager
+        .list_collections()
+        .await
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -76,12 +83,12 @@ pub async fn jsondb_drop_collection(
     space: String,
     db: String,
     collection: String,
-) -> Result<(), String> {
+) -> Result<()> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .drop_collection(&collection)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 // --- GESTION INDEXES ---
@@ -94,12 +101,12 @@ pub async fn jsondb_create_index(
     collection: String,
     field: String,
     kind: String,
-) -> Result<(), String> {
+) -> Result<()> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .create_index(&collection, &field, &kind)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -109,12 +116,12 @@ pub async fn jsondb_drop_index(
     db: String,
     collection: String,
     field: String,
-) -> Result<(), String> {
+) -> Result<()> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .drop_index(&collection, &field)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 // --- MOTEUR DE RÈGLES ---
@@ -126,7 +133,7 @@ pub async fn jsondb_evaluate_draft(
     db: String,
     collection: String,
     mut doc: Value,
-) -> Result<Value, String> {
+) -> Result<Value> {
     let registry = SchemaRegistry::from_db(&storage.config, &space, &db)
         .await
         .map_err(|e| format!("Erreur chargement registre: {}", e))?;
@@ -143,10 +150,10 @@ pub async fn jsondb_evaluate_draft(
             .unwrap_or("")
             .to_string()
     } else {
-        return Err(format!(
+        return Err(AppError::Validation(format!(
             "Collection '{}' non initialisée (pas de _meta.json)",
             collection
-        ));
+        )));
     };
 
     if schema_uri.is_empty() {
@@ -178,12 +185,12 @@ pub async fn jsondb_insert_document(
     db: String,
     collection: String,
     document: Value,
-) -> Result<Value, String> {
+) -> Result<Value> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .insert_with_schema(&collection, document)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -194,12 +201,12 @@ pub async fn jsondb_update_document(
     collection: String,
     id: String,
     document: Value,
-) -> Result<Value, String> {
+) -> Result<Value> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .update_document(&collection, &id, document)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -209,12 +216,12 @@ pub async fn jsondb_get_document(
     db: String,
     collection: String,
     id: String,
-) -> Result<Option<Value>, String> {
+) -> Result<Option<Value>> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .get_document(&collection, &id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -224,12 +231,12 @@ pub async fn jsondb_delete_document(
     db: String,
     collection: String,
     id: String,
-) -> Result<bool, String> {
+) -> Result<bool> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .delete_document(&collection, &id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -238,12 +245,12 @@ pub async fn jsondb_list_all(
     space: String,
     db: String,
     collection: String,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<Value>> {
     let manager = mgr(&storage, &space, &db)?;
     manager
         .list_all(&collection)
         .await
-        .map_err(|e| format!("List All Failed: {}", e))
+        .map_err(|e| AppError::Validation(format!("List All Failed: {}", e)))
 }
 
 // --- REQUÊTES (MODIFIÉ POUR INSERT SQL) ---
@@ -254,10 +261,13 @@ pub async fn jsondb_execute_query(
     space: String,
     db: String,
     query: Query,
-) -> Result<QueryResult, String> {
+) -> Result<QueryResult> {
     let manager = mgr(&storage, &space, &db)?;
     let engine = QueryEngine::new(&manager);
-    engine.execute_query(query).await.map_err(|e| e.to_string())
+    engine
+        .execute_query(query)
+        .await
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[command]
@@ -266,7 +276,7 @@ pub async fn jsondb_execute_sql(
     space: String,
     db: String,
     sql: String,
-) -> Result<QueryResult, String> {
+) -> Result<QueryResult> {
     let manager = mgr(&storage, &space, &db)?;
 
     // Parsing SQL -> SqlRequest (Read ou Write)
@@ -277,7 +287,10 @@ pub async fn jsondb_execute_sql(
         // CAS LECTURE (SELECT)
         SqlRequest::Read(query) => {
             let engine = QueryEngine::new(&manager);
-            engine.execute_query(query).await.map_err(|e| e.to_string())
+            engine
+                .execute_query(query)
+                .await
+                .map_err(|e| AppError::from(e.to_string()))
         }
         // CAS ÉCRITURE (INSERT)
         SqlRequest::Write(requests) => {
@@ -306,7 +319,7 @@ pub async fn jsondb_init_demo_rules(
     storage: State<'_, StorageEngine>,
     space: String,
     db: String,
-) -> Result<(), String> {
+) -> Result<()> {
     let mgr = mgr(&storage, &space, &db)?;
     mgr.init_db().await.map_err(|e| e.to_string())?;
 
@@ -385,7 +398,7 @@ pub async fn jsondb_init_model_rules(
     storage: State<'_, StorageEngine>,
     space: String,
     db: String,
-) -> Result<(), String> {
+) -> Result<()> {
     let mgr = mgr(&storage, &space, &db)?;
     mgr.init_db().await.map_err(|e| e.to_string())?;
 

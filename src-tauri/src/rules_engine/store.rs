@@ -1,11 +1,9 @@
 // FICHIER : src-tauri/src/rules_engine/store.rs
+use crate::utils::{prelude::*, HashMap, HashSet};
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::rules_engine::analyzer::Analyzer;
 use crate::rules_engine::ast::Rule;
-use anyhow::Result;
-use serde_json::json;
-use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct RuleStore<'a> {

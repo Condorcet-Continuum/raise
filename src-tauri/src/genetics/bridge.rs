@@ -3,7 +3,7 @@
 use crate::genetics::dto::AllocatedSolution;
 use crate::genetics::evaluators::architecture::ArchitectureCostModel;
 use crate::model_engine::types::ProjectModel;
-use std::collections::HashMap;
+use crate::utils::HashMap;
 
 // --- Interfaces d'Entrée ---
 
@@ -212,8 +212,7 @@ impl GeneticsAdapter {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
-    use serde_json::json;
-    use std::collections::HashMap;
+    use crate::utils::data::json;
 
     // Helper pour remplacer l'ancienne méthode ArcadiaElement::new()
     fn make_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {

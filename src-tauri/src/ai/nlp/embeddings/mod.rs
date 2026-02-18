@@ -1,7 +1,7 @@
+use crate::utils::prelude::*;
+
 pub mod candle;
 pub mod fast;
-
-use anyhow::Result;
 
 pub enum EngineType {
     FastEmbed,
@@ -47,15 +47,23 @@ impl EmbeddingEngine {
 
     pub fn embed_batch(&mut self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         match &mut self.inner {
-            EngineImplementation::Fast(e) => e.embed_batch(texts),
-            EngineImplementation::Candle(e) => e.embed_batch(texts),
+            EngineImplementation::Fast(e) => e
+                .embed_batch(texts)
+                // ✅ Conversion de anyhow::Error vers AppError
+                .map_err(|err| AppError::from(err.to_string())),
+
+            EngineImplementation::Candle(e) => e.embed_batch(texts), // ✅ Déjà un AppError
         }
     }
 
     pub fn embed_query(&mut self, text: &str) -> Result<Vec<f32>> {
         match &mut self.inner {
-            EngineImplementation::Fast(e) => e.embed_query(text),
-            EngineImplementation::Candle(e) => e.embed_query(text),
+            EngineImplementation::Fast(e) => e
+                .embed_query(text)
+                // ✅ Conversion de anyhow::Error vers AppError
+                .map_err(|err| AppError::from(err.to_string())),
+
+            EngineImplementation::Candle(e) => e.embed_query(text), // ✅ Déjà un AppError
         }
     }
 }

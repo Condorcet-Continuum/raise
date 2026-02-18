@@ -1,6 +1,6 @@
 // src-tauri/src/blockchain/sync/state.rs
 
-use serde::{Deserialize, Serialize};
+use crate::utils::prelude::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum SyncStatus {

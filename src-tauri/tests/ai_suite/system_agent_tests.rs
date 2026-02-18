@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/system_agent_tests.rs
 
-use crate::common::init_ai_test_env;
+use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
@@ -13,7 +13,7 @@ async fn test_system_agent_creates_function_end_to_end() {
 
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit l'attendre pour accéder aux champs client et storage.
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     // 1. Config Robuste (Identique aux autres agents)
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
@@ -79,18 +79,16 @@ async fn test_system_agent_creates_function_end_to_end() {
 
     let mut found = false;
     if functions_dir.exists() {
-        for entry in std::fs::read_dir(&functions_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
+        for e in std::fs::read_dir(&functions_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
 
-                // Recherche insensible à la casse
-                if content.contains("calculer") && content.contains("vitesse") {
-                    found = true;
-                    println!("✅ Fonction Système trouvée : {:?}", e.file_name());
-                    break;
-                }
+            // Recherche insensible à la casse
+            if content.contains("calculer") && content.contains("vitesse") {
+                found = true;
+                println!("✅ Fonction Système trouvée : {:?}", e.file_name());
+                break;
             }
         }
     }

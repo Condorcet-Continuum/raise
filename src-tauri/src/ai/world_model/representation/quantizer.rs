@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/world_model/representation/quantizer.rs
 
-use anyhow::Result;
+use crate::utils::prelude::*;
 use candle_core::{Module, Tensor};
 use candle_nn::{Embedding, VarBuilder};
 
@@ -18,7 +18,8 @@ impl VectorQuantizer {
     /// * `embedding_dim`: Dimension des vecteurs (D)
     pub fn new(num_embeddings: usize, embedding_dim: usize, vb: VarBuilder) -> Result<Self> {
         // On initialise l'embedding table via Candle
-        let embedding = candle_nn::embedding(num_embeddings, embedding_dim, vb)?;
+        let embedding = candle_nn::embedding(num_embeddings, embedding_dim, vb)
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(Self { embedding })
     }
 
@@ -30,25 +31,38 @@ impl VectorQuantizer {
         // ||z - e||^2 = ||z||^2 + ||e||^2 - 2 <z, e>
 
         // a. Carré de l'entrée : ||z||^2
-        // [Batch, 1]
-        let z_sq = z.sqr()?.sum_keepdim(1)?;
+        // ✅ Conversion des erreurs Candle pour sqr et sum
+        let z_sq = z
+            .sqr()
+            .map_err(|e| AppError::from(e.to_string()))?
+            .sum_keepdim(1)
+            .map_err(|e| AppError::from(e.to_string()))?;
 
         // b. Carré du codebook : ||e||^2
-        // [1, Num_Embeddings] (Transposition virtuelle pour le broadcast)
         let w = self.embedding.embeddings();
-        let w_sq = w.sqr()?.sum_keepdim(1)?.t()?;
+        let w_sq = w
+            .sqr()
+            .map_err(|e| AppError::from(e.to_string()))?
+            .sum_keepdim(1)
+            .map_err(|e| AppError::from(e.to_string()))?
+            .t()
+            .map_err(|e| AppError::from(e.to_string()))?;
 
         // c. Produit scalaire : <z, e>
-        // [Batch, Num_Embeddings]
-        let zw = z.matmul(&w.t()?)?;
+        let w_t = w.t().map_err(|e| AppError::from(e.to_string()))?;
+        let zw = z.matmul(&w_t).map_err(|e| AppError::from(e.to_string()))?;
 
         // d. Assemblage de la distance
         // distance[i, j] = z_sq[i] + w_sq[j] - 2 * zw[i, j]
-        let dist = z_sq.broadcast_add(&w_sq)?.broadcast_sub(&(zw * 2.0)?)?;
+        let zw2 = (zw * 2.0).map_err(|e| AppError::from(e.to_string()))?;
+        let dist = z_sq
+            .broadcast_add(&w_sq)
+            .map_err(|e| AppError::from(e.to_string()))?
+            .broadcast_sub(&zw2)
+            .map_err(|e| AppError::from(e.to_string()))?;
 
         // 2. Recherche du plus proche voisin (Argmin)
-        // On cherche l'index j qui minimise la distance pour chaque i
-        let indices = dist.argmin(1)?;
+        let indices = dist.argmin(1).map_err(|e| AppError::from(e.to_string()))?;
 
         Ok(indices)
     }
@@ -57,7 +71,10 @@ impl VectorQuantizer {
     /// Input: [Batch] (Indices)
     /// Output: [Batch, Dim]
     pub fn decode(&self, indices: &Tensor) -> Result<Tensor> {
-        let vectors = self.embedding.forward(indices)?;
+        let vectors = self
+            .embedding
+            .forward(indices)
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(vectors)
     }
 }

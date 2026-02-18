@@ -1,11 +1,8 @@
+use crate::utils::{io::PathBuf, prelude::*, Uuid};
+
 use crate::ai::memory::{qdrant_store::QdrantMemory, MemoryRecord, VectorStore};
 use crate::ai::nlp::{embeddings::EmbeddingEngine, splitting};
 use crate::graph_store::GraphStore;
-use anyhow::{Context, Result};
-use serde_json::json;
-use std::env;
-use std::path::PathBuf;
-use uuid::Uuid;
 
 enum RagBackend {
     Qdrant(QdrantMemory),
@@ -20,10 +17,11 @@ pub struct RagRetriever {
 
 impl RagRetriever {
     pub async fn new(qdrant_url: &str, storage_path: PathBuf) -> Result<Self> {
-        let embedder = EmbeddingEngine::new().context("Échec init Embedder")?;
+        let embedder = EmbeddingEngine::new()
+            .map_err(|e| AppError::Ai(format!("Échec init Embedder: {}", e)))?;
         let collection_name = "raise_knowledge_base".to_string();
 
-        let provider = env::var("VECTOR_STORE_PROVIDER").unwrap_or_else(|_| "surreal".to_string());
+        let provider = AppConfig::get().core.vector_store_provider.clone();
         println!(
             "📚 [RAG] Initialisation du backend : {}",
             provider.to_uppercase()
@@ -31,7 +29,7 @@ impl RagRetriever {
 
         let backend = match provider.as_str() {
             "qdrant" => {
-                let memory = QdrantMemory::new(qdrant_url).context("Échec connexion Qdrant")?;
+                let memory = QdrantMemory::new(qdrant_url)?;
                 memory.init_collection(&collection_name, 384).await?;
                 RagBackend::Qdrant(memory)
             }
@@ -55,7 +53,7 @@ impl RagRetriever {
         }
 
         let vectors = self.embedder.embed_batch(chunks.clone())?;
-        let ingest_time = chrono::Utc::now().to_rfc3339();
+        let ingest_time = Utc::now().to_rfc3339();
 
         match &self.backend {
             RagBackend::Qdrant(memory) => {
@@ -173,33 +171,31 @@ impl RagRetriever {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
-    use tempfile::tempdir;
+    // ✅ On importe les outils de la façade utils
+    use crate::utils::io::tempdir;
 
-    struct EnvReset {
-        key: String,
-    }
-    impl EnvReset {
-        fn new(key: &str, val: &str) -> Self {
-            unsafe {
-                env::set_var(key, val);
+    // ✅ On utilise Once pour garantir que la config n'est initialisée qu'une seule fois
+    // même si les tests s'exécutent en parallèle (multithreading).
+    /*
+    static INIT_TEST: Once = Once::new();
+
+    fn setup_test_env() {
+        INIT_TEST.call_once(|| {
+            // Initialise la configuration globale pour les tests
+            if let Err(e) = AppConfig::init() {
+                eprintln!(
+                    "⚠️ Info: Configuration déjà initialisée ou impossible à charger: {}",
+                    e
+                );
             }
-            Self {
-                key: key.to_string(),
-            }
-        }
+        });
     }
-    impl Drop for EnvReset {
-        fn drop(&mut self) {
-            unsafe {
-                env::remove_var(&self.key);
-            }
-        }
-    }
+    */
 
     #[tokio::test]
     async fn test_rag_backend_surreal_default() {
-        let _guard = EnvReset::new("VECTOR_STORE_PROVIDER", "surreal");
+        // ✅ On utilise l'injecteur de Mock mémoire au lieu de setup_test_env()
+        crate::utils::config::test_mocks::inject_mock_config();
 
         let dir = tempdir().unwrap();
         let mut rag = RagRetriever::new("http://dummy", dir.path().to_path_buf())
@@ -228,7 +224,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_rag_chunking_logic() {
-        let _guard = EnvReset::new("VECTOR_STORE_PROVIDER", "surreal");
+        // ✅ Remplace l'ancien `EnvReset`
+        crate::utils::config::test_mocks::inject_mock_config();
+
         let dir = tempdir().unwrap();
         let mut rag = RagRetriever::new("http://dummy", dir.path().to_path_buf())
             .await

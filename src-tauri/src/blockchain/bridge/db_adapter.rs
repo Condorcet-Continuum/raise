@@ -3,8 +3,7 @@
 use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
-use anyhow::{anyhow, Result};
-use serde_json::Value;
+use crate::utils::prelude::*;
 
 /// Adaptateur responsable de l'application des commits blockchain dans la JSON-DB.
 pub struct DbAdapter<'a> {
@@ -39,7 +38,7 @@ impl<'a> DbAdapter<'a> {
                     obj.insert("id".to_string(), Value::String(mutation.element_id.clone()));
                     obj.insert(
                         "_blockchain_sync".to_string(),
-                        serde_json::json!({
+                        json!({
                             "sync_at": chrono::Utc::now().to_rfc3339(),
                         }),
                     );
@@ -78,10 +77,10 @@ impl<'a> DbAdapter<'a> {
             return Ok("physical_elements".to_string());
         }
 
-        Err(anyhow!(
+        Err(AppError::Validation(format!(
             "Impossible de résoudre la collection pour l'ID: {}",
             element_id
-        ))
+        )))
     }
 
     /// Mappe les types Arcadia sémantiques vers les noms de collections physiques.
@@ -102,8 +101,7 @@ mod tests {
     use super::*;
     use crate::blockchain::storage::commit::MutationOp;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     #[tokio::test]
     async fn test_db_adapter_upsert_logic() {

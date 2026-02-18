@@ -1,7 +1,7 @@
 use crate::ai::deep_learning::models::sequence_net::SequenceNet;
+use crate::utils::io::Path;
 use candle_core::{DType, Device, Result};
 use candle_nn::{VarBuilder, VarMap};
-use std::path::Path;
 
 /// Sauvegarde les poids du modèle dans un fichier au format SafeTensors.
 ///
@@ -41,11 +41,11 @@ pub fn load_checkpoint(varmap: &mut VarMap, path: impl AsRef<Path>) -> Result<()
 mod tests {
     use super::*;
     use crate::ai::deep_learning::trainer::Trainer;
+    use crate::utils::io::{self, Path};
     use candle_core::Tensor;
-    use std::fs;
 
-    #[test]
-    fn test_save_and_load_consistency() -> Result<()> {
+    #[tokio::test]
+    async fn test_save_and_load_consistency() -> Result<()> {
         let device = Device::Cpu;
         let path = "/tmp/test_raise_model.safetensors";
 
@@ -80,7 +80,7 @@ mod tests {
             .to_scalar::<f32>()?;
 
         // Nettoyage
-        let _ = fs::remove_file(path);
+        let _ = io::remove_file(Path::new(path)).await;
 
         assert!(
             diff < 1e-5,

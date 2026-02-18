@@ -5,9 +5,8 @@
     windows_subsystem = "windows"
 )]
 
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
@@ -65,8 +64,6 @@ use raise::spatial_engine;
 
 #[allow(clippy::await_holding_lock)]
 fn main() {
-    // 1. CHARGEMENT ENV
-    dotenvy::dotenv().ok();
     if let Err(e) = raise::utils::config::AppConfig::init() {
         eprintln!("❌ Erreur fatale de configuration : {}", e);
         std::process::exit(1);
@@ -74,11 +71,7 @@ fn main() {
     println!("🚀 Démarrage de RAISE...");
     raise::utils::init_logging();
     // 3. VÉRIFICATION (SANS ERREUR DE SYNTAXE)
-    let config = raise::utils::config::AppConfig::get();
-    println!(
-        "✅ Configuration chargée (Env: {}, DB: {:?})",
-        config.env_mode, config.database_root
-    );
+    let _config = raise::utils::config::AppConfig::get();
 
     tauri::Builder::default()
         .manage(NativeLlmState(std::sync::Mutex::new(None)))
@@ -86,22 +79,18 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             // 2. CONFIG DOMAINE & STOCKAGE
-            // Récupération du chemin racine (ex: /home/zair/raise_domain)
-            let db_root = if let Ok(env_path) = env::var("PATH_RAISE_DOMAIN") {
-                PathBuf::from(env_path)
-            } else {
-                app.path().app_data_dir().unwrap().join("raise_db")
-            };
+            let app_config = raise::utils::config::AppConfig::get();
+            let db_root = app_config.get_path("PATH_RAISE_DOMAIN")
+                .expect("❌ ERREUR FATALE: PATH_RAISE_DOMAIN introuvable dans la configuration !");
             if !db_root.exists() {
                 fs::create_dir_all(&db_root)?;
             }
-
             let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
 
-            // NOTE: Votre structure de dossier indique l'espace "mbse2"
-            let default_space = "mbse2";
-            let default_db = "_system";
+            // On utilise les espaces par défaut définis dans le JSON !
+            let default_space = &app_config.default_domain;
+            let default_db = &app_config.default_db;
 
             // 3. CHARGEMENT ONTOLOGIES (Depuis le dossier de domaine)
             // Construction du chemin : ~/raise_domain/mbse2/_system/schemas/v1/arcadia/@context
@@ -215,11 +204,25 @@ fn main() {
             let plugin_mgr_for_wf = plugin_mgr.clone();
 
             tauri::async_runtime::spawn(async move {
-                let llm_url =
-                    env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
-                let qdrant_url = format!(
-                    "http://127.0.0.1:{}",
-                    env::var("PORT_QDRANT_GRPC").unwrap_or_else(|_| "6334".into())
+                let global_cfg = raise::utils::config::AppConfig::get();
+
+                // 1. Récupération de l'URL LLM depuis ai_engines
+                let llm_url = global_cfg.ai_engines.get("primary_local")
+                    .and_then(|engine| engine.api_url.clone())
+                    .unwrap_or_else(|| "http://127.0.0.1:8081".to_string());
+
+                // 2. Récupération de l'URL Qdrant GRPC depuis services
+                let qdrant_url = global_cfg.services.get("qdrant_grpc")
+                    .map(|s| format!("{}://{}:{}", s.protocol.as_deref().unwrap_or("http"), s.host, s.port))
+                    .unwrap_or_else(|| "http://127.0.0.1:6334".to_string());
+
+                let storage_state = app_handle_clone.state::<StorageEngine>();
+
+                // 3. On utilise l'espace dynamique
+                let _ = ModelLoader::from_engine(
+                    storage_state.inner(),
+                    &global_cfg.default_domain,
+                    &global_cfg.default_db
                 );
 
                 let storage_state = app_handle_clone.state::<StorageEngine>();

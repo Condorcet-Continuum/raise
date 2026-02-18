@@ -1,9 +1,6 @@
 // src-tauri/src/ai/protocols/acl.rs
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use std::fmt;
-use uuid::Uuid;
+use crate::utils::{fmt, prelude::*, DateTime, Utc, Uuid};
 
 /// Les types d'actes communicatifs (Performatifs)
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -91,7 +88,7 @@ impl AclMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::utils::data;
     #[test]
     fn test_acl_creation() {
         let msg = AclMessage::new(Performative::Request, "A", "B", "Test");
@@ -102,7 +99,7 @@ mod tests {
     #[test]
     fn test_acl_serialization() {
         let msg = AclMessage::new(Performative::Inform, "A", "B", "Data");
-        let json = serde_json::to_string(&msg).unwrap();
+        let json = data::stringify(&msg).unwrap();
         // Vérifie que le champ s'appelle bien "_id" et pas "id"
         assert!(json.contains("_id"));
         assert!(json.contains("performative"));

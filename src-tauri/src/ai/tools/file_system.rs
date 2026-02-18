@@ -1,10 +1,8 @@
 // FICHIER : src-tauri/src/ai/tools/file_system.rs
 
 use crate::ai::protocols::mcp::{McpTool, McpToolCall, McpToolResult, ToolDefinition};
-use async_trait::async_trait;
-use serde_json::json; // CORRECTION : Retrait de Value
+use crate::utils::{async_trait, io::PathBuf, prelude::*};
 use std::fs;
-use std::path::PathBuf;
 
 /// Outil permettant à l'IA d'écrire un fichier sur le disque.
 pub struct FileWriteTool {
@@ -96,7 +94,7 @@ impl McpTool for FileWriteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     fn make_call(path: &str, content: &str) -> McpToolCall {
         McpToolCall::new(

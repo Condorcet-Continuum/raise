@@ -1,10 +1,11 @@
 // FICHIER : src-tauri/src/commands/codegen_commands.rs
 
+use crate::utils::{data::Value, prelude::*};
+
 use crate::commands::rules_commands::RuleEngineState;
 use crate::json_db::storage::StorageEngine;
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::transformers::{get_transformer, TransformationDomain};
-use serde_json::Value;
 use tauri::State;
 
 /// Génère une représentation technique (Code, VHDL, Doc) pour un élément donné.
@@ -17,7 +18,7 @@ pub async fn generate_source_code(
     domain: String, // "software", "hardware", "system"
     state: State<'_, RuleEngineState>,
     storage: State<'_, StorageEngine>,
-) -> Result<Value, String> {
+) -> Result<Value> {
     // 1. Parsing du domaine cible
     // On mappe la chaîne reçue du frontend vers l'enum TransformationDomain
     let target_domain = match domain.to_lowercase().as_str() {
@@ -25,10 +26,10 @@ pub async fn generate_source_code(
         "hardware" | "vhdl" | "fpga" | "verilog" => TransformationDomain::Hardware,
         "system" | "overview" | "doc" | "architecture" => TransformationDomain::System,
         _ => {
-            return Err(format!(
+            return Err(AppError::Validation(format!(
                 "Domaine de transformation inconnu ou non supporté : {}",
                 domain
-            ))
+            )))
         }
     };
 
@@ -79,8 +80,7 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::JsonDbConfig;
     use crate::model_engine::arcadia;
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     /// Test d'intégration complet : DB -> Loader -> Transformer -> Sortie
     /// Vérifie que la logique interne de la commande fonctionne correctement.

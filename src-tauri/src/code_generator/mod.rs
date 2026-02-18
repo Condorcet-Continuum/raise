@@ -17,7 +17,7 @@ use self::analyzers::Analyzer;
 use crate::utils::data::{Deserialize, Serialize, Value};
 use crate::utils::error::anyhow;
 use crate::utils::io::{Path, PathBuf, ProjectScope};
-use crate::utils::prelude::*; // Result, AppError, info, warn
+use crate::utils::prelude::*;
 use crate::utils::sys;
 
 // AJOUT : Derive Serialize pour l'affichage JSON dans les outils

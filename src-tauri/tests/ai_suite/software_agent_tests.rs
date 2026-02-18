@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/software_agent_tests.rs
 
-use crate::common::init_ai_test_env;
+use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
@@ -13,7 +13,7 @@ async fn test_software_agent_creates_component_end_to_end() {
 
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit utiliser .await pour obtenir l'objet AiTestEnv concret.
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     // --- CONFIGURATION ROBUSTE (Comme code_gen_suite) ---
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
@@ -76,13 +76,11 @@ async fn test_software_agent_creates_component_end_to_end() {
     let mut found = false;
     if components_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(&components_dir) {
-            for entry in entries {
-                if let Ok(e) = entry {
-                    let content = std::fs::read_to_string(e.path()).unwrap_or_default();
-                    if content.contains("TestAuthService") {
-                        found = true;
-                        break;
-                    }
+            for e in entries.flatten() {
+                let content = std::fs::read_to_string(e.path()).unwrap_or_default();
+                if content.contains("TestAuthService") {
+                    found = true;
+                    break;
                 }
             }
         }
@@ -96,7 +94,7 @@ async fn test_intent_classification_integration() {
     dotenvy::dotenv().ok();
 
     // CORRECTION E0609 : .await ajouté ici également.
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     if !env.client.ping_local().await && api_key.is_empty() {

@@ -13,15 +13,10 @@ pub mod transverse_agent;
 
 pub use self::context::AgentContext;
 
+use self::intent_classifier::EngineeringIntent;
 use crate::ai::protocols::acl::AclMessage;
 
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use std::fmt;
-
-use self::intent_classifier::EngineeringIntent;
+use crate::utils::{async_trait, data, fmt, io, prelude::*, DateTime};
 
 /// Représente un élément créé ou modifié par un agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,7 +132,6 @@ pub trait Agent: Send + Sync {
 pub mod tools {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use serde_json::Value;
 
     /// Extrait le JSON d'une réponse LLM (nettoie Markdown, préambules, etc.)
     pub fn extract_json_from_llm(response: &str) -> String {
@@ -159,7 +153,7 @@ pub mod tools {
     }
 
     /// Sauvegarde standardisée d'un artefact sur le disque
-    pub fn save_artifact(
+    pub async fn save_artifact(
         ctx: &AgentContext,
         layer: &str,
         collection: &str,
@@ -188,12 +182,17 @@ pub mod tools {
         let full_path = ctx.paths.domain_root.join(&relative_path);
 
         if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Impossible de créer le dossier {:?}", parent))?;
+            io::create_dir_all(parent)
+                .await
+                .map_err(|e| AppError::Validation(format!("Dossier {:?} : {}", parent, e)))?;
         }
 
-        std::fs::write(&full_path, serde_json::to_string_pretty(doc)?)
-            .with_context(|| format!("Impossible d'écrire le fichier {:?}", full_path))?;
+        let content =
+            data::stringify_pretty(doc).map_err(|e| AppError::Validation(e.to_string()))?;
+
+        io::write(&full_path, content)
+            .await
+            .map_err(|e| AppError::Validation(format!("Fichier {:?} : {}", full_path, e)))?;
 
         Ok(CreatedArtifact {
             id: doc_id,
@@ -218,7 +217,7 @@ pub mod tools {
             .await
         {
             Ok(Some(doc_value)) => {
-                let session: AgentSession = serde_json::from_value(doc_value)?;
+                let session: AgentSession = data::from_value(doc_value)?;
                 Ok(session)
             }
             _ => {
@@ -233,7 +232,7 @@ pub mod tools {
     /// Sauvegarde l'état actuel de la session
     pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> Result<()> {
         let manager = CollectionsManager::new(&ctx.db, "un2", "_system");
-        let json_doc = serde_json::to_value(session)?;
+        let json_doc = data::to_value(session)?;
         manager.upsert_document("agent_sessions", json_doc).await?;
         Ok(())
     }

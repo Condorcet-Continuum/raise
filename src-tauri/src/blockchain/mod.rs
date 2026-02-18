@@ -7,7 +7,7 @@
 //! 3. Le client VPN Innernet réel (`vpn`).
 //! 4. La gestion de l'état global (State) pour l'application Tauri.
 
-use std::sync::Mutex;
+use crate::utils::{HashMap, Mutex};
 use tauri::{AppHandle, Manager, Runtime, State};
 
 // Exposition publique des sous-modules
@@ -90,9 +90,9 @@ pub fn ensure_fabric_state<R: Runtime>(app: &AppHandle<R>) {
                 organization: "unknown".into(),
                 connection: None,
             },
-            organizations: std::collections::HashMap::new(),
-            peers: std::collections::HashMap::new(),
-            certificate_authorities: std::collections::HashMap::new(),
+            organizations: HashMap::new(),
+            peers: HashMap::new(),
+            certificate_authorities: HashMap::new(),
         };
 
         let client = FabricClient::from_config(empty_profile);
@@ -123,9 +123,9 @@ mod tests {
                 organization: "Org1".into(),
                 connection: None,
             },
-            organizations: std::collections::HashMap::new(),
-            peers: std::collections::HashMap::new(),
-            certificate_authorities: std::collections::HashMap::new(),
+            organizations: HashMap::new(),
+            peers: HashMap::new(),
+            certificate_authorities: HashMap::new(),
         };
         let _client = FabricClient::from_config(profile);
     }

@@ -1,14 +1,12 @@
 // FICHIER : src-tauri/src/ai/agents/epbs_agent.rs
 
+use crate::utils::{async_trait, data, prelude::*, Uuid};
+
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
 use super::{Agent, AgentContext, AgentResult};
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use serde_json::json;
-use uuid::Uuid;
 
 #[derive(Default)]
 pub struct EpbsAgent;
@@ -24,7 +22,7 @@ impl EpbsAgent {
         name: &str,
         raw_type: &str,
         history_context: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -44,11 +42,11 @@ impl EpbsAgent {
             .llm
             .ask(LlmBackend::LocalLlama, sys, &user)
             .await
-            .map_err(|e| anyhow!("{}", e))?;
+            .map_err(|e| AppError::Validation(e.to_string()))?;
 
         let clean = extract_json_from_llm(&res);
-        let mut data: serde_json::Value =
-            serde_json::from_str(&clean).unwrap_or(json!({"name": name, "partNumber": "UNK"}));
+        let mut data: Value =
+            data::parse(&clean).unwrap_or(json!({"name": name, "partNumber": "UNK"}));
 
         data["id"] = json!(Uuid::new_v4().to_string());
         data["layer"] = json!("EPBS");
@@ -94,7 +92,7 @@ impl Agent for EpbsAgent {
                 let doc = self
                     .enrich_item(ctx, name, element_type, &history_str)
                     .await?;
-                let artifact = save_artifact(ctx, "epbs", "configuration_items", &doc)?;
+                let artifact = save_artifact(ctx, "epbs", "configuration_items", &doc).await?;
                 let msg = format!("Article **{}** (EPBS) créé.", name);
 
                 session.add_message("assistant", &msg);

@@ -1,7 +1,8 @@
 // FICHIER : src-tauri/src/traceability/tracer.rs
 
+use crate::utils::HashMap;
+
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
-use std::collections::HashMap;
 
 /// Service principal de traçabilité.
 pub struct Tracer<'a> {
@@ -111,7 +112,7 @@ fn is_link_property(key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     #[test]
     fn test_reverse_indexing_ai_model() {

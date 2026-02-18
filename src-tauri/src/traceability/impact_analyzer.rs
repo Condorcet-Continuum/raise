@@ -1,8 +1,7 @@
 // FICHIER : src-tauri/src/traceability/impact_analyzer.rs
+use crate::utils::{prelude::*, HashSet};
 
 use super::tracer::Tracer;
-use serde::Serialize;
-use std::collections::HashSet;
 
 #[derive(Debug, Serialize)]
 pub struct ImpactReport {

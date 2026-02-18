@@ -117,8 +117,7 @@ impl AuditGenerator {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
-    use serde_json::json;
-    use std::collections::HashMap;
+    use crate::utils::{data::json, HashMap};
 
     fn create_dummy_element(id: &str) -> ArcadiaElement {
         ArcadiaElement {

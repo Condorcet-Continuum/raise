@@ -1,8 +1,9 @@
-use crate::utils::data::HashMap;
-use crate::utils::io::{self, Path};
-use crate::utils::Regex;
-use crate::utils::Result;
-
+use crate::utils::{
+    data::HashMap,
+    io::{self, Path},
+    prelude::*,
+    Regex,
+};
 /// Analyseur capable d'extraire des blocs de code protégés d'un fichier existant.
 pub struct InjectionAnalyzer;
 

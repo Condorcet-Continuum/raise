@@ -1,41 +1,47 @@
 // FICHIER : src-tauri/tests/json_db_suite/integration_suite.rs
 
+use crate::common::setup_test_env; // Notre fameux socle !
 use raise::json_db::{
     collections::manager::CollectionsManager,
     indexes::manager::IndexManager,
-    query::{sql, QueryEngine},
-    storage::{JsonDbConfig, StorageEngine},
+    query::{sql, Condition, FilterOperator, Query, QueryEngine, QueryFilter},
+    storage::JsonDbConfig,
     transactions::{manager::TransactionManager, TransactionRequest},
 };
-use raise::utils::{fs::tempdir, json::json, Arc};
+use raise::utils::{prelude::*, Arc}; // SSOT : Apporte json!, Arc, Value, etc.
 
 #[tokio::test]
 async fn test_json_db_global_scenario() {
-    // Renommé pour matcher le filtre 'json_db'
-    // 1. SETUP ENVIRONNEMENT
-    let dir = tempdir().unwrap();
+    // 1. SETUP ENVIRONNEMENT (Robuste & Isolé)
+    let env = setup_test_env().await;
+
+    // Le TransactionManager a besoin de la configuration enveloppée dans un Arc
     let config = Arc::new(JsonDbConfig {
-        data_root: dir.path().to_path_buf(),
+        data_root: env.domain_path.clone(),
     });
-    let space = "integration";
-    let db = "test_db";
 
-    let storage = StorageEngine::new((*config).clone());
-    let col_mgr = CollectionsManager::new(&storage, space, db);
-    let mut idx_mgr = IndexManager::new(&storage, space, db);
-    let tx_mgr = TransactionManager::new(&config, space, db);
-
-    // Initialisation DB
-    col_mgr.init_db().await.unwrap();
+    let col_mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mut idx_mgr = IndexManager::new(&env.storage, &env.space, &env.db);
+    let tx_mgr = TransactionManager::new(&config, &env.space, &env.db);
 
     // 2. CRÉATION SCHÉMA & INDEX
     println!("--- Step 1: Create Collection & Index ---");
-    col_mgr.create_collection("users", None).await.unwrap();
+    // Note : Plus besoin de init_db(), setup_test_env s'en est déjà chargé !
+
+    col_mgr
+        .create_collection("users", None)
+        .await
+        .expect("❌ Échec de la création de la collection 'users'");
+
     idx_mgr
         .create_index("users", "email", "hash")
         .await
-        .unwrap();
-    idx_mgr.create_index("users", "age", "btree").await.unwrap();
+        .expect("❌ Échec de la création de l'index sur 'email'");
+
+    idx_mgr
+        .create_index("users", "age", "btree")
+        .await
+        .expect("❌ Échec de la création de l'index sur 'age'");
 
     // 3. INSERTION VIA TRANSACTION (API Smart)
     println!("--- Step 2: Insert Data (Transaction) ---");
@@ -51,49 +57,64 @@ async fn test_json_db_global_scenario() {
             document: json!({ "name": "Bob", "email": "bob@corp.com", "age": 40 }),
         },
     ];
-    tx_mgr.execute_smart(tx_reqs).await.unwrap();
+
+    tx_mgr
+        .execute_smart(tx_reqs)
+        .await
+        .expect("❌ Échec de la transaction d'insertion initiale");
 
     // 4. VERIFICATION VIA SQL (SELECT)
     println!("--- Step 3: Query Data (SQL SELECT) ---");
-    // On requête sur l'email (Index Hash)
     let sql_read = "SELECT name, age FROM users WHERE email = 'alice@corp.com'";
 
-    // Déballage du SqlRequest (Select)
-    let query = match sql::parse_sql(sql_read).unwrap() {
+    let query = match sql::parse_sql(sql_read).expect("❌ Erreur de parsing du SQL SELECT") {
         sql::SqlRequest::Read(q) => q,
-        _ => panic!("Should be Read"),
+        _ => panic!("❌ La requête SQL devrait être de type Read"),
     };
 
     let engine = QueryEngine::new(&col_mgr);
-    let res = engine.execute_query(query).await.unwrap();
-    assert_eq!(res.documents.len(), 1);
-    assert_eq!(res.documents[0]["name"], "Alice");
-    // Vérif projection
-    assert!(res.documents[0].get("email").is_none());
+    let res = engine
+        .execute_query(query)
+        .await
+        .expect("❌ Échec de l'exécution du SELECT");
+
+    assert_eq!(
+        res.documents.len(),
+        1,
+        "Devrait trouver exactement 1 document pour Alice"
+    );
+    assert_eq!(
+        res.documents[0]["name"], "Alice",
+        "Le nom devrait être Alice"
+    );
+    assert!(
+        res.documents[0].get("email").is_none(),
+        "L'email ne devrait pas être projeté (SELECT name, age)"
+    );
 
     // 5. MODIFICATION VIA SQL (INSERT)
     println!("--- Step 4: Write Data (SQL INSERT) ---");
     let sql_write =
         "INSERT INTO users (name, email, age) VALUES ('Charlie', 'charlie@corp.com', 25)";
 
-    // Déballage du SqlRequest (Write)
-    match sql::parse_sql(sql_write).unwrap() {
+    match sql::parse_sql(sql_write).expect("❌ Erreur de parsing du SQL INSERT") {
         sql::SqlRequest::Write(reqs) => {
-            tx_mgr.execute_smart(reqs).await.unwrap();
+            tx_mgr
+                .execute_smart(reqs)
+                .await
+                .expect("❌ Échec de l'insertion SQL de Charlie");
         }
-        _ => panic!("Should be Write"),
+        _ => panic!("❌ La requête SQL devrait être de type Write"),
     }
 
-    // 6. VERIFICATION INDEX (QueryEngine doit trouver Charlie via l'index)
+    // 6. VERIFICATION INDEX
     println!("--- Step 5: Verify Index Consistency ---");
-    let engine = QueryEngine::new(&col_mgr);
 
-    // On utilise l'index BTree sur l'age
-    let q_btree = raise::json_db::query::Query {
+    let q_btree = Query {
         collection: "users".into(),
-        filter: Some(raise::json_db::query::QueryFilter {
-            operator: raise::json_db::query::FilterOperator::And,
-            conditions: vec![raise::json_db::query::Condition::eq("age", json!(25))],
+        filter: Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("age", json!(25))],
         }),
         sort: None,
         limit: None,
@@ -101,10 +122,20 @@ async fn test_json_db_global_scenario() {
         projection: None,
     };
 
-    // Le QueryEngine utilise l'index. Si l'index n'est pas à jour, il ne trouvera rien.
-    let res_btree = engine.execute_query(q_btree).await.unwrap();
-    assert_eq!(res_btree.documents.len(), 1);
-    assert_eq!(res_btree.documents[0]["name"], "Charlie");
+    let res_btree = engine
+        .execute_query(q_btree)
+        .await
+        .expect("❌ Échec de la requête sur l'index BTree");
+
+    assert_eq!(
+        res_btree.documents.len(),
+        1,
+        "L'index devrait trouver exactement 1 document via l'âge"
+    );
+    assert_eq!(
+        res_btree.documents[0]["name"], "Charlie",
+        "Le document trouvé devrait être Charlie"
+    );
 
     println!("✅ GLOBAL INTEGRATION SUCCESS");
 }

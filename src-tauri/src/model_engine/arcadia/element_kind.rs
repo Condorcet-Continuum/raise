@@ -2,7 +2,7 @@
 
 use crate::json_db::jsonld::vocabulary::namespaces; // Import des namespaces officiels
 use crate::model_engine::types::ArcadiaElement;
-use serde::Serialize;
+use crate::utils::prelude::*;
 
 /// Les couches principales de la méthodologie Arcadia + Data + Transverse
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -113,7 +113,7 @@ impl ArcadiaSemantics for ArcadiaElement {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use std::collections::HashMap;
+    use crate::utils::HashMap;
 
     fn make_el(kind: &str) -> ArcadiaElement {
         ArcadiaElement {

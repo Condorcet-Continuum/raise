@@ -1,5 +1,5 @@
 // FICHIER : src-tauri/src/ai/nlp/preprocessing.rs
-use std::collections::HashSet;
+use crate::utils::HashSet;
 
 /// Normalise le texte :
 /// 1. Minuscule & Sans accents.

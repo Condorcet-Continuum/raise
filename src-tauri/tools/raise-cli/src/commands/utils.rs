@@ -1,5 +1,11 @@
 use clap::{Args, Subcommand};
-use raise::{user_info, user_success, utils::prelude::*};
+use raise::{
+    user_info, user_success,
+    utils::{
+        io::{self},
+        prelude::*,
+    },
+};
 
 /// Outils de maintenance et d'inspection système pour RAISE.
 #[derive(Args, Clone, Debug)]
@@ -26,24 +32,37 @@ pub async fn handle(args: UtilsArgs) -> Result<()> {
             user_info!("VERSION", "{}", env!("CARGO_PKG_VERSION"));
 
             // Champs valides confirmés par le compilateur
-            user_info!("ENV_MODE", "{:?}", config.env_mode);
-            user_info!("DB_ROOT", "{:?}", config.database_root);
+            let env_mode = if cfg!(debug_assertions) {
+                "development"
+            } else {
+                "production"
+            };
+            user_info!("SYS_ENV", "Environnement : {}", env_mode);
+
+            user_info!("DB_ROOT", "{:?}", config.get_path("PATH_RAISE_DOMAIN"));
 
             // Affichage masqué pour la clé API si elle existe (sécurité)
             let has_key = config
-                .llm_api_key
-                .as_ref()
+                .ai_engines
+                .get("cloud_gemini")
+                .and_then(|engine| engine.api_key.as_ref())
                 .map(|k| !k.is_empty())
                 .unwrap_or(false);
-            user_info!(
-                "LLM_API",
-                "URL: {} (Key set: {})",
-                config.llm_api_url,
-                has_key
-            );
+            let api_url = config
+                .ai_engines
+                .get("primary_local")
+                .and_then(|engine| engine.api_url.as_deref())
+                .unwrap_or("Non configurée");
+            user_info!("LLM_API", "URL: {} (Key set: {})", api_url, has_key);
 
             // Vérification simple de l'existence de la racine DB
-            if raise::utils::fs::exists(&config.database_root).await {
+            if io::exists(
+                &config
+                    .get_path("PATH_RAISE_DOMAIN")
+                    .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !"),
+            )
+            .await
+            {
                 user_success!("CHECK_FS", "Le dossier database_root est accessible.");
             } else {
                 // Note: user_error! n'est pas importé, on utilise un log simple ou on l'ajoute aux imports
@@ -73,8 +92,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_utils_info() {
+        std::env::set_var("RAISE_ENV_MODE", "test");
         // On tente d'init la config pour le test, on ignore l'erreur si déjà init
-        let _ = AppConfig::init();
+        let _ = AppConfig::init().ok();
 
         let args = UtilsArgs {
             command: UtilsCommands::Info,

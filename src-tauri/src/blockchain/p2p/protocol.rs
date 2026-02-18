@@ -2,7 +2,7 @@
 
 use crate::blockchain::consensus::vote::Vote; // Ajout nécessaire
 use crate::blockchain::storage::commit::ArcadiaCommit;
-use serde::{Deserialize, Serialize};
+use crate::utils::prelude::*;
 
 /// Types de messages échangés sur le réseau P2P souverain.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -37,7 +37,7 @@ pub enum ArcadiaResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use crate::utils::Utc;
 
     #[test]
     fn test_protocol_serialization() {

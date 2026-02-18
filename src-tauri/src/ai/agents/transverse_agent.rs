@@ -1,9 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/transverse_agent.rs
 
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use serde_json::json;
-use uuid::Uuid;
+use crate::utils::{async_trait, data, prelude::*, Uuid};
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -11,7 +8,6 @@ use super::{Agent, AgentContext, AgentResult};
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
 
-// IMPORTS POUR LA DB
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 
@@ -30,7 +26,7 @@ impl TransverseAgent {
         user: &str,
         doc_type: &str,
         original_name: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         if original_name == "skip_llm" {
             return Ok(json!({}));
         }
@@ -39,10 +35,10 @@ impl TransverseAgent {
             .llm
             .ask(LlmBackend::LocalLlama, sys, user)
             .await
-            .map_err(|e| anyhow!("LLM Transverse: {}", e))?;
+            .map_err(|e| AppError::Validation(format!("LLM Transverse: {}", e)))?;
 
         let clean = extract_json_from_llm(&response);
-        let mut doc: serde_json::Value = serde_json::from_str(&clean).unwrap_or(json!({}));
+        let mut doc: Value = data::parse(&clean).unwrap_or(json!({}));
 
         doc["name"] = json!(original_name);
         doc["id"] = json!(Uuid::new_v4().to_string());
@@ -62,7 +58,7 @@ impl TransverseAgent {
         ctx: &AgentContext,
         name: &str,
         history_context: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -80,11 +76,7 @@ impl TransverseAgent {
     }
 
     /// Recherche le composant dans la DB (SA, LA, ou PA)
-    async fn find_component_in_db(
-        &self,
-        ctx: &AgentContext,
-        name: &str,
-    ) -> Option<serde_json::Value> {
+    async fn find_component_in_db(&self, ctx: &AgentContext, name: &str) -> Option<Value> {
         // On suppose l'espace par défaut "mbse2/drones" (comme SoftwareAgent)
         // Dans une version future, cela devrait venir du contexte de session
         let manager = CollectionsManager::new(&ctx.db, "mbse2", "drones");
@@ -213,7 +205,7 @@ impl Agent for TransverseAgent {
                     "requirements",
                 );
 
-                let artifact = save_artifact(ctx, "transverse", sub_folder, &doc)?;
+                let artifact = save_artifact(ctx, "transverse", sub_folder, &doc).await?;
                 let msg = format!("Élément Transverse **{}** ({}) créé.", name, element_type);
 
                 session.add_message("assistant", &msg);
@@ -246,7 +238,7 @@ impl Agent for TransverseAgent {
                     "generatedAt": chrono::Utc::now().to_rfc3339()
                 });
 
-                let artifact = save_artifact(ctx, "transverse", "reports", &report)?;
+                let artifact = save_artifact(ctx, "transverse", "reports", &report).await?;
 
                 let findings_list = findings
                     .iter()
@@ -283,8 +275,10 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use std::sync::Arc;
-    use tempfile::tempdir;
+    use crate::utils::{
+        io::{self, tempdir},
+        Arc,
+    };
 
     #[test]
     fn test_transverse_id() {
@@ -329,11 +323,20 @@ mod tests {
         let agent = TransverseAgent::new();
 
         // 3. Setup FS : Création physique du dossier et du Cargo.toml
+        // 3. Setup FS : Création physique du dossier et du Cargo.toml
         let src_gen = domain_root.join("src-gen").join("mon_composant");
-        std::fs::create_dir_all(&src_gen).unwrap();
-        std::fs::write(src_gen.join("Cargo.toml"), "[package]").unwrap();
+        let full_path = src_gen.join("Cargo.toml"); // On définit le fichier cible
+        let content = "[package]\nname = \"mon_composant\"".to_string(); // On définit le contenu
 
-        // 4. Appel de l'intention
+        // ✅ Création du dossier parent
+        io::create_dir_all(&src_gen)
+            .await
+            .expect("Échec de la création du dossier src-gen");
+
+        // ✅ Écriture du fichier Cargo.toml
+        io::write(&full_path, content)
+            .await
+            .expect("Échec de l'écriture du Cargo.toml"); // 4. Appel de l'intention
         let intent = EngineeringIntent::VerifyQuality {
             scope: "code".into(),
             target: "Mon Composant".into(),

@@ -4,21 +4,9 @@ use clap::{Parser, Subcommand};
 mod commands;
 
 use raise::{
-    user_error,
-    user_info, // Les macros à la racine
-    utils::{
-        context,    // Remplace env, i18n, logger (Config & Environnement)
-        data,       // Remplace json (Manipulation de données)
-        io,         // Remplace fs (Entrées/Sorties sécurisées)
-        prelude::*, // Types communs (Result, AppError, etc.)
-    },
+    user_error, user_info,
+    utils::{context, prelude::*},
 };
-
-// EMBARQUEMENT DES RESSOURCES (Compilation)
-const DEFAULT_LOCALE_FR: &str = include_str!("../../../locales/fr.json");
-const DEFAULT_LOCALE_EN: &str = include_str!("../../../locales/en.json");
-const DEFAULT_LOCALE_DE: &str = include_str!("../../../locales/de.json");
-const DEFAULT_LOCALE_ES: &str = include_str!("../../../locales/es.json");
 
 #[derive(Parser)]
 #[command(name = "raise-cli")]
@@ -32,32 +20,17 @@ struct Cli {
 
 #[derive(Subcommand, Clone)]
 enum Commands {
-    /// Pilotage du Workflow Engine (Neuro-Symbolic MAS)
     Workflow(commands::workflow::WorkflowArgs),
-
     ModelEngine(commands::model_engine::ModelArgs),
-
-    /// Commandes pour le JSON-DB (Embedded NoSQL Engine)
     Jsondb(commands::jsondb::JsondbArgs),
-
-    /// Commandes pour le AI (Cerveau Neuro-Symbolique)
     Ai(commands::ai::AiArgs),
-
     Genetics(commands::genetics::GeneticsArgs),
-
     Blockchain(commands::blockchain::BlockchainArgs),
-
     Plugins(commands::plugins::PluginsArgs),
-
     Traceability(commands::traceability::TraceabilityArgs),
-
     Spatial(commands::spatial::SpatialArgs),
-
     CodeGen(commands::code_gen::CodeGenArgs),
-
-    /// Commandes pour le Validator (Schémas & Validation)
     Validator(commands::validator::ValidatorArgs),
-
     Utils(commands::utils::UtilsArgs),
 }
 
@@ -73,19 +46,14 @@ async fn main() -> Result<()> {
     // 2. Initialisation du Logger
     context::init_logging();
 
-    // 3. BOOTSTRAP DES LOCALES
-    // Async et Atomique !
-    bootstrap_locales().await;
+    // 3. Initialisation de la Langue (Lecture directe depuis JSON-DB)
+    let config = AppConfig::get();
+    context::init_i18n(&config.core.language).await;
 
-    // 4. Initialisation de la Langue
-    // REFAC: Utilisation de env::get_or
-    let lang = context::get_or("RAISE_LANG", "fr");
-    context::init_i18n(&lang);
-
-    // Message d'accueil système
+    // Message d'accueil système traduit
     user_info!("CLI_START", "v{}", env!("CARGO_PKG_VERSION"));
 
-    // 5. Parsing & Dispatch
+    // 4. Parsing & Dispatch
     let cli = Cli::parse();
 
     match cli.command {
@@ -117,32 +85,31 @@ async fn run_global_shell() -> Result<()> {
     println!("   Tapez 'exit' ou 'quit' pour quitter.");
     println!("--------------------------------------------------");
 
-    // 1. Initialisation de l'éditeur de ligne
-    let mut rl = DefaultEditor::new().map_err(|e| e.to_string())?;
-    // 2. Chargement de l'historique existant (si disponible)
+    let mut rl = DefaultEditor::new().map_err(|e| AppError::Config(e.to_string()))?;
     let config = AppConfig::get();
-    let history_path = config.database_root.join("history.txt");
+    let history_path = config
+        .get_path("PATH_RAISE_DOMAIN")
+        .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !")
+        .join("_system")
+        .join("history.txt");
 
     if rl.load_history(&history_path).is_err() {
-        // Pas d'historique ou fichier introuvable (normal au premier lancement)
+        // Pas d'historique au premier lancement, c'est normal
     }
 
     loop {
-        // Affiche le prompt et attend l'input (avec gestion des flèches !)
         let readline = rl.readline("RAISE> ");
 
         match readline {
             Ok(line) => {
                 let input = line.trim();
 
-                // Si la ligne n'est pas vide, on l'ajoute à l'historique mémoire
                 if !input.is_empty() {
                     let _ = rl.add_history_entry(input);
                 } else {
                     continue;
                 }
 
-                // Commandes natives du Shell
                 if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
                     println!("👋 Au revoir !");
                     break;
@@ -152,7 +119,6 @@ async fn run_global_shell() -> Result<()> {
                     continue;
                 }
 
-                // Parsing et Exécution
                 match shell_words::split(input) {
                     Ok(args) => {
                         let mut full_args = vec!["repl".to_string()];
@@ -171,19 +137,10 @@ async fn run_global_shell() -> Result<()> {
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("❌ Erreur de syntaxe : {}", e);
-                    }
+                    Err(e) => eprintln!("❌ Erreur de syntaxe : {}", e),
                 }
             }
-            Err(ReadlineError::Interrupted) => {
-                println!("(CTRL-C)");
-                break;
-            }
-            Err(ReadlineError::Eof) => {
-                println!("(CTRL-D)");
-                break;
-            }
+            Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
             Err(err) => {
                 user_error!("SHELL_ERROR", "{}", err);
                 break;
@@ -191,7 +148,6 @@ async fn run_global_shell() -> Result<()> {
         }
     }
 
-    // 3. Sauvegarde de l'historique en quittant
     if let Err(e) = rl.save_history(&history_path) {
         tracing::warn!("Impossible de sauvegarder l'historique : {}", e);
     }
@@ -213,44 +169,6 @@ async fn execute_command(cmd: Commands) -> Result<()> {
         Commands::CodeGen(args) => commands::code_gen::handle(args).await,
         Commands::Validator(args) => commands::validator::handle(args).await,
         Commands::Utils(args) => commands::utils::handle(args).await,
-    }
-}
-
-/// Déploie les fichiers de langue de manière Atomique et Validée
-async fn bootstrap_locales() {
-    let config = AppConfig::get();
-    let locales_dir = config.database_root.join("locales");
-
-    // REFAC: Utilisation de fs::ensure_dir (plus sûr)
-    if let Err(e) = io::ensure_dir(&locales_dir).await {
-        tracing::warn!("Impossible de créer le dossier locales : {}", e);
-        return;
-    }
-
-    let writes = vec![
-        ("fr.json", DEFAULT_LOCALE_FR),
-        ("en.json", DEFAULT_LOCALE_EN),
-        ("de.json", DEFAULT_LOCALE_DE),
-        ("es.json", DEFAULT_LOCALE_ES),
-    ];
-
-    for (name, content) in writes {
-        let path = locales_dir.join(name);
-
-        // 1. Validation : On parse le JSON brut
-        match data::parse::<data::Value>(content) {
-            Ok(json_value) => {
-                // 2. Écriture Atomique : On utilise notre utilitaire sécurisé
-                if let Err(e) = io::write_json_atomic(&path, &json_value).await {
-                    tracing::error!("Erreur écriture atomique {}: {}", name, e);
-                } else {
-                    tracing::debug!("Locale {} déployée.", name);
-                }
-            }
-            Err(e) => {
-                tracing::error!("❌ locale {} corrompue au build ! : {}", name, e);
-            }
-        }
     }
 }
 

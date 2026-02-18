@@ -1,9 +1,10 @@
 // FICHIER : src-tauri/src/ai/context/tests.rs
 
+use crate::utils::data::HashMap;
+
 use crate::ai::context::retriever::SimpleRetriever;
 // CORRECTION 1 : Ajout de NameType dans les imports
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
-use std::collections::HashMap;
 
 // Helper pour créer un élément factice rapidement
 fn mock_element(name: &str, desc: &str) -> ArcadiaElement {

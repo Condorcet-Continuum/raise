@@ -1,8 +1,7 @@
 // FICHIER : src-tauri/src/ai/agents/intent_classifier.rs
 
 use crate::ai::llm::client::{LlmBackend, LlmClient};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use crate::utils::{data, prelude::*};
 
 // Import de la Toolbox pour le parsing JSON robuste
 use super::tools::extract_json_from_llm;
@@ -191,7 +190,7 @@ impl IntentClassifier {
 
         // UTILISATION DE LA TOOLBOX ICI (Plus de code dupliqué)
         let clean_json = extract_json_from_llm(&response);
-        let mut json_value: Value = serde_json::from_str(&clean_json).unwrap_or(json!({}));
+        let mut json_value: Value = data::parse(&clean_json).unwrap_or(json!({}));
 
         // --- MODE SECOURS (HEURISTIQUE) ---
         // Si le LLM échoue à produire un JSON valide avec un "intent"
@@ -239,7 +238,7 @@ impl IntentClassifier {
             json_value["name"] = json!(user_input.replace("Crée ", "").replace("le ", "").trim());
         }
 
-        match serde_json::from_value::<EngineeringIntent>(json_value) {
+        match data::from_value::<EngineeringIntent>(json_value) {
             Ok(intent) => intent,
             Err(_) => EngineeringIntent::Unknown,
         }

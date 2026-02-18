@@ -2,10 +2,13 @@
 
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use crate::utils::data::{ContextBuilder, Deserialize, Value};
-use crate::utils::io::PathBuf;
-use crate::utils::prelude::*; // Pour Result, warn!, info!
-use crate::utils::sys;
+
+use crate::utils::{
+    data::{ContextBuilder, Deserialize, Value},
+    io::PathBuf,
+    prelude::*,
+    sys,
+};
 
 use heck::{ToPascalCase, ToSnakeCase};
 

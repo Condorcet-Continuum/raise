@@ -1,8 +1,7 @@
 // src-tauri/src/blockchain/consensus/vote.rs
 //! Gestion du mécanisme de vote et de la validation du quorum pour Arcadia.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::utils::{prelude::*, HashMap};
 
 /// Représente un vote individuel émis par un validateur.
 #[derive(Debug, Clone, Serialize, Deserialize)]

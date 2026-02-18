@@ -1,9 +1,9 @@
 // FICHIER : src-tauri/src/model_engine/transformers/software_transformer.rs
 
+use crate::utils::prelude::*;
+
 use super::ModelTransformer;
 use crate::model_engine::arcadia; // <-- Accès au vocabulaire sémantique
-use anyhow::Result;
-use serde_json::{json, Value};
 
 pub struct SoftwareTransformer;
 

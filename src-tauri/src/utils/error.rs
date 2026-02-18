@@ -72,6 +72,14 @@ impl From<&str> for AppError {
     }
 }
 
+impl AppError {
+    /// Crée une erreur d'Entrée/Sortie personnalisée (ErrorKind::Other)
+    pub fn custom_io(msg: impl Into<String>) -> Self {
+        // ✅ Utilisation du raccourci natif suggéré par Clippy
+        AppError::Io(std::io::Error::other(msg.into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +107,19 @@ mod tests {
 
         // Notre implémentation personnalisée de Serialize doit renvoyer juste la chaîne
         assert_eq!(json, "\"Erreur IA/LLM : Service indisponible\"");
+    }
+
+    #[test]
+    fn test_custom_io_helper() {
+        let err = AppError::custom_io("Accès refusé au dossier");
+
+        match err {
+            AppError::Io(e) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::Other);
+                assert_eq!(e.to_string(), "Accès refusé au dossier");
+            }
+            _ => panic!("Le helper doit générer une AppError::Io"),
+        }
     }
 
     #[test]

@@ -32,9 +32,12 @@ impl<'a> CollectionsManager<'a> {
         }
     }
 
-    pub async fn init_db(&self) -> Result<()> {
-        file_storage::create_db(&self.storage.config, &self.space, &self.db).await?;
-        self.ensure_system_index().await
+    pub async fn init_db(&self) -> Result<bool> {
+        let created = file_storage::create_db(&self.storage.config, &self.space, &self.db).await?;
+        if created {
+            self.ensure_system_index().await?;
+        }
+        Ok(created)
     }
 
     pub async fn drop_db(&self) -> Result<bool> {

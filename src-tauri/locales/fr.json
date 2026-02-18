@@ -6,6 +6,7 @@
   "JSONDB_CTX_SPACE": "🔧 Espace de travail",
   "JSONDB_BOOTSTRAP_AUTO": "ℹ️ Auto-bootstrap : Initialisation de la structure de base...",
   "JSONDB_INIT_SUCCESS": "✅ Base de données initialisée avec succès.",
+  "JSONDB_EXISTS": "⚠️ l'objet existe déjà: ",
   "JSONDB_DROP_WARN": "⚠️ Attention : Utilisez le flag --force pour confirmer la suppression de la base.",
   "JSONDB_DROP_SUCCESS": "🔥 Base de données supprimée :",
   "JSONDB_DROP_NOT_FOUND": "❌ Base introuvable, rien à supprimer.",

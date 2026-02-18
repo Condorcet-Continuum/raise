@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/commands/cognitive_commands.rs
+use crate::utils::{data::Value, prelude::*};
 
 use crate::plugins::manager::PluginManager;
-use serde_json::{json, Value};
 use tauri::State;
 
 /// Charge un plugin cognitif dans le gestionnaire.
@@ -12,10 +12,11 @@ pub async fn cognitive_load_plugin(
     path: String,
     space: String,
     db: String,
-) -> Result<String, String> {
+) -> Result<String> {
     manager
         .load_plugin(&id, &path, &space, &db)
-        .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| AppError::from(e.to_string()))?;
 
     Ok(format!("Plugin {} chargé avec succès", id))
 }
@@ -27,11 +28,12 @@ pub async fn cognitive_run_plugin(
     manager: State<'_, PluginManager>,
     id: String,
     mandate: Option<Value>,
-) -> Result<Value, String> {
+) -> Result<Value> {
     // Utilisation de la nouvelle méthode run_plugin_with_context pour supporter le Workflow
     let (code, signals) = manager
         .run_plugin_with_context(&id, mandate)
-        .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| AppError::from(e.to_string()))?;
 
     Ok(json!({
         "exit_code": code,
@@ -41,10 +43,8 @@ pub async fn cognitive_run_plugin(
 
 /// Liste tous les plugins actuellement chargés.
 #[tauri::command]
-pub async fn cognitive_list_plugins(
-    manager: State<'_, PluginManager>,
-) -> Result<Vec<String>, String> {
-    Ok(manager.list_active_plugins())
+pub async fn cognitive_list_plugins(manager: State<'_, PluginManager>) -> Result<Vec<String>> {
+    Ok(manager.list_active_plugins().await)
 }
 
 #[cfg(test)]

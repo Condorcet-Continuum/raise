@@ -5,21 +5,17 @@ use crate::json_db::jsonld::JsonLdProcessor;
 use crate::json_db::storage::StorageEngine;
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
 use crate::rules_engine::evaluator::DataProvider;
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use chrono::Utc;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use crate::utils::{async_trait, prelude::*, Arc, AsyncRwLock, HashMap, Utc};
+
 use tauri::State;
-use tokio::sync::RwLock;
 
 /// Cache de localisation pour le Lazy Loading.
 type LocationIndex = HashMap<String, String>;
 
 pub struct ModelLoader<'a> {
     pub manager: CollectionsManager<'a>,
-    index: Arc<RwLock<LocationIndex>>,
+    index: Arc<AsyncRwLock<LocationIndex>>,
     processor: JsonLdProcessor,
 }
 
@@ -33,7 +29,7 @@ impl<'a> ModelLoader<'a> {
     pub fn from_engine(storage: &'a StorageEngine, space: &str, db: &str) -> Self {
         Self {
             manager: CollectionsManager::new(storage, space, db),
-            index: Arc::new(RwLock::new(HashMap::new())),
+            index: Arc::new(AsyncRwLock::new(HashMap::new())),
             processor: JsonLdProcessor::new(),
         }
     }
@@ -41,7 +37,7 @@ impl<'a> ModelLoader<'a> {
     pub fn new_with_manager(manager: CollectionsManager<'a>) -> Self {
         Self {
             manager,
-            index: Arc::new(RwLock::new(HashMap::new())),
+            index: Arc::new(AsyncRwLock::new(HashMap::new())),
             processor: JsonLdProcessor::new(),
         }
     }
@@ -100,11 +96,17 @@ impl<'a> ModelLoader<'a> {
         match collection {
             Some(col) => {
                 let doc = self.manager.get_document(&col, id).await?.ok_or_else(|| {
-                    anyhow!("Document {} introuvable dans {} (Index périmé ?)", id, col)
+                    AppError::Validation(format!(
+                        "Document {} introuvable dans {} (Index périmé ?)",
+                        id, col
+                    ))
                 })?;
                 self.json_to_element(doc, Some(&col))
             }
-            None => Err(anyhow!("ID inconnu ou non indexé : {}", id)),
+            None => Err(AppError::Validation(format!(
+                "ID inconnu ou non indexé : {}",
+                id
+            ))),
         }
     }
 
@@ -118,9 +120,9 @@ impl<'a> ModelLoader<'a> {
             self.manager
                 .get_document(&col, id)
                 .await?
-                .ok_or_else(|| anyhow!("Document introuvable"))
+                .ok_or_else(|| AppError::from("Document introuvable"))
         } else {
-            Err(anyhow!("ID non trouvé dans l'index"))
+            Err(AppError::from("ID non trouvé dans l'index"))
         }
     }
 
@@ -156,7 +158,7 @@ impl<'a> ModelLoader<'a> {
             short_type.to_string()
         };
 
-        let obj = doc.as_object().ok_or(anyhow!("Document invalide"))?;
+        let obj = doc.as_object().ok_or(AppError::from("Document invalide"))?;
         let mut properties = HashMap::new();
         for (k, v) in obj {
             if !matches!(

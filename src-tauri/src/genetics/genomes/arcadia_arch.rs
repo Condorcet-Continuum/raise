@@ -1,8 +1,8 @@
+use crate::utils::{fmt, prelude::*};
+
 use crate::genetics::operators::{crossover, mutation};
 use crate::genetics::traits::Genome;
 use rand::prelude::*;
-use serde::{Deserialize, Serialize};
-use std::fmt;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SystemAllocationGenome {

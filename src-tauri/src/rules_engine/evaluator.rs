@@ -1,10 +1,8 @@
 // FICHIER : src-tauri/src/rules_engine/evaluator.rs
-
 use crate::rules_engine::ast::Expr;
-use async_trait::async_trait;
-use chrono::{DateTime, Duration, NaiveDate, Utc};
-use regex::Regex;
-use serde_json::{json, Value};
+use crate::utils::{async_trait, prelude::*, DateTime, Regex, Utc};
+use chrono::{Duration, NaiveDate};
+
 use std::borrow::Cow;
 
 #[derive(Debug, thiserror::Error)]
@@ -46,7 +44,7 @@ impl Evaluator {
         expr: &'a Expr,
         context: &'a Value,
         provider: &dyn DataProvider,
-    ) -> Result<Cow<'a, Value>, EvalError> {
+    ) -> std::result::Result<Cow<'a, Value>, EvalError> {
         match expr {
             Expr::Val(v) => Ok(Cow::Borrowed(v)),
             Expr::Var(path) => resolve_path(context, path),
@@ -361,7 +359,7 @@ async fn compare_nums<'a, F>(
     c: &'a Value,
     p: &dyn DataProvider,
     op: F,
-) -> Result<Cow<'a, Value>, EvalError>
+) -> std::result::Result<Cow<'a, Value>, EvalError>
 where
     F: Fn(f64, f64) -> bool,
 {
@@ -382,7 +380,7 @@ async fn fold_nums<'a, F>(
     p: &dyn DataProvider,
     init: f64,
     op: F,
-) -> Result<Cow<'a, Value>, EvalError>
+) -> std::result::Result<Cow<'a, Value>, EvalError>
 where
     F: Fn(f64, f64) -> f64,
 {
@@ -405,7 +403,10 @@ fn smart_number(n: f64) -> Value {
     }
 }
 
-fn resolve_path<'a>(context: &'a Value, path: &str) -> Result<Cow<'a, Value>, EvalError> {
+fn resolve_path<'a>(
+    context: &'a Value,
+    path: &str,
+) -> std::result::Result<Cow<'a, Value>, EvalError> {
     let mut current = context;
     if path.is_empty() {
         return Ok(Cow::Borrowed(current));

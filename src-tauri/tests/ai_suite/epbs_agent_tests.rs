@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/epbs_agent_tests.rs
 
-use crate::common::init_ai_test_env;
+use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{epbs_agent::EpbsAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
@@ -13,7 +13,7 @@ async fn test_epbs_agent_creates_configuration_item() {
 
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit utiliser .await pour récupérer l'objet AiTestEnv.
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
     let local_url =
@@ -66,22 +66,20 @@ async fn test_epbs_agent_creates_configuration_item() {
 
     let mut found = false;
     if items_dir.exists() {
-        for entry in std::fs::read_dir(&items_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path()).unwrap_or_default();
+        for e in std::fs::read_dir(&items_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path()).unwrap_or_default();
 
-                // Debug : Affiche ce qu'on a trouvé pour comprendre pourquoi ça match pas
-                println!("📄 Analyse fichier : {:?}", e.file_name());
-                println!(
-                    "   Contenu partiel : {:.100}...",
-                    content.replace("\n", " ")
-                );
+            // Debug : Affiche ce qu'on a trouvé pour comprendre pourquoi ça match pas
+            println!("📄 Analyse fichier : {:?}", e.file_name());
+            println!(
+                "   Contenu partiel : {:.100}...",
+                content.replace("\n", " ")
+            );
 
-                if content.contains("partNumber") && content.contains("Rack Server") {
-                    found = true;
-                    println!("✅ CI validé !");
-                    break;
-                }
+            if content.contains("partNumber") && content.contains("Rack Server") {
+                found = true;
+                println!("✅ CI validé !");
+                break;
             }
         }
     }

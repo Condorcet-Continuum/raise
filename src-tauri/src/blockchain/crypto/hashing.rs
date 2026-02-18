@@ -1,7 +1,6 @@
-use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 
+use crate::utils::{data::Value, BTreeMap};
 /// Calcule le hash SHA-256 d'une valeur JSON de manière strictement déterministe.
 /// Utilise un BTreeMap pour forcer le tri des clés, neutralisant ainsi
 /// les réglages globaux de 'preserve_order' de serde_json.

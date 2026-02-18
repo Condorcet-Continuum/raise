@@ -1,8 +1,7 @@
 // src-tauri/src/blockchain/storage/merkle.rs
 
 use crate::blockchain::crypto::hashing::calculate_hash;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use crate::utils::prelude::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MerkleTree {

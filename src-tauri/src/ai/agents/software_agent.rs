@@ -1,9 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/software_agent.rs
 
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use serde_json::json;
-use uuid::Uuid;
+use crate::utils::{async_trait, data, io, prelude::*, Uuid};
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -36,7 +33,7 @@ impl SoftwareAgent {
         ctx.llm
             .ask(LlmBackend::LocalLlama, system, user)
             .await
-            .map_err(|e| anyhow!("Erreur LLM : {}", e))
+            .map_err(|e| AppError::Validation(format!("Erreur LLM : {}", e)))
     }
 
     /// Tente de retrouver l'UUID d'un composant par son nom
@@ -74,7 +71,7 @@ impl SoftwareAgent {
         name: &str,
         description: &str,
         history_context: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -93,8 +90,8 @@ impl SoftwareAgent {
         let response = self.ask_llm(ctx, system_prompt, &user_prompt).await?;
         let clean_json = extract_json_from_llm(&response);
 
-        let mut data: serde_json::Value = serde_json::from_str(&clean_json)
-            .unwrap_or(json!({ "name": name, "description": description }));
+        let mut data: Value =
+            data::parse(&clean_json).unwrap_or(json!({ "name": name, "description": description }));
 
         data["id"] = json!(Uuid::new_v4().to_string());
         data["layer"] = json!("LA");
@@ -150,7 +147,7 @@ impl Agent for SoftwareAgent {
                     )
                     .await?;
 
-                let artifact = save_artifact(ctx, "la", "components", &doc)?;
+                let artifact = save_artifact(ctx, "la", "components", &doc).await?;
 
                 // DÉLÉGATION -> EPBS
                 let transition_msg =
@@ -184,7 +181,10 @@ impl Agent for SoftwareAgent {
 
                 // 1. RECHERCHE (Neuro-Symbolic)
                 let component_id = self.find_component_id(ctx, context).await.ok_or_else(|| {
-                    anyhow!("Composant '{}' introuvable dans mbse2/drones.", context)
+                    AppError::Validation(format!(
+                        "Composant '{}' introuvable dans mbse2/drones.",
+                        context
+                    ))
                 })?;
 
                 // 2. APPEL OUTIL (Symbolic Execution)
@@ -209,7 +209,10 @@ impl Agent for SoftwareAgent {
                 let result = tool.execute(call).await;
 
                 if result.is_error {
-                    return Err(anyhow!("Erreur CodeGen: {}", result.content));
+                    return Err(AppError::Validation(format!(
+                        "Erreur CodeGen: {}",
+                        result.content
+                    )));
                 }
 
                 let file_list = result.content["files"]
@@ -225,7 +228,7 @@ impl Agent for SoftwareAgent {
                     .iter()
                     .map(|path| CreatedArtifact {
                         id: format!("gen_{}", Uuid::new_v4()),
-                        name: std::path::Path::new(path)
+                        name: io::Path::new(path)
                             .file_name()
                             .unwrap_or_default()
                             .to_string_lossy()
@@ -273,8 +276,7 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use std::sync::Arc;
-    use tempfile::tempdir;
+    use crate::utils::{io::tempdir, Arc};
 
     #[test]
     fn test_software_agent_id() {

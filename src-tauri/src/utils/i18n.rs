@@ -1,15 +1,29 @@
+use crate::json_db::collections;
+use crate::json_db::storage::JsonDbConfig;
 use crate::utils::config::AppConfig;
+use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 
-// Singleton global thread-safe : Une seule instance pour toute l'app
+// --- STRUCTURES DE DÉSÉRIALISATION ---
+#[derive(Debug, Deserialize)]
+struct LocaleDocument {
+    #[allow(dead_code)]
+    locale: String,
+    translations: Vec<TranslationItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranslationItem {
+    key: String,
+    value: String,
+}
+
+// --- SINGLETON GLOBAL ---
 static TRANSLATOR: OnceLock<Arc<RwLock<Translator>>> = OnceLock::new();
 
-/// Structure interne qui détient les données
 pub struct Translator {
-    translations: HashMap<String, String>,
+    pub translations: HashMap<String, String>,
     pub current_lang: String,
 }
 
@@ -17,48 +31,40 @@ impl Translator {
     fn new() -> Self {
         Self {
             translations: HashMap::new(),
-            current_lang: "en".to_string(), // Langue par défaut technique
+            current_lang: "en".to_string(),
         }
     }
 
-    /// Charge un fichier de langue depuis le disque
-    /// Le chemin est calculé via AppConfig + /locales/{lang}.json
-    pub fn load(&mut self, lang: &str) {
-        // On récupère la racine de la DB/Config
-        let config = AppConfig::get();
-        let locales_dir = config.database_root.join("locales");
-        let path = locales_dir.join(format!("{}.json", lang));
+    /// Charge la langue depuis la base de données (Testable en isolation)
+    pub async fn load_from_db(&mut self, db_config: &JsonDbConfig, lang: &str) {
+        match collections::list_all(db_config, "_system", "_system", "locales").await {
+            Ok(docs) => {
+                for doc_val in docs {
+                    if doc_val.get("locale").and_then(|v| v.as_str()) == Some(lang) {
+                        if let Ok(document) = serde_json::from_value::<LocaleDocument>(doc_val) {
+                            let map: HashMap<String, String> = document
+                                .translations
+                                .into_iter()
+                                .map(|item| (item.key, item.value))
+                                .collect();
 
-        self.load_from_path(lang, path);
-    }
-
-    /// Méthode interne pour charger depuis un chemin spécifique (utile pour les tests)
-    fn load_from_path(&mut self, lang: &str, path: PathBuf) {
-        if path.exists() {
-            match fs::read_to_string(&path) {
-                Ok(content) => {
-                    // On attend un simple dictionnaire clé/valeur : {"HELLO": "Bonjour"}
-                    match serde_json::from_str::<HashMap<String, String>>(&content) {
-                        Ok(map) => {
                             self.translations = map;
                             self.current_lang = lang.to_string();
-                            tracing::info!("🌍 Langue chargée : {} (depuis {:?})", lang, path);
-                        }
-                        Err(e) => {
-                            tracing::error!("❌ Erreur parsing JSON langue ({:?}): {}", path, e);
+                            tracing::info!(
+                                "🌍 Langue chargée avec succès : {} ({} clés)",
+                                lang,
+                                self.translations.len()
+                            );
+                            return; // On a trouvé et chargé la langue, on s'arrête
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::error!(
-                        "❌ Impossible de lire le fichier langue ({:?}): {}",
-                        path,
-                        e
-                    );
-                }
+                tracing::warn!(
+                    "⚠️ Langue '{}' introuvable dans la collection 'locales'.",
+                    lang
+                );
             }
-        } else {
-            tracing::warn!("⚠️ Fichier de traduction introuvable : {:?}", path);
+            Err(e) => tracing::error!("❌ Erreur JsonDb lors du chargement des locales : {}", e),
         }
     }
 
@@ -70,25 +76,34 @@ impl Translator {
     }
 }
 
-/// Initialise le système global avec une langue cible
-pub fn init_i18n(lang: &str) {
-    let translator = TRANSLATOR.get_or_init(|| Arc::new(RwLock::new(Translator::new())));
+/// Initialise le système global avec une langue cible (ASYNC)
+pub async fn init_i18n(lang: &str) {
+    let config = AppConfig::get();
+    let db_root = config
+        .get_path("PATH_RAISE_DOMAIN")
+        .expect("ERREUR: PATH_RAISE_DOMAIN est introuvable dans la configuration !");
 
-    // Verrouillage en écriture pour mettre à jour la langue
+    let db_config = JsonDbConfig::new(db_root);
+
+    // 1. On prépare le nouveau dictionnaire de manière asynchrone
+    let mut temp_translator = Translator::new();
+    temp_translator.load_from_db(&db_config, lang).await;
+
+    // 2. MISE À JOUR SYNCHRONE ULTRA-RAPIDE DU GLOBAL
+    let translator = TRANSLATOR.get_or_init(|| Arc::new(RwLock::new(Translator::new())));
     if let Ok(mut write_guard) = translator.write() {
-        write_guard.load(lang);
+        write_guard.translations = temp_translator.translations;
+        write_guard.current_lang = temp_translator.current_lang;
     }
 }
 
-/// Helper public : Traduit une clé via l'instance globale
+/// Helper public : Traduit une clé via l'instance globale (Sync)
 pub fn t(key: &str) -> String {
     if let Some(arc) = TRANSLATOR.get() {
-        // Verrouillage en lecture (très rapide)
         if let Ok(read_guard) = arc.read() {
             return read_guard.t(key);
         }
     }
-    // Fallback si le système n'est pas encore init
     key.to_string()
 }
 
@@ -96,54 +111,60 @@ pub fn t(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use serde_json::json;
+
+    // Helper pour générer un environnement de DB temporaire
+    fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        (dir, config)
+    }
 
     #[test]
     fn test_translator_default_behavior() {
-        // Par défaut (sans chargement), le traducteur renvoie la clé
+        // Par défaut, sans base de données, il renvoie la clé
         let translator = Translator::new();
         assert_eq!(translator.t("HELLO"), "HELLO");
         assert_eq!(translator.current_lang, "en");
     }
 
-    #[test]
-    fn test_translator_loading_valid_json() {
-        // 1. Création d'un fichier temporaire simulant fr.json
-        let mut temp_file = NamedTempFile::new().unwrap();
-        let json_content = r#"{
-            "HELLO": "Bonjour",
-            "BYE": "Au revoir"
-        }"#;
-        write!(temp_file, "{}", json_content).unwrap();
+    #[tokio::test] // On utilise tokio car on teste des appels asynchrones
+    async fn test_translator_db_integration() {
+        let (_dir, db_config) = setup_env();
+        let storage = StorageEngine::new(db_config.clone());
+        let manager = CollectionsManager::new(&storage, "_system", "_system");
 
-        // 2. Chargement manuel via load_from_path
+        // 1. Initialisation de la fausse base de données
+        manager.init_db().await.unwrap();
+        manager.create_collection("locales", None).await.unwrap();
+
+        // 2. Création et insertion d'un faux document de traduction
+        let doc = json!({
+            "id": "uuid-test-fr",
+            "locale": "fr",
+            "translations": [
+                { "key": "HELLO", "value": "Bonjour" },
+                { "key": "BYE", "value": "Au revoir" }
+            ]
+        });
+        manager.insert_raw("locales", &doc).await.unwrap();
+
+        // 3. Test du chargement via le Translator
         let mut translator = Translator::new();
-        translator.load_from_path("fr", temp_file.path().to_path_buf());
+        translator.load_from_db(&db_config, "fr").await;
 
-        // 3. Vérifications
+        // 4. Vérifications
         assert_eq!(translator.current_lang, "fr");
         assert_eq!(translator.t("HELLO"), "Bonjour");
         assert_eq!(translator.t("BYE"), "Au revoir");
-        assert_eq!(translator.t("UNKNOWN"), "UNKNOWN"); // Clé manquante = Clé
+        assert_eq!(translator.t("UNKNOWN_KEY"), "UNKNOWN_KEY");
     }
 
     #[test]
-    fn test_translator_loading_invalid_json() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        write!(temp_file, "INVALID JSON").unwrap();
-
-        let mut translator = Translator::new();
-        // Ne doit pas paniquer, juste logger une erreur
-        translator.load_from_path("es", temp_file.path().to_path_buf());
-
-        // Doit rester à l'état précédent ou vide
-        assert_eq!(translator.t("HELLO"), "HELLO");
-    }
-
-    #[test]
-    fn test_global_access() {
-        // Test de la fonction statique t()
+    fn test_global_access_fallback() {
+        // Si non initialisé, le fallback renvoie la clé
         let result = t("TEST_KEY");
         assert_eq!(result, "TEST_KEY");
     }

@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/hardware_agent_tests.rs
 
-use crate::common::init_ai_test_env;
+use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{hardware_agent::HardwareAgent, Agent, AgentContext};
 use raise::ai::llm::client::LlmClient;
@@ -13,7 +13,7 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
 
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone suite à la migration
     // vers le moteur de stockage asynchrone. On doit l'attendre pour obtenir l'environnement.
-    let env = init_ai_test_env().await;
+    let env = setup_test_env().await;
 
     // Config Standard
     let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
@@ -80,24 +80,22 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
     let mut found_cloud = false;
 
     if nodes_dir.exists() {
-        for entry in std::fs::read_dir(&nodes_dir).unwrap() {
-            if let Ok(e) = entry {
-                let content = std::fs::read_to_string(e.path())
-                    .unwrap_or_default()
-                    .to_lowercase();
+        for e in std::fs::read_dir(&nodes_dir).unwrap().flatten() {
+            let content = std::fs::read_to_string(e.path())
+                .unwrap_or_default()
+                .to_lowercase();
 
-                // Vérifie FPGA (Nature: Electronics)
-                if content.contains("video")
-                    && (content.contains("fpga") || content.contains("electronics"))
-                {
-                    found_fpga = true;
-                }
-                // Vérifie Cloud (Nature: Infrastructure)
-                if content.contains("database")
-                    && (content.contains("cpu") || content.contains("infrastructure"))
-                {
-                    found_cloud = true;
-                }
+            // Vérifie FPGA (Nature: Electronics)
+            if content.contains("video")
+                && (content.contains("fpga") || content.contains("electronics"))
+            {
+                found_fpga = true;
+            }
+            // Vérifie Cloud (Nature: Infrastructure)
+            if content.contains("database")
+                && (content.contains("cpu") || content.contains("infrastructure"))
+            {
+                found_cloud = true;
             }
         }
     }

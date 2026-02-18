@@ -1,12 +1,12 @@
 // FICHIER : src-tauri/src/model_engine/validators/dynamic_validator.rs
 
+use crate::utils::{async_trait, prelude::*};
+
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
 use crate::model_engine::validators::{ModelValidator, Severity, ValidationIssue};
 use crate::rules_engine::ast::Rule;
 use crate::rules_engine::evaluator::Evaluator;
-use async_trait::async_trait;
-use serde_json::{json, Value};
 
 pub struct DynamicValidator {
     rules: Vec<Rule>,

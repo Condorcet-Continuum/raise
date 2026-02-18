@@ -1,9 +1,9 @@
 // FICHIER : src-tauri/src/model_engine/transformers/system_transformer.rs
 
+use crate::utils::prelude::*;
+
 use super::ModelTransformer;
 use crate::model_engine::arcadia; // <-- Vocabulaire
-use anyhow::Result;
-use serde_json::{json, Value};
 
 pub struct SystemTransformer;
 

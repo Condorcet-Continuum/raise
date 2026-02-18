@@ -1,13 +1,15 @@
 // FICHIER : src-tauri/src/plugins/cognitive.rs
 
+use crate::utils::prelude::*;
+
 use super::runtime::PluginContext;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::model_engine::loader::ModelLoader;
 use crate::rules_engine::ast::Rule;
 use crate::rules_engine::store::RuleStore;
-use anyhow::Result;
+
 use futures::executor::block_on;
-use serde_json::{json, Value};
+
 use wasmtime::{Caller, Extern, Linker};
 
 /// Enregistre les fonctions du Pont Cognitif dans le linker WASM.
@@ -161,7 +163,9 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> Result<()>
                 let mut orch = orch_arc.lock().unwrap();
                 block_on(orch.ask(&prompt))
             } else {
-                Err(anyhow::anyhow!("AI Orchestrator not available"))
+                Err(crate::utils::error::AppError::Validation(
+                    "AI Orchestrator not available".into(),
+                ))
             };
             match response_result {
                 Ok(response) => success_to_buffer(&mut caller, json!({ "response": response })),
@@ -248,7 +252,7 @@ fn read_string_from_wasm(
         .data(&caller)
         .get(ptr as usize..(ptr + len) as usize)
         .ok_or(anyhow::anyhow!("Out of bounds"))?;
-    Ok(String::from_utf8(data.to_vec())?)
+    String::from_utf8(data.to_vec()).map_err(|e| AppError::from(format!("Erreur UTF-8: {}", e)))
 }
 
 fn read_json_request(caller: &mut Caller<'_, PluginContext>, ptr: i32, len: i32) -> Result<Value> {

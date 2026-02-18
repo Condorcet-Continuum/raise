@@ -1,9 +1,8 @@
 // FICHIER : src-tauri/src/model_engine/transformers/hardware_transformer.rs
+use crate::utils::prelude::*;
 
 use super::ModelTransformer;
 use crate::model_engine::arcadia; // <-- Accès au vocabulaire
-use anyhow::Result;
-use serde_json::{json, Value};
 
 pub struct HardwareTransformer;
 

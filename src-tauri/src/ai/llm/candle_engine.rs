@@ -1,13 +1,11 @@
-use anyhow::{Error as E, Result};
+use crate::utils::prelude::*;
+
 use candle_core::quantized::gguf_file;
 use candle_core::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::quantized_llama as model;
-use dotenvy::dotenv;
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use std::env;
 use tokenizers::Tokenizer;
-use tracing::{info, warn};
 
 // --- CONFIGURATION ULTRA-LÉGÈRE (Llama 3.2 1B) ---
 // Poids : ~700 Mo (Téléchargement très rapide)
@@ -26,23 +24,30 @@ pub struct CandleLlmEngine {
 
 impl CandleLlmEngine {
     pub fn new() -> Result<Self> {
-        let _ = dotenv();
+        // 1. Configuration (Source de vérité : AppConfig)
+        let config = crate::utils::config::AppConfig::get();
 
-        // 1. Configuration (Priorité : Variables d'env, sinon Défaut Rapide)
-        // On force le mode "Rapide" si on détecte une config "Lourde" (Mistral/Qwen) dans le .env qui traîne
-        let env_repo = env::var("LLM_RUST_REPO_ID").unwrap_or_default();
+        let ai_config = config.ai_engines.get("primary_local").ok_or_else(|| {
+            AppError::Config("Configuration 'primary_local' introuvable dans AppConfig".into())
+        })?;
 
-        let (repo_id, model_file) = if env_repo.to_lowercase().contains("mistral")
-            || env_repo.to_lowercase().contains("qwen")
-        {
-            warn!("🛑 Annulation du modèle lourd détecté dans .env ({}). On force Llama 3.2 1B pour un démarrage immédiat.", env_repo);
-            (DEFAULT_REPO_ID.to_string(), DEFAULT_MODEL_FILE.to_string())
-        } else {
-            (
-                env::var("LLM_RUST_REPO_ID").unwrap_or_else(|_| DEFAULT_REPO_ID.to_string()),
-                env::var("LLM_RUST_MODEL_FILE").unwrap_or_else(|_| DEFAULT_MODEL_FILE.to_string()),
-            )
-        };
+        // Vérification de sécurité : le moteur est-il activé ?
+        if ai_config.status != "enabled" {
+            return Err(AppError::Config(
+                "Le moteur LLM 'primary_local' est désactivé dans la configuration".into(),
+            ));
+        }
+
+        // Récupération dynamique depuis le JSON avec fallback sur les constantes ultra-légères
+        let repo_id = ai_config
+            .rust_repo_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_REPO_ID.to_string());
+
+        let model_file = ai_config
+            .rust_model_file
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL_FILE.to_string());
 
         // Sécurité Tokenizer : On force Unsloth pour éviter les erreurs 401/404
         let tokenizer_repo = DEFAULT_TOKENIZER_REPO.to_string();
@@ -53,34 +58,40 @@ impl CandleLlmEngine {
             .unwrap_or(Device::Cpu);
 
         info!(
-            "🚀 Init Candle Engine (Rapide) sur : {:?} avec {}",
+            "🚀 Init Candle Engine sur : {:?} avec {}",
             device, model_file
         );
 
-        // 3. Téléchargement
-        let api = Api::new()?;
+        // 3. Téléchargement via HuggingFace
+        // Conversion de l'erreur réseau HF vers AppError::Network
+        let api = Api::new().map_err(|e| AppError::from(format!("Erreur API HF: {}", e)))?;
 
         let model_repo = api.repo(Repo::new(repo_id, RepoType::Model));
         let model_path = model_repo
             .get(&model_file)
-            .map_err(|e| E::msg(format!("Erreur téléchargement modèle: {}", e)))?;
+            .map_err(|e| AppError::Ai(format!("Erreur téléchargement modèle: {}", e)))?;
+
         info!("📦 Modèle chargé : {:?}", model_path);
 
         let tokenizer_api = api.repo(Repo::new(tokenizer_repo, RepoType::Model));
         let tokenizer_path = tokenizer_api
             .get("tokenizer.json")
-            .map_err(|e| E::msg(format!("Erreur téléchargement tokenizer: {}", e)))?;
+            .map_err(|e| AppError::Ai(format!("Erreur téléchargement tokenizer: {}", e)))?;
 
-        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
+        let tokenizer = Tokenizer::from_file(tokenizer_path)
+            .map_err(|e| AppError::Ai(format!("Erreur initialisation Tokenizer: {}", e)))?;
 
         // 4. Chargement en Mémoire
-        let mut file = std::fs::File::open(&model_path)?;
+        // Utilisation explicite de std::fs::File pour les opérations synchrones requises par candle
+        let mut file = std::fs::File::open(&model_path)?; // `?` fonctionne car AppError implémente From<std::io::Error>
+
         let content = gguf_file::Content::read(&mut file)
-            .map_err(|e| E::msg(format!("Erreur lecture structure GGUF: {}", e)))?;
+            .map_err(|e| AppError::Ai(format!("Erreur lecture structure GGUF: {}", e)))?;
 
         let model = model::ModelWeights::from_gguf(content, &mut file, &device)
-            .map_err(|e| E::msg(format!("Erreur chargement poids GGUF: {}", e)))?;
+            .map_err(|e| AppError::Ai(format!("Erreur chargement poids GGUF: {}", e)))?;
 
+        // 5. Configuration du processeur de génération
         let logits_processor = LogitsProcessor::new(299792458, Some(0.7), Some(0.9));
 
         Ok(Self {
@@ -109,7 +120,7 @@ impl CandleLlmEngine {
         let tokens = self
             .tokenizer
             .encode(formatted_prompt, true)
-            .map_err(E::msg)?;
+            .map_err(|e| AppError::from(format!("Erreur encodage Tokenizer: {}", e)))?;
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = Vec::new();
 
@@ -124,14 +135,28 @@ impl CandleLlmEngine {
             let context_size = if index_pos == 0 { tokens.len() } else { 1 };
             let start_pos = tokens.len().saturating_sub(context_size);
 
-            let input = Tensor::new(&tokens[start_pos..], &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, index_pos)?;
-            let logits = logits
-                .squeeze(0)?
-                .squeeze(0)?
-                .to_dtype(candle_core::DType::F32)?;
+            // ✅ Conversion explicite des erreurs CandleCore vers AppError
+            let input = Tensor::new(&tokens[start_pos..], &self.device)
+                .map_err(|e| AppError::from(e.to_string()))?
+                .unsqueeze(0)
+                .map_err(|e| AppError::from(e.to_string()))?;
 
-            let next_token = self.logits_processor.sample(&logits)?;
+            let logits = self
+                .model
+                .forward(&input, index_pos)
+                .map_err(|e| AppError::from(e.to_string()))?;
+            let logits = logits
+                .squeeze(0)
+                .map_err(|e| AppError::from(e.to_string()))?
+                .squeeze(0)
+                .map_err(|e| AppError::from(e.to_string()))?
+                .to_dtype(candle_core::DType::F32)
+                .map_err(|e| AppError::from(e.to_string()))?;
+
+            let next_token = self
+                .logits_processor
+                .sample(&logits)
+                .map_err(|e| AppError::from(e.to_string()))?;
 
             if next_token == eos_token_id || next_token == stop_token_id {
                 break;
@@ -145,7 +170,7 @@ impl CandleLlmEngine {
         let result = self
             .tokenizer
             .decode(&generated_tokens, true)
-            .map_err(E::msg)?;
+            .map_err(|e| AppError::from(format!("Erreur décodage Tokenizer: {}", e)))?;
         Ok(result)
     }
 }
@@ -165,7 +190,6 @@ mod tests {
     #[test]
     #[ignore]
     fn test_quick_inference() {
-        let _ = dotenv();
         println!("⏳ Init Engine (Llama 3.2 1B - Rapide)...");
 
         // Ce test va ignorer le .env s'il contient "Mistral" et charger le modèle léger

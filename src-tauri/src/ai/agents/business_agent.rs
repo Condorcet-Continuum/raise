@@ -1,18 +1,13 @@
 // FICHIER : src-tauri/src/ai/agents/business_agent.rs
 
+use crate::utils::{async_trait, data, prelude::*, Uuid};
+
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
 use super::{Agent, AgentContext, AgentResult};
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
-
-// AJOUT : Import du protocole ACL
 use crate::ai::protocols::acl::{AclMessage, Performative};
-
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use serde_json::json;
-use uuid::Uuid;
 
 #[derive(Default)]
 pub struct BusinessAgent;
@@ -29,7 +24,7 @@ impl BusinessAgent {
         domain: &str,
         description: &str,
         history_context: &str,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<Value> {
         let entities = entity_extractor::extract_entities(description);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -53,10 +48,10 @@ impl BusinessAgent {
             .llm
             .ask(LlmBackend::LocalLlama, system_prompt, &user_prompt)
             .await
-            .map_err(|e| anyhow!("Erreur LLM Business: {}", e))?;
+            .map_err(|e| AppError::Validation(format!("Erreur LLM Business: {}", e)))?;
 
         let clean = extract_json_from_llm(&response);
-        Ok(serde_json::from_str(&clean).unwrap_or(json!({})))
+        Ok(data::parse(&clean).unwrap_or(json!({})))
     }
 }
 
@@ -124,7 +119,7 @@ impl Agent for BusinessAgent {
             });
 
             let mut artifacts = vec![];
-            artifacts.push(save_artifact(ctx, "oa", "capabilities", &cap_doc)?);
+            artifacts.push(save_artifact(ctx, "oa", "capabilities", &cap_doc).await?);
 
             if let Some(actors) = analysis["actors"].as_array() {
                 for actor in actors {
@@ -138,7 +133,7 @@ impl Agent for BusinessAgent {
                         "createdAt": chrono::Utc::now().to_rfc3339()
                     });
 
-                    artifacts.push(save_artifact(ctx, "oa", "actors", &act_doc)?);
+                    artifacts.push(save_artifact(ctx, "oa", "actors", &act_doc).await?);
                 }
             }
 

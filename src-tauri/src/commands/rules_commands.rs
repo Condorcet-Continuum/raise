@@ -1,12 +1,14 @@
 // FICHIER : src-tauri/src/commands/rules_commands.rs
 
+use crate::utils::prelude::*;
+
 use crate::json_db::storage::StorageEngine;
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ProjectModel;
 use crate::model_engine::validators::{DynamicValidator, ModelValidator, ValidationIssue};
 use crate::rules_engine::ast::Rule;
 use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
-use serde_json::Value;
+
 use tauri::State;
 use tokio::sync::Mutex;
 
@@ -19,13 +21,13 @@ pub struct RuleEngineState {
 /// Le frontend envoie une règle JSON et un contexte JSON (l'élément à tester).
 /// Le backend renvoie le résultat (True/False ou valeur calculée).
 #[tauri::command]
-pub async fn dry_run_rule(rule: Rule, context: Value) -> Result<Value, String> {
+pub async fn dry_run_rule(rule: Rule, context: Value) -> Result<Value> {
     let provider = NoOpDataProvider;
 
     // On évalue la règle sans persistance
     match Evaluator::evaluate(&rule.expr, &context, &provider).await {
         Ok(cow_res) => Ok(cow_res.into_owned()),
-        Err(e) => Err(format!("Erreur d'évaluation : {}", e)),
+        Err(e) => Err(AppError::Validation(format!("Erreur d'évaluation : {}", e))),
     }
 }
 
@@ -37,7 +39,7 @@ pub async fn validate_model(
     rules: Vec<Rule>,
     state: State<'_, RuleEngineState>,
     storage: State<'_, StorageEngine>, // Injection du moteur de stockage
-) -> Result<Vec<ValidationIssue>, String> {
+) -> Result<Vec<ValidationIssue>> {
     // 1. Récupération du contexte (Space/DB) depuis le modèle en mémoire
     // On a besoin de savoir "où" nous sommes pour initialiser le Loader
     let (space, db) = {
@@ -103,7 +105,12 @@ mod tests {
 
         let result = dry_run_rule(rule, json!({})).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Type incompatible"));
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Type incompatible"),
+            "Message d'erreur inattendu : {}",
+            err_msg
+        );
     }
 
     #[tokio::test]

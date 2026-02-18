@@ -1,10 +1,9 @@
 // FICHIER : src-tauri/src/ai/world_model/engine.rs
 
-use anyhow::Result;
 use candle_core::{DType, Device, Tensor, Var};
 use candle_nn::{VarBuilder, VarMap};
-use std::collections::HashMap;
-use std::path::Path;
+
+use crate::utils::{io::Path, prelude::*, HashMap};
 
 use crate::ai::nlp::parser::CommandType;
 use crate::ai::world_model::dynamics::WorldModelPredictor;
@@ -31,7 +30,7 @@ impl WorldAction {
             data[idx] = 1.0;
         }
 
-        Ok(Tensor::from_vec(data, (1, dim), &Device::Cpu)?)
+        Tensor::from_vec(data, (1, dim), &Device::Cpu).map_err(|e| AppError::from(e.to_string()))
     }
 }
 
@@ -97,8 +96,11 @@ impl NeuroSymbolicEngine {
     pub async fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref().to_owned();
         let tensors = self.extract_tensors_sync();
+
         tokio::task::spawn_blocking(move || candle_core::safetensors::save(&tensors, path))
-            .await??;
+            .await
+            .map_err(|e| AppError::from(format!("Spawn error: {}", e)))?
+            .map_err(|e| AppError::from(format!("Save error: {}", e)))?;
         Ok(())
     }
 
@@ -110,13 +112,18 @@ impl NeuroSymbolicEngine {
         hidden_dim: usize,
     ) -> Result<Self> {
         let buffer = tokio::fs::read(path).await?;
-        let tensors = candle_core::safetensors::load_buffer(&buffer, &Device::Cpu)?;
+
+        let tensors = candle_core::safetensors::load_buffer(&buffer, &Device::Cpu)
+            .map_err(|e| AppError::from(e.to_string()))?;
 
         let varmap = VarMap::new();
         {
             let mut data = varmap.data().lock().unwrap();
             for (name, tensor) in tensors {
-                data.insert(name, Var::from_tensor(&tensor)?);
+                data.insert(
+                    name,
+                    Var::from_tensor(&tensor).map_err(|e| AppError::from(e.to_string()))?,
+                );
             }
         }
 
@@ -129,7 +136,6 @@ mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
     use candle_nn::VarMap;
-    use std::collections::HashMap;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -163,6 +169,7 @@ mod tests {
         let engine2 = NeuroSymbolicEngine::load_from_file(path, 10, 16, 5, 32)
             .await
             .expect("Load failed");
+
         let element = ArcadiaElement {
             id: "t".to_string(),
             name: NameType::default(),

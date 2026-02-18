@@ -1,12 +1,10 @@
 // FICHIER : src-tauri/src/workflow_engine/mandate.rs
+use crate::utils::{prelude::*, HashMap};
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::{AppError, Result};
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use serde_json::Value; // AJOUT : Nécessaire pour stocker l'AST JSON
-use std::collections::HashMap;
 
 // --- STRUCTURES DU MANDAT ---
 

@@ -1,8 +1,8 @@
 // src-tauri/src/blockchain/p2p/swarm.rs
 
 use crate::blockchain::p2p::behavior::ArcadiaBehavior;
+use crate::utils::Duration;
 use libp2p::{identity, noise, tcp, yamux, Swarm, SwarmBuilder};
-use std::time::Duration;
 
 /// Crée et configure un Swarm libp2p pour le réseau Raise.
 /// Le Swarm combine le transport (TCP + Noise + Yamux) et le comportement (ArcadiaBehavior).

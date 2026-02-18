@@ -1,10 +1,10 @@
 // src-tauri/src/ai/agents/context.rs
 
+use crate::utils::{io::PathBuf, Arc};
+
 use crate::ai::llm::client::LlmClient;
 use crate::code_generator::CodeGeneratorService;
 use crate::json_db::storage::StorageEngine;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 /// Chemins structurels du projet RAISE
 #[derive(Clone)]

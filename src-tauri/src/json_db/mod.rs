@@ -42,6 +42,7 @@ pub mod test_utils {
                 .with_env_filter("info")
                 .with_test_writer()
                 .try_init();
+            let _ = AppConfig::init();
         });
 
         let tmp_dir = tempfile::tempdir().expect("create temp dir");

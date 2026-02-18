@@ -1,10 +1,9 @@
 // FICHIER : src-tauri/src/model_engine/capella/diagram_generator.rs
 
-use anyhow::Result;
+use crate::utils::{io::Path, prelude::*, HashMap};
+
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
-use std::collections::HashMap;
-use std::path::Path;
 
 /// Structure simple pour stocker les coordonnées
 #[derive(Debug, Clone, PartialEq)]
@@ -21,7 +20,8 @@ impl AirdParser {
     /// Extrait les positions (layout) des éléments graphiques depuis un fichier .aird
     /// Retourne une Map : Target_UUID -> Layout
     pub fn extract_layout(path: &Path) -> Result<HashMap<String, DiagramLayout>> {
-        let mut reader = Reader::from_file(path)?;
+        let mut reader = Reader::from_file(path)
+            .map_err(|e| AppError::from(format!("Erreur de lecture du fichier Aird: {}", e)))?;
         // CORRECTION API Quick-XML
         reader.config_mut().trim_text(true);
 

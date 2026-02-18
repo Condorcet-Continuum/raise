@@ -4,12 +4,9 @@
 //! Gère la connexion au mesh VPN WireGuard via la CLI `innernet`.
 //! Utilise tokio::process pour ne pas bloquer le runtime Tauri.
 
-use serde::{Deserialize, Serialize};
-use std::process::Output;
-use std::sync::Arc;
+use crate::utils::{prelude::*, Arc, AsyncRwLock};
+use std::process::{Command as StdCommand, Output};
 use tokio::process::Command;
-use tokio::sync::RwLock;
-
 // Import de l'erreur centralisée
 use crate::blockchain::error::VpnError;
 
@@ -57,7 +54,7 @@ type Result<T> = std::result::Result<T, VpnError>;
 #[derive(Clone)]
 pub struct InnernetClient {
     config: NetworkConfig,
-    status: Arc<RwLock<NetworkStatus>>,
+    status: Arc<AsyncRwLock<NetworkStatus>>,
 }
 
 impl InnernetClient {
@@ -73,13 +70,13 @@ impl InnernetClient {
 
         Self {
             config,
-            status: Arc::new(RwLock::new(status)),
+            status: Arc::new(AsyncRwLock::new(status)),
         }
     }
 
     /// Vérifie si Innernet est installé (Appel bloquant acceptable au démarrage)
     pub fn check_installation() -> Result<String> {
-        let output = std::process::Command::new("innernet")
+        let output = StdCommand::new("innernet")
             .arg("--version")
             .output()
             .map_err(|e| VpnError::CommandExecution(format!("Innernet not found: {}", e)))?;

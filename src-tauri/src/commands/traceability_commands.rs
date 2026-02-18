@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/commands/traceability_commands.rs
 
+use crate::utils::{data, prelude::*};
+
 use crate::model_engine::types::ArcadiaElement;
 use crate::AppState;
 use tauri::State;
@@ -23,7 +25,7 @@ pub fn analyze_impact(
     state: State<AppState>,
     element_id: String,
     depth: usize,
-) -> Result<ImpactReport, String> {
+) -> Result<ImpactReport> {
     // Gestion robuste de l'erreur de Mutex (PoisonError)
     let model = state.model.lock().map_err(|e| e.to_string())?;
 
@@ -41,7 +43,7 @@ pub fn analyze_impact(
 /// Exécute tous les checkers de conformité (DO-178C, EU AI Act, etc.)
 /// Retourne un rapport incluant les statistiques de la couche Transverse.
 #[tauri::command]
-pub fn run_compliance_audit(state: State<AppState>) -> Result<AuditReport, String> {
+pub fn run_compliance_audit(state: State<AppState>) -> Result<AuditReport> {
     let model = state.model.lock().map_err(|e| e.to_string())?;
 
     // AuditGenerator a été mis à jour pour compter les Requirements/Scenarios
@@ -53,7 +55,7 @@ pub fn run_compliance_audit(state: State<AppState>) -> Result<AuditReport, Strin
 /// Commande : Matrice de Traçabilité
 /// Génère la vue tabulaire de couverture SA -> LA
 #[tauri::command]
-pub fn get_traceability_matrix(state: State<AppState>) -> Result<TraceabilityMatrix, String> {
+pub fn get_traceability_matrix(state: State<AppState>) -> Result<TraceabilityMatrix> {
     let model = state.model.lock().map_err(|e| e.to_string())?;
 
     let matrix = MatrixGenerator::generate_sa_to_la(&model);
@@ -64,10 +66,7 @@ pub fn get_traceability_matrix(state: State<AppState>) -> Result<TraceabilityMat
 /// Commande : Navigation de Voisinage
 /// Retourne les parents (Upstream) et les enfants (Downstream)
 #[tauri::command]
-pub fn get_element_neighbors(
-    state: State<AppState>,
-    element_id: String,
-) -> Result<serde_json::Value, String> {
+pub fn get_element_neighbors(state: State<AppState>, element_id: String) -> Result<data::Value> {
     let model = state.model.lock().map_err(|e| e.to_string())?;
 
     let tracer = Tracer::new(&model);

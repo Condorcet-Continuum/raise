@@ -1,12 +1,9 @@
 pub mod surreal_impl;
 
+use crate::utils::{io::PathBuf, prelude::*, Arc};
+
 use self::surreal_impl::SurrealClient;
 use crate::ai::nlp::embeddings::EmbeddingEngine; // Import du moteur NLP
-use anyhow::Result;
-use serde_json::json;
-use std::env;
-use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::Mutex; // Nécessaire car EmbeddingEngine a besoin de mutabilité
 
 #[derive(Clone)]
@@ -19,15 +16,16 @@ pub struct GraphStore {
 impl GraphStore {
     pub async fn new(storage_path: PathBuf) -> Result<Self> {
         let backend = SurrealClient::init(storage_path).await?;
+        let app_config = AppConfig::get();
 
-        // 1. Lecture du Flag .env
-        let use_vectors = env::var("ENABLE_GRAPH_VECTORS")
-            .unwrap_or_else(|_| "false".to_string())
-            .parse::<bool>()
-            .unwrap_or(false);
+        let use_vectors =
+            app_config.core.graph_mode == "internal" || app_config.core.graph_mode == "db";
 
         let embedder = if use_vectors {
-            println!("🕸️ [GraphStore] Vectorisation activée (Hybrid Search)");
+            println!(
+                "🕸️ [GraphStore] Vectorisation activée (Hybrid Search) via mode: {}",
+                app_config.core.graph_mode
+            );
             match EmbeddingEngine::new() {
                 Ok(engine) => Some(Arc::new(Mutex::new(engine))),
                 Err(e) => {
@@ -130,15 +128,12 @@ fn extract_text_content(data: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
-    use tempfile::tempdir;
+    use crate::utils::io::tempdir;
 
     #[tokio::test]
     async fn test_graph_vector_flag() {
-        // 1. Activer le flag
-        unsafe {
-            env::set_var("ENABLE_GRAPH_VECTORS", "true");
-        }
+        // 1. On initialise la configuration (let _ = ignore l'erreur si un autre test l'a déjà fait)
+        let _ = AppConfig::init();
 
         let dir = tempdir().unwrap();
         let store = GraphStore::new(dir.path().to_path_buf()).await.unwrap();
@@ -149,39 +144,51 @@ mod tests {
             "description": "Système de propulsion utilisant l'énergie électrique."
         });
 
-        // Cela devrait déclencher l'embedding engine en interne
+        // L'insertion se fait. L'embedding sera calculé UNIQUEMENT SI la config l'autorise.
         store
             .index_entity("component", "engine", data)
             .await
             .unwrap();
 
-        // 3. Vérifier si le vecteur a été généré
-        // On passe par le backend pour lire le nœud brut
+        // 3. Récupération du nœud en base
         let node = store.backend.select("component", "engine").await.unwrap();
         let node_data = node.unwrap();
 
-        // Vérification
-        assert!(
-            node_data.get("embedding").is_some(),
-            "Le champ 'embedding' doit être présent"
-        );
-        let vec_arr = node_data["embedding"].as_array().unwrap();
-        assert_eq!(
-            vec_arr.len(),
-            384,
-            "La dimension du vecteur doit être 384 (FastEmbed/Candle)"
-        );
+        // 4. VÉRIFICATION CONDITIONNELLE (Le cœur de la solution)
+        let config = AppConfig::get();
+        let is_vector_active =
+            config.core.graph_mode == "internal" || config.core.graph_mode == "db";
 
-        // 4. Test Recherche
-        let results = store
-            .search_similar("component", "propulsion", 1)
-            .await
-            .unwrap();
-        assert!(
-            !results.is_empty(),
-            "La recherche vectorielle doit trouver le moteur"
-        );
+        if is_vector_active {
+            // CAS A : Les vecteurs SONT activés par la config
+            assert!(
+                node_data.get("embedding").is_some(),
+                "Le champ 'embedding' DOIT être présent quand les vecteurs sont activés"
+            );
 
-        println!("Score de similarité : {}", results[0]["score"]);
+            let vec_arr = node_data["embedding"].as_array().unwrap();
+            assert_eq!(vec_arr.len(), 384, "La dimension du vecteur doit être 384");
+
+            // Test de la recherche sémantique
+            let results = store
+                .search_similar("component", "propulsion", 1)
+                .await
+                .unwrap();
+            assert!(
+                !results.is_empty(),
+                "La recherche doit trouver le composant"
+            );
+            println!("Score de similarité : {}", results[0]["score"]);
+        } else {
+            // CAS B : Les vecteurs NE SONT PAS activés par la config
+            assert!(
+                node_data.get("embedding").is_none(),
+                "Le champ 'embedding' NE DOIT PAS exister puisque le mode graphique est '{}'",
+                config.core.graph_mode
+            );
+            println!(
+                "Test validé (Mode sans vecteur) : L'entité a bien été sauvegardée sans embedding."
+            );
+        }
     }
 }

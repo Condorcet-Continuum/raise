@@ -1,16 +1,13 @@
+use crate::utils::{async_trait, data, prelude::*, HashMap};
+
 pub mod leann_store;
 pub mod qdrant_store;
-
-use anyhow::Result;
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
     pub id: String,
     pub content: String,
-    pub metadata: serde_json::Value,
+    pub metadata: data::Value,
     pub vectors: Option<Vec<f32>>,
 }
 
@@ -34,15 +31,26 @@ pub trait VectorStore: Send + Sync {
 mod integration_tests {
     use super::qdrant_store::QdrantMemory;
     use super::{MemoryRecord, VectorStore};
-    use serde_json::json;
-    use std::env;
-    use uuid::Uuid;
+    use crate::utils::{config::AppConfig, prelude::*, sleep, Duration, Once, Uuid};
+
+    static INIT_TEST: Once = Once::new();
 
     #[tokio::test]
     #[ignore]
     async fn test_qdrant_lifecycle() {
-        dotenvy::dotenv().ok();
-        let port = env::var("PORT_QDRANT_GRPC").unwrap_or("6334".to_string());
+        // ✅ 1. bonjour SSOT !
+        INIT_TEST.call_once(|| {
+            let _ = AppConfig::init();
+        });
+
+        // ✅ 2. On récupère le port depuis la configuration centralisée
+        let config = AppConfig::get();
+        let port = config
+            .services
+            .get("qdrant_grpc")
+            .map(|s| s.port)
+            .unwrap_or(6334);
+
         let url = format!("http://127.0.0.1:{}", port);
 
         let store = QdrantMemory::new(&url)
@@ -52,14 +60,14 @@ mod integration_tests {
         store.init_collection(col, 4).await.expect("Init failed");
 
         let rec = MemoryRecord {
-            id: Uuid::new_v4().to_string(),
+            id: Uuid::new_v4().to_string(), // ✅ L'import Uuid fonctionne
             content: "Test d'intégration".into(),
-            metadata: json!({"env": "test"}),
+            metadata: json!({"env": "test"}), // ✅ Correction de la typo : json! au lieu de data:json!
             vectors: Some(vec![1.0, 0.0, 0.0, 0.0]),
         };
 
         store.add_documents(col, vec![rec.clone()]).await.unwrap();
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        sleep(Duration::from_millis(500)).await;
 
         // Appel avec 5 arguments
         let res = store

@@ -1,9 +1,7 @@
 // src-tauri/src/blockchain/fabric/client.rs
 //! Client Hyperledger Fabric (Implémentation pour Tonic 0.14.3).
 
-use std::path::Path;
-use std::time::Duration;
-
+use crate::utils::{io::Path, Duration};
 // Ces imports sont maintenant disponibles grâce à la feature "tls-ring"
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 

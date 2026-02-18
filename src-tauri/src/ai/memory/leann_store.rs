@@ -1,24 +1,21 @@
 use super::{MemoryRecord, VectorStore};
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::time::Duration;
+use crate::utils::{
+    async_trait,
+    net_client::{get_simple, post_json_with_retry},
+    prelude::*,
+    HashMap,
+};
 
 pub struct LeannMemory {
     base_url: String,
-    client: reqwest::Client,
+    // 🗑️ PLUS DE `client: reqwest::Client` ! Le Singleton de la façade s'en charge.
 }
 
 impl LeannMemory {
     pub fn new(url: &str) -> Result<Self> {
         let clean_url = url.trim_end_matches('/').to_string();
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()?;
         Ok(Self {
             base_url: clean_url,
-            client,
         })
     }
 }
@@ -52,39 +49,32 @@ struct ServerSearchResponse {
 impl VectorStore for LeannMemory {
     async fn init_collection(&self, _col: &str, _size: u64) -> Result<()> {
         let url = format!("{}/health", self.base_url);
-        let res = self
-            .client
-            .get(&url)
-            .send()
+
+        // ✅ Utilisation de la façade (gère le Timeout, les statuts et l'erreur)
+        get_simple(&url)
             .await
-            .context("Serveur LEANN injoignable")?;
-        if !res.status().is_success() {
-            anyhow::bail!("LEANN Health Error");
-        }
+            .map_err(|e| AppError::from(format!("LEANN Health Error: {}", e)))?;
+
         Ok(())
     }
 
     async fn add_documents(&self, _col: &str, records: Vec<MemoryRecord>) -> Result<()> {
         let url = format!("{}/insert", self.base_url);
         let server_docs = records
-            .iter()
+            .into_iter()
             .map(|r| ServerDocument {
-                text: r.content.clone(),
-                metadata: r.metadata.clone(),
+                text: r.content,
+                metadata: r.metadata,
             })
             .collect();
 
-        let res = self
-            .client
-            .post(&url)
-            .json(&ServerInsertRequest {
-                documents: server_docs,
-            })
-            .send()
-            .await?;
-        if !res.status().is_success() {
-            anyhow::bail!("LEANN Insert Error");
-        }
+        let request = ServerInsertRequest {
+            documents: server_docs,
+        };
+
+        // ✅ Utilisation de la façade pour le POST JSON (AppError est géré en interne !)
+        let _res: Value = post_json_with_retry(&url, &request, 1).await?;
+
         Ok(())
     }
 
@@ -97,13 +87,10 @@ impl VectorStore for LeannMemory {
         _filter: Option<HashMap<String, String>>,
     ) -> Result<Vec<MemoryRecord>> {
         let url = format!("{}/search", self.base_url);
-        let res = self
-            .client
-            .post(&url)
-            .json(&ServerSearchRequest { k: limit })
-            .send()
-            .await?;
-        let response: ServerSearchResponse = res.json().await?;
+        let request = ServerSearchRequest { k: limit };
+
+        // ✅ Utilisation de la façade avec la magie de Serde pour parser la réponse
+        let response: ServerSearchResponse = post_json_with_retry(&url, &request, 1).await?;
 
         Ok(response
             .results
@@ -132,9 +119,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_leann_health_fail() {
-        // Test réel contre un port vide, doit échouer
+        // Test réel contre un port vide, doit échouer proprement via la façade
         let store = LeannMemory::new("http://127.0.0.1:9999").unwrap();
         let res = store.init_collection("any", 384).await;
-        assert!(res.is_err());
+
+        assert!(res.is_err(), "Devrait renvoyer une erreur réseau");
     }
 }

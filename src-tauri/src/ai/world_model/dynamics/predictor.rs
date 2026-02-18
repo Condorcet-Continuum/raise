@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/world_model/dynamics/predictor.rs
 
-use anyhow::Result;
+use crate::utils::prelude::*;
 use candle_core::{Module, Tensor};
 // On garde Activation car on va l'utiliser
 use candle_nn::{linear, Activation, Linear, VarBuilder};
@@ -28,9 +28,12 @@ impl WorldModelPredictor {
         // L'entrée de la couche 1 est la concaténation de State + Action
         let input_dim = state_dim + action_dim;
 
-        let l1 = linear(input_dim, hidden_dim, vb.pp("l1"))?;
-        let l2 = linear(hidden_dim, state_dim, vb.pp("l2"))?; // On veut prédire un nouvel état
+        // ✅ Conversion explicite des erreurs lors de la création des couches
+        let l1 = linear(input_dim, hidden_dim, vb.pp("l1"))
+            .map_err(|e| AppError::from(e.to_string()))?;
 
+        let l2 = linear(hidden_dim, state_dim, vb.pp("l2"))
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(Self { l1, l2 })
     }
 
@@ -38,18 +41,22 @@ impl WorldModelPredictor {
     /// * `state` : [Batch, State_Dim]
     /// * `action` : [Batch, Action_Dim]
     pub fn forward(&self, state: &Tensor, action: &Tensor) -> Result<Tensor> {
-        // 1. Fusion (Early Fusion) : On concatène l'état et l'action
-        // dim=1 signifie qu'on colle les colonnes côte à côte
-        let x = Tensor::cat(&[state, action], 1)?;
+        // ✅ Conversion des erreurs pour chaque opération de tenseur
+        let x = Tensor::cat(&[state, action], 1).map_err(|e| AppError::from(e.to_string()))?;
 
-        // 2. Passage dans le réseau de neurones
-        let h = self.l1.forward(&x)?;
+        let h = self
+            .l1
+            .forward(&x)
+            .map_err(|e| AppError::from(e.to_string()))?;
 
-        // CORRECTION : Utilisation de l'enum Activation pour appliquer GELU
-        let h = Activation::Gelu.forward(&h)?;
+        let h = Activation::Gelu
+            .forward(&h)
+            .map_err(|e| AppError::from(e.to_string()))?;
 
-        let next_state = self.l2.forward(&h)?;
-
+        let next_state = self
+            .l2
+            .forward(&h)
+            .map_err(|e| AppError::from(e.to_string()))?;
         Ok(next_state)
     }
 }

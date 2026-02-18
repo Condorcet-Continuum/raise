@@ -1,0 +1,94 @@
+{
+  "name": {
+    "fr": "Configuration Bac à Sable (Tests)",
+    "en": "Sandbox Test Configuration"
+  },
+  "default_domain": "_system",
+  "default_db": "_system",
+  "core": {
+    "env_mode": "test",
+    "graph_mode": "db",
+    "log_level": "trace",
+    "vector_store_provider": "qdrant",
+    "language": "fr"
+  },
+  "paths": [
+    {
+      "id": "PATH_RAISE_DOMAIN",
+      "value": "/tmp/mock_raise_domain"
+    },
+    {
+      "id": "PATH_LLM_MODELS",
+      "value": "/tmp/mock_raise_domain/models"
+    }
+  ],
+  "services": {
+    "qdrant_http": {
+      "status": "enabled",
+      "kind": "qdrant",
+      "host": "127.0.0.1",
+      "port": 6333,
+      "protocol": "http"
+    },
+    "qdrant_grpc": {
+      "status": "enabled",
+      "kind": "qdrant",
+      "host": "127.0.0.1",
+      "port": 6334,
+      "protocol": "grpc"
+    },
+    "leann_api": {
+      "status": "enabled",
+      "kind": "leann_api",
+      "host": "127.0.0.1",
+      "port": 8000,
+      "protocol": "http"
+    },
+    "llm_gateway": {
+      "status": "enabled",
+      "kind": "llm_gateway",
+      "host": "127.0.0.1",
+      "port": 8081,
+      "protocol": "http"
+    }
+  },
+  "ai_engines": {
+    "primary_local": {
+      "status": "enabled",
+      "provider": "local_gguf",
+      "model_name": "mock-model.gguf",
+      "api_url": "http://localhost:8081",
+      "rust_repo_id": "mock/repo",
+      "rust_model_file": "mock.gguf"
+    },
+    "cloud_gemini": {
+      "status": "disabled",
+      "provider": "gemini",
+      "model_name": "gemini-2.0-flash",
+      "api_key": "TEST_DUMMY_KEY"
+    }
+  },
+  "integrations": {
+    "github_token": null,
+    "compose_profiles": "core"
+  },
+  "id": "453edeae-39e7-402c-8c54-432d7bf32a12",
+  "createdAt": "2026-02-13T10:09:28.144292029+00:00",
+  "updatedAt": "2026-02-13T10:09:28.144292029+00:00",
+  "$schema": "db://_system/_system/schemas/v1/configs/config.schema.json",
+  "@context": {
+    "arcadia": "https://raise.io/ontology/arcadia#",
+    "epbs": "https://raise.io/ontology/arcadia/epbs#",
+    "data": "https://raise.io/ontology/arcadia/data#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "oa": "https://raise.io/ontology/arcadia/oa#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "la": "https://raise.io/ontology/arcadia/la#",
+    "pa": "https://raise.io/ontology/arcadia/pa#",
+    "transverse": "https://raise.io/ontology/arcadia/transverse#",
+    "dcterms": "http://purl.org/dc/terms/",
+    "sa": "https://raise.io/ontology/arcadia/sa#",
+    "prov": "http://www.w3.org/ns/prov#"
+  }
+}

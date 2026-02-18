@@ -6,8 +6,7 @@ use raise::model_engine::arcadia;
 use raise::model_engine::loader::ModelLoader;
 use raise::model_engine::validators::{DynamicValidator, ModelValidator, Severity};
 use raise::rules_engine::ast::{Expr, Rule};
-use serde_json::json;
-use tempfile::tempdir;
+use raise::utils::{io::tempdir, prelude::*};
 
 #[tokio::test]
 async fn test_full_stack_integration() {

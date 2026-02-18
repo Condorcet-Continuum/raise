@@ -39,7 +39,7 @@ pub use capella::{CapellaReader, CapellaXmiParser};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     #[test]
     fn test_integration_facade() {

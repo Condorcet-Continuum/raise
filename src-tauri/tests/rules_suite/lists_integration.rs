@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tests/rules_suite/lists_integration.rs
 
 use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider};
-use serde_json::json;
+use raise::utils::prelude::*;
 
 /// Teste la fonction Len() sur des tableaux et chaînes
 #[tokio::test]

@@ -191,13 +191,27 @@ impl<'a> TransactionManager<'a> {
     }
 
     async fn load_dataset_file(&self, path: &str) -> Result<Value> {
-        let dataset_root = std::env::var("PATH_RAISE_DATASET").map_err(|_| {
-            AppError::Validation("❌ Configuration : PATH_RAISE_DATASET manquant.".to_string())
-        })?;
+        let config = AppConfig::get();
+
+        // 1. On récupère le domaine de base (qui est garanti d'exister)
+        let domain_path = config
+            .get_path("PATH_RAISE_DOMAIN")
+            .expect("ERREUR: PATH_RAISE_DOMAIN introuvable dans la configuration !");
+
+        // 2. On cherche le dataset, sinon on utilise le fallback standard
+        let dataset_root = config
+            .get_path("PATH_RAISE_DATASET")
+            .unwrap_or_else(|| domain_path.join("dataset"))
+            .to_string_lossy()
+            .to_string();
+
+        // 3. Interpolation propre
         let resolved_path = path.replace("$PATH_RAISE_DATASET", &dataset_root);
+
         let content = io::read_to_string(Path::new(&resolved_path))
             .await
             .map_err(|_| AppError::NotFound(format!("Fichier introuvable : {}", resolved_path)))?;
+
         json::parse(&content)
     }
 
@@ -870,51 +884,60 @@ mod tests {
     #[tokio::test]
     async fn test_upsert_workflow() {
         let (_dir, config, space, db) = setup_test_db().await;
+
+        // Initialisation de la Source Unique de Vérité (SSOT)
+        AppConfig::init().ok();
+
         let tm = TransactionManager::new(&config, &space, &db);
         io::ensure_dir(&config.db_collection_path(&space, &db, "actors"))
             .await
             .unwrap();
 
-        let dataset_dir = tempdir().unwrap();
-        std::env::set_var("PATH_RAISE_DATASET", dataset_dir.path().to_str().unwrap());
+        // ✅ LOGIQUE RÉALISTE : On récupère le domaine et on déduit le dataset s'il manque
+        let app_cfg = AppConfig::get();
+        let domain_path = app_cfg
+            .get_path("PATH_RAISE_DOMAIN")
+            .expect("PATH_RAISE_DOMAIN doit être défini dans la sandbox");
 
+        let dataset_dir = app_cfg
+            .get_path("PATH_RAISE_DATASET")
+            .unwrap_or_else(|| domain_path.join("dataset"));
+
+        // On s'assure que le dossier physique existe pour les fichiers mocks
+        io::ensure_dir(&dataset_dir).await.unwrap();
+
+        // 1. Premier Insert : On passe la référence &dataset_dir (type &Path)
         create_dataset_file(
-            dataset_dir.path(),
+            &dataset_dir,
             "bob.json",
             json!({ "handle": "bob", "role": "worker" }),
         )
         .await;
 
-        // 1. Insert
         let req1 = vec![TransactionRequest::UpsertFrom {
             collection: "actors".to_string(),
             path: "$PATH_RAISE_DATASET/bob.json".to_string(),
         }];
         tm.execute_smart(req1).await.unwrap();
 
-        // 2. Update
+        // 2. Second Update
         create_dataset_file(
-            dataset_dir.path(),
+            &dataset_dir,
             "bob.json",
             json!({ "handle": "bob", "role": "boss" }),
         )
         .await;
+
         let req2 = vec![TransactionRequest::UpsertFrom {
             collection: "actors".to_string(),
             path: "$PATH_RAISE_DATASET/bob.json".to_string(),
         }];
         tm.execute_smart(req2).await.unwrap();
 
+        // Vérification finale
         let storage = StorageEngine::new(config.clone());
         let res = QueryEngine::new(&CollectionsManager::new(&storage, &space, &db))
-            .execute_query(Query {
-                collection: "actors".into(),
-                filter: None,
-                sort: None,
-                limit: None,
-                offset: None,
-                projection: None,
-            })
+            .execute_query(Query::new("actors"))
             .await
             .unwrap();
 

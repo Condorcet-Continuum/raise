@@ -1,8 +1,10 @@
 // FICHIER : src-tauri/src/code_generator/templates/template_engine.rs
 
-use crate::utils::data::{HashMap, Value};
-use crate::utils::io::{Path, ProjectScope};
-use crate::utils::prelude::*; // AppError, Result, info!
+use crate::utils::{
+    data::{HashMap, Value},
+    io::{Path, ProjectScope},
+    prelude::*,
+};
 use tera::{try_get_value, Tera};
 
 pub struct TemplateEngine {

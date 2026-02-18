@@ -1,6 +1,5 @@
 use super::{AnalysisResult, Analyzer};
-use crate::utils::data::Value;
-use crate::utils::Result;
+use crate::utils::{data::Value, prelude::*};
 
 #[derive(Default)]
 pub struct DependencyAnalyzer;

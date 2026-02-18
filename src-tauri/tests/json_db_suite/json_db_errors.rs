@@ -1,41 +1,54 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_errors.rs
 
-use crate::{init_test_env, TEST_DB, TEST_SPACE};
+use crate::common::setup_test_env; // Notre socle SSOT
 use raise::json_db::storage::file_storage::{create_db, open_db};
+use raise::json_db::storage::JsonDbConfig;
 
-#[tokio::test] // CORRECTION : open_db est synchrone, on repasse en test synchrone
+#[tokio::test]
 async fn open_missing_db_fails() {
-    let env = init_test_env().await;
-    let cfg = &env.cfg;
-    let space = TEST_SPACE;
+    // 1. Initialisation de l'environnement isolé
+    let env = setup_test_env().await;
+
+    // 2. Création de la config de stockage pointant vers notre dossier isolé
+    let cfg = JsonDbConfig {
+        data_root: env.domain_path.clone(),
+    };
+
     let db_missing = "db_introuvable_123";
 
-    // 1. open sur DB inexistante → Err
+    // 3. Tentative d'ouverture d'une DB inexistante
+    let res = open_db(&cfg, &env.space, db_missing).await;
+
     assert!(
-        open_db(cfg, space, db_missing).await.is_err(),
-        "open_db devrait échouer si la DB n'existe pas"
+        res.is_err(),
+        "❌ open_db devrait échouer si la base de données '{}' n'existe pas, mais l'opération a réussi de manière inattendue.",
+        db_missing
     );
 }
 
 #[tokio::test]
 async fn create_db_is_idempotent() {
-    let env = init_test_env().await;
-    let cfg = &env.cfg;
-    let space = TEST_SPACE;
-    let db = TEST_DB;
+    // 1. Initialisation de l'environnement isolé
+    let env = setup_test_env().await;
 
-    // 1. Premier create_db → OK
-    // create_db reste asynchrone
-    create_db(cfg, space, db)
+    let cfg = JsonDbConfig {
+        data_root: env.domain_path.clone(),
+    };
+
+    // Note : setup_test_env() a déjà appelé init_db() en coulisses,
+    // donc le dossier de la DB existe déjà ! Cela rend ce test d'idempotence encore plus pertinent.
+
+    // 2. Premier appel explicite à create_db (doit réussir même si le dossier est déjà là)
+    create_db(&cfg, &env.space, &env.db)
         .await
-        .expect("premier create_db doit réussir");
+        .expect("❌ Le premier appel à create_db doit réussir");
 
-    // 2. Second create_db → OK (Idempotent)
-    let res = create_db(cfg, space, db).await;
+    // 3. Second appel à create_db (Vérification stricte de l'idempotence)
+    let res = create_db(&cfg, &env.space, &env.db).await;
 
     assert!(
         res.is_ok(),
-        "second create_db devrait réussir (idempotence), erreur reçue : {:?}",
+        "❌ Le second create_db devrait réussir (comportement idempotent), mais a échoué avec l'erreur : {:?}",
         res.err()
     );
 }

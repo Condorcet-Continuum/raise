@@ -1,8 +1,8 @@
 // src-tauri/src/blockchain/storage/chain.rs
 
 use crate::blockchain::storage::commit::ArcadiaCommit;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+use crate::utils::{prelude::*, HashMap};
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Ledger {
@@ -19,18 +19,18 @@ impl Ledger {
     }
 
     /// Ajoute un commit à la chaîne locale après vérification de sa validité.
-    pub fn append_commit(&mut self, commit: ArcadiaCommit) -> Result<(), String> {
+    pub fn append_commit(&mut self, commit: ArcadiaCommit) -> Result<()> {
         // 1. Vérification de la signature et de l'intégrité
         if !commit.verify() {
-            return Err("Signature ou intégrité du commit invalide".to_string());
+            return Err(AppError::from("Signature ou intégrité du commit invalide"));
         }
 
         // 2. Vérification du chaînage (continuité)
         if commit.parent_hash != self.last_commit_hash {
-            return Err(format!(
+            return Err(AppError::Validation(format!(
                 "Erreur de continuité : le parent attendu est {:?}, reçu {:?}",
                 self.last_commit_hash, commit.parent_hash
-            ));
+            )));
         }
 
         // 3. Insertion dans le registre

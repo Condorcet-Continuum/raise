@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/workflow_engine/executor.rs
 
+use crate::utils::{prelude::*, Arc, AsyncMutex, HashMap};
+
 use super::compiler::WorkflowCompiler;
 use super::mandate::Mandate;
 use super::tools::AgentTool;
@@ -15,15 +17,10 @@ use crate::rules_engine::ast::Expr;
 use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
 use crate::utils::{AppError, Result};
 
-use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
 /// L'Exécuteur transforme les intentions du workflow en actions via l'IA ou des Outils.
 pub struct WorkflowExecutor {
     /// Référence partagée vers l'Orchestrateur IA
-    pub orchestrator: Arc<Mutex<AiOrchestrator>>,
+    pub orchestrator: Arc<AsyncMutex<AiOrchestrator>>,
     /// Gestionnaire de plugins pour l'exécution WASM cognitive
     pub plugin_manager: Arc<PluginManager>,
     /// Module de Critique (Reward Model)
@@ -35,7 +32,7 @@ pub struct WorkflowExecutor {
 impl WorkflowExecutor {
     /// Crée un nouvel exécuteur lié à l'intelligence centrale et au Hub de Plugins
     pub fn new(
-        orchestrator: Arc<Mutex<AiOrchestrator>>,
+        orchestrator: Arc<AsyncMutex<AiOrchestrator>>,
         plugin_manager: Arc<PluginManager>,
     ) -> Self {
         Self {
@@ -129,6 +126,7 @@ impl WorkflowExecutor {
                 match self
                     .plugin_manager
                     .run_plugin_with_context(plugin_id, mandate_ctx)
+                    .await
                 {
                     Ok((exit_code, signals)) => {
                         let duration = start.elapsed();

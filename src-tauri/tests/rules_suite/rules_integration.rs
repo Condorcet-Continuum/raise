@@ -2,9 +2,8 @@
 
 use raise::json_db::collections;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use serde_json::json;
+use raise::utils::{io::tempdir, prelude::*};
 use std::fs;
-use tempfile::tempdir;
 
 #[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter les appels .await
 async fn test_end_to_end_rules_execution() {

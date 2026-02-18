@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/world_model/training.rs
 
-use anyhow::Result;
+use crate::utils::prelude::*;
 use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 
 use crate::ai::world_model::engine::{NeuroSymbolicEngine, WorldAction};
@@ -16,13 +16,15 @@ pub struct WorldTrainer<'a> {
 impl<'a> WorldTrainer<'a> {
     pub fn new(engine: &'a NeuroSymbolicEngine, lr: f64) -> Result<Self> {
         let vars = engine.varmap.all_vars();
+        // ✅ Conversion de l'erreur Candle lors de la création de l'optimiseur
         let opt = AdamW::new(
             vars,
             ParamsAdamW {
                 lr,
                 ..Default::default()
             },
-        )?;
+        )
+        .map_err(|e| AppError::from(e.to_string()))?;
         Ok(Self { engine, opt })
     }
 
@@ -39,12 +41,27 @@ impl<'a> WorldTrainer<'a> {
         let target_tensor = self.engine.quantizer.decode(&token_t1)?;
         let target_tensor = target_tensor.detach();
 
-        let diff = predicted_tensor.sub(&target_tensor)?;
-        let loss = diff.sqr()?.mean_all()?;
+        // ✅ Conversion systématique des erreurs d'opérations sur les tenseurs (sub, sqr, mean)
+        let diff = predicted_tensor
+            .sub(&target_tensor)
+            .map_err(|e| AppError::from(e.to_string()))?;
 
-        self.opt.backward_step(&loss)?;
+        let loss = diff
+            .sqr()
+            .map_err(|e| AppError::from(e.to_string()))?
+            .mean_all()
+            .map_err(|e| AppError::from(e.to_string()))?;
 
-        let scalar_loss = loss.to_scalar::<f32>()? as f64;
+        // ✅ Conversion de l'erreur de l'étape d'optimisation
+        self.opt
+            .backward_step(&loss)
+            .map_err(|e| AppError::from(e.to_string()))?;
+
+        // ✅ Conversion de l'erreur de conversion en scalaire
+        let scalar_loss = loss
+            .to_scalar::<f32>()
+            .map_err(|e| AppError::from(e.to_string()))? as f64;
+
         Ok(scalar_loss)
     }
 }
@@ -54,8 +71,8 @@ mod tests {
     use super::*;
     use crate::ai::nlp::parser::CommandType;
     use crate::model_engine::types::NameType;
+    use crate::utils::HashMap;
     use candle_nn::VarMap;
-    use std::collections::HashMap;
 
     fn make_dummy(id: &str, layer_idx: usize) -> ArcadiaElement {
         let kind = match layer_idx {

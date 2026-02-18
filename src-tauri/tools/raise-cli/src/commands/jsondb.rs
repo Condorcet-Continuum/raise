@@ -154,9 +154,12 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
 
     // RÉCUPÉRATION DE LA CONFIGURATION
     let app_config = AppConfig::get();
-    let root_dir = args
-        .root
-        .unwrap_or_else(|| app_config.database_root.clone());
+    let root_dir = args.root.unwrap_or_else(|| {
+        app_config
+            .get_path("PATH_RAISE_DOMAIN")
+            .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !")
+            .clone()
+    });
 
     bootstrap_ontologies(&root_dir, &args.space).await;
 
@@ -170,7 +173,7 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
     let tx_mgr = TransactionManager::new(&config, &args.space, &args.db);
 
     // Feedback contextuel
-    if std::env::var("RUST_LOG").is_ok() {
+    if app_config.core.log_level == "debug" || app_config.core.log_level == "trace" {
         user_info!("JSONDB_CTX_ROOT", "{:?}", root_dir);
         user_info!("JSONDB_CTX_SPACE", "{}/{}", args.space, args.db);
     }
@@ -187,18 +190,19 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
     match args.command {
         JsondbCommands::Usage => { /* Géré plus haut */ }
         JsondbCommands::CreateDb => {
-            col_mgr.init_db().await?;
-            user_success!("JSONDB_INIT_SUCCESS");
+            if col_mgr.init_db().await? {
+                user_success!("JSONDB_INIT_SUCCESS", "{}/{}", args.space, args.db);
+            } else {
+                user_info!("JSONDB_EXISTS", "{}/{}", args.space, args.db);
+            }
         }
         JsondbCommands::DropDb { force } => {
             if !force {
                 user_error!("JSONDB_DROP_WARN");
             } else if col_mgr.drop_db().await? {
-                // CORRECTION : On utilise 'else if' directement
-                // au lieu d'ouvrir un bloc 'else' qui contient un 'if'.
                 user_success!("JSONDB_DROP_SUCCESS", "{}/{}", args.space, args.db);
             } else {
-                user_error!("JSONDB_DROP_NOT_FOUND");
+                user_error!("JSONDB_DROP_NOT_FOUND", "{}/{}", args.space, args.db);
             }
         }
         JsondbCommands::CreateCollection { name, schema } => {

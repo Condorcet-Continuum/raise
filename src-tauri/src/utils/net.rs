@@ -2,7 +2,7 @@
 
 use crate::utils::Result;
 use anyhow::Context;
-use reqwest::{Client, StatusCode}; // ✅ Correction : Suppression de header::{...} inutilisés
+use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::OnceLock;
 use std::time::Duration;

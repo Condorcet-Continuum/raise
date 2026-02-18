@@ -1,7 +1,7 @@
 // src-tauri/src/blockchain/sync/delta.rs
 
 use crate::blockchain::storage::commit::Mutation;
-use serde::{Deserialize, Serialize};
+use crate::utils::prelude::*;
 
 /// Représente l'écart de données (diff) entre deux points de la chaîne.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

@@ -1,13 +1,12 @@
-use serde_json::Value;
-use tracing::{debug, warn};
+use crate::utils::{data, prelude::*};
 
 /// Tente d'extraire et de parser un objet JSON depuis une réponse brute de LLM.
 /// Gère les blocs Markdown (```json ... ```) et le texte superflu.
-pub fn extract_json(raw_text: &str) -> Result<Value, String> {
+pub fn extract_json(raw_text: &str) -> Result<Value> {
     let clean_text = extract_code_block(raw_text);
 
     // Tentative de parsing
-    match serde_json::from_str::<Value>(&clean_text) {
+    match data::parse::<Value>(&clean_text) {
         Ok(val) => {
             debug!("JSON extrait avec succès.");
             Ok(val)
@@ -18,10 +17,10 @@ pub fn extract_json(raw_text: &str) -> Result<Value, String> {
                 "Échec du parsing JSON. Erreur: {}. Texte reçu: {}",
                 e, clean_text
             );
-            Err(format!(
+            Err(AppError::from(format!(
                 "JSON invalide : {}. Vérifiez la sortie du modèle.",
                 e
-            ))
+            )))
         }
     }
 }

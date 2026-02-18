@@ -1,8 +1,6 @@
 // FICHIER : src-tauri/src/workflow_engine/state_machine.rs
-
 use super::{ExecutionStatus, WorkflowDefinition, WorkflowInstance};
-use crate::utils::Result;
-use serde_json::Value;
+use crate::utils::prelude::*;
 
 /// Moteur de règles de transition pour le workflow.
 /// C'est lui qui décide quel nœud doit s'exécuter ensuite.

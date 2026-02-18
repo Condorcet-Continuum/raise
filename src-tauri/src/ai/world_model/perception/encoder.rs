@@ -1,8 +1,9 @@
 // FICHIER : src-tauri/src/ai/world_model/perception/encoder.rs
 
+use crate::utils::prelude::*;
+
 use crate::model_engine::arcadia::element_kind::{ArcadiaSemantics, ElementCategory, Layer};
 use crate::model_engine::types::ArcadiaElement;
-use anyhow::Result;
 use candle_core::{Device, Tensor};
 
 /// Dimensions fixes pour l'encodage One-Hot
@@ -60,8 +61,8 @@ impl ArcadiaEncoder {
 
         // 3. Concaténation (Feature Fusion)
         // On fusionne sur la dimension 1 (les features)
-        let t_combined = Tensor::cat(&[&t_layer, &t_cat], 1)?;
-
+        let t_combined =
+            Tensor::cat(&[&t_layer, &t_cat], 1).map_err(|e| AppError::from(e.to_string()))?;
         Ok(t_combined)
     }
 
@@ -72,7 +73,7 @@ impl ArcadiaEncoder {
             data[index] = 1.0;
         }
         // Création du tenseur sur CPU (Device::Cpu est par défaut safe)
-        Ok(Tensor::from_vec(data, (1, size), &Device::Cpu)?)
+        Tensor::from_vec(data, (1, size), &Device::Cpu).map_err(|e| AppError::from(e.to_string()))
     }
 }
 
@@ -80,7 +81,7 @@ impl ArcadiaEncoder {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use std::collections::HashMap;
+    use crate::utils::HashMap;
 
     // Helper pour créer un élément dummy
     fn make_element(kind: &str) -> ArcadiaElement {

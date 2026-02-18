@@ -27,6 +27,18 @@
       "type": "string",
       "minLength": 1
     },
+    "default_config": {
+      "type": "string",
+      "minLength": 1
+    },
+    "default_workstation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "default_user": {
+      "type": "string",
+      "minLength": 1
+    },
     "collections": {
       "type": "object",
       "description": "Liste des collections gérées.",
@@ -84,7 +96,10 @@
         },
         "transactions": {
           "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",
-          "default": { "schema": "transactions/transaction.schema.json", "items": [] }
+          "default": {
+            "schema": "transactions/transaction.schema.json",
+            "items": []
+          }
         },
         "views": {
           "$ref": "../common/types/primitive-types.schema.json#/$defs/db_collection",

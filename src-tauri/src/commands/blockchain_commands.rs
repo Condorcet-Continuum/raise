@@ -2,11 +2,16 @@
 //! Commandes Tauri liées à la Blockchain (Fabric, VPN Mesh et Arcadia P2P).
 
 use crate::blockchain::{
-    error::BlockchainError,
     fabric_state, innernet_state,
     vpn::innernet_client::{NetworkStatus as VpnStatus, Peer as VpnPeer},
 };
-use serde::{Deserialize, Serialize};
+use crate::utils::{
+    data::{self, Value},
+    prelude::*,
+};
+use std::sync::Mutex;
+use tauri::State;
+use tokio::sync::Mutex as AsyncMutex;
 
 // --- IMPORTS ARCADIA P2P ---
 use crate::blockchain::p2p::behavior::ArcadiaBehavior;
@@ -16,9 +21,6 @@ use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation};
 use crate::blockchain::sync::engine::SyncEngine;
 use crate::blockchain::sync::state::SyncStatus;
 use libp2p::{gossipsub, Swarm};
-use std::sync::Mutex;
-use tauri::State;
-use tokio::sync::Mutex as AsyncMutex;
 
 // --- DTOs pour le Frontend ---
 
@@ -27,7 +29,7 @@ pub struct TransactionResult {
     pub success: bool,
     pub message: String,
     #[serde(default)]
-    pub payload: Option<serde_json::Value>,
+    pub payload: Option<Value>,
 }
 
 // --- COMMANDES ARCADIA (P2P SOUVERAIN) ---
@@ -38,7 +40,7 @@ pub async fn arcadia_broadcast_mutation(
     mutation: Mutation,
     swarm_state: State<'_, AsyncMutex<Swarm<ArcadiaBehavior>>>,
     ledger_state: State<'_, Mutex<Ledger>>,
-) -> Result<String, String> {
+) -> Result<String> {
     // 1. On extrait les données du Ledger dans un bloc limité pour relâcher le Mutex immédiatement
     let (commit, encoded_msg) = {
         let mut ledger = ledger_state.lock().map_err(|_| "Ledger Mutex poisoned")?;
@@ -66,7 +68,7 @@ pub async fn arcadia_broadcast_mutation(
             .map_err(|e| format!("Erreur Ledger: {}", e))?;
 
         let msg = ArcadiaNetMessage::AnnounceCommit(commit.clone());
-        let encoded = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+        let encoded = data::to_vec(&msg).map_err(|e| e.to_string())?;
 
         (commit, encoded) // Le verrou 'ledger' est relâché ici à la sortie du bloc
     };
@@ -92,9 +94,9 @@ pub fn arcadia_get_sync_status(sync_state: State<'_, Mutex<SyncEngine>>) -> Sync
 
 /// Récupère les derniers commits du registre local.
 #[tauri::command]
-pub fn arcadia_get_ledger_info(ledger_state: State<'_, Mutex<Ledger>>) -> serde_json::Value {
+pub fn arcadia_get_ledger_info(ledger_state: State<'_, Mutex<Ledger>>) -> Value {
     let ledger = ledger_state.lock().unwrap();
-    serde_json::json!({
+    data::json!({
         "height": ledger.len(),
         "last_hash": ledger.last_commit_hash,
         "is_empty": ledger.is_empty()
@@ -104,11 +106,11 @@ pub fn arcadia_get_ledger_info(ledger_state: State<'_, Mutex<Ledger>>) -> serde_
 // --- COMMANDES FABRIC ---
 
 #[tauri::command]
-pub async fn fabric_ping(app: tauri::AppHandle) -> Result<String, BlockchainError> {
+pub async fn fabric_ping(app: tauri::AppHandle) -> Result<String> {
     let state = fabric_state(&app);
     let _guard = state
         .lock()
-        .map_err(|_| BlockchainError::Unknown("Fabric Mutex poisoned".into()))?;
+        .map_err(|_| AppError::from("Fabric Mutex poisoned"))?;
 
     Ok("Fabric Client Ready (v2)".to_string())
 }
@@ -119,18 +121,19 @@ pub async fn fabric_submit_transaction(
     chaincode: String,
     function: String,
     args: Vec<String>,
-) -> Result<TransactionResult, BlockchainError> {
+) -> Result<TransactionResult> {
     let client = {
         let state = fabric_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("Fabric Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("Fabric Mutex poisoned"))?;
         guard.clone()
     };
 
     let tx_id = client
         .submit_transaction(&chaincode, &function, args)
-        .await?;
+        .await
+        .map_err(|e| AppError::from(e.to_string()))?;
 
     Ok(TransactionResult {
         success: true,
@@ -145,133 +148,143 @@ pub async fn fabric_query_transaction(
     chaincode: String,
     function: String,
     args: Vec<String>,
-) -> Result<TransactionResult, BlockchainError> {
+) -> Result<TransactionResult> {
     let client = {
         let state = fabric_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("Fabric Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("Fabric Mutex poisoned"))?;
         guard.clone()
     };
 
     let byte_args: Vec<Vec<u8>> = args.into_iter().map(|s| s.into_bytes()).collect();
-    let result_bytes = client.query_transaction(&function, byte_args).await?;
+    let result_bytes = client
+        .query_transaction(&function, byte_args)
+        .await
+        .map_err(|e| AppError::from(e.to_string()))?;
+
     let result_str = String::from_utf8_lossy(&result_bytes).to_string();
 
     Ok(TransactionResult {
         success: true,
         message: "Query successful".to_string(),
-        payload: Some(serde_json::json!({ "data": result_str, "chaincode": chaincode })),
+        payload: Some(data::json!({ "data": result_str, "chaincode": chaincode })),
     })
 }
 
 #[tauri::command]
-pub async fn fabric_get_history(
-    app: tauri::AppHandle,
-    key: String,
-) -> Result<TransactionResult, BlockchainError> {
+pub async fn fabric_get_history(app: tauri::AppHandle, key: String) -> Result<TransactionResult> {
     let client = {
         let state = fabric_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("Fabric Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("Fabric Mutex poisoned"))?;
         guard.clone()
     };
 
     let args = vec![key.into_bytes()];
-    let result = client.query_transaction("GetHistory", args).await?;
+    let result = client
+        .query_transaction("GetHistory", args)
+        .await
+        .map_err(|e| AppError::from(e.to_string()))?;
 
     Ok(TransactionResult {
         success: true,
         message: "History retrieved".to_string(),
-        payload: Some(serde_json::json!({ "history": String::from_utf8_lossy(&result) })),
+        payload: Some(data::json!({ "history": String::from_utf8_lossy(&result) })),
     })
 }
 
 // --- COMMANDES VPN (INNERNET) ---
 
 #[tauri::command]
-pub async fn vpn_network_status(app: tauri::AppHandle) -> Result<VpnStatus, BlockchainError> {
+pub async fn vpn_network_status(app: tauri::AppHandle) -> Result<VpnStatus> {
     let client = {
         let state = innernet_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("VPN Mutex poisoned"))?;
         guard.clone()
     };
-    client.get_status().await.map_err(BlockchainError::from)
+    client
+        .get_status()
+        .await
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[tauri::command]
-pub async fn vpn_connect(app: tauri::AppHandle) -> Result<(), BlockchainError> {
+pub async fn vpn_connect(app: tauri::AppHandle) -> Result<()> {
     let client = {
         let state = innernet_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("VPN Mutex poisoned"))?;
         guard.clone()
     };
-    client.connect().await.map_err(BlockchainError::from)
+    client
+        .connect()
+        .await
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[tauri::command]
-pub async fn vpn_disconnect(app: tauri::AppHandle) -> Result<(), BlockchainError> {
+pub async fn vpn_disconnect(app: tauri::AppHandle) -> Result<()> {
     let client = {
         let state = innernet_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("VPN Mutex poisoned"))?;
         guard.clone()
     };
-    client.disconnect().await.map_err(BlockchainError::from)
+    client
+        .disconnect()
+        .await
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[tauri::command]
-pub async fn vpn_list_peers(app: tauri::AppHandle) -> Result<Vec<VpnPeer>, BlockchainError> {
+pub async fn vpn_list_peers(app: tauri::AppHandle) -> Result<Vec<VpnPeer>> {
     let client = {
         let state = innernet_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("VPN Mutex poisoned"))?;
         guard.clone()
     };
-    client.list_peers().await.map_err(BlockchainError::from)
+    client
+        .list_peers()
+        .await
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[tauri::command]
-pub async fn vpn_add_peer(
-    app: tauri::AppHandle,
-    invitation_code: String,
-) -> Result<String, BlockchainError> {
+pub async fn vpn_add_peer(app: tauri::AppHandle, invitation_code: String) -> Result<String> {
     let client = {
         let state = innernet_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("VPN Mutex poisoned"))?;
         guard.clone()
     };
     client
         .add_peer(&invitation_code)
         .await
-        .map_err(BlockchainError::from)
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[tauri::command]
-pub async fn vpn_ping_peer(
-    app: tauri::AppHandle,
-    peer_ip: String,
-) -> Result<bool, BlockchainError> {
+pub async fn vpn_ping_peer(app: tauri::AppHandle, peer_ip: String) -> Result<bool> {
     let client = {
         let state = innernet_state(&app);
         let guard = state
             .lock()
-            .map_err(|_| BlockchainError::Unknown("VPN Mutex poisoned".into()))?;
+            .map_err(|_| AppError::from("VPN Mutex poisoned"))?;
         guard.clone()
     };
     client
         .ping_peer(&peer_ip)
         .await
-        .map_err(BlockchainError::from)
+        .map_err(|e| AppError::from(e.to_string()))
 }
 
 #[tauri::command]
@@ -288,9 +301,9 @@ mod tests {
         let res = TransactionResult {
             success: true,
             message: "Test OK".into(),
-            payload: Some(serde_json::json!({"id": 1})),
+            payload: Some(data::json!({"id": 1})),
         };
-        let json = serde_json::to_string(&res).unwrap();
+        let json = data::stringify(&res).unwrap();
         assert!(json.contains("\"success\":true"));
     }
 }

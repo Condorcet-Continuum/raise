@@ -1,56 +1,44 @@
 // FICHIER : src-tauri/tests/json_db_suite/dataset_integration.rs
 
-use crate::{ensure_db_exists, get_dataset_file, init_test_env, TEST_DB, TEST_SPACE};
+use crate::common::{seed_mock_datasets, setup_test_env}; // Notre nouveau socle !
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::storage::StorageEngine;
-use raise::utils::{fs, json};
+use raise::utils::io::{self};
+use raise::utils::prelude::*; // SSOT : Apporte Value, json, Result, etc.
 
-#[tokio::test] // On garde tokio pour les appels asynchrones au manager
+#[tokio::test]
 async fn debug_import_exchange_item() {
-    let env = init_test_env().await;
-    ensure_db_exists(&env.cfg, &env.space, &env.db).await;
+    // 1. Initialisation de l'environnement isolé
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
 
-    let refreshed_storage = StorageEngine::new(env.cfg.clone());
-    let mgr = CollectionsManager::new(&refreshed_storage, &env.space, &env.db);
+    // 2. Création du fichier factice (remplace l'ancienne méthode)
+    let data_path = seed_mock_datasets(&env.domain_path).await.unwrap();
 
-    // Le fichier est créé par init_test_env dans le mod.rs
-    let data_path =
-        get_dataset_file(&env.cfg, "arcadia/v1/data/exchange-items/position_gps.json").await;
-
-    // Vérification de sécurité
-    if !fs::exists(&data_path).await {
-        panic!("❌ Fichier de test introuvable : {:?}", data_path);
-    }
-
-    let json_content = fs::read_to_string(&data_path)
+    // 3. Lecture du fichier via notre SSOT
+    let mut json_doc: Value = io::read_json(&data_path)
         .await
-        .expect("Lecture donnée impossible");
+        .expect("Lecture ou parsing JSON impossible");
 
-    // Utilisation de la variable définie juste au-dessus
-    let mut json_doc: json::Value = json::parse(&json_content).expect("JSON malformé");
-
-    // On utilise un schéma qui existe réellement (copié par init_test_env)
+    // 4. Injection du schéma
     let schema_rel_path = "arcadia/data/exchange-item.schema.json";
     let db_schema_uri = format!(
         "db://{}/{}/schemas/v1/{}",
-        TEST_SPACE, TEST_DB, schema_rel_path
+        env.space, env.db, schema_rel_path
     );
 
     if let Some(obj) = json_doc.as_object_mut() {
-        obj.insert(
-            "$schema".to_string(),
-            serde_json::Value::String(db_schema_uri.clone()),
-        );
+        obj.insert("$schema".to_string(), Value::String(db_schema_uri.clone()));
     }
 
-    // Le CollectionsManager est asynchrone, on conserve donc les .await ici.
+    // 5. Création et insertion dans la base
     mgr.create_collection("exchange-items", Some(db_schema_uri))
         .await
-        .expect("create collection");
+        .expect("Échec création collection");
 
     match mgr.insert_with_schema("exchange-items", json_doc).await {
         Ok(res) => {
             assert!(res.get("id").is_some());
+            println!("✅ Insertion réussie avec l'ID : {}", res["id"]);
         }
         Err(e) => panic!("❌ ÉCHEC INSERTION : {}", e),
     }

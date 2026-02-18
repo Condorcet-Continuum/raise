@@ -1,7 +1,7 @@
 use crate::blockchain::vpn::NetworkStatus;
 use libp2p::Multiaddr;
-use std::str::FromStr;
 
+use crate::utils::FromStr;
 /// Pont entre le statut du VPN Mesh (Innernet) et la configuration réseau P2P.
 pub struct P2PVpnResolver;
 

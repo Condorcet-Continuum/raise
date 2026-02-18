@@ -1,40 +1,44 @@
 // FICHIER : src-tauri/tests/json_db_suite/workunits_x_compute.rs
 
-use crate::{ensure_db_exists, init_test_env, TEST_DB, TEST_SPACE};
+use crate::common::setup_test_env; // Notre socle SSOT unifié
 use raise::json_db::collections::manager::{self, CollectionsManager};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-use raise::json_db::storage::StorageEngine;
-use raise::utils::{json::json, Uuid};
+use raise::utils::prelude::*; // Apporte json!, Value, Uuid, etc.
 
 #[tokio::test]
 async fn workunit_compute_then_validate_minimal() {
-    let test_env = init_test_env().await;
-    let cfg = &test_env.cfg;
-    let space = TEST_SPACE;
-    let db = TEST_DB;
+    // 1. Initialisation de l'environnement (Sandboxing total)
+    let env = setup_test_env().await;
 
-    ensure_db_exists(cfg, space, db).await;
-
-    let reg = SchemaRegistry::from_db(cfg, space, db)
+    // 2. Chargement du registre des schémas depuis la DB isolée
+    let reg = SchemaRegistry::from_db(&env.storage.config, &env.space, &env.db)
         .await
-        .expect("registry init failed");
-    let root_uri = reg.uri("workunits/workunit.schema.json");
+        .expect("❌ Impossible de charger le registre des schémas");
+
+    // Construction de l'URI SSOT
+    let root_uri = format!(
+        "db://{}/{}/schemas/v1/workunits/workunit.schema.json",
+        env.space, env.db
+    );
 
     if reg.get_by_uri(&root_uri).is_none() {
-        panic!("Schéma workunit introuvable");
+        panic!(
+            "❌ Schéma workunit introuvable dans le registre : {}",
+            root_uri
+        );
     }
 
-    let validator =
-        SchemaValidator::compile_with_registry(&root_uri, &reg).expect("compile workunit failed");
+    let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)
+        .expect("❌ Échec de la compilation du validateur workunit");
 
-    // Donnée conforme au workunit.schema.json (qui inclut finance)
+    // 3. Donnée conforme au workunit.schema.json
     let doc = json!({
         "id": Uuid::new_v4().to_string(),
         "code": "WU-DEVOPS-01",
         "name": { "fr": "DevOps pipeline" },
         "status": "draft",
         "version": "1.0.0",
-        "createdAt": "2024-01-01T00:00:00Z",
+        "createdAt": chrono::Utc::now().to_rfc3339(),
         "finance": {
             "version": "1.0.0",
             "billing_model": "time_material",
@@ -45,32 +49,32 @@ async fn workunit_compute_then_validate_minimal() {
         }
     });
 
-    // La validation simple reste synchrone
-    validator.validate(&doc).expect("validate workunit failed");
+    // 4. Validation structurelle simple
+    validator
+        .validate(&doc)
+        .expect("❌ La validation simple du workunit a échoué");
+    println!("✅ Workunit minimal validé.");
 }
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter le moteur de règles
+#[tokio::test]
 async fn finance_compute_minimal() {
-    let env = init_test_env().await;
-    let cfg = &env.cfg;
-    let space = TEST_SPACE;
-    let db = TEST_DB;
+    // 1. Initialisation de l'environnement
+    let env = setup_test_env().await;
+    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
 
-    ensure_db_exists(cfg, space, db).await;
-
-    let reg = SchemaRegistry::from_db(cfg, space, db)
+    let reg = SchemaRegistry::from_db(&env.storage.config, &env.space, &env.db)
         .await
-        .expect("registry init failed");
-    let root_uri = reg.uri("workunits/finance.schema.json"); // On teste le module finance directement
+        .expect("❌ Échec init registre");
 
-    if reg.get_by_uri(&root_uri).is_none() {
-        panic!("Schéma finance introuvable");
-    }
+    let root_uri = format!(
+        "db://{}/{}/schemas/v1/workunits/finance.schema.json",
+        env.space, env.db
+    );
 
-    let validator =
-        SchemaValidator::compile_with_registry(&root_uri, &reg).expect("compile finance failed");
+    let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)
+        .expect("❌ Échec compilation validateur finance");
 
-    // CAS DE TEST : Une finance avec des revenus et des marges
+    // 2. CAS DE TEST : Données brutes avant calcul
     let mut finance_doc = json!({
         "version": "1.0.0",
         "billing_model": "fixed",
@@ -84,68 +88,65 @@ async fn finance_compute_minimal() {
             "mid_pct": 0.50, // 50%
             "high_pct": 0.80
         },
-        "summary": {}, // Les résultats seront injectés ici
+        "summary": {}, // Destiné à recevoir les x_rules
         "synthese_build": {}
     });
 
-    // 1. Initialisation des composants requis (CORRECTION)
-    let storage = StorageEngine::new(cfg.clone());
-    let manager = CollectionsManager::new(&storage, space, db);
-
-    // 2. APPEL DU NOUVEAU MOTEUR (GenRules via manager)
-    // CORRECTION E0599 : apply_business_rules est désormais asynchrone car il utilise l'évaluateur asynchrone
+    // 3. EXÉCUTION DU MOTEUR DE RÈGLES (Business Logic)
+    // On applique les règles dynamiques définies dans le schéma
     manager::apply_business_rules(
-        &manager,
-        "finance_test", // Nom collection fictif pour le test
+        &mgr,
+        "finance_test_collection",
         &mut finance_doc,
         None,
         &reg,
         &root_uri,
     )
-    .await // Ajout du .await requis
-    .expect("Echec du moteur de règles");
+    .await
+    .expect("❌ Échec de l'application des règles métier (GenRules)");
 
-    // 3. VALIDATION (Vérifie que le résultat respecte le schéma)
+    // 4. VALIDATION DU RÉSULTAT
     validator
         .validate(&finance_doc)
-        .expect("Validation du résultat échouée");
+        .expect("❌ Le document calculé ne respecte plus son schéma");
 
-    println!(
-        "Doc calculé : {}",
-        serde_json::to_string_pretty(&finance_doc).unwrap()
-    );
+    // 5. ASSERTIONS (Vérification des calculs x_rules)
 
-    // 4. ASSERTIONS (Vérification des règles x_rules)
-
-    // Règle : calc_margin_low = low_eur (1000) * low_pct (0.20) = 200
-    let margin_low = finance_doc.pointer("/summary/net_margin_low");
+    // Marge Low : 1000 * 0.20 = 200
     assert_eq!(
-        margin_low.and_then(|v| v.as_f64()),
+        finance_doc
+            .pointer("/summary/net_margin_low")
+            .and_then(|v| v.as_f64()),
         Some(200.0),
-        "Marge Low incorrecte"
+        "❌ Calcul de marge Low incorrect"
     );
 
-    // Règle : calc_margin_mid = mid_eur (2000) * mid_pct (0.50) = 1000
-    let margin_mid = finance_doc.pointer("/summary/net_margin_mid");
+    // Marge Mid : 2000 * 0.50 = 1000
     assert_eq!(
-        margin_mid.and_then(|v| v.as_f64()),
+        finance_doc
+            .pointer("/summary/net_margin_mid")
+            .and_then(|v| v.as_f64()),
         Some(1000.0),
-        "Marge Mid incorrecte"
+        "❌ Calcul de marge Mid incorrect"
     );
 
-    // Règle : check_profitability (1000 > 0 -> true)
-    let is_profitable = finance_doc.pointer("/summary/mid_is_profitable");
+    // Profitabilité : 1000 > 0 -> true
     assert_eq!(
-        is_profitable.and_then(|v| v.as_bool()),
+        finance_doc
+            .pointer("/summary/mid_is_profitable")
+            .and_then(|v| v.as_bool()),
         Some(true),
-        "Profitabilité incorrecte"
+        "❌ Évaluation de profitabilité incorrecte"
     );
 
-    // Règle : gen_finance_ref ("FIN-2025-" + "OK" car profitable)
-    let generated_ref = finance_doc.pointer("/summary/generated_ref");
+    // Référence générée : "FIN-2025-OK"
     assert_eq!(
-        generated_ref.and_then(|v| v.as_str()),
+        finance_doc
+            .pointer("/summary/generated_ref")
+            .and_then(|v| v.as_str()),
         Some("FIN-2025-OK"),
-        "Référence générée incorrecte"
+        "❌ Référence calculée incorrecte"
     );
+
+    println!("✅ FINANCE RULES ENGINE SUCCESS");
 }

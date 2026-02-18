@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/blockchain/bridge/mod.rs
 
+use crate::utils::prelude::*;
+
 pub mod db_adapter;
 pub mod model_sync;
 
@@ -9,7 +11,6 @@ pub use model_sync::ModelSync;
 use crate::blockchain::storage::commit::ArcadiaCommit;
 use crate::json_db::storage::StorageEngine;
 use crate::AppState;
-use anyhow::{Context, Result};
 
 /// Structure principale coordonnant la réconciliation entre la Blockchain et les moteurs RAISE.
 pub struct ArcadiaBridge<'a> {
@@ -30,16 +31,19 @@ impl<'a> ArcadiaBridge<'a> {
     /// Assure la persistance sur disque suivie de la mise à jour de l'état en mémoire.
     pub async fn process_new_commit(&self, commit: &ArcadiaCommit) -> Result<()> {
         // 1. Persistance physique dans la JSON-DB
-        self.db_adapter
-            .apply_commit(commit)
-            .await
-            .context("Échec de l'application du commit dans la JSON-DB via le DbAdapter")?;
-
+        self.db_adapter.apply_commit(commit).await.map_err(|e| {
+            AppError::from(format!(
+                "Échec de l'application du commit dans la JSON-DB via le DbAdapter: {}",
+                e
+            ))
+        })?;
         // 2. Synchronisation logique dans le ProjectModel
-        self.model_sync
-            .sync_commit(commit)
-            .context("Échec de la synchronisation du ProjectModel en mémoire via le ModelSync")?;
-
+        self.model_sync.sync_commit(commit).map_err(|e| {
+            AppError::from(format!(
+                "Échec de la synchronisation du ProjectModel en mémoire via le ModelSync: {}",
+                e
+            ))
+        })?;
         #[cfg(debug_assertions)]
         println!(
             "🚀 [ArcadiaBridge] Commit {} traité avec succès.",
@@ -58,9 +62,7 @@ mod tests {
     use crate::blockchain::storage::commit::{Mutation, MutationOp};
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::ProjectModel;
-    use serde_json::json;
-    use std::sync::Mutex;
-    use tempfile::tempdir;
+    use crate::utils::{io::tempdir, Mutex};
 
     #[tokio::test]
     async fn test_bridge_full_cycle_logic() {

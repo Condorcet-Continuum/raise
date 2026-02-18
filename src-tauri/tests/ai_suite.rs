@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tests/ai_suite.rs
 
 // Module commun (Setup, Helpers, Environnement asynchrone)
-#[path = "ai_suite/mod.rs"]
+#[path = "common/mod.rs"]
 mod common;
 
 // Tests de connectivité LLM (Ping, Dual Mode, Local vs Remote)

@@ -1,13 +1,6 @@
 // FICHIER : src-tauri/src/ai/protocols/mcp.rs
 
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::Arc;
-use uuid::Uuid; // Nécessaire pour les traits asynchrones
-
+use crate::utils::{async_trait, prelude::*, Arc, DateTime, HashMap, Utc, Uuid};
 // =========================================================================
 // 1. STRUCTURES DE DONNÉES (Payloads) - Celles que vous avez fournies
 // =========================================================================

@@ -101,12 +101,32 @@ fn translate_insert(insert: &Insert) -> Result<Vec<TransactionRequest>> {
     Ok(operations)
 }
 
-// --- TRADUCTION SELECT ---
-
 fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
-    let limit = None;
-    let offset = None;
+    let query_string = sql_query.to_string().to_uppercase();
 
+    // --- EXTRACTION DU LIMIT ---
+    let mut limit = None;
+    if let Some(idx) = query_string.find("LIMIT ") {
+        let remainder = &query_string[idx + 6..];
+        let digits: String = remainder
+            .chars()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        limit = digits.parse::<usize>().ok();
+    }
+
+    // --- EXTRACTION DE L'OFFSET ---
+    let mut offset = None;
+    if let Some(idx) = query_string.find("OFFSET ") {
+        let remainder = &query_string[idx + 7..];
+        let digits: String = remainder
+            .chars()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        offset = digits.parse::<usize>().ok();
+    }
     let sort = if let Some(order_by_struct) = &sql_query.order_by {
         match &order_by_struct.kind {
             OrderByKind::Expressions(exprs) => {
@@ -134,6 +154,7 @@ fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
     }
 }
 
+// --- TRADUCTION SELECT ---
 fn translate_select(
     select: &sqlparser::ast::Select,
     limit: Option<usize>,

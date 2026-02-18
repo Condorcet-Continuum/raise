@@ -13,7 +13,7 @@ use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 
 use raise::{
     user_error, user_info, user_success,
-    utils::{context, io, prelude::*, Arc},
+    utils::{io, prelude::*, Arc},
 };
 
 #[derive(Args, Debug, Clone)]
@@ -38,52 +38,44 @@ pub enum AiCommands {
 }
 
 pub async fn handle(args: AiArgs) -> Result<()> {
-    // 1. CONFIGURATION
-    let app_config = AppConfig::get();
+    let config = AppConfig::get();
+    let engine = config.ai_engines.get("cloud_gemini");
 
-    // Paramètres LLM & Réseau
-    let gemini_key = app_config.llm_api_key.clone().unwrap_or_default();
-    let local_url = app_config.llm_api_url.clone();
+    let api_key = engine.and_then(|e| e.api_key.clone()).unwrap_or_default();
+    let api_url = engine.and_then(|e| e.api_url.clone()).unwrap_or_default();
+    let model_name = engine.map(|e| e.model_name.clone());
 
-    // REFAC: Utilisation de env::get_optional
-    let model_name = context::get_optional("RAISE_MODEL_NAME");
+    let space = &config.default_domain;
+    let db = &config.default_db;
 
-    // Paramètres Contexte
-    // REFAC: Utilisation de env::get_or
-    let space = context::get_or("RAISE_DEFAULT_SPACE", "default_space");
-    let db = context::get_or("RAISE_DEFAULT_DB", "default_db");
+    let domain_path = config
+        .get_path("PATH_RAISE_DOMAIN")
+        .expect("ERREUR: PATH_RAISE_DOMAIN introuvable !");
 
-    // Chemins
-    let domain_path = app_config.database_root.clone();
+    let dataset_path = config
+        .get_path("PATH_RAISE_DATASET")
+        .unwrap_or_else(|| domain_path.join("dataset"));
 
-    // REFAC: Utilisation de io::PathBuf et std::env::current_dir est OK ici ou via config
-    let dataset_path = context::get_optional("PATH_RAISE_DATASET")
-        .map(io::PathBuf::from)
-        .unwrap_or_else(|| context::current_dir().unwrap().join("dataset"));
-
-    // CORRECTION : Création de dossier via utils::fs
     io::ensure_dir(&domain_path).await?;
 
-    // 2. MOTEURS
-    let client = LlmClient::new(&local_url, &gemini_key, model_name.clone());
-    let db_config = JsonDbConfig::new(domain_path.clone());
-    let storage = StorageEngine::new(db_config);
+    // 2. MOTEURS ET CONTEXTE
+    let client = LlmClient::new(&api_url, &api_key, model_name);
+    let storage = StorageEngine::new(JsonDbConfig::new(domain_path.clone()));
 
     let ctx = AgentContext::new(
-        &space,
-        &db,
+        space,
+        db,
         Arc::new(storage),
         client.clone(),
-        domain_path.clone(),
-        dataset_path.clone(),
+        domain_path,
+        dataset_path,
     );
 
+    // 3. EXÉCUTION
     match args.command.unwrap_or(AiCommands::Interactive) {
-        AiCommands::Interactive => {
-            run_interactive_mode(&ctx, client, &local_url).await?;
-        }
+        AiCommands::Interactive => run_interactive_mode(&ctx, client, &api_url).await?,
         AiCommands::Classify { input, execute } => {
-            process_input(&ctx, &input, client, execute).await;
+            process_input(&ctx, &input, client, execute).await
         }
     }
 

@@ -1,8 +1,6 @@
 // FICHIER : src-tauri/src/model_engine/types.rs
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
+use crate::utils::{prelude::*, HashMap};
 // --- TYPES FONDAMENTAUX ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

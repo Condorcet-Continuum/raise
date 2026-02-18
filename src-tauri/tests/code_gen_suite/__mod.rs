@@ -3,7 +3,6 @@
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use raise::utils::env;
 use raise::utils::io::{self, PathBuf};
 use raise::utils::Once;
 
@@ -26,7 +25,7 @@ pub struct AiTestEnv {
 /// CORRECTION : Passage en async pour supporter l'initialisation asynchrone de la DB.
 pub async fn init_ai_test_env() -> AiTestEnv {
     INIT.call_once(|| {
-        dotenvy::dotenv().ok();
+        let _ = raise::utils::config::AppConfig::init();
         let _ = tracing_subscriber::fmt()
             .with_env_filter("info")
             .with_test_writer()
@@ -81,9 +80,24 @@ pub async fn init_ai_test_env() -> AiTestEnv {
         .expect("❌ init_db failed in code_gen_suite");
 
     // --- CLIENT IA ---
-    let gemini_key = env::get_or("RAISE_GEMINI_KEY", "");
-    let model_name = env::get_optional("RAISE_MODEL_NAME");
-    let local_url = env::get_or("RAISE_LOCAL_URL", "http://localhost:8080");
+    let app_config = raise::utils::config::AppConfig::get();
+
+    let gemini_key = app_config
+        .ai_engines
+        .get("cloud_gemini")
+        .and_then(|e| e.api_key.clone())
+        .unwrap_or_default();
+
+    let model_name = app_config
+        .ai_engines
+        .get("primary_local")
+        .map(|e| e.model_name.clone());
+
+    let local_url = app_config
+        .ai_engines
+        .get("primary_local")
+        .and_then(|e| e.api_url.clone())
+        .unwrap_or_else(|| "http://localhost:8081".to_string());
 
     let client = LlmClient::new(&local_url, &gemini_key, model_name);
 

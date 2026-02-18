@@ -3,9 +3,8 @@ use clap::Args;
 use raise::{
     user_error, user_info, user_success,
     utils::{
-        context,
         data::Value,
-        io::{self, PathBuf},
+        io::{self},
         prelude::*,
     },
 };
@@ -28,13 +27,14 @@ pub async fn handle(args: ValidatorArgs) -> Result<()> {
     // 1. RÉCUPÉRATION DE LA CONFIGURATION
     let app_config = AppConfig::get();
 
-    // Chemin DOMAIN (Pioché dans la config centralisée)
-    let domain_root = app_config.database_root.clone();
+    let domain_root = app_config
+        .get_path("PATH_RAISE_DOMAIN")
+        .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !");
 
-    // Chemin DATASET (Reste spécifique à l'environnement local pour l'instant)
-    // REFAC: context::get renvoie une AppError, mais on utilise le ?  pour la convertir
-    let dataset_path_str = context::get("PATH_RAISE_DATASET")?;
-    let dataset_root = PathBuf::from(&dataset_path_str);
+    // Chemin DATASET (Piloté par la config globale avec fallback sur le domaine)
+    let dataset_root = app_config
+        .get_path("PATH_RAISE_DATASET")
+        .unwrap_or_else(|| domain_root.join("dataset"));
 
     // Vérification physique des dossiers racines
     if !dataset_root.exists() {
@@ -110,6 +110,7 @@ pub async fn handle(args: ValidatorArgs) -> Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use raise::utils::io::PathBuf;
 
     #[derive(Parser)]
     struct TestCli {

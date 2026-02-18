@@ -15,7 +15,7 @@ pub use store::RuleStore;
 mod tests {
     use super::*;
     use crate::rules_engine::ast::Expr;
-    use serde_json::json;
+    use crate::utils::data::json;
 
     // Imports nécessaires pour les tests d'intégration du Store
     use crate::json_db::collections::manager::CollectionsManager;

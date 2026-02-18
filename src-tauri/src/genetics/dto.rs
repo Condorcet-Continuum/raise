@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use crate::utils::prelude::*;
 
 // --- Configuration & Entrées ---
 

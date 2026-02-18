@@ -1,9 +1,7 @@
 pub mod dependency_analyzer;
 pub mod injection_analyzer;
 
-use crate::utils::data::{HashSet, Value};
-use crate::utils::Result;
-
+use crate::utils::{prelude::*, HashSet};
 /// Résultat de l'analyse de dépendance pour un élément
 #[derive(Debug, Default, Clone)]
 pub struct AnalysisResult {

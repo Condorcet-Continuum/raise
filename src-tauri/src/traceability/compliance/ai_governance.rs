@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/src/traceability/compliance/ai_governance.rs
+use crate::utils::prelude::*;
 
 use crate::model_engine::types::{ArcadiaElement, NameType};
 use crate::traceability::tracer::Tracer;
-use serde::Serialize;
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct AiComplianceReport {
@@ -97,8 +97,7 @@ mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
     use crate::traceability::tracer::Tracer;
-    use serde_json::json;
-    use std::collections::HashMap;
+    use crate::utils::{data::json, HashMap};
 
     fn create_mock_element(id: &str, kind: &str, props: serde_json::Value) -> ArcadiaElement {
         let mut properties = HashMap::new();
