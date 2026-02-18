@@ -3,13 +3,13 @@
 use crate::utils::{async_trait, data, prelude::*, Uuid};
 
 use super::intent_classifier::EngineeringIntent;
-use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
+// Import des outils optimisés (plus besoin de CollectionsManager ici)
+use super::tools::{
+    extract_json_from_llm, find_element_by_name, load_session, save_artifact, save_session,
+};
 use super::{Agent, AgentContext, AgentResult};
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
-
-use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 
 #[derive(Default)]
 pub struct TransverseAgent;
@@ -75,33 +75,7 @@ impl TransverseAgent {
         self.call_llm(ctx, sys, &user, "Requirement", name).await
     }
 
-    /// Recherche le composant dans la DB (SA, LA, ou PA)
-    async fn find_component_in_db(&self, ctx: &AgentContext, name: &str) -> Option<Value> {
-        // On suppose l'espace par défaut "mbse2/drones" (comme SoftwareAgent)
-        // Dans une version future, cela devrait venir du contexte de session
-        let manager = CollectionsManager::new(&ctx.db, "mbse2", "drones");
-        let query_engine = QueryEngine::new(&manager);
-
-        let collections = ["sa_components", "la_components", "pa_components"];
-
-        for col in collections {
-            let mut query = Query::new(col);
-            query.filter = Some(QueryFilter {
-                operator: FilterOperator::And,
-                conditions: vec![Condition::eq("name", name.into())],
-            });
-            query.limit = Some(1);
-
-            if let Ok(result) = query_engine.execute_query(query).await {
-                if let Some(doc) = result.documents.first() {
-                    return Some(doc.clone());
-                }
-            }
-        }
-        None
-    }
-
-    /// Analyse statique : DB + FS
+    /// Analyse statique : DB (via Tool) + FS
     async fn perform_static_analysis(
         &self,
         ctx: &AgentContext,
@@ -110,13 +84,14 @@ impl TransverseAgent {
         let mut findings = Vec::new();
         let mut overall_success = true;
 
-        // 1. VÉRIFICATION MODÈLE (DB)
+        // 1. VÉRIFICATION MODÈLE (DB) - OPTIMISÉ
         findings.push(format!(
             "🔎 Recherche de '{}' dans la base de données...",
             target
         ));
 
-        let db_component = self.find_component_in_db(ctx, target).await;
+        // ✅ Utilisation de l'outil centralisé (plus de code dupliqué pour la recherche)
+        let db_component = find_element_by_name(ctx, target).await;
 
         if let Some(comp) = db_component {
             let id = comp.get("id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -138,7 +113,6 @@ impl TransverseAgent {
                     component_path
                 ));
 
-                // Check Cargo.toml (Basic)
                 if component_path.join("Cargo.toml").exists() {
                     findings.push("✅ Manifeste Cargo.toml trouvé".into());
                 } else {
@@ -179,7 +153,6 @@ impl Agent for TransverseAgent {
             .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
 
         match intent {
-            // CAS 1 : CRÉATION D'EXIGENCES
             EngineeringIntent::CreateElement {
                 layer,
                 element_type,
@@ -189,7 +162,6 @@ impl Agent for TransverseAgent {
                     "user",
                     &format!("Create Transverse: {} ({})", name, element_type),
                 );
-
                 let history_str = session
                     .messages
                     .iter()
@@ -207,7 +179,6 @@ impl Agent for TransverseAgent {
 
                 let artifact = save_artifact(ctx, "transverse", sub_folder, &doc).await?;
                 let msg = format!("Élément Transverse **{}** ({}) créé.", name, element_type);
-
                 session.add_message("assistant", &msg);
                 save_session(ctx, &session).await?;
 
@@ -218,14 +189,12 @@ impl Agent for TransverseAgent {
                 }))
             }
 
-            // CAS 2 : VÉRIFICATION QUALITÉ
             EngineeringIntent::VerifyQuality { scope, target } => {
                 session.add_message(
                     "user",
                     &format!("Verify Quality ({}) for {}", scope, target),
                 );
 
-                // Appel Async de l'analyse
                 let (passed, findings) = self.perform_static_analysis(ctx, target).await;
 
                 let report = json!({
@@ -239,14 +208,13 @@ impl Agent for TransverseAgent {
                 });
 
                 let artifact = save_artifact(ctx, "transverse", "reports", &report).await?;
-
                 let findings_list = findings
                     .iter()
                     .map(|f| format!("- {}", f))
                     .collect::<Vec<_>>()
                     .join("\n");
-
                 let status_icon = if passed { "✅" } else { "❌" };
+
                 let msg = format!(
                     "Rapport Qualité pour **{}**.\nStatut: {} **{}**\n\n{}",
                     target,
@@ -279,6 +247,11 @@ mod tests {
         io::{self, tempdir},
         Arc,
     };
+    // ✅ CORRECTION : Import explicite de CollectionsManager pour les tests
+    // (nécessaire car il n'est plus importé dans le module principal)
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::config::AppConfig;
 
     #[test]
     fn test_transverse_id() {
@@ -287,6 +260,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_verify_quality_logic() {
+        // 1. Initialisation Mock Config
+        inject_mock_config();
+
         let dir = tempdir().unwrap();
         let domain_root = dir.path().to_path_buf();
         let dataset_root = dir.path().join("dataset");
@@ -295,11 +271,14 @@ mod tests {
         let db = Arc::new(StorageEngine::new(config));
         let llm = LlmClient::new("http://localhost:11434", "dummy", None);
 
-        // 1. Setup DB Manager
-        let manager = CollectionsManager::new(&db, "mbse2", "drones");
-        manager.init_db().await.unwrap();
+        // 2. Setup DB Manager via AppConfig
+        let app_cfg = AppConfig::get();
+        // ✅ CORRECTIF : system_domain / system_db
+        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
+        // On ignore l'erreur si la DB existe déjà (mock)
+        let _ = manager.init_db().await;
 
-        // 2. SEED DB : On crée le composant pour qu'il existe logiquement
+        // 3. SEED DB : Injection d'un composant fictif
         let comp_doc = json!({
             "id": "comp-123",
             "name": "Mon Composant",
@@ -311,6 +290,7 @@ mod tests {
             .await
             .unwrap();
 
+        // 4. Setup Context
         let ctx = AgentContext::new(
             "tester",
             "sess_qual_01",
@@ -319,24 +299,17 @@ mod tests {
             domain_root.clone(),
             dataset_root,
         );
-
         let agent = TransverseAgent::new();
 
-        // 3. Setup FS : Création physique du dossier et du Cargo.toml
-        // 3. Setup FS : Création physique du dossier et du Cargo.toml
+        // 5. Setup FS : Simulation de l'existence des fichiers
         let src_gen = domain_root.join("src-gen").join("mon_composant");
-        let full_path = src_gen.join("Cargo.toml"); // On définit le fichier cible
-        let content = "[package]\nname = \"mon_composant\"".to_string(); // On définit le contenu
-
-        // ✅ Création du dossier parent
-        io::create_dir_all(&src_gen)
+        let full_path = src_gen.join("Cargo.toml");
+        io::create_dir_all(&src_gen).await.unwrap();
+        io::write(&full_path, "[package]\nname = \"mon_composant\"")
             .await
-            .expect("Échec de la création du dossier src-gen");
+            .unwrap();
 
-        // ✅ Écriture du fichier Cargo.toml
-        io::write(&full_path, content)
-            .await
-            .expect("Échec de l'écriture du Cargo.toml"); // 4. Appel de l'intention
+        // 6. Execute Intent
         let intent = EngineeringIntent::VerifyQuality {
             scope: "code".into(),
             target: "Mon Composant".into(),

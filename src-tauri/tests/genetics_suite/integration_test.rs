@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/tests/genetics_suite/integration_test.rs
 
+use crate::common::setup_test_env;
 use raise::genetics::bridge::GeneticsAdapter;
 use raise::genetics::engine::GeneticConfig;
 use raise::genetics::evaluators::architecture::ArchitectureEvaluator;
@@ -8,21 +9,20 @@ use raise::genetics::operators::selection::TournamentSelection;
 use raise::genetics::types::{Individual, Population};
 use raise::genetics::GeneticEngine;
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use raise::model_engine::loader::ModelLoader;
-use raise::utils::{io::tempdir, prelude::*};
+use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone
+#[tokio::test]
 async fn test_genetics_integration_with_json_db() {
-    let tmp = tempdir().unwrap();
-    let config_db = JsonDbConfig::new(tmp.path().to_path_buf());
-    let storage = StorageEngine::new(config_db);
-    let manager = CollectionsManager::new(&storage, "testing", "arcadia");
+    // 1. Initialisation robuste
+    let env = setup_test_env().await;
+
+    // 2. Manager sur un espace de test dédié
+    let manager = CollectionsManager::new(&env.storage, "testing", "arcadia");
 
     let lf_schema = "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json";
     let lc_schema = "https://raise.local/schemas/v1/arcadia/la/logical-component.schema.json";
 
-    // CORRECTION E0599 : Ajout de .await car insert_raw est désormais asynchrone
     manager.insert_raw("la", &json!({
         "id": "f_ctrl", "name": "Control", "type": lf_schema, "properties": { "complexity": 50.0 }
     })).await.unwrap();
@@ -34,15 +34,12 @@ async fn test_genetics_integration_with_json_db() {
                 "id": "c_cpu", "name": "CPU", "type": lc_schema, "properties": { "capacity": 100.0 }
             }),
         )
-        .await // CORRECTION E0599 : Ajout de .await
+        .await
         .unwrap();
 
     let loader = ModelLoader::new_with_manager(manager);
-
-    // CORRECTION E0599 : Ajout de .await car load_full_model renvoie une Future
     let model = loader.load_full_model().await.expect("Erreur chargement");
 
-    // Extraction des IDs réels
     let function_ids: Vec<String> = model.la.functions.iter().map(|f| f.id.clone()).collect();
     let component_ids: Vec<String> = model.pa.components.iter().map(|c| c.id.clone()).collect();
 
@@ -61,7 +58,6 @@ async fn test_genetics_integration_with_json_db() {
 
     let mut initial_population = Population::new();
     for _ in 0..config.population_size {
-        // CORRECTION : Passage des vecteurs de Strings
         let genome =
             SystemAllocationGenome::new_random(function_ids.clone(), component_ids.clone());
         initial_population.add(Individual::new(genome));

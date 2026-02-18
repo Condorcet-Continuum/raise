@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/tests/genetics_suite/full_flow_test.rs
 
+use crate::common::setup_test_env;
 use raise::genetics::bridge::GeneticsAdapter;
 use raise::genetics::engine::GeneticConfig;
 use raise::genetics::evaluators::architecture::ArchitectureEvaluator;
@@ -8,18 +9,17 @@ use raise::genetics::operators::selection::TournamentSelection;
 use raise::genetics::types::{Individual, Population};
 use raise::genetics::GeneticEngine;
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use raise::model_engine::loader::ModelLoader;
-use raise::utils::{io::tempdir, prelude::*};
+use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone
+#[tokio::test]
 async fn test_arcadia_to_genetics_pipeline() {
-    let dir = tempdir().unwrap();
-    let config_db = JsonDbConfig::new(dir.path().to_path_buf());
-    let storage = StorageEngine::new(config_db);
-    let manager = CollectionsManager::new(&storage, "test_workspace", "arcadia_db");
+    // 1. Initialisation robuste (Config + Schémas système)
+    let env = setup_test_env().await;
 
-    // CORRECTION E0599 : Ajout de .await car insert_raw est désormais asynchrone
+    // 2. Création d'un manager sur un workspace spécifique au test
+    let manager = CollectionsManager::new(&env.storage, "test_workspace", "arcadia_db");
+
     manager
         .insert_raw(
             "la",
@@ -47,11 +47,9 @@ async fn test_arcadia_to_genetics_pipeline() {
         .unwrap();
 
     let loader = ModelLoader::new_with_manager(manager);
-
-    // CORRECTION E0599 : Ajout de .await car load_full_model renvoie une Future
     let project_model = loader.load_full_model().await.expect("Erreur chargement");
 
-    // Extraction des IDs réels pour le génome
+    // Extraction des IDs pour le génome
     let function_ids: Vec<String> = project_model
         .la
         .functions
@@ -65,6 +63,7 @@ async fn test_arcadia_to_genetics_pipeline() {
         .map(|c| c.id.clone())
         .collect();
 
+    // Configuration et exécution du moteur génétique
     let adapter = GeneticsAdapter::new(&project_model);
     let cost_model = adapter.build_cost_model(&project_model);
     let evaluator = ArchitectureEvaluator::new(cost_model);
@@ -80,7 +79,6 @@ async fn test_arcadia_to_genetics_pipeline() {
 
     let mut initial_population = Population::new();
     for _ in 0..config.population_size {
-        // CORRECTION : Passage des vecteurs de Strings
         let genome =
             SystemAllocationGenome::new_random(function_ids.clone(), component_ids.clone());
         initial_population.add(Individual::new(genome));

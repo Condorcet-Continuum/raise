@@ -1,5 +1,7 @@
+// FICHIER : src-tauri/src/utils/config.rs
+
 use crate::utils::error::{AppError, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
@@ -10,19 +12,93 @@ use std::sync::OnceLock;
 /// Singleton global pour la configuration
 static CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Constantes Système (Single Source of Truth)
+pub const SYSTEM_DOMAIN: &str = "_system";
+pub const SYSTEM_DB: &str = "_system";
+
+/// Configuration globale structurée par niveaux de responsabilité
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppConfig {
     pub name: Option<HashMap<String, String>>,
-    pub default_domain: String,
-    pub default_db: String,
+
+    // --- NIVEAU 1 : SYSTEME (Global) ---
+    #[serde(default = "default_system_domain")]
+    pub system_domain: String,
+    #[serde(default = "default_system_db")]
+    pub system_db: String,
+
     pub core: CoreConfig,
+
+    // Gestion transparente de la conversion Liste -> Map via Serde
+    #[serde(deserialize_with = "deserialize_paths_flexible")]
     pub paths: HashMap<String, String>,
+
+    #[serde(default)]
     pub services: HashMap<String, ServiceConfig>,
+    #[serde(default)]
     pub ai_engines: HashMap<String, AiEngineConfig>,
+    #[serde(default)]
     pub integrations: IntegrationsConfig,
+
+    // --- NIVEAU 2 & 3 : SURCHARGES (Contextuelles) ---
+    pub workstation: Option<ScopeConfig>,
+    pub user: Option<ScopeConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Configuration spécifique à un contexte (Poste ou Utilisateur)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScopeConfig {
+    pub id: String,
+    pub default_domain: Option<String>,
+    pub default_db: Option<String>,
+    pub language: Option<String>,
+}
+
+// --- HELPERS SERDE ---
+
+fn default_system_domain() -> String {
+    SYSTEM_DOMAIN.to_string()
+}
+fn default_system_db() -> String {
+    SYSTEM_DB.to_string()
+}
+
+fn deserialize_paths_flexible<'de, D>(
+    deserializer: D,
+) -> std::result::Result<HashMap<String, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: Value = Deserialize::deserialize(deserializer)?;
+
+    if let Some(map) = v.as_object() {
+        let mut paths = HashMap::new();
+        for (key, val) in map {
+            if let Some(s) = val.as_str() {
+                paths.insert(key.clone(), s.to_string());
+            }
+        }
+        Ok(paths)
+    } else if let Some(arr) = v.as_array() {
+        let mut paths = HashMap::new();
+        for item in arr {
+            let id = item.get("id").and_then(|v| v.as_str());
+            let val = item.get("value").and_then(|v| v.as_str());
+            if let (Some(k), Some(v)) = (id, val) {
+                paths.insert(k.to_string(), v.to_string());
+            }
+        }
+        Ok(paths)
+    } else {
+        Err(serde::de::Error::custom(
+            "Format de 'paths' invalide : attendu Map ou Liste",
+        ))
+    }
+}
+
+// --- SOUS-STRUCTURES DE CONFIGURATION ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CoreConfig {
     pub env_mode: String,
     pub graph_mode: String,
@@ -31,7 +107,7 @@ pub struct CoreConfig {
     pub language: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServiceConfig {
     pub status: String,
     pub kind: String,
@@ -40,7 +116,7 @@ pub struct ServiceConfig {
     pub protocol: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct AiEngineConfig {
     pub status: String,
     pub provider: String,
@@ -51,30 +127,16 @@ pub struct AiEngineConfig {
     pub rust_model_file: Option<String>,
 }
 
-// 🔒 SÉCURITÉ : Masquage des clés API dans les logs
 impl std::fmt::Debug for AiEngineConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mask = |key: &Option<String>| {
-            if key.as_ref().is_some_and(|k| !k.is_empty()) {
-                "*** MASQUÉ ***"
-            } else {
-                "Non configuré"
-            }
-        };
-
         f.debug_struct("AiEngineConfig")
             .field("status", &self.status)
             .field("provider", &self.provider)
-            .field("model_name", &self.model_name)
-            .field("api_url", &self.api_url)
-            .field("api_key", &mask(&self.api_key))
-            .field("rust_repo_id", &self.rust_repo_id)
-            .field("rust_model_file", &self.rust_model_file)
             .finish()
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct IntegrationsConfig {
     pub github_token: Option<String>,
     pub compose_profiles: Option<String>,
@@ -82,27 +144,19 @@ pub struct IntegrationsConfig {
 
 impl std::fmt::Debug for IntegrationsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mask = |key: &Option<String>| {
-            if key.as_ref().is_some_and(|k| !k.is_empty()) {
-                "*** MASQUÉ ***"
-            } else {
-                "Non configuré"
-            }
-        };
-        f.debug_struct("IntegrationsConfig")
-            .field("github_token", &mask(&self.github_token))
-            .field("compose_profiles", &self.compose_profiles)
-            .finish()
+        f.debug_struct("IntegrationsConfig").finish()
     }
 }
 
+// --- IMPLÉMENTATION PRINCIPALE ---
+
 impl AppConfig {
     pub fn init() -> Result<()> {
-        // ✅ SÉCURITÉ : Si la configuration (ou le mock) est déjà chargée, on court-circuite tout !
         if CONFIG.get().is_some() {
             return Ok(());
         }
-        let target_env = if cfg!(test) {
+
+        let target_env = if cfg!(test) || env::var("RAISE_ENV_MODE").as_deref() == Ok("test") {
             "test".to_string()
         } else if let Ok(env_override) = env::var("RAISE_ENV_MODE") {
             env_override
@@ -112,111 +166,180 @@ impl AppConfig {
             "production".to_string()
         };
 
-        if target_env == "test" {
-            let config = Self::load_test_sandbox()?;
-            // On ignore si c'est déjà rempli, car un autre test a pu le faire juste avant
-            let _ = CONFIG.set(config);
-            return Ok(());
-        }
-
-        // --- MODE NORMAL (Cascade JSON-DB via l'Index _system.json) ---
-
-        // ÉTAPE 1 : Configuration Système
-        let mut merged_json = Self::load_collection_doc("configs", |v| {
-            v.get("core")
-                .and_then(|c| c.get("env_mode"))
-                .and_then(|e| e.as_str())
-                == Some(target_env.as_str())
-        })
-        .ok_or_else(|| {
-            AppError::Config(format!("Config système introuvable pour : {}", target_env))
-        })?;
-
-        // ÉTAPE 2 : Surcharge Poste de Travail (BOOTSTRAP: legit std::env)
-        let hostname = env::var("HOSTNAME")
-            .or_else(|_| env::var("COMPUTERNAME"))
-            .unwrap_or_else(|_| "condorcet-ws-01".to_string());
-
-        if let Some(ws_json) = Self::load_collection_doc("workstations", |v| {
-            v.get("hostname").and_then(|h| h.as_str()) == Some(hostname.as_str())
-        }) {
-            tracing::info!(
-                "💻 Surcharge : Profil Poste de travail ({}) appliqué.",
-                hostname
-            );
-            json_merge(&mut merged_json, ws_json);
-        }
-
-        // ÉTAPE 3 : Surcharge Utilisateur (BOOTSTRAP: legit std::env)
-        let username = env::var("USER")
-            .or_else(|_| env::var("USERNAME"))
-            .unwrap_or_else(|_| "zair".to_string());
-
-        if let Some(user_json) = Self::load_collection_doc("users", |v| {
-            v.get("username").and_then(|u| u.as_str()) == Some(username.as_str())
-        }) {
-            tracing::info!("👤 Surcharge : Profil Utilisateur ({}) appliqué.", username);
-            json_merge(&mut merged_json, user_json);
-        }
-
-        // ÉTAPE 4 : Validation et Enregistrement avec DEBUG JSON
-        let config: AppConfig = match serde_json::from_value(merged_json.clone()) {
-            Ok(c) => c,
-            Err(e) => return Err(AppError::Config(format!("Erreur JSON : {}", e))),
+        let config = if target_env == "test" {
+            Self::load_test_sandbox()?
+        } else {
+            Self::load_production_config(&target_env)?
         };
 
-        if CONFIG.set(config).is_err() && !cfg!(test) {
-            tracing::warn!("⚠️ Tentative de ré-initialisation de la config détectée.");
-        }
+        CONFIG
+            .set(config)
+            .map_err(|_| AppError::Config("Echec initialisation OnceLock config".into()))?;
 
-        tracing::info!(
-            "⚙️  Config Boot ({}) chargée avec succès (Langue finale: {}).",
-            AppConfig::get().core.env_mode,
-            AppConfig::get().core.language
-        );
         Ok(())
     }
 
     pub fn get() -> &'static AppConfig {
         CONFIG
             .get()
-            .expect("AppConfig non initialisé ! Appelez init().")
+            .expect("❌ AppConfig non initialisé ! Appelez AppConfig::init() au démarrage.")
     }
 
-    // ✅ CORRECTION : Adapté pour la HashMap
     pub fn get_path(&self, id: &str) -> Option<PathBuf> {
-        let path_str = self.paths.get(id)?;
-        let base_path = PathBuf::from(path_str);
+        self.paths.get(id).map(PathBuf::from)
+    }
 
-        // ✅ SOLUTION RÉALISTE POUR GITHUB & PARALLÉLISME
-        // En mode test, on simule l'isolation d'instance pour chaque thread.
-        // Cela permet à SurrealDB d'avoir son propre fichier "Manifest" sans collision.
-        if cfg!(test) && id == "PATH_RAISE_DOMAIN" {
-            // On récupère l'ID du thread (l'équivalent d'un ID de conteneur en prod)
-            let thread_id = format!("{:?}", std::thread::current().id())
-                .replace("ThreadId(", "")
-                .replace(")", "");
+    /// Charge la configuration de test (sandbox)
+    fn load_test_sandbox() -> Result<Self> {
+        let manifest = env::var("CARGO_MANIFEST_DIR")
+            .map_err(|e| AppError::Config(format!("Env CARGO_MANIFEST_DIR manquant: {}", e)))?;
 
-            let unique_path = base_path.join(format!("instance_{}", thread_id));
+        let path = PathBuf::from(manifest).join("tests/config.test.json");
 
-            // On s'assure que le dossier existe pour SurrealDB
-            let _ = std::fs::create_dir_all(&unique_path);
-            return Some(unique_path);
+        if !path.exists() {
+            return Ok(Self::create_default_test_config());
         }
 
-        Some(base_path)
+        let content = fs::read_to_string(&path)
+            .map_err(|e| AppError::Config(format!("Erreur lecture config test: {}", e)))?;
+
+        let mut config: AppConfig = serde_json::from_str(&content)
+            .map_err(|e| AppError::Config(format!("Erreur parsing config test: {}", e)))?;
+
+        // Isolation dynamique des chemins /tmp pour éviter les conflits de tests
+        if let Some(domain_path) = config.paths.get_mut("PATH_RAISE_DOMAIN") {
+            // ✅ CORRECTION COMPILATION : On rend explicite la conversion en &str
+            let temp_dir = env::temp_dir();
+            let temp_str = temp_dir.to_string_lossy();
+
+            // Le cast 'as &str' lève l'ambiguïté sur AsRef
+            if domain_path.starts_with("/tmp") || domain_path.starts_with(temp_str.as_ref() as &str)
+            {
+                let unique_id = format!(
+                    "{}_{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_micros()
+                );
+                *domain_path = format!("{}_{}", domain_path, unique_id);
+                let _ = fs::create_dir_all(domain_path);
+            }
+        }
+
+        config.system_domain = SYSTEM_DOMAIN.to_string();
+        config.system_db = SYSTEM_DB.to_string();
+
+        Ok(config)
+    }
+
+    fn create_default_test_config() -> Self {
+        let mut paths = HashMap::new();
+        let tmp = env::temp_dir();
+        paths.insert(
+            "PATH_RAISE_DOMAIN".to_string(),
+            tmp.to_string_lossy().to_string(),
+        );
+        paths.insert(
+            "PATH_LOGS".to_string(),
+            tmp.join("logs").to_string_lossy().to_string(),
+        );
+
+        AppConfig {
+            name: Some(HashMap::from([(
+                "en".to_string(),
+                "Default Test Config".to_string(),
+            )])),
+            system_domain: SYSTEM_DOMAIN.to_string(),
+            system_db: SYSTEM_DB.to_string(),
+            workstation: None,
+            user: None,
+            core: CoreConfig {
+                env_mode: "test".to_string(),
+                graph_mode: "none".to_string(),
+                log_level: "debug".to_string(),
+                vector_store_provider: "memory".to_string(),
+                language: "en".to_string(),
+            },
+            paths,
+            services: HashMap::new(),
+            ai_engines: HashMap::new(),
+            integrations: IntegrationsConfig::default(),
+        }
+    }
+
+    fn load_production_config(env: &str) -> Result<Self> {
+        let system_json = Self::load_collection_doc("configs", |v| {
+            v.get("core")
+                .and_then(|c| c.get("env_mode"))
+                .and_then(|e| e.as_str())
+                == Some(env)
+        })
+        .ok_or_else(|| AppError::Config(format!("Config système introuvable pour : {}", env)))?;
+
+        let mut config: AppConfig = serde_json::from_value(system_json)
+            .map_err(|e| AppError::Config(format!("Erreur parsing System Config: {}", e)))?;
+
+        // Charge la Workstation
+        let hostname = env::var("HOSTNAME")
+            .or_else(|_| env::var("COMPUTERNAME"))
+            .unwrap_or_else(|_| "localhost".to_string());
+
+        if let Some(ws_json) = Self::load_collection_doc("workstations", |v| {
+            v.get("hostname").and_then(|h| h.as_str()) == Some(hostname.as_str())
+        }) {
+            config.workstation = Some(ScopeConfig {
+                id: hostname,
+                default_domain: ws_json
+                    .get("default_domain")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                default_db: ws_json
+                    .get("default_db")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                language: ws_json
+                    .get("language")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+            });
+        }
+
+        // Charge le User
+        let username = env::var("USER")
+            .or_else(|_| env::var("USERNAME"))
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        if let Some(user_json) = Self::load_collection_doc("users", |v| {
+            v.get("username").and_then(|u| u.as_str()) == Some(username.as_str())
+        }) {
+            config.user = Some(ScopeConfig {
+                id: username,
+                default_domain: user_json
+                    .get("default_domain")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                default_db: user_json
+                    .get("default_db")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                language: user_json
+                    .get("language")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+            });
+        }
+
+        Ok(config)
     }
 
     fn load_collection_doc<F>(collection_name: &str, predicate: F) -> Option<Value>
     where
         F: Fn(&Value) -> bool,
     {
-        // ⚓ ANCRE DU DOMAINE : On garde hardcodé le fallback au home_dir pour pouvoir booter
-        let base_domain = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("raise_domain");
-
-        let db_root = base_domain.join("_system").join("_system");
+        let base_domain = dirs::home_dir()?.join("raise_domain");
+        let db_root = base_domain.join(SYSTEM_DOMAIN).join(SYSTEM_DB);
         let sys_index_path = db_root.join("_system.json");
         let collection_dir = db_root.join("collections").join(collection_name);
 
@@ -228,8 +351,8 @@ impl AppConfig {
                         if let Some(filename) = item.get("file").and_then(|f| f.as_str()) {
                             let path = collection_dir.join(filename);
                             if path.exists() {
-                                if let Ok(doc_content) = fs::read_to_string(&path) {
-                                    if let Ok(doc) = serde_json::from_str::<Value>(&doc_content) {
+                                if let Ok(content) = fs::read_to_string(&path) {
+                                    if let Ok(doc) = serde_json::from_str::<Value>(&content) {
                                         if predicate(&doc) {
                                             return Some(doc);
                                         }
@@ -243,132 +366,104 @@ impl AppConfig {
         }
         None
     }
-
-    fn load_test_sandbox() -> Result<Self> {
-        let test_config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("config.test.json");
-
-        let content = fs::read_to_string(&test_config_path)
-            .map_err(|e| AppError::Config(format!("Fichier manquant: {:?}", e)))?;
-
-        let mut json_data: Value = serde_json::from_str(&content)
-            .map_err(|e| AppError::Config(format!("Erreur syntaxe JSON: {}", e)))?;
-
-        // 1. Transformer le tableau "paths" en Map pour satisfaire la structure Rust
-        if let Some(paths_array) = json_data.get("paths").and_then(|p| p.as_array()) {
-            let mut paths_map = serde_json::Map::new();
-            for item in paths_array {
-                if let (Some(id), Some(val)) = (
-                    item.get("id").and_then(|i| i.as_str()),
-                    item.get("value").and_then(|v| v.as_str()),
-                ) {
-                    paths_map.insert(id.to_string(), Value::String(val.to_string()));
-                }
-            }
-            json_data["paths"] = Value::Object(paths_map);
-        }
-
-        // 🚨 C'EST CETTE LIGNE QUI MANQUAIT : Création de la variable 'config'
-        let mut config: AppConfig = serde_json::from_value(json_data)
-            .map_err(|e| AppError::Config(format!("Erreur mapping AppConfig: {}", e)))?;
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_micros();
-
-        let temp_domain =
-            env::temp_dir().join(format!("raise_test_{}_{}", std::process::id(), now));
-        let _ = fs::create_dir_all(&temp_domain);
-
-        // Maintenant 'config' existe, on peut l'utiliser !
-        config.paths.insert(
-            "PATH_RAISE_DOMAIN".to_string(),
-            temp_domain.to_string_lossy().to_string(),
-        );
-
-        Ok(config)
-    }
 }
 
-fn json_merge(a: &mut Value, b: Value) {
-    match (a, b) {
-        (Value::Object(a), Value::Object(b)) => {
-            for (k, v) in b {
-                json_merge(a.entry(k).or_insert(Value::Null), v);
-            }
-        }
-        (a, b) => *a = b,
-    }
-}
-
+// --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
     #[test]
-    fn test_recursive_json_merge() {
-        let mut system = json!({
-            "default_domain": "_system",
-            "core": {
-                "env_mode": "development",
-                "language": "fr"
-            }
-        });
+    fn test_scope_config_structure() {
+        let scope = ScopeConfig {
+            id: "dev-machine".to_string(),
+            default_domain: Some("dev_domain".to_string()),
+            default_db: Some("dev_db".to_string()),
+            language: Some("fr".to_string()),
+        };
+        assert_eq!(scope.id, "dev-machine");
+        assert_eq!(scope.default_domain.as_deref(), Some("dev_domain"));
+    }
 
-        let user = json!({
+    #[test]
+    fn test_deserialize_app_config_with_scopes() {
+        let json_data = json!({
+            "name": null,
+            "system_domain": "_system",
+            "system_db": "_system",
             "core": {
+                "env_mode": "test",
+                "graph_mode": "none",
+                "log_level": "debug",
+                "vector_store_provider": "memory",
                 "language": "en"
+            },
+            "paths": { "PATH_TEST": "/tmp" },
+            "services": {},
+            "ai_engines": {},
+            "integrations": {},
+            "workstation": {
+                "id": "host1",
+                "default_domain": "ws_domain"
+            },
+            "user": {
+                "id": "user1",
+                "default_db": "user_db"
             }
         });
 
-        json_merge(&mut system, user);
+        let config: AppConfig = serde_json::from_value(json_data).expect("Désérialisation échouée");
 
-        assert_eq!(system["core"]["language"], "en");
-        assert_eq!(system["default_domain"], "_system");
-        assert_eq!(system["core"]["env_mode"], "development");
+        assert_eq!(config.system_domain, "_system");
+
+        let ws = config.workstation.expect("Workstation should be present");
+        assert_eq!(ws.id, "host1");
+        assert_eq!(ws.default_domain.as_deref(), Some("ws_domain"));
+
+        let user = config.user.expect("User should be present");
+        assert_eq!(user.id, "user1");
+        assert_eq!(user.default_db.as_deref(), Some("user_db"));
+    }
+
+    #[test]
+    fn test_deserialize_paths_list_compat() {
+        let json_data = json!({
+            "system_domain": "_sys",
+            "system_db": "_db",
+            "core": {
+                "env_mode": "test",
+                "graph_mode": "none",
+                "log_level": "debug",
+                "vector_store_provider": "memory",
+                "language": "en"
+            },
+            "paths": [
+                { "id": "P1", "value": "/v1" }
+            ],
+            "services": {}, "ai_engines": {}, "integrations": {}
+        });
+
+        let config: AppConfig = serde_json::from_value(json_data).unwrap();
+        assert_eq!(config.paths.get("P1").unwrap(), "/v1");
     }
 }
 
-#[cfg(test)]
+// --- MODULE MOCKS PUBLIC (Pour integration tests) ---
 pub mod test_mocks {
     use super::*;
-    use std::collections::HashMap;
 
     pub fn inject_mock_config() {
-        // ✅ Utilise CONFIG (Majuscules) pour le static OnceLock
         if CONFIG.get().is_some() {
             return;
         }
 
-        let mut paths = HashMap::new();
-        paths.insert("PATH_LOGS".to_string(), "./temp_logs".to_string());
-        paths.insert("PATH_MODELS".to_string(), "./temp_models".to_string());
-        paths.insert("PATH_RAISE_DOMAIN".to_string(), "./temp_domain".to_string());
+        let config = AppConfig::create_default_test_config();
 
-        let mock_config = AppConfig {
-            name: None,
-            default_domain: "_system".to_string(),
-            default_db: "_system".to_string(),
-            core: CoreConfig {
-                env_mode: "test".to_string(),
-                graph_mode: "none".to_string(),
-                log_level: "info".to_string(),
-                vector_store_provider: "surreal".to_string(),
-                language: "fr".to_string(),
-            },
-            paths,
-            services: HashMap::new(),
-            ai_engines: HashMap::new(),
-            integrations: IntegrationsConfig {
-                github_token: None,
-                compose_profiles: None,
-            },
-        };
+        if let Some(path) = config.paths.get("PATH_RAISE_DOMAIN") {
+            let _ = fs::create_dir_all(path);
+        }
 
-        // ✅ Utilise CONFIG (Majuscules) ici aussi
-        let _ = CONFIG.set(mock_config);
+        let _ = CONFIG.set(config);
     }
 }

@@ -13,6 +13,9 @@ use candle_nn::VarMap;
 use crate::json_db::storage::StorageEngine;
 use crate::utils::{io::PathBuf, prelude::*, Arc};
 
+// --- CONFIGURATION ---
+use crate::utils::config::AppConfig;
+
 // --- IMPORTS AGENTS ---
 use crate::ai::agents::intent_classifier::IntentClassifier;
 use crate::ai::agents::{
@@ -31,7 +34,7 @@ pub struct AiOrchestrator {
     #[allow(dead_code)]
     world_engine_path: PathBuf,
 
-    // Référence au StorageEngine pour les Agents
+    // Référence au StorageEngine pour les Agents (Optionnel pour le mode léger, requis pour les agents)
     storage: Option<Arc<StorageEngine>>,
 }
 
@@ -44,23 +47,26 @@ impl AiOrchestrator {
         storage_engine: Option<Arc<StorageEngine>>,
     ) -> Result<Self> {
         let app_config = AppConfig::get();
+
+        // Sécurité : On récupère le chemin du domaine via la config globale
         let domain_path = app_config
             .get_path("PATH_RAISE_DOMAIN")
-            .ok_or_else(|| AppError::Config("PATH_RAISE_DOMAIN manquant".into()))?;
+            .ok_or_else(|| AppError::Config("PATH_RAISE_DOMAIN manquant dans AppConfig".into()))?;
 
-        let base_path = domain_path;
-        let chats_path = base_path.join("chats");
-        let brain_path = base_path.join("world_model.safetensors");
+        let chats_path = domain_path.join("chats");
+        let brain_path = domain_path.join("world_model.safetensors");
 
-        let rag = RagRetriever::new(qdrant_url, base_path.clone()).await?;
+        // Initialisation RAG & Symbolique
+        let rag = RagRetriever::new(qdrant_url, domain_path.clone()).await?;
         let symbolic = SimpleRetriever::new(model);
 
-        // Récupération des clés depuis la config fusionnée
+        // Récupération des clés API et modèles depuis la config
         let gemini_key = app_config
             .ai_engines
             .get("cloud_gemini")
             .and_then(|e| e.api_key.clone())
             .unwrap_or_default();
+
         let model_name = app_config
             .ai_engines
             .get("primary_local")
@@ -68,13 +74,14 @@ impl AiOrchestrator {
 
         let llm = LlmClient::new(llm_url, &gemini_key, model_name);
 
+        // Configuration du World Model (Neuro-Symbolique)
         let vocab_size = 10;
         let embedding_dim = 16;
         let action_dim = 5;
         let hidden_dim = 32;
 
         let world_engine = if brain_path.exists() {
-            println!("🧠 [Orchestrator] Chargement du World Model...");
+            tracing::info!("🧠 [Orchestrator] Chargement du World Model existant...");
             NeuroSymbolicEngine::load_from_file(
                 &brain_path,
                 vocab_size,
@@ -84,17 +91,18 @@ impl AiOrchestrator {
             )
             .await
             .unwrap_or_else(|e| {
-                eprintln!("⚠️ Erreur chargement, création nouveau cerveau: {}", e);
+                tracing::error!("⚠️ Erreur chargement cerveau, réinitialisation: {}", e);
                 let vm = VarMap::new();
                 NeuroSymbolicEngine::new(vocab_size, embedding_dim, action_dim, hidden_dim, vm)
-                    .unwrap()
+                    .expect("Echec fatal création WorldModel")
             })
         } else {
-            println!("✨ [Orchestrator] Création d'un nouveau World Model vierge.");
+            tracing::info!("✨ [Orchestrator] Création d'un nouveau World Model vierge.");
             let vm = VarMap::new();
             NeuroSymbolicEngine::new(vocab_size, embedding_dim, action_dim, hidden_dim, vm)?
         };
 
+        // Gestion de la mémoire de conversation
         let memory_store = MemoryStore::new(&chats_path).await.map_err(|e| {
             AppError::Config(format!(
                 "Impossible d'initialiser le stockage des chats: {}",
@@ -117,6 +125,7 @@ impl AiOrchestrator {
         })
     }
 
+    /// Factory simple pour instancier les agents spécialisés
     fn create_agent(&self, agent_id: &str) -> Option<Box<dyn Agent>> {
         match agent_id {
             "business_agent" | "business_analyst" => Some(Box::new(BusinessAgent::new())),
@@ -130,36 +139,42 @@ impl AiOrchestrator {
         }
     }
 
+    /// Point d'entrée principal : Exécute une requête utilisateur via le système multi-agents
     pub async fn execute_workflow(&mut self, user_query: &str) -> Result<AgentResult> {
+        // 1. Enrichissement contextuel (RAG) - Optionnel mais recommandé
         let _rag_context = self.rag.retrieve(user_query, 3).await.unwrap_or_default();
 
+        // 2. Classification de l'intention
         let classifier = IntentClassifier::new(self.llm.clone());
         let mut current_intent = classifier.classify(user_query).await;
         let mut current_agent_id = current_intent.recommended_agent_id().to_string();
 
+        // Cas spécial : Si c'est l'orchestrateur, on répond directement (chat simple)
         if current_agent_id == "orchestrator_agent" {
             let response = self.ask(user_query).await?;
             return Ok(AgentResult::text(response));
         }
 
+        // 3. Préparation du contexte d'exécution des agents
         let session_scope = current_intent.default_session_scope();
         let global_session_id =
             AgentContext::generate_default_session_id("orchestrator", session_scope);
 
-        let app_config = AppConfig::get(); //
+        let app_config = AppConfig::get();
         let domain_path = app_config
             .get_path("PATH_RAISE_DOMAIN")
-            .expect("❌ [SSOT] PATH_RAISE_DOMAIN manquant"); //
+            .ok_or_else(|| AppError::Config("PATH_RAISE_DOMAIN manquant".into()))?;
 
+        // Fallback sécurisé pour le dataset
         let dataset_path = app_config
             .get_path("PATH_RAISE_DATASET")
-            .unwrap_or_else(|| domain_path.join("dataset")); //
+            .unwrap_or_else(|| domain_path.join("dataset"));
 
-        let storage_arc = self
-            .storage
-            .clone()
-            .ok_or_else(|| AppError::Validation("StorageEngine manquant".into()))?;
+        let storage_arc = self.storage.clone().ok_or_else(|| {
+            AppError::Validation("StorageEngine requis pour l'exécution des agents".into())
+        })?;
 
+        // 4. Boucle d'exécution Multi-Agents (avec limite de sauts)
         let mut hop_count = 0;
         const MAX_HOPS: i32 = 5;
         let mut accumulated_artifacts: Vec<CreatedArtifact> = Vec::new();
@@ -167,7 +182,8 @@ impl AiOrchestrator {
 
         loop {
             if hop_count >= MAX_HOPS {
-                accumulated_messages.push("⚠️ Limite de redirections atteinte.".to_string());
+                accumulated_messages
+                    .push("⚠️ Limite de redirections entre agents atteinte.".to_string());
                 break;
             }
 
@@ -181,24 +197,34 @@ impl AiOrchestrator {
             );
 
             if let Some(agent) = self.create_agent(&current_agent_id) {
+                tracing::info!("🤖 Activation Agent: {}", current_agent_id);
+
+                // Exécution de l'agent
                 let result_opt = agent.process(&ctx, &current_intent).await?;
 
                 if let Some(res) = result_opt {
                     accumulated_artifacts.extend(res.artifacts);
                     accumulated_messages.push(res.message);
 
+                    // Vérification s'il y a un message de délégation (ACL)
                     if let Some(acl_msg) = res.outgoing_message {
+                        tracing::info!("📡 Délégation vers : {}", acl_msg.receiver);
                         current_agent_id = acl_msg.receiver.clone();
+                        // On re-classifie le contenu du message interne pour adapter l'intention
                         current_intent = classifier.classify(&acl_msg.content).await;
                         hop_count += 1;
                         continue;
                     } else {
-                        break;
+                        break; // Fin de la chaîne
                     }
                 } else {
-                    break;
+                    break; // Pas de résultat
                 }
             } else {
+                accumulated_messages.push(format!(
+                    "❌ Agent inconnu ou non implémenté : {}",
+                    current_agent_id
+                ));
                 break;
             }
         }
@@ -210,23 +236,28 @@ impl AiOrchestrator {
         })
     }
 
+    /// Chat direct avec le LLM (sans outils complexes)
     pub async fn ask(&mut self, query: &str) -> Result<String> {
         self.session.add_user_message(query);
         let prompt = format!("Expert Arcadia: {}", query);
 
-        // ✅ Plus besoin de map_err, l'erreur est déjà du bon type !
+        // Appel LLM (Local ou Cloud selon config interne de LlmClient)
         let response = self
             .llm
-            .ask(LlmBackend::LocalLlama, "Tu es un expert.", &prompt)
+            .ask(
+                LlmBackend::LocalLlama,
+                "Tu es un expert système Arcadia.",
+                &prompt,
+            )
             .await?;
 
         self.session.add_ai_message(&response);
-        // Note: tu avais passé save_session en async précédemment,
-        // n'oublie pas le .await si ce n'est pas déjà fait !
         let _ = self.memory_store.save_session(&self.session).await;
+
         Ok(response)
     }
 
+    /// Apprentissage par renforcement (World Model)
     pub async fn reinforce_learning(
         &self,
         state_before: &ArcadiaElement,
@@ -240,21 +271,24 @@ impl AiOrchestrator {
             .train_step(state_before, WorldAction { intent }, state_after)
             .map_err(|e| AppError::Validation(format!("Erreur TrainStep: {}", e)))?;
 
+        // Sauvegarde asynchrone du cerveau
         let _ = self
             .world_engine
             .save_to_file(&self.world_engine_path)
             .await;
+
         Ok(loss)
     }
 
+    /// Indexation RAG d'un document
     pub async fn learn_document(&mut self, content: &str, source: &str) -> Result<usize> {
         self.rag
             .index_document(content, source)
             .await
             .map_err(|e| AppError::Validation(format!("Erreur d'indexation RAG : {}", e)))
-        // ✅ Conversion explicite
     }
 
+    /// Efface l'historique de la session courante
     pub async fn clear_history(&mut self) -> Result<()> {
         self.session = ConversationSession::new(self.session.id.clone());
         let _ = self.memory_store.save_session(&self.session).await;
@@ -263,7 +297,7 @@ impl AiOrchestrator {
 }
 
 // =========================================================================
-// TESTS DE ROBUSTESSE
+// TESTS
 // =========================================================================
 
 #[cfg(test)]
@@ -271,31 +305,16 @@ mod tests {
     use super::*;
     use crate::ai::protocols::acl::{AclMessage, Performative};
     use crate::model_engine::types::NameType;
-    use crate::utils::{data::HashMap, io::tempdir, Once};
+    use crate::utils::{data::HashMap, io::tempdir};
+    // ✅ Import du mock de config pour les tests
+    use crate::utils::config::test_mocks::inject_mock_config;
 
-    static INIT_TEST: Once = Once::new();
-    struct TestContext {
-        _dir: tempfile::TempDir,
-    }
-    impl TestContext {
-        fn new() -> (Self, PathBuf) {
-            let dir = tempdir().expect("create temp dir");
-            INIT_TEST.call_once(|| {
-                if let Err(e) = AppConfig::init() {
-                    panic!("Impossible d'initialiser AppConfig pour les tests: {}", e);
-                }
-            });
-            let path = AppConfig::get().get_path("PATH_RAISE_DOMAIN").unwrap();
-            (Self { _dir: dir }, path)
-        }
-    }
-
+    /// Helper pour créer un élément Arcadia factice
     fn make_element(id: &str) -> ArcadiaElement {
-        // CORRECTION : Utilisation d'une URI valide pour le test d'apprentissage
-        // Cela garantit que l'encodeur détecte correctement la couche (LA) et la catégorie (Function)
         ArcadiaElement {
             id: id.to_string(),
             name: NameType::default(),
+            // URI valide pour l'encodeur
             kind: "https://raise.io/ontology/arcadia/la#LogicalFunction".to_string(),
             description: None,
             properties: HashMap::new(),
@@ -303,25 +322,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_orchestrator_robust_init() {
-        let (_ctx, _path) = TestContext::new(); // On initialise la sandbox via TestContext
+    async fn test_orchestrator_init() {
+        // 1. Injection de la config mock (CRITIQUE pour éviter le panic de AppConfig::get)
+        inject_mock_config();
 
-        // ✅ On appelle avec 4 arguments (le path est géré en interne via AppConfig::get())
+        let _dir = tempdir().expect("temp dir");
+
+        // 2. Initialisation
         let orch = AiOrchestrator::new(
             ProjectModel::default(),
             "http://dummy",
             "http://dummy",
             None,
         )
-        .await
-        .expect("Init failed");
+        .await;
 
+        assert!(
+            orch.is_ok(),
+            "L'initialisation de l'orchestrateur a échoué : {:?}",
+            orch.err()
+        );
+        let orch = orch.unwrap();
         assert_eq!(orch.session.id, "main_session");
     }
 
     #[tokio::test]
     async fn test_full_acl_path() {
-        let (_ctx, _path) = TestContext::new();
         let msg = AclMessage::new(
             Performative::Request,
             "hardware",
@@ -333,7 +359,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_cycle() {
-        let (_ctx, _path) = TestContext::new();
+        inject_mock_config(); // Toujours injecter la config
+        let _dir = tempdir().expect("temp dir");
+
         let orch = AiOrchestrator::new(
             ProjectModel::default(),
             "http://dummy",

@@ -1,12 +1,9 @@
 // FICHIER : src-tauri/src/json_db/storage/file_storage.rs
 
 use crate::json_db::storage::JsonDbConfig;
-
-use crate::utils::io::{self, include_dir, Dir, Path};
+use crate::utils::config::AppConfig;
+use crate::utils::io::{self, Path};
 use crate::utils::prelude::*;
-
-// --- EMBARQUEMENT DES SCHÉMAS ---
-static DEFAULT_SCHEMAS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../schemas/v1");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DropMode {
@@ -25,28 +22,27 @@ pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()>
     Ok(())
 }
 
-/// Crée l'arborescence physique ET déploie les schémas par défaut (Async).
+/// Crée l'arborescence physique de la base de données.
+/// Note : Architecture "Zéro Copie", les schémas ne sont plus copiés ici.
 pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<bool> {
     let db_root = config.db_root(space, db);
+
     if io::exists(&db_root).await {
         return Ok(false);
     }
+
+    // Création simple du dossier racine
     io::create_dir_all(&db_root).await?;
-    let schemas_dest = config.db_schemas_root(space, db).join("v1");
 
-    if !io::exists(&schemas_dest).await {
+    // Vérification : Est-ce qu'on crée la base système ?
+    let app_config = AppConfig::get();
+    // ✅ CORRECTION : Utilisation des nouveaux champs 'system_domain' / 'system_db'
+    let sys_domain = &app_config.system_domain;
+    let sys_db = &app_config.system_db;
+
+    if space == sys_domain && db == sys_db {
         #[cfg(debug_assertions)]
-        user_info!(
-            "DB_INIT",
-            "Déploiement des schémas standards dans {:?}",
-            schemas_dest
-        );
-        io::ensure_dir(&schemas_dest).await?;
-
-        // Extraction synchrone (CPU bound), acceptable ici car ponctuelle à l'init.
-        DEFAULT_SCHEMAS
-            .extract(&schemas_dest)
-            .map_err(|e| AppError::Io(std::io::Error::other(e)))?;
+        println!("🚀 Initialisation de la base SYSTEME détectée.");
     }
 
     Ok(true)
@@ -120,25 +116,21 @@ pub async fn delete_document(
         .join(format!("{}.json", id));
 
     if io::exists(&file_path).await {
-        // Passage par référence (&file_path)
         io::remove_file(&file_path).await?;
     }
     Ok(())
 }
 
 pub async fn atomic_write<P: AsRef<Path>>(path: P, content: &[u8]) -> Result<()> {
-    // Délégation totale à la façade utils::fs
     io::write_atomic(path.as_ref(), content).await?;
     Ok(())
 }
 
-/// Alias pour l'écriture binaire (utilisé par les index)
 pub async fn atomic_write_binary<P: AsRef<Path>>(path: P, content: &[u8]) -> Result<()> {
     atomic_write(path, content).await
 }
 
 pub async fn save_database_index(path: &io::Path, data: &Value) -> Result<()> {
-    // La primitive est maintenant ici, centralisée et testée
     io::write_json_compressed_atomic(path, data).await
 }
 
@@ -165,25 +157,21 @@ mod tests {
 
         let doc = json!({"name": "Refactor Test"});
 
-        // Write
         write_document(&config, "s1", "d1", "c1", "doc1", &doc)
             .await
             .expect("Write failed");
 
-        // Read
         let read = read_document(&config, "s1", "d1", "c1", "doc1")
             .await
             .expect("Read failed")
             .expect("Doc not found");
         assert_eq!(read["name"], "Refactor Test");
 
-        // Physical check via utils
         let path = config
             .db_collection_path("s1", "d1", "c1")
             .join("doc1.json");
         assert!(io::exists(&path).await);
 
-        // Delete
         delete_document(&config, "s1", "d1", "c1", "doc1")
             .await
             .expect("Delete failed");

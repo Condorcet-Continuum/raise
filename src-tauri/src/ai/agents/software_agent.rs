@@ -3,7 +3,10 @@
 use crate::utils::{async_trait, data, io, prelude::*, Uuid};
 
 use super::intent_classifier::EngineeringIntent;
-use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
+// ✅ IMPORT OPTIMISÉ
+use super::tools::{
+    extract_json_from_llm, find_element_by_name, load_session, save_artifact, save_session,
+};
 use super::{Agent, AgentContext, AgentResult, CreatedArtifact};
 
 // Import du protocole ACL
@@ -16,10 +19,6 @@ use crate::ai::tools::CodeGenTool;
 use crate::ai::llm::client::LlmBackend;
 use crate::ai::nlp::entity_extractor;
 
-// Imports pour la recherche (Smart Linking)
-use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
-
 #[derive(Default)]
 pub struct SoftwareAgent;
 
@@ -29,40 +28,10 @@ impl SoftwareAgent {
     }
 
     async fn ask_llm(&self, ctx: &AgentContext, system: &str, user: &str) -> Result<String> {
-        // En mode test, si le LLM n'est pas dispo, on suppose que ctx.llm gère ou on pourrait mocker.
         ctx.llm
             .ask(LlmBackend::LocalLlama, system, user)
             .await
             .map_err(|e| AppError::Validation(format!("Erreur LLM : {}", e)))
-    }
-
-    /// Tente de retrouver l'UUID d'un composant par son nom
-    async fn find_component_id(&self, ctx: &AgentContext, name: &str) -> Option<String> {
-        // Cible l'espace "mbse2/drones" utilisé lors de l'import CLI
-        let manager = CollectionsManager::new(&ctx.db, "mbse2", "drones");
-        let query_engine = QueryEngine::new(&manager);
-
-        // Recherche dans les collections probables
-        let collections = ["pa_components", "la_components", "sa_components"];
-
-        for col in collections {
-            let mut query = Query::new(col);
-            query.filter = Some(QueryFilter {
-                operator: FilterOperator::And,
-                conditions: vec![Condition::eq("name", name.into())],
-            });
-            query.limit = Some(1);
-
-            if let Ok(result) = query_engine.execute_query(query).await {
-                if let Some(doc) = result.documents.first() {
-                    // On cherche l'ID système (champ "id" ou "_id" selon la projection)
-                    if let Some(id) = doc.get("id").and_then(|v| v.as_str()) {
-                        return Some(id.to_string());
-                    }
-                }
-            }
-        }
-        None
     }
 
     async fn enrich_logical_component(
@@ -127,7 +96,6 @@ impl Agent for SoftwareAgent {
                     "user",
                     &format!("Create Logical Component: {} ({})", name, element_type),
                 );
-
                 let history_str = session
                     .messages
                     .iter()
@@ -146,7 +114,6 @@ impl Agent for SoftwareAgent {
                         &history_str,
                     )
                     .await?;
-
                 let artifact = save_artifact(ctx, "la", "components", &doc).await?;
 
                 // DÉLÉGATION -> EPBS
@@ -169,9 +136,10 @@ impl Agent for SoftwareAgent {
                     outgoing_message: Some(acl_msg),
                 }))
             }
+
             EngineeringIntent::GenerateCode {
                 language,
-                context, // Nom du composant (ex: "Nvidia Jetson Controller")
+                context,
                 filename: _,
             } => {
                 session.add_message(
@@ -179,23 +147,26 @@ impl Agent for SoftwareAgent {
                     &format!("Generate code for '{}' in {}", context, language),
                 );
 
-                // 1. RECHERCHE (Neuro-Symbolic)
-                let component_id = self.find_component_id(ctx, context).await.ok_or_else(|| {
+                // 1. RECHERCHE (Optimisée via Tool)
+                let component_doc = find_element_by_name(ctx, context).await.ok_or_else(|| {
                     AppError::Validation(format!(
-                        "Composant '{}' introuvable dans mbse2/drones.",
+                        "Composant '{}' introuvable dans le modèle.",
                         context
                     ))
                 })?;
 
+                let component_id = component_doc["id"].as_str().unwrap_or_default().to_string();
+
                 // 2. APPEL OUTIL (Symbolic Execution)
-                // CORRECTION : On cible le sous-dossier 'src-gen' pour ne pas polluer la racine
                 let gen_path = ctx.paths.domain_root.join("src-gen");
 
+                // ✅ OPTIMISATION : Utilisation de la config globale pour le space/db
+                let config = crate::utils::config::AppConfig::get();
                 let tool = CodeGenTool::new(
                     gen_path,
                     ctx.db.clone(),
-                    "mbse2",  // Espace cible
-                    "drones", // Base cible
+                    &config.system_domain, // ✅ CORRECTIF : system_domain
+                    &config.system_db,     // ✅ CORRECTIF : system_db
                 );
 
                 let call = McpToolCall::new(
@@ -256,7 +227,6 @@ impl Agent for SoftwareAgent {
                     "Code généré pour **{}**. Fichiers : {:?}",
                     context, file_list
                 );
-
                 session.add_message("assistant", &msg);
                 save_session(ctx, &session).await?;
 
@@ -278,80 +248,81 @@ mod tests {
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::utils::{io::tempdir, Arc};
 
+    // ✅ CORRECTION : Import explicite de CollectionsManager pour les tests
+    use crate::json_db::collections::manager::CollectionsManager;
+    // ✅ CORRECTION : Injection du mock de config
+    use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::config::AppConfig;
+
     #[test]
-    fn test_software_agent_id() {
+    fn test_software_id() {
         assert_eq!(SoftwareAgent::new().id(), "software_engineer");
     }
 
+    // ✅ NOUVEAU TEST AJOUTÉ : Vérification des triggers de délégation
     #[tokio::test]
-    #[ignore]
     async fn test_software_delegation_triggers() {
         let _agent = SoftwareAgent::new();
-
-        // 1. Test Composant -> EPBS
-        let msg_comp = AclMessage::new(
-            Performative::Request,
-            "software_engineer",
-            "configuration_manager",
-            "Create CI",
-        );
-        assert_eq!(msg_comp.receiver, "configuration_manager");
-
-        // 2. Test Code -> Quality
-        let msg_code = AclMessage::new(
+        // Simulation d'un message tel que généré dans le process
+        let msg = AclMessage::new(
             Performative::Request,
             "software_engineer",
             "quality_manager",
-            "Create Tests",
+            "Code Check Request",
         );
-        assert_eq!(msg_code.receiver, "quality_manager");
+
+        assert_eq!(msg.sender, "software_engineer");
+        assert_eq!(msg.receiver, "quality_manager");
+        assert_eq!(msg.performative, Performative::Request);
     }
 
-    // --- TEST D'INTÉGRATION COMPLET ---
-    // Ce test simule le flux réel : Agent -> DB -> CodeGenTool -> Disque
     #[tokio::test]
-    async fn test_generation_jetson_integration() {
-        // CORRECTION : Utilisation d'un répertoire temporaire pour éviter de dépendre du disque local /home/zair
-        let t_dir = tempdir().unwrap();
-        let domain_root = t_dir.path().to_path_buf();
-        let dataset_root = domain_root.join("datasets");
+    async fn test_software_generation_integration() {
+        // 1. Initialisation Mock Config (CRITIQUE)
+        inject_mock_config();
+
+        let dir = tempdir().unwrap();
+        let domain_root = dir.path().to_path_buf();
+        let dataset_root = dir.path().join("dataset");
 
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
+        // Mock LLM si non disponible
+        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
 
-        // 1. PRÉPARATION DE LA DONNÉE (Injection du composant manquant)
-        // L'agent cherche dans "mbse2/drones" -> "pa_components"
-        let manager = CollectionsManager::new(&db, "mbse2", "drones");
-        manager.init_db().await.unwrap();
+        // 2. Initialisation DB via AppConfig
+        let app_cfg = AppConfig::get();
+        // ✅ CORRECTIF : system_domain / system_db
+        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
+        // On ignore l'erreur si la DB existe déjà
+        let _ = manager.init_db().await;
 
-        let jetson_mock = json!({
-            "id": "jetson-001",
+        // 3. SEED DB : Injection du composant logique pour qu'il soit trouvé
+        let comp_doc = json!({
+            "id": "comp-jetson",
             "name": "Nvidia Jetson Controller",
-            "type": "PhysicalComponent",
-            "properties": {
-                "os": "Linux For Tegra",
-                "cores": 8
-            }
+            "layer": "LA",
+            "type": "LogicalComponent",
+            "description": "Embedded AI controller"
         });
+
         manager
-            .insert_raw("pa_components", &jetson_mock)
+            .upsert_document("la_components", comp_doc)
             .await
             .unwrap();
 
-        // 2. CONFIGURATION CONTEXTE
-        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
         let ctx = AgentContext::new(
-            "test_user",
-            "sess_integration_01",
+            "dev",
+            "sess_sw_01",
             db,
             llm,
-            domain_root,
+            domain_root.clone(),
             dataset_root,
         );
 
         let agent = SoftwareAgent::new();
 
-        // 3. EXÉCUTION
+        // 4. EXÉCUTION
         let intent = EngineeringIntent::GenerateCode {
             language: "rust".to_string(),
             context: "Nvidia Jetson Controller".to_string(),
@@ -372,12 +343,11 @@ mod tests {
             }
             Ok(None) => panic!("L'agent n'a rien renvoyé"),
             Err(e) => {
-                // Si l'erreur est liée au LLM (Ollama non lancé en CI), on ignore gracieusement
-                // ou on vérifie au moins que ce n'est plus l'erreur "Composant introuvable"
                 let err_msg = e.to_string();
                 if err_msg.contains("Composant 'Nvidia Jetson Controller' introuvable") {
                     panic!("L'injection de donnée a échoué : {}", err_msg);
                 } else {
+                    // Si LLM pas dispo, on tolère
                     println!(
                         "⚠️ Test ignoré ou erreur attendue (ex: LLM offline) : {}",
                         err_msg

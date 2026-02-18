@@ -1,7 +1,10 @@
+// FICHIER : src-tauri/src/bin/raise-cli/utils.rs
+
 use clap::{Args, Subcommand};
 use raise::{
     user_info, user_success,
     utils::{
+        config::AppConfig, // Nécessaire pour AppConfig::get()
         io::{self},
         prelude::*,
     },
@@ -25,7 +28,7 @@ pub enum UtilsCommands {
 pub async fn handle(args: UtilsArgs) -> Result<()> {
     match args.command {
         UtilsCommands::Info => {
-            // Singleton Config
+            // Singleton Config (Doit être initialisé avant)
             let config = AppConfig::get();
 
             println!("--- 🛠️ RAISE SYSTEM INFO ---");
@@ -39,7 +42,9 @@ pub async fn handle(args: UtilsArgs) -> Result<()> {
             };
             user_info!("SYS_ENV", "Environnement : {}", env_mode);
 
-            user_info!("DB_ROOT", "{:?}", config.get_path("PATH_RAISE_DOMAIN"));
+            // Utilisation robuste de get_path
+            let db_root = config.get_path("PATH_RAISE_DOMAIN");
+            user_info!("DB_ROOT", "{:?}", db_root);
 
             // Affichage masqué pour la clé API si elle existe (sécurité)
             let has_key = config
@@ -48,25 +53,27 @@ pub async fn handle(args: UtilsArgs) -> Result<()> {
                 .and_then(|engine| engine.api_key.as_ref())
                 .map(|k| !k.is_empty())
                 .unwrap_or(false);
+
             let api_url = config
                 .ai_engines
                 .get("primary_local")
                 .and_then(|engine| engine.api_url.as_deref())
                 .unwrap_or("Non configurée");
+
             user_info!("LLM_API", "URL: {} (Key set: {})", api_url, has_key);
 
             // Vérification simple de l'existence de la racine DB
-            if io::exists(
-                &config
-                    .get_path("PATH_RAISE_DOMAIN")
-                    .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !"),
-            )
-            .await
-            {
-                user_success!("CHECK_FS", "Le dossier database_root est accessible.");
+            if let Some(path) = db_root {
+                if io::exists(&path).await {
+                    user_success!("CHECK_FS", "Le dossier database_root est accessible.");
+                } else {
+                    eprintln!(
+                        "❌ CHECK_FS: Le dossier database_root semble manquant ! ({:?})",
+                        path
+                    );
+                }
             } else {
-                // Note: user_error! n'est pas importé, on utilise un log simple ou on l'ajoute aux imports
-                eprintln!("❌ CHECK_FS: Le dossier database_root semble manquant !");
+                eprintln!("❌ CHECK_FS: Configuration PATH_RAISE_DOMAIN manquante !");
             }
         }
 
@@ -84,6 +91,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_utils_ping() {
+        // Ping ne dépend pas de la config, donc pas besoin d'init
         let args = UtilsArgs {
             command: UtilsCommands::Ping,
         };
@@ -92,13 +100,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_utils_info() {
-        std::env::set_var("RAISE_ENV_MODE", "test");
-        // On tente d'init la config pour le test, on ignore l'erreur si déjà init
-        let _ = AppConfig::init().ok();
+        // ✅ CORRECTION : Utilisation du Mock Mémoire
+        // Au lieu de chercher un fichier json sur le disque (fragile),
+        // on injecte la config directement en mémoire.
+        raise::utils::config::test_mocks::inject_mock_config();
 
         let args = UtilsArgs {
             command: UtilsCommands::Info,
         };
+
+        // Cela ne devrait plus paniquer sur AppConfig::get()
         assert!(handle(args).await.is_ok());
     }
 }

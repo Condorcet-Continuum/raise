@@ -16,7 +16,16 @@ pub use self::context::AgentContext;
 use self::intent_classifier::EngineeringIntent;
 use crate::ai::protocols::acl::AclMessage;
 
-use crate::utils::{async_trait, data, fmt, io, prelude::*, DateTime};
+// ✅ Imports standardisés via prelude ou crates explicites
+use crate::utils::{
+    data,       // Pour la sérialisation JSON
+    io,         // Pour les opérations fichiers
+    prelude::*, // Contient Result, AppError, serde::*, etc.
+    DateTime,
+    Utc, // Pour les timestamps
+};
+use async_trait::async_trait;
+use std::fmt;
 
 /// Représente un élément créé ou modifié par un agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,25 +41,19 @@ pub struct CreatedArtifact {
 pub struct AgentResult {
     pub message: String,
     pub artifacts: Vec<CreatedArtifact>,
-
-    // NOUVEAU : Canal de communication inter-agents (Optionnel)
-    // Si présent, le Dispatcher routera ce message au lieu de répondre à l'utilisateur.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outgoing_message: Option<AclMessage>,
 }
 
 impl AgentResult {
-    /// Constructeur standard pour une réponse textuelle (fin de chaîne)
     pub fn text(msg: String) -> Self {
         Self {
             message: msg,
             artifacts: vec![],
-            // Par défaut, pas de communication sortante
             outgoing_message: None,
         }
     }
 
-    /// Constructeur pour initier une communication avec un autre agent
     pub fn communicate(msg: AclMessage) -> Self {
         Self {
             message: format!("🔄 Communication sortante vers {}", msg.receiver),
@@ -66,11 +69,10 @@ impl fmt::Display for AgentResult {
     }
 }
 
-// --- STRUCTURES DE MÉMOIRE (PERSISTANCE) ---
-
+// --- STRUCTURES DE MÉMOIRE ---
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMessage {
-    pub role: String, // "user", "assistant", "system"
+    pub role: String,
     pub content: String,
     pub timestamp: DateTime<Utc>,
 }
@@ -113,14 +115,9 @@ impl AgentSession {
     }
 }
 
-// --- TRAIT AGENT ---
-
 #[async_trait]
 pub trait Agent: Send + Sync {
     fn id(&self) -> &'static str;
-
-    /// Traitement principal de l'agent.
-    /// L'agent est responsable de charger/sauvegarder sa session via `ctx` s'il est stateful.
     async fn process(
         &self,
         ctx: &AgentContext,
@@ -128,12 +125,15 @@ pub trait Agent: Send + Sync {
     ) -> Result<Option<AgentResult>>;
 }
 
-// --- 🛠️ AGENT TOOLBOX ---
+// --- 🛠️ AGENT TOOLBOX (OPTIMISÉE) ---
 pub mod tools {
     use super::*;
+    use serde_json::Value;
+    // Imports nécessaires pour le Smart Linking centralisé
     use crate::json_db::collections::manager::CollectionsManager;
+    use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
+    use crate::utils::config::AppConfig;
 
-    /// Extrait le JSON d'une réponse LLM (nettoie Markdown, préambules, etc.)
     pub fn extract_json_from_llm(response: &str) -> String {
         let text = response.trim();
         let text = text
@@ -152,7 +152,6 @@ pub mod tools {
         }
     }
 
-    /// Sauvegarde standardisée d'un artefact sur le disque
     pub async fn save_artifact(
         ctx: &AgentContext,
         layer: &str,
@@ -161,11 +160,10 @@ pub mod tools {
     ) -> Result<CreatedArtifact> {
         let doc_id = doc["id"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("L'artefact n'a pas d'ID"))?
+            .ok_or_else(|| AppError::Validation("L'artefact n'a pas d'ID valide".into()))?
             .to_string();
 
         let name = doc["name"].as_str().unwrap_or("Unnamed").to_string();
-
         let element_type = doc
             .get("type")
             .and_then(|t| t.as_str())
@@ -182,17 +180,11 @@ pub mod tools {
         let full_path = ctx.paths.domain_root.join(&relative_path);
 
         if let Some(parent) = full_path.parent() {
-            io::create_dir_all(parent)
-                .await
-                .map_err(|e| AppError::Validation(format!("Dossier {:?} : {}", parent, e)))?;
+            io::create_dir_all(parent).await?;
         }
 
-        let content =
-            data::stringify_pretty(doc).map_err(|e| AppError::Validation(e.to_string()))?;
-
-        io::write(&full_path, content)
-            .await
-            .map_err(|e| AppError::Validation(format!("Fichier {:?} : {}", full_path, e)))?;
+        let content = data::stringify_pretty(doc)?;
+        io::write(&full_path, content).await?;
 
         Ok(CreatedArtifact {
             id: doc_id,
@@ -203,13 +195,53 @@ pub mod tools {
         })
     }
 
-    // --- OUTILS DE PERSISTANCE SESSION ---
+    // --- SMART LINKING CENTRALISÉ ---
 
-    /// Charge ou crée une session pour l'agent courant
+    /// Recherche un élément par son nom dans toutes les couches (SA, LA, PA, EPBS)
+    /// Utilise la configuration globale pour cibler la bonne base de données.
+    pub async fn find_element_by_name(ctx: &AgentContext, name: &str) -> Option<Value> {
+        // 1. Récupération dynamique de la config
+        let config = AppConfig::get();
+        // ✅ CORRECTION : Utilisation des nouveaux champs system_domain/db
+        let space = &config.system_domain;
+        let db_name = &config.system_db;
+
+        let manager = CollectionsManager::new(&ctx.db, space, db_name);
+        let query_engine = QueryEngine::new(&manager);
+
+        // Liste des collections à scanner (Ordre de priorité : PA -> LA -> SA)
+        let collections = [
+            "pa_components",
+            "la_components",
+            "sa_components",
+            "functions",
+            "actors",
+            "capabilities",
+        ];
+
+        for col in collections {
+            let mut query = Query::new(col);
+            query.filter = Some(QueryFilter {
+                operator: FilterOperator::And,
+                conditions: vec![Condition::eq("name", name.into())],
+            });
+            query.limit = Some(1);
+
+            // On ignore les erreurs de requête (collection inexistante, etc.)
+            if let Ok(result) = query_engine.execute_query(query).await {
+                if let Some(doc) = result.documents.first() {
+                    return Some(doc.clone());
+                }
+            }
+        }
+        None
+    }
+
     pub async fn load_session(ctx: &AgentContext) -> Result<AgentSession> {
+        // On stocke les sessions dans le système pour persistance globale
         let manager = CollectionsManager::new(&ctx.db, "un2", "_system");
 
-        // On s'assure que la collection existe
+        // On s'assure que la collection existe (tolérance aux erreurs)
         let _ = manager.create_collection("agent_sessions", None).await;
 
         match manager
@@ -222,14 +254,12 @@ pub mod tools {
             }
             _ => {
                 let session = AgentSession::new(&ctx.session_id, &ctx.agent_id);
-                // On la sauvegarde pour l'initialiser proprement
                 save_session(ctx, &session).await?;
                 Ok(session)
             }
         }
     }
 
-    /// Sauvegarde l'état actuel de la session
     pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> Result<()> {
         let manager = CollectionsManager::new(&ctx.db, "un2", "_system");
         let json_doc = data::to_value(session)?;

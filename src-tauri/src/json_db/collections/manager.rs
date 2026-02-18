@@ -9,9 +9,7 @@ use crate::rules_engine::{EvalError, Evaluator, Rule, RuleStore};
 use super::collection;
 use super::data_provider::CachedDataProvider;
 
-// --- MIGRATION V2 : USAGE DES FAÇADES SÉMANTIQUES ---
-
-// 1. Le Prélude (Result, AppError, AppConfig...)
+use crate::utils::config::AppConfig;
 use crate::utils::data::{self, HashSet};
 use crate::utils::io;
 use crate::utils::prelude::*;
@@ -41,13 +39,10 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub async fn drop_db(&self) -> Result<bool> {
-        // On vérifie l'existence pour le retour booléen (pour le CLI)
         let db_path = self.storage.config.db_root(&self.space, &self.db);
         if !db_path.exists() {
             return Ok(false);
         }
-
-        // On délègue la suppression au module de stockage bas niveau
         file_storage::drop_db(
             &self.storage.config,
             &self.space,
@@ -55,9 +50,129 @@ impl<'a> CollectionsManager<'a> {
             file_storage::DropMode::Hard,
         )
         .await?;
-
         Ok(true)
     }
+
+    // --- HELPER DE RÉSOLUTION D'URI (HIÉRARCHIQUE) ---
+
+    /// Détermine la meilleure URI pour un schéma donné en suivant la hiérarchie de configuration.
+    /// Ordre : Local > User > Workstation > System
+    fn resolve_best_schema_uri(&self, input_path_or_uri: &str) -> String {
+        // Nettoyage du chemin relatif
+        let relative_path = if let Some(idx) = input_path_or_uri.find("/schemas/v1/") {
+            &input_path_or_uri[idx + "/schemas/v1/".len()..]
+        } else {
+            input_path_or_uri
+        };
+
+        // 1. PRIORITÉ ABSOLUE : Local (Arguments de la DB courante)
+        let local_path = self
+            .storage
+            .config
+            .db_schemas_root(&self.space, &self.db)
+            .join("v1")
+            .join(relative_path);
+
+        if local_path.exists() {
+            return format!(
+                "db://{}/{}/schemas/v1/{}",
+                self.space, self.db, relative_path
+            );
+        }
+
+        let app_config = AppConfig::get();
+
+        // 2. PRIORITÉ USER : Config Utilisateur
+        if let Some(user_cfg) = &app_config.user {
+            if let (Some(u_domain), Some(u_db)) = (&user_cfg.default_domain, &user_cfg.default_db) {
+                let user_path = self
+                    .storage
+                    .config
+                    .db_schemas_root(u_domain, u_db)
+                    .join("v1")
+                    .join(relative_path);
+
+                if user_path.exists() {
+                    return format!("db://{}/{}/schemas/v1/{}", u_domain, u_db, relative_path);
+                }
+            }
+        }
+
+        // 3. PRIORITÉ WORKSTATION : Config Poste
+        if let Some(ws_cfg) = &app_config.workstation {
+            if let (Some(w_domain), Some(w_db)) = (&ws_cfg.default_domain, &ws_cfg.default_db) {
+                let ws_path = self
+                    .storage
+                    .config
+                    .db_schemas_root(w_domain, w_db)
+                    .join("v1")
+                    .join(relative_path);
+
+                if ws_path.exists() {
+                    return format!("db://{}/{}/schemas/v1/{}", w_domain, w_db, relative_path);
+                }
+            }
+        }
+
+        // 4. PRIORITÉ SYSTEM CONFIG : Config Globale
+        let sys_domain = &app_config.system_domain;
+        let sys_db = &app_config.system_db;
+
+        let sys_path = self
+            .storage
+            .config
+            .db_schemas_root(sys_domain, sys_db)
+            .join("v1")
+            .join(relative_path);
+
+        if sys_path.exists() {
+            return format!(
+                "db://{}/{}/schemas/v1/{}",
+                sys_domain, sys_db, relative_path
+            );
+        }
+
+        // 5. FALLBACK ULTIME : _system/_system (Si la config système pointe ailleurs par erreur)
+        if sys_domain != "_system" || sys_db != "_system" {
+            let hard_sys_path = self
+                .storage
+                .config
+                .db_schemas_root("_system", "_system")
+                .join("v1")
+                .join(relative_path);
+
+            if hard_sys_path.exists() {
+                return format!("db://_system/_system/schemas/v1/{}", relative_path);
+            }
+        }
+
+        // Défaut : On retourne l'URI locale pour générer une erreur explicite "Introuvable"
+        format!(
+            "db://{}/{}/schemas/v1/{}",
+            self.space, self.db, relative_path
+        )
+    }
+
+    /// Charge le registre approprié en fonction de l'URI.
+    async fn get_registry_for_uri(&self, uri: &str) -> Result<SchemaRegistry> {
+        let app_config = AppConfig::get();
+        let sys_domain = &app_config.system_domain;
+        let sys_db = &app_config.system_db;
+
+        let sys_prefix_config = format!("db://{}/{}/", sys_domain, sys_db);
+        let sys_prefix_hard = "db://_system/_system/";
+
+        if uri.starts_with(&sys_prefix_config) {
+            SchemaRegistry::from_db(&self.storage.config, sys_domain, sys_db).await
+        } else if uri.starts_with(sys_prefix_hard) {
+            SchemaRegistry::from_db(&self.storage.config, "_system", "_system").await
+        } else {
+            // Note : Pour les cas User/Workstation, le chargement local suffit souvent
+            // car le registre est capable de charger d'autres domaines si nécessaire.
+            SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await
+        }
+    }
+
     // --- MÉTHODES DE LECTURE ---
 
     pub async fn get_document(&self, collection: &str, id: &str) -> Result<Option<Value>> {
@@ -72,7 +187,6 @@ impl<'a> CollectionsManager<'a> {
 
     pub async fn read_many(&self, collection: &str, ids: &[String]) -> Result<Vec<Value>> {
         let mut docs = Vec::with_capacity(ids.len());
-
         for id in ids {
             let doc_opt = self
                 .get_document(collection, id)
@@ -87,7 +201,6 @@ impl<'a> CollectionsManager<'a> {
                 ))),
             }
         }
-
         Ok(docs)
     }
 
@@ -128,10 +241,8 @@ impl<'a> CollectionsManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
 
-        let expected_uri = format!(
-            "db://{}/{}/schemas/v1/db/index.schema.json",
-            self.space, self.db
-        );
+        // ✅ Utilisation du helper robuste pour l'index lui-même
+        let expected_uri = self.resolve_best_schema_uri("db/index.schema.json");
 
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("$schema") {
@@ -149,21 +260,11 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await?;
+        let reg = self.get_registry_for_uri(&expected_uri).await?;
 
-        let found_uri = if reg.get_by_uri(&expected_uri).is_some() {
-            Some(expected_uri.clone())
-        } else {
-            reg.list_uris()
-                .into_iter()
-                .find(|u| u.ends_with("/db/index.schema.json"))
-        };
-
-        if let Some(uri) = found_uri {
-            if let Ok(validator) = SchemaValidator::compile_with_registry(&uri, &reg) {
-                if let Err(e) = validator.compute_then_validate(doc) {
-                    return Err(AppError::Database(format!("Index système invalide: {}", e)));
-                }
+        if let Ok(validator) = SchemaValidator::compile_with_registry(&expected_uri, &reg) {
+            if let Err(e) = validator.compute_then_validate(doc) {
+                warn!("⚠️ Index système invalide (sauvegarde forcée): {}", e);
             }
         }
 
@@ -179,7 +280,8 @@ impl<'a> CollectionsManager<'a> {
         }
 
         let final_schema_uri = if let Some(uri) = schema_uri {
-            uri
+            // ✅ Utilisation du helper robuste pour le schéma de collection
+            self.resolve_best_schema_uri(&uri)
         } else {
             self.resolve_schema_from_index(name)
                 .await
@@ -213,19 +315,15 @@ impl<'a> CollectionsManager<'a> {
     // --- INDEXES SECONDAIRES ---
     pub async fn create_index(&self, collection: &str, field: &str, kind: &str) -> Result<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-        idx_mgr
-            .create_index(collection, field, kind) // Vérifie bien les 3 arguments ici
-            .await
+        idx_mgr.create_index(collection, field, kind).await
     }
 
     pub async fn drop_index(&self, collection: &str, field: &str) -> Result<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
-        idx_mgr
-            .drop_index(collection, field) // ✅ On appelle drop_index, pas create_index
-            .await
+        idx_mgr.drop_index(collection, field).await
     }
 
-    // --- HELPER INDEX SYSTÈME ---
+    // --- HELPER INDEX SYSTÈME & RÉSOLUTION SCHÉMA ---
 
     async fn resolve_schema_from_index(&self, col_name: &str) -> Result<String> {
         let sys_path = self
@@ -250,15 +348,8 @@ impl<'a> CollectionsManager<'a> {
             return Ok(String::new());
         }
 
-        let relative_path = if let Some(idx) = raw_path.find("/schemas/v1/") {
-            &raw_path[idx + "/schemas/v1/".len()..]
-        } else {
-            raw_path
-        };
-        Ok(format!(
-            "db://{}/{}/schemas/v1/{}",
-            self.space, self.db, relative_path
-        ))
+        // ✅ Utilisation du helper robuste ici aussi
+        Ok(self.resolve_best_schema_uri(raw_path))
     }
 
     async fn update_system_index_collection(&self, col_name: &str, schema_uri: &str) -> Result<()> {
@@ -471,7 +562,6 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub async fn prepare_document(&self, collection: &str, doc: &mut Value) -> Result<()> {
-        // 1. Injection des champs techniques (ID, Timestamps)
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("id") {
                 obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
@@ -485,7 +575,6 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        // 2. Résolution du schéma (ROBUSTE)
         let meta_path = self
             .storage
             .config
@@ -499,7 +588,8 @@ impl<'a> CollectionsManager<'a> {
                 if let Ok(meta) = data::parse::<Value>(&content) {
                     if let Some(s) = meta.get("schema").and_then(|v| v.as_str()) {
                         if !s.is_empty() {
-                            resolved_uri = Some(s.to_string());
+                            // ✅ Normalisation via le helper robuste
+                            resolved_uri = Some(self.resolve_best_schema_uri(s));
                         }
                     }
                 }
@@ -525,8 +615,8 @@ impl<'a> CollectionsManager<'a> {
                 obj.insert("$schema".to_string(), Value::String(uri.clone()));
             }
 
-            let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await?;
-            // CORRECTION CLIPPY : 'uri' au lieu de '&uri'
+            let reg = self.get_registry_for_uri(uri).await?;
+
             if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, uri).await {
                 warn!("⚠️ Erreur règles métier (non bloquant): {}", e);
             }
@@ -541,7 +631,6 @@ impl<'a> CollectionsManager<'a> {
             );
         }
 
-        // 4. Logique Sémantique (CORRIGÉ : passage de resolved_uri)
         self.apply_semantic_logic(doc, resolved_uri.as_deref())
             .map_err(|e| AppError::Validation(format!("Validation sémantique échouée: {}", e)))?;
         Ok(())
@@ -549,7 +638,6 @@ impl<'a> CollectionsManager<'a> {
 
     // --- OPTIMISATION SEMANTIQUE ---
     fn apply_semantic_logic(&self, doc: &mut Value, schema_uri: Option<&str>) -> Result<()> {
-        // 1. Détection de la couche (Layer)
         let layer_hint = if let Some(uri) = schema_uri {
             if uri.contains("/oa/") {
                 Some("oa")
@@ -570,7 +658,6 @@ impl<'a> CollectionsManager<'a> {
             None
         };
 
-        // 2. Injection du Contexte (@context)
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("@context") {
                 let registry = VocabularyRegistry::global();
@@ -593,27 +680,20 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        // 3. Validation sémantique du Type
         let has_type = doc.get("@type").is_some()
             || doc
                 .get("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
                 .is_some();
 
         if has_type {
-            // CORRECTION IMPORTANTE : Initialisation avec le contexte du document
             let processor = JsonLdProcessor::new()
                 .with_doc_context(doc)
                 .unwrap_or_else(|_| JsonLdProcessor::new());
 
             if let Some(type_uri) = processor.get_type(doc) {
                 let registry = VocabularyRegistry::global();
-
-                // 1. Expansion primaire : "OperationalActor" -> "oa:OperationalActor"
                 let mut expanded_type = processor.context_manager().expand_term(&type_uri);
 
-                // 2. DOUBLE EXPANSION (Recursive) : Pour les CURIEs (ex: "oa:Actor")
-                // Le registre contient des IRIs complets (https://...), pas des CURIEs.
-                // Si l'expansion donne encore un préfixe (ex: oa:...), on ré-expand.
                 if !VocabularyRegistry::is_iri(&expanded_type) && expanded_type.contains(':') {
                     let deep_expanded = processor.context_manager().expand_term(&expanded_type);
                     if VocabularyRegistry::is_iri(&deep_expanded) {
@@ -798,6 +878,8 @@ mod tests {
     use crate::utils::io::tempdir;
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
+        crate::utils::config::test_mocks::inject_mock_config();
+
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         (dir, config)

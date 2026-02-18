@@ -31,11 +31,10 @@ async fn db_lifecycle_minimal() {
         "❌ Le dossier racine de la DB doit exister physiquement"
     );
 
-    let schemas_path = cfg.db_schemas_root(space, db);
-    assert!(
-        schemas_path.exists(),
-        "❌ Le dossier schemas doit avoir été créé"
-    );
+    // ✅ CORRECTION : On retire l'assertion sur le dossier schemas
+    // Avec l'architecture "Zéro Copie", create_db ne crée plus ce dossier.
+    // let schemas_path = cfg.db_schemas_root(space, db);
+    // assert!(schemas_path.exists(), "❌ Le dossier schemas doit avoir été créé");
 
     // --- OPEN ---
     open_db(&cfg, space, db)
@@ -195,6 +194,7 @@ async fn test_system_index_strict_conformance() {
     );
 
     // 5. Validation par le registre de schémas
+    // Le registre doit être capable de résoudre le schéma (soit localement, soit via fallback système)
     let registry = SchemaRegistry::from_db(cfg, &env.space, &env.db)
         .await
         .expect("❌ Chargement du registre de schémas a échoué");

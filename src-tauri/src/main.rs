@@ -88,12 +88,12 @@ fn main() {
             let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
 
-            // On utilise les espaces par défaut définis dans le JSON !
-            let default_space = &app_config.default_domain;
-            let default_db = &app_config.default_db;
+            // ✅ CORRECTION : Utilisation des nouveaux champs de config
+            let default_space = &app_config.system_domain;
+            let default_db = &app_config.system_db;
 
             // 3. CHARGEMENT ONTOLOGIES (Depuis le dossier de domaine)
-            // Construction du chemin : ~/raise_domain/mbse2/_system/schemas/v1/arcadia/@context
+            // Construction du chemin : ~/raise_domain/_system/_system/schemas/v1/arcadia/@context
             let ontology_path = db_root
                 .join(default_space)
                 .join(default_db)
@@ -218,15 +218,15 @@ fn main() {
 
                 let storage_state = app_handle_clone.state::<StorageEngine>();
 
-                // 3. On utilise l'espace dynamique
+                // 3. ✅ CORRECTION : Utilisation de system_domain/system_db pour initialiser le modèle
                 let _ = ModelLoader::from_engine(
                     storage_state.inner(),
-                    &global_cfg.default_domain,
-                    &global_cfg.default_db
+                    &global_cfg.system_domain,
+                    &global_cfg.system_db
                 );
 
                 let storage_state = app_handle_clone.state::<StorageEngine>();
-                // On utilise le même espace que défini plus haut (mbse2)
+                // On utilise le même espace que défini plus haut (mbse2) pour la logique métier spécifique
                 let loader = ModelLoader::from_engine(storage_state.inner(), "mbse2", "_system");
 
                 if let Ok(model) = loader.load_full_model().await {
@@ -482,10 +482,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_migrations_list_integrity() {
+        // ✅ ÉTAPE CRUCIALE : Initialisation manuelle de la config pour le test.
+        // Puisque config.test.json est obligatoire, .expect() nous dira
+        // immédiatement s'il y a un problème de chemin ou de syntaxe.
+        raise::utils::config::AppConfig::init()
+            .expect("❌ Impossible d'initialiser AppConfig pour le test de migration");
+
         let dir = tempdir().unwrap();
+        // On force le stockage sur un dossier temporaire pour ne pas polluer le disque réel
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
+
+        // run_app_migrations appelle Migrator, qui appelle create_db,
+        // qui fait maintenant un AppConfig::get().
         let res = run_app_migrations(&storage, "test_space", "test_db").await;
-        assert!(res.is_ok());
+
+        assert!(
+            res.is_ok(),
+            "Le test de migration a échoué : {:?}",
+            res.err()
+        );
     }
 }

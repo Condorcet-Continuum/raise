@@ -1,3 +1,6 @@
+#[path = "common/mod.rs"]
+mod common;
+
 #[path = "rules_suite/logic_scenarios.rs"]
 pub mod logic_scenarios;
 

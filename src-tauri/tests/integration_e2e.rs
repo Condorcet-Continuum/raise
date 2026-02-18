@@ -1,29 +1,30 @@
 // FICHIER : src-tauri/tests/integration_e2e.rs
 
+// ✅ Import du socle commun pour l'initialisation robuste
+#[path = "common/mod.rs"]
+mod common;
+
+use common::setup_test_env;
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use raise::model_engine::arcadia;
 use raise::model_engine::loader::ModelLoader;
 use raise::model_engine::validators::{DynamicValidator, ModelValidator, Severity};
 use raise::rules_engine::ast::{Expr, Rule};
-use raise::utils::{io::tempdir, prelude::*};
+use raise::utils::prelude::*; // Plus besoin de 'io::tempdir'
 
 #[tokio::test]
 async fn test_full_stack_integration() {
     // =========================================================================
     // ÉTAPE 1 : Infrastructure (JSON-DB)
     // =========================================================================
-    // On crée un environnement isolé (dossier temporaire)
-    let dir = tempdir().unwrap();
-    let config = JsonDbConfig::new(dir.path().to_path_buf());
-    let storage = StorageEngine::new(config);
+    // ✅ Utilisation de l'environnement standardisé (Config + Schémas + Logs)
+    let env = setup_test_env().await;
 
-    // On initialise un projet "TestSpace/TestDB"
-    let manager = CollectionsManager::new(&storage, "TestSpace", "TestDB");
-    manager
-        .init_db()
-        .await
-        .expect("Impossible d'initialiser la DB");
+    // On utilise le manager pointant sur l'espace de test isolé généré par setup_test_env
+    let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
+
+    // L'init_db est déjà fait par setup_test_env, mais on peut vérifier qu'il est prêt
+    // (Les schémas système sont déjà en place grâce à common/mod.rs)
 
     // =========================================================================
     // ÉTAPE 2 : Peuplement des Données (Simulation de sauvegarde)
@@ -46,6 +47,7 @@ async fn test_full_stack_integration() {
         // Pas de description -> Doit déclencher la règle
     });
 
+    // insert_raw va créer la collection "la" si elle n'existe pas
     manager
         .insert_raw("la", &valid_json)
         .await
@@ -60,8 +62,7 @@ async fn test_full_stack_integration() {
     // =========================================================================
     // Règle : "Si un élément est un Composant Logique, il DOIT avoir une description non vide."
 
-    // Expression AST : description != null AND description != ""
-    // Simplification pour le test : description != null
+    // Expression AST : description != null
     let rule_expr = Expr::Not(Box::new(Expr::Eq(vec![
         Expr::Var(arcadia::PROP_DESCRIPTION.to_string()),
         Expr::Val(serde_json::Value::Null),

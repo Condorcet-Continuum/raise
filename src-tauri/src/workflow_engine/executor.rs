@@ -379,11 +379,8 @@ mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::ProjectModel;
+    use crate::utils::{config::test_mocks, data::json, io::tempdir};
     use crate::workflow_engine::tools::SystemMonitorTool;
-    use serde_json::json;
-    use std::sync::Arc;
-    use tempfile::tempdir;
-    use tokio::sync::Mutex;
 
     use crate::json_db::schema::registry::SchemaRegistry;
     use crate::json_db::schema::validator::SchemaValidator;
@@ -406,7 +403,7 @@ mod tests {
         let storage = StorageEngine::new(JsonDbConfig::new(dir.path().to_path_buf()));
         let plugin_manager = Arc::new(PluginManager::new(&storage, None));
 
-        let mut exec = WorkflowExecutor::new(Arc::new(Mutex::new(orch)), plugin_manager);
+        let mut exec = WorkflowExecutor::new(Arc::new(AsyncMutex::new(orch)), plugin_manager);
         exec.register_tool(Box::new(SystemMonitorTool));
         exec
     }
@@ -507,6 +504,9 @@ mod tests {
     #[tokio::test]
     async fn test_bridge_loading_and_compilation() {
         let env = init_test_env().await;
+
+        test_mocks::inject_mock_config();
+
         let cfg = &env.cfg;
         let space = &env.space;
         let db = &env.db;

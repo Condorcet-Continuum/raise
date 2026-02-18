@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/bin/raise-cli/commands/ai.rs
+
 use clap::{Args, Subcommand};
 use std::io::{self as std_io, Write}; // On garde std::io pour flush/read_line (interactivité CLI)
 
@@ -12,8 +14,10 @@ use raise::ai::llm::client::LlmClient;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 
 use raise::{
-    user_error, user_info, user_success,
-    utils::{io, prelude::*, Arc},
+    user_error,
+    user_info,
+    user_success,
+    utils::{config::AppConfig, io, prelude::*, Arc}, // Ajout explicite de AppConfig si nécessaire
 };
 
 #[derive(Args, Debug, Clone)]
@@ -45,8 +49,9 @@ pub async fn handle(args: AiArgs) -> Result<()> {
     let api_url = engine.and_then(|e| e.api_url.clone()).unwrap_or_default();
     let model_name = engine.map(|e| e.model_name.clone());
 
-    let space = &config.default_domain;
-    let db = &config.default_db;
+    // ✅ CORRECTION : Utilisation des nouveaux champs système
+    let space = &config.system_domain;
+    let db = &config.system_db;
 
     let domain_path = config
         .get_path("PATH_RAISE_DOMAIN")

@@ -1,22 +1,24 @@
 // FICHIER : src-tauri/tests/rules_suite/rules_integration.rs
 
+use crate::common::setup_test_env; // ✅ Utilisation du socle commun
 use raise::json_db::collections;
-use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use raise::utils::{io::tempdir, prelude::*};
+use raise::json_db::collections::manager::CollectionsManager;
+use raise::utils::prelude::*;
 use std::fs;
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter les appels .await
+#[tokio::test]
 async fn test_end_to_end_rules_execution() {
-    // 1. SETUP
-    let dir = tempdir().unwrap();
-    let config = JsonDbConfig::new(dir.path().to_path_buf());
+    // 1. SETUP ROBUSTE
+    let env = setup_test_env().await;
+    let config = &env.storage.config;
 
-    let space = "test_space";
-    let db = "test_db";
-    let storage = StorageEngine::new(config.clone());
+    // On utilise l'espace et la DB fournis par l'environnement
+    let space = &env.space;
+    let db = &env.db;
 
-    // CORRECTION E0599 : init_db() est désormais asynchrone, ajout de .await
-    collections::manager::CollectionsManager::new(&storage, space, db)
+    // L'init_db est déjà fait par setup_test_env, mais on peut le rappeler par sécurité
+    // (create_db est idempotent)
+    CollectionsManager::new(&env.storage, space, db)
         .init_db()
         .await
         .unwrap();
@@ -52,6 +54,7 @@ async fn test_end_to_end_rules_execution() {
         ]
     });
 
+    // On écrit le schéma dans le dossier temporaire du test
     let schema_inv_path = config
         .db_schemas_root(space, db)
         .join("v1/invoices/default.json");
@@ -60,8 +63,7 @@ async fn test_end_to_end_rules_execution() {
     fs::write(&schema_inv_path, schema_content.to_string()).unwrap();
 
     // 3. Création collection
-    // CORRECTION E0599 : create_collection est désormais asynchrone
-    collections::create_collection(&config, space, db, "invoices")
+    collections::create_collection(config, space, db, "invoices")
         .await
         .unwrap();
 
@@ -73,13 +75,13 @@ async fn test_end_to_end_rules_execution() {
         "price": 50
     });
 
-    // CORRECTION E0599 : insert_with_schema est désormais asynchrone
     let result =
-        collections::insert_with_schema(&config, space, db, "invoices/default.json", invoice_input)
+        collections::insert_with_schema(config, space, db, "invoices/default.json", invoice_input)
             .await
             .expect("Insert invoice failed");
 
     // 5. VALIDATIONS
     assert_eq!(result["total"], 100.0);
+    // INV-U_DEV-100
     assert_eq!(result["ref"], "INV-U_DEV-100");
 }
