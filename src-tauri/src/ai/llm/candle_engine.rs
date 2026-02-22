@@ -185,6 +185,8 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_quick_inference() {
         inject_mock_config();
         println!("Init Engine (Qwen 2.5 1.5B - Rapide)...");
