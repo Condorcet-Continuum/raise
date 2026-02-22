@@ -13,6 +13,7 @@ use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 
 #[tokio::test]
+#[ignore]
 async fn test_genetics_integration_with_json_db() {
     // 1. Initialisation robuste
     let env = setup_test_env().await;

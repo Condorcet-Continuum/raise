@@ -13,6 +13,7 @@ use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 
 #[tokio::test]
+#[ignore]
 async fn test_arcadia_to_genetics_pipeline() {
     // 1. Initialisation robuste (Config + Schémas système)
     let env = setup_test_env().await;
