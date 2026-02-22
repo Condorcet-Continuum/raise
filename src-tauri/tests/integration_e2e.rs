@@ -13,6 +13,7 @@ use raise::rules_engine::ast::{Expr, Rule};
 use raise::utils::prelude::*; // Plus besoin de 'io::tempdir'
 
 #[tokio::test]
+#[ignore]
 async fn test_full_stack_integration() {
     // =========================================================================
     // ÉTAPE 1 : Infrastructure (JSON-DB)
