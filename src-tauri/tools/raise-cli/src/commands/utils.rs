@@ -46,21 +46,27 @@ pub async fn handle(args: UtilsArgs) -> Result<()> {
             let db_root = config.get_path("PATH_RAISE_DOMAIN");
             user_info!("DB_ROOT", "{:?}", db_root);
 
-            // Affichage masqué pour la clé API si elle existe (sécurité)
-            let has_key = config
-                .ai_engines
-                .get("cloud_gemini")
-                .and_then(|engine| engine.api_key.as_ref())
-                .map(|k| !k.is_empty())
-                .unwrap_or(false);
+            let primary_engine = config.ai_engines.get("primary_local");
 
-            let api_url = config
-                .ai_engines
-                .get("primary_local")
-                .and_then(|engine| engine.api_url.as_deref())
-                .unwrap_or("Non configurée");
+            let provider = primary_engine
+                .map(|e| e.provider.as_str())
+                .unwrap_or("Non configuré");
 
-            user_info!("LLM_API", "URL: {} (Key set: {})", api_url, has_key);
+            let model = primary_engine
+                .and_then(|e| e.rust_model_file.as_deref())
+                .unwrap_or("Inconnu");
+
+            let status = primary_engine
+                .map(|e| e.status.as_str())
+                .unwrap_or("disabled");
+
+            user_info!(
+                "LLM_ENGINE",
+                "Provider: {} | Modèle: {} | Statut: {}",
+                provider,
+                model,
+                status
+            );
 
             // Vérification simple de l'existence de la racine DB
             if let Some(path) = db_root {

@@ -73,6 +73,8 @@ mod tests {
     use crate::model_engine::types::NameType;
     use crate::utils::HashMap;
     use candle_nn::VarMap;
+    // 🎯 NOUVEL IMPORT
+    use crate::utils::config::WorldModelConfig;
 
     fn make_dummy(id: &str, layer_idx: usize) -> ArcadiaElement {
         let kind = match layer_idx {
@@ -94,8 +96,18 @@ mod tests {
     fn test_training_loop_convergence() {
         // 1. Setup
         let varmap = VarMap::new();
-        // CORRECTION : embedding_dim = 16 (Aligné avec l'encodeur V2)
-        let engine = NeuroSymbolicEngine::new(10, 16, 5, 32, varmap).unwrap();
+
+        // 🎯 Création de la config pour l'entraînement
+        let config = WorldModelConfig {
+            vocab_size: 10,
+            embedding_dim: 16, // Aligné avec l'encodeur V2
+            action_dim: 5,
+            hidden_dim: 32,
+            use_gpu: false,
+        };
+
+        // 🎯 Initialisation via la config
+        let engine = NeuroSymbolicEngine::new(config, varmap).unwrap();
 
         // 2. Trainer
         let mut trainer = WorldTrainer::new(&engine, 0.05).unwrap();

@@ -26,7 +26,7 @@ impl Linear {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::Device; // DType retiré ici s'il n'est pas utilisé, ou gardé si nécessaire pour les tests
+    use candle_core::Device;
 
     #[test]
     fn test_linear_shapes() -> Result<()> {

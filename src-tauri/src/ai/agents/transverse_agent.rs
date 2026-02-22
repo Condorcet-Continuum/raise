@@ -259,6 +259,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_verify_quality_logic() {
         // 1. Initialisation Mock Config
         inject_mock_config();
@@ -269,7 +271,7 @@ mod tests {
 
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
-        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
+        let llm = LlmClient::new().unwrap();
 
         // 2. Setup DB Manager via AppConfig
         let app_cfg = AppConfig::get();
@@ -329,12 +331,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_verify_quality_missing_in_db() {
+        inject_mock_config();
+
         // Test cas d'échec : Composant absent de la DB
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().into());
         let db = Arc::new(StorageEngine::new(config));
-        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
+        let llm = LlmClient::new().unwrap();
 
         let ctx = AgentContext::new("t", "s", db, llm, dir.path().into(), dir.path().into());
         let agent = TransverseAgent::new();

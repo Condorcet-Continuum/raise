@@ -3,6 +3,7 @@
 pub mod compliance_validator;
 pub mod consistency_checker;
 pub mod dynamic_validator;
+pub mod ontological_validator;
 
 use crate::utils::{async_trait, prelude::*};
 
@@ -13,6 +14,7 @@ use crate::model_engine::types::ArcadiaElement;
 pub use compliance_validator::ComplianceValidator;
 pub use consistency_checker::ConsistencyChecker;
 pub use dynamic_validator::DynamicValidator;
+pub use ontological_validator::OntologicalValidator;
 
 /// Niveau de sévérité d'un problème de validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

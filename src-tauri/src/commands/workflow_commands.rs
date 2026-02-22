@@ -6,18 +6,19 @@ use crate::workflow_engine::{
     ExecutionStatus, Mandate, WorkflowCompiler, WorkflowDefinition, WorkflowInstance,
     WorkflowScheduler,
 };
-// AJOUT : Import du capteur simulé (Jumeau Numérique) pour le contrôle via Slider UI
-use crate::workflow_engine::tools::system_tools::VIBRATION_SENSOR;
+
+// 🎯 FIX: Suppression de l'import du VIBRATION_SENSOR (Mutex supprimé)
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+use std::path::PathBuf;
 
 use tauri::{command, State};
 use tokio::sync::Mutex;
 
 /// Structure qui contient l'état global du moteur de workflow.
-/// Elle est gérée par Tauri (State management).
 #[derive(Default)]
 pub struct WorkflowStore {
     pub scheduler: Option<WorkflowScheduler>,
-    // Instances actives : ID -> Instance
     pub instances: HashMap<String, WorkflowInstance>,
 }
 
@@ -41,20 +42,44 @@ impl From<&WorkflowInstance> for WorkflowView {
     }
 }
 
+// --- HELPER DB ---
+fn create_db_manager() -> Result<(StorageEngine, String, String)> {
+    let config = AppConfig::get();
+    let path = config
+        .get_path("PATH_RAISE_DOMAIN")
+        .unwrap_or_else(|| PathBuf::from("./_system"));
+
+    let storage = StorageEngine::new(JsonDbConfig::new(path));
+    Ok((
+        storage,
+        config.system_domain.clone(),
+        config.system_db.clone(),
+    ))
+}
+
 // --- COMMANDES EXPOSÉES AU FRONTEND ---
 
 /// Met à jour la valeur du capteur de vibration (Jumeau Numérique).
-/// Appelée quand l'utilisateur bouge le slider dans l'interface.
 #[command]
 pub async fn set_sensor_value(value: f64) -> Result<String> {
-    // On verrouille le Mutex global pour mettre à jour la valeur simulée
-    // Cela affectera immédiatement les lectures faites par SystemMonitorTool
-    let mut sensor = VIBRATION_SENSOR.lock().map_err(|_| "Mutex Poisoned")?;
-    *sensor = value;
-    Ok(format!("Capteur mis à jour : {:.2}", value))
+    // 🎯 FIX: La commande Tauri écrit maintenant proprement dans le JsonDB (IPC par la donnée) !
+    let (storage, domain, db) = create_db_manager()?;
+    let manager = CollectionsManager::new(&storage, &domain, &db);
+
+    let sensor_doc = serde_json::json!({
+        "id": "vibration_z",
+        "value": value,
+        "updatedAt": chrono::Utc::now().to_rfc3339()
+    });
+
+    manager
+        .insert_raw("digital_twin", &sensor_doc)
+        .await
+        .map_err(|e| AppError::Database(format!("Erreur d'écriture capteur: {}", e)))?;
+
+    Ok(format!("Capteur mis à jour en base : {:.2}", value))
 }
 
-/// Compile et Enregistre un Mandat envoyé par le frontend.
 #[command]
 pub async fn submit_mandate(
     state: State<'_, Mutex<WorkflowStore>>,
@@ -62,17 +87,11 @@ pub async fn submit_mandate(
 ) -> Result<String> {
     let mut store = state.lock().await;
 
-    // 1. (Optionnel) Vérification de signature
-    // if !mandate.verify_signature(...) { return Err("Signature invalide".into()); }
-
-    // 2. Compilation : Mandat (Politique) -> Workflow (Technique)
-    // C'est ici que les Vetos sont transformés en nœuds GatePolicy
     let definition = WorkflowCompiler::compile(&mandate);
     let wf_id = definition.id.clone();
 
-    // 3. Enregistrement dans le Scheduler
     if let Some(scheduler) = &mut store.scheduler {
-        scheduler.register_workflow(definition);
+        scheduler.definitions.insert(wf_id.clone(), definition);
         Ok(format!(
             "Mandat v{} compilé avec succès. Workflow '{}' prêt à l'exécution.",
             mandate.meta.version, wf_id
@@ -84,7 +103,6 @@ pub async fn submit_mandate(
     }
 }
 
-/// Enregistre une définition de workflow brute (pour debug ou workflows manuels)
 #[command]
 pub async fn register_workflow(
     state: State<'_, Mutex<WorkflowStore>>,
@@ -93,37 +111,39 @@ pub async fn register_workflow(
     let mut store = state.lock().await;
     if let Some(scheduler) = &mut store.scheduler {
         let id = definition.id.clone();
-        scheduler.register_workflow(definition);
+        scheduler.definitions.insert(id.clone(), definition);
         Ok(format!("Workflow '{}' enregistré avec succès.", id))
     } else {
         Err(AppError::from(
-            "Le moteur de workflow n'est pas encore prêt (IA en chargement).".to_string(),
+            "Le moteur de workflow n'est pas encore prêt.".to_string(),
         ))
     }
 }
 
-/// Démarre une nouvelle instance d'un workflow existant
 #[command]
 pub async fn start_workflow(
     state: State<'_, Mutex<WorkflowStore>>,
     workflow_id: String,
 ) -> Result<WorkflowView> {
+    let (storage, domain, db) = create_db_manager()?;
+    let manager = CollectionsManager::new(&storage, &domain, &db);
+
     let instance_id = {
         let mut store = state.lock().await;
         if store.scheduler.is_none() {
             return Err(AppError::from("Le moteur de workflow n'est pas prêt."));
         }
-        // Création de l'instance avec un contexte vide
-        let instance = WorkflowInstance::new(&workflow_id, HashMap::new());
+
+        let scheduler = store.scheduler.as_mut().unwrap();
+        let instance = scheduler.create_instance(&workflow_id, &manager).await?;
         let id = instance.id.clone();
         store.instances.insert(id.clone(), instance);
         id
     };
-    // On lance la boucle d'exécution (asynchrone)
-    run_workflow_loop(state, instance_id).await
+
+    run_workflow_loop(state, instance_id, &manager).await
 }
 
-/// Reprend un workflow en pause (HITL) après validation utilisateur
 #[command]
 pub async fn resume_workflow(
     state: State<'_, Mutex<WorkflowStore>>,
@@ -131,29 +151,24 @@ pub async fn resume_workflow(
     node_id: String,
     approved: bool,
 ) -> Result<WorkflowView> {
+    let (storage, domain, db) = create_db_manager()?;
+    let manager = CollectionsManager::new(&storage, &domain, &db);
+
     {
         let mut guard = state.lock().await;
-        let WorkflowStore {
-            scheduler,
-            instances,
-        } = &mut *guard;
+        let sched = guard
+            .scheduler
+            .as_mut()
+            .ok_or_else(|| AppError::from("Moteur non initialisé".to_string()))?;
 
-        let instance = instances
-            .get_mut(&instance_id)
-            .ok_or("Instance introuvable")?;
-        let sched = scheduler.as_ref().ok_or("Moteur non initialisé")?;
-
-        // Appel au scheduler pour débloquer le nœud
         sched
-            .resume_node(instance, &node_id, approved)
-            .await
-            .map_err(|e| e.to_string())?;
+            .resume_node(&instance_id, &node_id, approved, &manager)
+            .await?;
     }
-    // On relance la boucle
-    run_workflow_loop(state, instance_id).await
+
+    run_workflow_loop(state, instance_id, &manager).await
 }
 
-/// Récupère l'état courant d'une instance (pour rafraîchissement UI)
 #[command]
 pub async fn get_workflow_state(
     state: State<'_, Mutex<WorkflowStore>>,
@@ -163,43 +178,47 @@ pub async fn get_workflow_state(
     let instance = store
         .instances
         .get(&instance_id)
-        .ok_or("Instance introuvable")?;
+        .ok_or_else(|| AppError::from("Instance introuvable en cache".to_string()))?;
     Ok(WorkflowView::from(instance))
 }
 
-// --- HELPER : BOUCLE D'EXÉCUTION ---
+// --- HELPER : BOUCLE D'EXÉCUTION SOUVERAINE ---
 
-/// Fait avancer le workflow tant qu'il y a des étapes "runnable"
 async fn run_workflow_loop(
     state: State<'_, Mutex<WorkflowStore>>,
     instance_id: String,
+    manager: &CollectionsManager<'_>,
 ) -> Result<WorkflowView> {
-    loop {
-        // 1. On verrouille pour accéder au scheduler et à l'instance
-        let mut guard = state.lock().await;
-        let WorkflowStore {
-            scheduler,
-            instances,
-        } = &mut *guard;
+    let final_status = {
+        let guard = state.lock().await;
+        let sched = guard
+            .scheduler
+            .as_ref()
+            .ok_or_else(|| AppError::from("Moteur non initialisé".to_string()))?;
+        sched.execute_instance_loop(&instance_id, manager).await?
+    };
 
-        let instance = instances
-            .get_mut(&instance_id)
-            .ok_or("Instance introuvable")?;
-        let sched = scheduler.as_ref().ok_or("Moteur non initialisé")?;
+    let doc = manager
+        .get_document("workflow_instances", &instance_id)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?
+        .ok_or_else(|| {
+            AppError::NotFound("Instance introuvable en base après exécution".to_string())
+        })?;
 
-        // 2. On exécute UNE étape (run_step)
-        // Note: run_step exécute tous les nœuds parallèles éligibles
-        let keep_going = sched.run_step(instance).await.map_err(|e| e.to_string())?;
+    let updated_instance: WorkflowInstance =
+        serde_json::from_value(doc).map_err(AppError::Serialization)?;
 
-        // 3. Si plus rien ne bouge (fini, pause ou échec), on arrête
-        if !keep_going {
-            return Ok(WorkflowView::from(&*instance));
-        }
+    let mut store = state.lock().await;
+    store
+        .instances
+        .insert(instance_id.clone(), updated_instance.clone());
 
-        // Sinon on boucle pour l'étape suivante immédiate
-    }
+    tracing::info!("🏁 Boucle frontend terminée. Statut: {:?}", final_status);
+    Ok(WorkflowView::from(&updated_instance))
 }
 
+// --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,31 +235,24 @@ mod tests {
         assert!(store.instances.is_empty());
     }
 
-    // --- TESTS JUMEAU NUMÉRIQUE ---
-
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_set_sensor_value() {
+        crate::utils::config::test_mocks::inject_mock_config();
+
         // 1. Mise à jour de la valeur via la commande
         let result = set_sensor_value(10.5).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "Capteur mis à jour : 10.50");
 
-        // 2. Vérification de l'effet de bord sur la variable globale
-        // C'est ce que l'outil SystemMonitorTool lira
-        {
-            let lock = crate::workflow_engine::tools::system_tools::VIBRATION_SENSOR
-                .lock()
-                .unwrap();
-            assert_eq!(*lock, 10.5);
-        }
+        // 2. Vérification dans JsonDB (IPC validé)
+        let (storage, domain, db) = create_db_manager().unwrap();
+        let manager = CollectionsManager::new(&storage, &domain, &db);
 
-        // 3. Reset à une valeur nominale
-        let _ = set_sensor_value(2.0).await;
-        {
-            let lock = crate::workflow_engine::tools::system_tools::VIBRATION_SENSOR
-                .lock()
-                .unwrap();
-            assert_eq!(*lock, 2.0);
-        }
+        let doc = manager
+            .get_document("digital_twin", "vibration_z")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(doc["value"], 10.5);
     }
 }

@@ -3,8 +3,7 @@ use crate::genetics::types::{Individual, Population};
 use rand::prelude::*;
 
 pub trait SelectionStrategy<G: Genome>: Send + Sync {
-    fn select<'a>(&self, rng: &mut dyn RngCore, population: &'a Population<G>)
-        -> &'a Individual<G>;
+    fn select<'a>(&self, rng: &mut dyn Rng, population: &'a Population<G>) -> &'a Individual<G>;
 }
 
 pub struct TournamentSelection {
@@ -20,11 +19,7 @@ impl TournamentSelection {
 }
 
 impl<G: Genome> SelectionStrategy<G> for TournamentSelection {
-    fn select<'a>(
-        &self,
-        rng: &mut dyn RngCore,
-        population: &'a Population<G>,
-    ) -> &'a Individual<G> {
+    fn select<'a>(&self, rng: &mut dyn Rng, population: &'a Population<G>) -> &'a Individual<G> {
         let pop_len = population.individuals.len();
         if pop_len == 0 {
             panic!("Cannot select from empty population");

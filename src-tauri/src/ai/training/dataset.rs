@@ -22,7 +22,6 @@ pub async fn extract_domain_data(
     let manager = CollectionsManager::new(storage, space, db_name);
     let mut dataset = Vec::new();
 
-    // CORRECTION E0599 : Ajout de .await car list_collections est asynchrone
     let collections = manager
         .list_collections()
         .await

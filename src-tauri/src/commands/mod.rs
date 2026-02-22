@@ -7,5 +7,6 @@ pub mod json_db_commands;
 pub mod model_commands;
 pub mod rules_commands;
 pub mod traceability_commands;
+pub mod training_commands;
 pub mod utils_commands;
 pub mod workflow_commands;

@@ -7,6 +7,7 @@ pub mod types;
 // 2. Modules de Logique Métier (Les fonctionnalités)
 pub mod arcadia; // Définitions sémantiques (OA, SA, LA, PA)
 pub mod capella; // Support des fichiers .capella / .aird
+pub mod sysml2;
 pub mod transformers; // Génération de code et conversion
 pub mod validators; // Vérification de cohérence
 
@@ -35,6 +36,8 @@ pub use arcadia::element_kind::{ArcadiaSemantics, ElementCategory, Layer};
 
 // Capella (Import)
 pub use capella::{CapellaReader, CapellaXmiParser};
+
+pub use sysml2::{Sysml2Parser, Sysml2ToArcadiaMapper};
 
 #[cfg(test)]
 mod tests {

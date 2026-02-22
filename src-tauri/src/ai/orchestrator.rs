@@ -42,8 +42,6 @@ impl AiOrchestrator {
     /// Constructeur
     pub async fn new(
         model: ProjectModel,
-        qdrant_url: &str,
-        llm_url: &str,
         storage_engine: Option<Arc<StorageEngine>>,
     ) -> Result<Self> {
         let app_config = AppConfig::get();
@@ -56,50 +54,32 @@ impl AiOrchestrator {
         let chats_path = domain_path.join("chats");
         let brain_path = domain_path.join("world_model.safetensors");
 
-        // Initialisation RAG & Symbolique
-        let rag = RagRetriever::new(qdrant_url, domain_path.clone()).await?;
+        // Initialisation RAG (Autonome) & Symbolique
+        let rag = RagRetriever::new().await?;
         let symbolic = SimpleRetriever::new(model);
 
-        // Récupération des clés API et modèles depuis la config
-        let gemini_key = app_config
-            .ai_engines
-            .get("cloud_gemini")
-            .and_then(|e| e.api_key.clone())
-            .unwrap_or_default();
-
-        let model_name = app_config
-            .ai_engines
-            .get("primary_local")
-            .map(|e| e.model_name.clone());
-
-        let llm = LlmClient::new(llm_url, &gemini_key, model_name);
+        let llm = LlmClient::new()?;
 
         // Configuration du World Model (Neuro-Symbolique)
-        let vocab_size = 10;
-        let embedding_dim = 16;
-        let action_dim = 5;
-        let hidden_dim = 32;
+        let wm_config = app_config.world_model.clone();
 
         let world_engine = if brain_path.exists() {
             tracing::info!("🧠 [Orchestrator] Chargement du World Model existant...");
             NeuroSymbolicEngine::load_from_file(
                 &brain_path,
-                vocab_size,
-                embedding_dim,
-                action_dim,
-                hidden_dim,
+                wm_config.clone(), // 🎯 On passe la config au lieu des 4 paramètres
             )
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("⚠️ Erreur chargement cerveau, réinitialisation: {}", e);
                 let vm = VarMap::new();
-                NeuroSymbolicEngine::new(vocab_size, embedding_dim, action_dim, hidden_dim, vm)
+                NeuroSymbolicEngine::new(wm_config.clone(), vm) // 🎯 Utilise la config
                     .expect("Echec fatal création WorldModel")
             })
         } else {
             tracing::info!("✨ [Orchestrator] Création d'un nouveau World Model vierge.");
             let vm = VarMap::new();
-            NeuroSymbolicEngine::new(vocab_size, embedding_dim, action_dim, hidden_dim, vm)?
+            NeuroSymbolicEngine::new(wm_config, vm)? // 🎯 Utilise la config
         };
 
         // Gestion de la mémoire de conversation
@@ -141,8 +121,9 @@ impl AiOrchestrator {
 
     /// Point d'entrée principal : Exécute une requête utilisateur via le système multi-agents
     pub async fn execute_workflow(&mut self, user_query: &str) -> Result<AgentResult> {
-        // 1. Enrichissement contextuel (RAG) - Optionnel mais recommandé
+        // 1. Enrichissement contextuel (RAG + Modèle) - Préparation pour les agents
         let _rag_context = self.rag.retrieve(user_query, 3).await.unwrap_or_default();
+        let _arcadia_context = self.symbolic.retrieve_context(user_query);
 
         // 2. Classification de l'intention
         let classifier = IntentClassifier::new(self.llm.clone());
@@ -165,7 +146,6 @@ impl AiOrchestrator {
             .get_path("PATH_RAISE_DOMAIN")
             .ok_or_else(|| AppError::Config("PATH_RAISE_DOMAIN manquant".into()))?;
 
-        // Fallback sécurisé pour le dataset
         let dataset_path = app_config
             .get_path("PATH_RAISE_DATASET")
             .unwrap_or_else(|| domain_path.join("dataset"));
@@ -199,26 +179,23 @@ impl AiOrchestrator {
             if let Some(agent) = self.create_agent(&current_agent_id) {
                 tracing::info!("🤖 Activation Agent: {}", current_agent_id);
 
-                // Exécution de l'agent
                 let result_opt = agent.process(&ctx, &current_intent).await?;
 
                 if let Some(res) = result_opt {
                     accumulated_artifacts.extend(res.artifacts);
                     accumulated_messages.push(res.message);
 
-                    // Vérification s'il y a un message de délégation (ACL)
                     if let Some(acl_msg) = res.outgoing_message {
                         tracing::info!("📡 Délégation vers : {}", acl_msg.receiver);
                         current_agent_id = acl_msg.receiver.clone();
-                        // On re-classifie le contenu du message interne pour adapter l'intention
                         current_intent = classifier.classify(&acl_msg.content).await;
                         hop_count += 1;
                         continue;
                     } else {
-                        break; // Fin de la chaîne
+                        break;
                     }
                 } else {
-                    break; // Pas de résultat
+                    break;
                 }
             } else {
                 accumulated_messages.push(format!(
@@ -236,17 +213,29 @@ impl AiOrchestrator {
         })
     }
 
-    /// Chat direct avec le LLM (sans outils complexes)
+    /// Chat direct avec le LLM unifiant les deux mémoires (Vectorielle et Graphe)
     pub async fn ask(&mut self, query: &str) -> Result<String> {
         self.session.add_user_message(query);
-        let prompt = format!("Expert Arcadia: {}", query);
 
-        // Appel LLM (Local ou Cloud selon config interne de LlmClient)
+        let rag_ctx = self.rag.retrieve(query, 3).await.unwrap_or_default();
+        let arcadia_ctx = self.symbolic.retrieve_context(query);
+
+        let mut prompt = format!("Demande Utilisateur : {}\n\n", query);
+
+        if !rag_ctx.is_empty() {
+            prompt.push_str(&rag_ctx);
+            prompt.push('\n');
+        }
+        if !arcadia_ctx.contains("Aucun élément spécifique") {
+            prompt.push_str(&arcadia_ctx);
+            prompt.push('\n');
+        }
+
         let response = self
             .llm
             .ask(
                 LlmBackend::LocalLlama,
-                "Tu es un expert système Arcadia.",
+                "Tu es un expert système Arcadia. Utilise le contexte documentaire (RAG) et structurel (Modèle) fourni pour répondre avec précision.",
                 &prompt,
             )
             .await?;
@@ -271,7 +260,6 @@ impl AiOrchestrator {
             .train_step(state_before, WorldAction { intent }, state_after)
             .map_err(|e| AppError::Validation(format!("Erreur TrainStep: {}", e)))?;
 
-        // Sauvegarde asynchrone du cerveau
         let _ = self
             .world_engine
             .save_to_file(&self.world_engine_path)
@@ -297,7 +285,7 @@ impl AiOrchestrator {
 }
 
 // =========================================================================
-// TESTS
+// TESTS UNITAIRES ET D'INTÉGRATION HYPER ROBUSTES
 // =========================================================================
 
 #[cfg(test)]
@@ -305,16 +293,22 @@ mod tests {
     use super::*;
     use crate::ai::protocols::acl::{AclMessage, Performative};
     use crate::model_engine::types::NameType;
-    use crate::utils::{data::HashMap, io::tempdir};
-    // ✅ Import du mock de config pour les tests
     use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::{data::HashMap, io::tempdir};
 
-    /// Helper pour créer un élément Arcadia factice
+    // 🎯 Imports pour la sérialisation des tests
+    use crate::utils::{AsyncMutex, OnceLock};
+
+    /// Verrou asynchrone pour éviter les collisions sur le modèle HuggingFace lors des tests parallèles
+    fn get_hf_lock() -> &'static AsyncMutex<()> {
+        static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| AsyncMutex::new(()))
+    }
+
     fn make_element(id: &str) -> ArcadiaElement {
         ArcadiaElement {
             id: id.to_string(),
             name: NameType::default(),
-            // URI valide pour l'encodeur
             kind: "https://raise.io/ontology/arcadia/la#LogicalFunction".to_string(),
             description: None,
             properties: HashMap::new(),
@@ -322,32 +316,27 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_init() {
-        // 1. Injection de la config mock (CRITIQUE pour éviter le panic de AppConfig::get)
         inject_mock_config();
 
+        let _guard = get_hf_lock().lock().await; // 🔒 Sécurité d'accès concourant
         let _dir = tempdir().expect("temp dir");
 
-        // 2. Initialisation
-        let orch = AiOrchestrator::new(
-            ProjectModel::default(),
-            "http://dummy",
-            "http://dummy",
-            None,
-        )
-        .await;
+        let orch = AiOrchestrator::new(ProjectModel::default(), None).await;
 
         assert!(
             orch.is_ok(),
             "L'initialisation de l'orchestrateur a échoué : {:?}",
             orch.err()
         );
-        let orch = orch.unwrap();
-        assert_eq!(orch.session.id, "main_session");
+        assert_eq!(orch.unwrap().session.id, "main_session");
     }
 
     #[tokio::test]
     async fn test_full_acl_path() {
+        // Test purement synchrone, pas besoin de verrou HF
         let msg = AclMessage::new(
             Performative::Request,
             "hardware",
@@ -358,23 +347,114 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_learning_cycle() {
-        inject_mock_config(); // Toujours injecter la config
+        inject_mock_config();
+        let _guard = get_hf_lock().lock().await; // 🔒 Sécurité d'accès concourant
         let _dir = tempdir().expect("temp dir");
 
-        let orch = AiOrchestrator::new(
-            ProjectModel::default(),
-            "http://dummy",
-            "http://dummy",
-            None,
-        )
-        .await
-        .unwrap();
+        let orch = AiOrchestrator::new(ProjectModel::default(), None)
+            .await
+            .unwrap();
 
         let loss = orch
             .reinforce_learning(&make_element("1"), CommandType::Create, &make_element("2"))
             .await;
 
         assert!(loss.is_ok(), "L'apprentissage a échoué : {:?}", loss.err());
+    }
+
+    // --- NOUVEAUX TESTS ROBUSTES ---
+    #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_orchestrator_agent_factory() {
+        inject_mock_config();
+
+        let _guard = get_hf_lock().lock().await; // 🔒 Sécurité d'accès concourant
+        let _dir = tempdir().expect("temp dir");
+
+        let orch = AiOrchestrator::new(ProjectModel::default(), None)
+            .await
+            .unwrap();
+
+        // 1. Vérification du routage vers les agents connus
+        assert!(
+            orch.create_agent("business_agent").is_some(),
+            "Le Business Agent doit être créé"
+        );
+        assert!(
+            orch.create_agent("system_architect").is_some(),
+            "Le System Agent doit répondre à ses alias"
+        );
+
+        // 2. Vérification de la résilience face à un agent inconnu
+        assert!(
+            orch.create_agent("unknown_hacker_agent").is_none(),
+            "Un agent inconnu doit retourner None"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_orchestrator_clear_history() {
+        inject_mock_config();
+
+        let _guard = get_hf_lock().lock().await; // 🔒 Sécurité d'accès concourant
+        let _dir = tempdir().expect("temp dir");
+
+        let mut orch = AiOrchestrator::new(ProjectModel::default(), None)
+            .await
+            .unwrap();
+
+        // 1. Simulation d'une conversation
+        orch.session.add_user_message("Bonjour l'IA");
+        orch.session.add_ai_message("Bonjour Humain");
+        assert_eq!(
+            orch.session.history.len(),
+            2,
+            "La session doit contenir 2 messages"
+        );
+
+        // 2. Nettoyage
+        let clear_res = orch.clear_history().await;
+        assert!(clear_res.is_ok(), "Le nettoyage doit réussir");
+        assert_eq!(
+            orch.session.history.len(),
+            0,
+            "La session doit être vide après le nettoyage"
+        );
+
+        // 3. Vérification de l'ID (le nettoyage ne doit pas casser l'ID de la session)
+        assert_eq!(orch.session.id, "main_session");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_orchestrator_learn_document() {
+        inject_mock_config();
+        let _guard = get_hf_lock().lock().await; // 🔒 Sécurité d'accès concourant
+        let _dir = tempdir().expect("temp dir");
+
+        let mut orch = AiOrchestrator::new(ProjectModel::default(), None)
+            .await
+            .unwrap();
+
+        // Test d'intégration complet : Envoi d'un texte à l'orchestrateur -> RAG -> Embedding Candle -> Vector DB
+        let content = "Raise est une plateforme incroyable combinant RAG et modèles formels.";
+        let res = orch.learn_document(content, "documentation.txt").await;
+
+        assert!(
+            res.is_ok(),
+            "L'apprentissage de document a échoué : {:?}",
+            res.err()
+        );
+        assert!(
+            res.unwrap() > 0,
+            "Le document aurait dû générer au moins un chunk vectoriel"
+        );
     }
 }

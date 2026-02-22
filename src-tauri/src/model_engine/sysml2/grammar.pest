@@ -1,0 +1,52 @@
+// FICHIER : src-tauri/src/model_engine/sysml2/grammar.pest
+
+// Règles silencieuses
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
+
+// Identifiants et chaînes (Règles atomiques)
+ident      = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+string_val = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" | "'" ~ (!"'" ~ ANY)* ~ "'" }
+
+doc_string = @{ "doc" ~ WHITESPACE* ~ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+
+// ==========================================
+// DÉFINITIONS TRANSVERSES & DONNÉES
+// ==========================================
+item_def        = { "item" ~ "def" ~ ident ~ "{" ~ (doc_string | attribute_def)* ~ "}" }
+requirement_def = { "requirement" ~ "def" ~ ident ~ "{" ~ (doc_string | string_val | attribute_def)* ~ "}" }
+constraint_def  = { "constraint" ~ "def" ~ ident ~ "{" ~ (doc_string | string_val)* ~ "}" }
+state_def       = { "state" ~ "def" ~ ident ~ "{" ~ (doc_string)* ~ "}" }
+use_case_def    = { "use" ~ "case" ~ "def" ~ (ident | string_val) ~ "{" ~ (doc_string | actor_inst | perform_stmt | include_stmt)* ~ "}" }
+
+// ==========================================
+// DÉFINITIONS STRUCTURELLES (Acteurs, Composants, EPBS)
+// ==========================================
+actor_def     = { "actor" ~ "def" ~ ident ~ ";" }
+part_def      = { "part" ~ "def" ~ ident ~ "{" ~ (doc_string | port_def | part_inst)* ~ "}" }
+port_def      = { "port" ~ ident ~ (":" ~ ident)? ~ ";" }
+attribute_def = { "attribute" ~ ident ~ ":" ~ ident ~ ";" }
+
+// ==========================================
+// DÉFINITIONS COMPORTEMENTALES (Fonctions, Activités)
+// ==========================================
+action_def   = { "action" ~ "def" ~ ident ~ "{" ~ (doc_string | action_param)* ~ "}" }
+action_param = { ("in" | "out") ~ ident ~ ":" ~ ident ~ ";" }
+
+// ==========================================
+// CONTEXTE & ALLOCATIONS
+// ==========================================
+part_inst     = { "part" ~ ident ~ ":" ~ ident ~ ("{" ~ perform_stmt* ~ "}" | ";") }
+actor_inst    = { "actor" ~ ident ~ ":" ~ ident ~ ";" }
+perform_stmt  = { "perform" ~ ident ~ ("by" ~ ident)? ~ ";" }
+allocate_stmt = { "allocate" ~ ident ~ "to" ~ ident ~ ";" }
+flow_stmt     = { "flow" ~ ident ~ ("." ~ ident)* ~ "to" ~ ident ~ ("." ~ ident)* ~ ";" }
+include_stmt  = { "include" ~ "action" ~ ident ~ ";" }
+
+// ==========================================
+// ORGANISATION
+// ==========================================
+package_item = _{ item_def | requirement_def | constraint_def | state_def | use_case_def | part_def | actor_def | action_def | part_inst | actor_inst | allocate_stmt | flow_stmt | package_decl }
+package_decl = { "package" ~ ident ~ "{" ~ (doc_string | package_item)* ~ "}" }
+
+file = { SOI ~ package_decl* ~ EOI }

@@ -1,7 +1,8 @@
 // FICHIER : src-tauri/src/traceability/compliance/iso_26262.rs
 
 use super::{ComplianceChecker, ComplianceReport, Violation};
-use crate::model_engine::types::{NameType, ProjectModel};
+use crate::traceability::tracer::Tracer;
+use crate::utils::{prelude::*, HashMap};
 
 pub struct Iso26262Checker;
 
@@ -10,32 +11,33 @@ impl ComplianceChecker for Iso26262Checker {
         "ISO-26262 (Road Vehicles Functional Safety)"
     }
 
-    fn check(&self, model: &ProjectModel) -> ComplianceReport {
+    /// 🎯 Version robuste : Vérification des niveaux ASIL pour les composants critiques
+    fn check(&self, _tracer: &Tracer, docs: &HashMap<String, Value>) -> ComplianceReport {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
-        for comp in &model.pa.components {
-            // On vérifie seulement si la propriété 'safety_critical' est vraie
-            let is_critical = comp
-                .properties
+        for (id, doc) in docs {
+            // 🎯 Détection sémantique : Est-ce un composant critique pour la sécurité ?
+            let is_safety_critical = doc
                 .get("safety_critical")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            if is_critical {
+            if is_safety_critical {
                 checked_count += 1;
-                let has_asil = comp.properties.contains_key("asil");
+                let name = doc.get("name").and_then(|n| n.as_str()).unwrap_or(id);
+
+                // 🎯 RÈGLE : Présence obligatoire du niveau ASIL (Automotive Safety Integrity Level)
+                let has_asil = doc.get("asil").is_some();
 
                 if !has_asil {
-                    let name = match &comp.name {
-                        NameType::String(s) => s.clone(),
-                        _ => "Inconnu".to_string(),
-                    };
-
                     violations.push(Violation {
-                        element_id: Some(comp.id.clone()),
+                        element_id: Some(id.clone()),
                         rule_id: "ISO26262-ASIL-UNDEF".to_string(),
-                        description: format!("Composant critique '{}' sans niveau ASIL", name),
+                        description: format!(
+                            "Le composant critique '{}' ne possède pas de classification ASIL (A à D)",
+                            name
+                        ),
                         severity: "Critical".to_string(),
                     });
                 }
@@ -52,49 +54,76 @@ impl ComplianceChecker for Iso26262Checker {
 }
 
 // =========================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES HYPER ROBUSTES
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::{data::json, HashMap};
+    use serde_json::json;
 
-    fn create_comp(id: &str, props: serde_json::Value) -> ArcadiaElement {
-        let mut properties = HashMap::new();
-        if let Some(obj) = props.as_object() {
-            for (k, v) in obj {
-                properties.insert(k.clone(), v.clone());
-            }
-        }
-        ArcadiaElement {
-            id: id.to_string(),
-            name: NameType::String(id.to_string()),
-            kind: "Component".to_string(),
-            // CORRECTION : Initialisation du champ description ajouté récemment
-            description: None,
-            properties,
-        }
+    #[test]
+    fn test_iso26262_asil_strict_check() {
+        let mut docs: HashMap<String, Value> = HashMap::new();
+
+        // 1. Composant conforme (Critique + ASIL D)
+        docs.insert(
+            "Brakes_01".to_string(),
+            json!({
+                "id": "Brakes_01",
+                "name": "Electronic Braking System",
+                "safety_critical": true,
+                "asil": "D"
+            }),
+        );
+
+        // 2. Composant non conforme (Critique mais ASIL manquant)
+        docs.insert(
+            "Steering_02".to_string(),
+            json!({
+                "id": "Steering_02",
+                "name": "Power Steering Controller",
+                "safety_critical": true
+            }),
+        );
+
+        // 3. Élément ignoré (Non critique)
+        docs.insert(
+            "Radio_03".to_string(),
+            json!({
+                "id": "Radio_03",
+                "name": "Infotainment",
+                "safety_critical": false
+            }),
+        );
+
+        // 🎯 Injection du graphe via from_json_list (Isolant total pour le test)
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let checker = Iso26262Checker;
+        let report = checker.check(&tracer, &docs);
+
+        assert_eq!(report.rules_checked, 2); // Brakes + Steering
+        assert_eq!(report.violations.len(), 1); // Steering est fautif
+        assert_eq!(
+            report.violations[0].element_id,
+            Some("Steering_02".to_string())
+        );
+        assert!(report.violations[0].description.contains("ASIL"));
     }
 
     #[test]
-    fn test_iso26262_asil_check() {
-        let mut model = ProjectModel::default();
+    fn test_iso26262_no_critical_components() {
+        let mut docs: HashMap<String, Value> = HashMap::new();
+        docs.insert(
+            "Lamp".to_string(),
+            json!({ "id": "Lamp", "safety_critical": false }),
+        );
 
-        let c1 = create_comp("Brakes", json!({ "safety_critical": true, "asil": "D" }));
-        let c2 = create_comp("Radio", json!({ "safety_critical": false }));
-        let c3 = create_comp("Airbag_Controller", json!({ "safety_critical": true })); // Pas d'ASIL !
-
-        model.pa.components = vec![c1, c2, c3];
-
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
         let checker = Iso26262Checker;
-        let report = checker.check(&model);
 
-        assert!(!report.passed);
-        assert_eq!(report.rules_checked, 2); // Brakes et Airbag checkés
-        assert_eq!(report.violations.len(), 1);
-        assert!(report.violations[0]
-            .description
-            .contains("Airbag_Controller"));
+        let report = checker.check(&tracer, &docs);
+
+        assert!(report.passed);
+        assert_eq!(report.rules_checked, 0);
     }
 }

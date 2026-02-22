@@ -25,8 +25,8 @@ use raise::blockchain::sync::engine::SyncEngine;
 use raise::blockchain::{ConnectionProfile, FabricClient, SharedFabricClient};
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
-    json_db_commands, model_commands, rules_commands, traceability_commands, utils_commands,
-    workflow_commands,
+    json_db_commands, model_commands, rules_commands, traceability_commands, training_commands,
+    utils_commands, workflow_commands,
 };
 
 // --- BRIDGE, CONSENSUS & P2P ---
@@ -49,13 +49,14 @@ use raise::plugins::manager::PluginManager;
 // Structures d'état
 use raise::commands::ai_commands::AiState;
 use raise::commands::workflow_commands::WorkflowStore;
-use raise::workflow_engine::scheduler::WorkflowScheduler;
+use raise::workflow_engine::executor::WorkflowExecutor;
+use raise::workflow_engine::scheduler::WorkflowScheduler; // 🎯 FIX : Import de l'Exécuteur
 
 pub use raise::model_engine::types::ProjectModel;
 use raise::AppState;
 
+use raise::ai::graph_store::GraphStore;
 use raise::ai::orchestrator::AiOrchestrator;
-use raise::graph_store::GraphStore;
 use raise::model_engine::loader::ModelLoader;
 
 use raise::commands::ai_commands::DlState;
@@ -70,7 +71,6 @@ fn main() {
     }
     println!("🚀 Démarrage de RAISE...");
     raise::utils::init_logging();
-    // 3. VÉRIFICATION (SANS ERREUR DE SYNTAXE)
     let _config = raise::utils::config::AppConfig::get();
 
     tauri::Builder::default()
@@ -88,18 +88,15 @@ fn main() {
             let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
 
-            // ✅ CORRECTION : Utilisation des nouveaux champs de config
             let default_space = &app_config.system_domain;
             let default_db = &app_config.system_db;
 
-            // 3. CHARGEMENT ONTOLOGIES (Depuis le dossier de domaine)
-            // Construction du chemin : ~/raise_domain/_system/_system/schemas/v1/arcadia/@context
+            // 3. CHARGEMENT ONTOLOGIES
             let ontology_path = db_root
                 .join(default_space)
                 .join(default_db)
                 .join("schemas/v1/arcadia/@context");
 
-            //load_arcadia_ontologies(&ontology_path) ;
             tauri::async_runtime::spawn(async move {
                 load_arcadia_ontologies(&ontology_path).await;
             });
@@ -199,26 +196,14 @@ fn main() {
                 }
             });
 
-            // --- BACKGROUND: ORCHESTRATEUR IA ---
+            // --- BACKGROUND: ORCHESTRATEUR IA ET MOTEUR DE WORKFLOW ---
             let app_handle_clone = app.handle().clone();
             let plugin_mgr_for_wf = plugin_mgr.clone();
 
             tauri::async_runtime::spawn(async move {
                 let global_cfg = raise::utils::config::AppConfig::get();
-
-                // 1. Récupération de l'URL LLM depuis ai_engines
-                let llm_url = global_cfg.ai_engines.get("primary_local")
-                    .and_then(|engine| engine.api_url.clone())
-                    .unwrap_or_else(|| "http://127.0.0.1:8081".to_string());
-
-                // 2. Récupération de l'URL Qdrant GRPC depuis services
-                let qdrant_url = global_cfg.services.get("qdrant_grpc")
-                    .map(|s| format!("{}://{}:{}", s.protocol.as_deref().unwrap_or("http"), s.host, s.port))
-                    .unwrap_or_else(|| "http://127.0.0.1:6334".to_string());
-
                 let storage_state = app_handle_clone.state::<StorageEngine>();
 
-                // 3. ✅ CORRECTION : Utilisation de system_domain/system_db pour initialiser le modèle
                 let _ = ModelLoader::from_engine(
                     storage_state.inner(),
                     &global_cfg.system_domain,
@@ -226,24 +211,26 @@ fn main() {
                 );
 
                 let storage_state = app_handle_clone.state::<StorageEngine>();
-                // On utilise le même espace que défini plus haut (mbse2) pour la logique métier spécifique
                 let loader = ModelLoader::from_engine(storage_state.inner(), "mbse2", "_system");
 
                 if let Ok(model) = loader.load_full_model().await {
                     let storage_arc = Arc::new(storage_state.inner().clone());
 
-                    match AiOrchestrator::new(model, &qdrant_url, &llm_url, Some(storage_arc)).await
+                    match AiOrchestrator::new(model, Some(storage_arc)).await
                     {
                         Ok(orchestrator) => {
                             let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
                             let ai_state = app_handle_clone.state::<AiState>();
                             *ai_state.0.lock().await = Some(shared_orch.clone());
+
+                            // 🎯 FIX ICI : Instanciation propre de la nouvelle architecture !
+                            let executor = WorkflowExecutor::new(shared_orch.clone(), plugin_mgr_for_wf);
+
                             let wf_state = app_handle_clone.state::<AsyncMutex<WorkflowStore>>();
                             let mut wf_store = wf_state.lock().await;
-                            wf_store.scheduler =
-                                Some(WorkflowScheduler::new(shared_orch, plugin_mgr_for_wf));
+                            wf_store.scheduler = Some(WorkflowScheduler::new(executor));
 
-                            println!("✅ [RAISE] Orchestrateur IA opérationnel.");
+                            println!("✅ [RAISE] Orchestrateur IA et Workflow Engine opérationnels.");
                         }
                         Err(e) => eprintln!("❌ Erreur Fatale Orchestrator: {}", e),
                     }
@@ -268,7 +255,6 @@ fn main() {
                 loop {
                     tokio::select! {
                         event = swarm.select_next_some() => {
-                            // CORRECTION CLIPPY: Remplacement de `match` par `if let` pour un cas unique
                             if let SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Gossipsub(gossipsub::Event::Message { message, .. })) = event {
                                 if let Ok(net_msg) = serde_json::from_slice::<ArcadiaNetMessage>(&message.data) {
                                     let mut engine = consensus_state.lock().await;
@@ -333,6 +319,7 @@ fn main() {
             ai_commands::train_dl_step,
             ai_commands::save_dl_model,
             ai_commands::load_dl_model,
+            training_commands::tauri_train_domain,
             dataset::ai_export_dataset,
             cognitive_commands::cognitive_load_plugin,
             cognitive_commands::cognitive_run_plugin,
@@ -482,18 +469,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_migrations_list_integrity() {
-        // ✅ CORRECTION : Utilisation du Mock Mémoire au lieu de l'init réel
-        // Cela évite de chercher les fichiers "configs", "workstations" sur le disque
-        // et résout l'erreur "Config système introuvable".
         raise::utils::config::test_mocks::inject_mock_config();
 
         let dir = tempdir().unwrap();
-        // On force le stockage sur un dossier temporaire pour ne pas polluer le disque réel
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
 
-        // run_app_migrations appelle Migrator, qui appelle create_db,
-        // qui utilise maintenant AppConfig::get().
         let res = run_app_migrations(&storage, "test_space", "test_db").await;
 
         assert!(

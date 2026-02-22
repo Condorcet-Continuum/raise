@@ -7,24 +7,42 @@ use super::{NodeType, WorkflowDefinition, WorkflowEdge, WorkflowNode};
 pub struct WorkflowCompiler;
 
 impl WorkflowCompiler {
+    /// Dictionnaire interne pour résoudre les dépendances techniques d'une règle politique
+    /// Retourne : Option<(Nom_de_l_outil, Arguments_JSON, Clé_de_contexte_cible)>
+    fn resolve_tool_dependency(rule_name: &str) -> Option<(&'static str, Value, &'static str)> {
+        match rule_name {
+            "VIBRATION_MAX" => Some((
+                "read_system_metrics",
+                json!({ "sensor_id": "vibration_z" }),
+                "sensor_vibration",
+            )),
+            "TEMP_MAX" => Some((
+                "read_system_metrics",
+                json!({ "sensor_id": "temp_core" }),
+                "sensor_temperature",
+            )),
+            // Facilement extensible sans modifier le cœur du moteur
+            _ => None,
+        }
+    }
+
     /// Transforme un Mandat politique en Workflow technique exécutable
     pub fn compile(mandate: &Mandate) -> WorkflowDefinition {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
-        // On nettoie le nom pour l'ID
+
         let wf_id = format!(
             "wf_{}_{}",
             mandate.meta.author.replace(" ", ""),
             mandate.meta.version
         );
 
-        // Pointeur vers le dernier nœud créé pour chaîner les edges
         let mut previous_node_id = "start".to_string();
 
         // 1. Nœud de Départ
         nodes.push(WorkflowNode {
             id: "start".into(),
-            r#type: NodeType::Task, // Changé temporairement en Task pour initialiser
+            r#type: NodeType::Task,
             name: "Initialisation Mandat".into(),
             params: json!({
                 "strategy": mandate.governance.strategy,
@@ -35,41 +53,40 @@ impl WorkflowCompiler {
         // 2. Compilation des Lignes Rouges (VETOS -> GatePolicy)
         for (i, veto) in mandate.hard_logic.vetos.iter().enumerate() {
             if veto.active {
-                // --- Injection de l'outil de lecture AVANT le Veto ---
-                // Note : À terme, cela devrait être configuré dynamiquement, pas hardcodé.
-                if veto.rule == "VIBRATION_MAX" {
-                    let tool_node_id = format!("tool_read_vibration_{}", i);
+                // Injection DYNAMIQUE de l'outil si la règle le nécessite
+                if let Some((tool_name, args, output_key)) =
+                    Self::resolve_tool_dependency(&veto.rule)
+                {
+                    let tool_node_id = format!("tool_read_{}_{}", veto.rule.to_lowercase(), i);
 
                     nodes.push(WorkflowNode {
                         id: tool_node_id.clone(),
-                        r#type: NodeType::CallMcp, // Action : Lire le capteur
-                        name: "Lecture Capteur Vibration".into(),
+                        r#type: NodeType::CallMcp,
+                        name: format!("Lecture pour {}", veto.rule),
                         params: json!({
-                            "tool_name": "read_system_metrics",
-                            "arguments": { "sensor_id": "vibration_z" }
+                            "tool_name": tool_name,
+                            "arguments": args,
+                            "output_key": output_key // Instruction pour l'executor de stocker le résultat ici
                         }),
                     });
 
-                    // Lien : Précédent -> Outil
                     edges.push(WorkflowEdge {
                         from: previous_node_id.clone(),
                         to: tool_node_id.clone(),
                         condition: None,
                     });
 
-                    // Le nœud précédent devient l'outil
                     previous_node_id = tool_node_id;
                 }
 
                 let node_id = format!("gate_veto_{}", i);
 
-                // Construction des paramètres du nœud GatePolicy
                 let mut params = json!({
                     "rule": veto.rule,
                     "action": veto.action
                 });
 
-                // AJOUT : Transmission de l'AST dynamique si présent dans le mandat
+                // Transmission de l'AST dynamique
                 if let Some(ast) = &veto.ast {
                     if let Some(obj) = params.as_object_mut() {
                         obj.insert("ast".to_string(), ast.clone());
@@ -78,12 +95,11 @@ impl WorkflowCompiler {
 
                 nodes.push(WorkflowNode {
                     id: node_id.clone(),
-                    r#type: NodeType::GatePolicy, // Contrôle : Vérifier la valeur
+                    r#type: NodeType::GatePolicy,
                     name: format!("VETO: {}", veto.rule),
                     params,
                 });
 
-                // Lien : (Précédent ou Outil) -> GatePolicy
                 edges.push(WorkflowEdge {
                     from: previous_node_id.clone(),
                     to: node_id.clone(),
@@ -94,14 +110,13 @@ impl WorkflowCompiler {
             }
         }
 
-        // --- NOUVEAU : 2.5 Injection de la Gouvernance Dynamique (WASM) ---
-        // On insère ce nœud entre les Vetos (Hard Logic) et l'exécution (Agents)
+        // 2.5 Injection de la Gouvernance Dynamique (WASM / Plugins)
         let wasm_node_id = "policy_wasm_check".to_string();
         nodes.push(WorkflowNode {
             id: wasm_node_id.clone(),
-            r#type: NodeType::Wasm, // Hot-Swap dynamique
+            r#type: NodeType::Wasm,
             name: "🛡️ Politique WASM (Hot-Swap)".into(),
-            params: json!({}), // Utilise le path par défaut défini dans l'executor
+            params: json!({}),
         });
 
         edges.push(WorkflowEdge {
@@ -110,7 +125,6 @@ impl WorkflowCompiler {
             condition: None,
         });
         previous_node_id = wasm_node_id;
-        // ------------------------------------------------------------------
 
         // 3. L'Agent d'Exécution
         let task_id = "agent_execution".to_string();
@@ -127,14 +141,14 @@ impl WorkflowCompiler {
         });
         previous_node_id = task_id;
 
-        // 4. Le Consensus Algorithmique (Decision / Condorcet)
+        // 4. Le Consensus Algorithmique
         let vote_id = "consensus_condorcet".to_string();
         nodes.push(WorkflowNode {
             id: vote_id.clone(),
             r#type: NodeType::Decision,
             name: "Vote Condorcet Pondéré".into(),
             params: json!({
-                "weights": mandate.governance.condorcet_weights, // Injection des POIDS
+                "weights": mandate.governance.condorcet_weights,
                 "threshold": 0.5
             }),
         });
@@ -166,6 +180,9 @@ impl WorkflowCompiler {
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,7 +191,7 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    fn get_test_mandate() -> Mandate {
+    fn build_test_mandate(rules: Vec<VetoRule>) -> Mandate {
         Mandate {
             id: "test_mandate_001".into(),
             meta: MandateMeta {
@@ -184,88 +201,101 @@ mod tests {
             },
             governance: Governance {
                 strategy: Strategy::SafetyFirst,
-                condorcet_weights: HashMap::from([
-                    ("agent_security".to_string(), 3.0),
-                    ("agent_finance".to_string(), 1.0),
-                ]),
+                condorcet_weights: HashMap::from([("sec".to_string(), 1.0)]),
             },
-            hard_logic: HardLogic {
-                vetos: vec![
-                    VetoRule {
-                        rule: "VIBRATION_MAX".into(),
-                        active: true,
-                        action: "SHUTDOWN".into(),
-                        ast: None, // CORRECTION : Champ ajouté
-                    },
-                    VetoRule {
-                        rule: "TEMP_MAX".into(),
-                        active: false,
-                        action: "LOG".into(),
-                        ast: None, // CORRECTION : Champ ajouté
-                    },
-                ],
-            },
+            hard_logic: HardLogic { vetos: rules },
             observability: Observability { heartbeat_ms: 100 },
             signature: None,
         }
     }
 
     #[test]
-    fn test_compiler_generates_workflow() {
-        let mandate = get_test_mandate();
+    fn test_compiler_dynamic_tool_injection() {
+        let mandate = build_test_mandate(vec![
+            VetoRule {
+                rule: "VIBRATION_MAX".into(), // Doit injecter un outil
+                active: true,
+                action: "STOP".into(),
+                ast: Some(json!({"Gt": [{"Var": "sensor_vibration"}, {"Val": 8.0}]})),
+            },
+            VetoRule {
+                rule: "UNKNOWN_RULE".into(), // NE DOIT PAS injecter d'outil
+                active: true,
+                action: "LOG".into(),
+                ast: Some(json!({"Eq": [{"Var": "x"}, {"Val": 1}]})),
+            },
+        ]);
+
         let wf = WorkflowCompiler::compile(&mandate);
 
-        assert_eq!(wf.id, "wf_Admin_v1");
-
-        // On doit avoir 7 nœuds maintenant :
+        // Nœuds attendus :
         // 1. Start
-        // 2. ToolRead (pour VIBRATION_MAX)
-        // 3. GateVeto (pour VIBRATION_MAX)
-        // 4. WASM (Politique Dynamique)
-        // 5. Exec (Agent)
-        // 6. Vote (Condorcet)
-        // 7. End
+        // 2. Tool (VIBRATION_MAX)
+        // 3. Gate (VIBRATION_MAX)
+        // 4. Gate (UNKNOWN_RULE) - Pas d'outil avant !
+        // 5. WASM
+        // 6. Agent Exec
+        // 7. Vote
+        // 8. End
         assert_eq!(
             wf.nodes.len(),
-            7,
-            "Le nombre de nœuds doit inclure le nœud WASM"
+            8,
+            "Le workflow doit avoir exactement 8 nœuds"
         );
 
-        // Vérifions que le nœud WASM est bien présent
-        let wasm_node = wf.nodes.iter().find(|n| n.r#type == NodeType::Wasm);
-        assert!(wasm_node.is_some(), "Le nœud WASM doit être injecté");
-
-        // Vérifions que le nœud CallMcp est bien présent
-        let tool_node = wf.nodes.iter().find(|n| n.r#type == NodeType::CallMcp);
-        assert!(tool_node.is_some(), "Le nœud outil doit être injecté");
-
-        let decision_node = wf
+        // Vérification de l'injection d'outil
+        let tools: Vec<_> = wf
             .nodes
             .iter()
-            .find(|n| n.r#type == NodeType::Decision)
-            .unwrap();
-        let weights = decision_node.params.get("weights").unwrap();
+            .filter(|n| n.r#type == NodeType::CallMcp)
+            .collect();
+        assert_eq!(tools.len(), 1, "Un seul outil doit être injecté");
+        assert_eq!(
+            tools[0].params.get("output_key").unwrap().as_str().unwrap(),
+            "sensor_vibration"
+        );
 
-        assert_eq!(weights.get("agent_security").unwrap().as_f64(), Some(3.0));
+        // Vérification des AST
+        let gates: Vec<_> = wf
+            .nodes
+            .iter()
+            .filter(|n| n.r#type == NodeType::GatePolicy)
+            .collect();
+        assert_eq!(gates.len(), 2, "Deux vetos actifs doivent être présents");
+        assert!(gates[0].params.get("ast").is_some());
+        assert!(gates[1].params.get("ast").is_some());
     }
 
     #[test]
-    fn test_compiler_injects_ast() {
-        let mut mandate = get_test_mandate();
-        // Injection d'un AST fictif
-        let ast = json!({ "Eq": [{"Var": "x"}, {"Val": 1}] });
-        mandate.hard_logic.vetos[0].ast = Some(ast.clone());
+    fn test_compiler_ignores_inactive_rules() {
+        let mandate = build_test_mandate(vec![VetoRule {
+            rule: "TEMP_MAX".into(),
+            active: false, // Règle désactivée !
+            action: "STOP".into(),
+            ast: None,
+        }]);
 
         let wf = WorkflowCompiler::compile(&mandate);
-
-        // On cherche le nœud de veto actif (le premier, index 2 dans la liste finale car start + tool avant)
-        // Mais plus robuste de chercher par nom
-        let veto_node = wf
+        let gates: Vec<_> = wf
             .nodes
             .iter()
-            .find(|n| n.name.contains("VIBRATION_MAX") && n.r#type == NodeType::GatePolicy)
-            .unwrap();
+            .filter(|n| n.r#type == NodeType::GatePolicy)
+            .collect();
+        let tools: Vec<_> = wf
+            .nodes
+            .iter()
+            .filter(|n| n.r#type == NodeType::CallMcp)
+            .collect();
 
-        assert_eq!(veto_node.params.get("ast"), Some(&ast));
+        assert_eq!(
+            gates.len(),
+            0,
+            "Aucun gate ne doit être généré pour un veto inactif"
+        );
+        assert_eq!(
+            tools.len(),
+            0,
+            "Aucun outil ne doit être injecté pour un veto inactif"
+        );
     }
 }

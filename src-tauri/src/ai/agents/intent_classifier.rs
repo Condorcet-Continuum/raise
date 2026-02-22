@@ -98,9 +98,23 @@ impl IntentClassifier {
     pub async fn classify(&self, user_input: &str) -> EngineeringIntent {
         let lower_input = user_input.to_lowercase();
 
-        // --- 1. COURT-CIRCUIT (Optimisation CPU & Déterminisme) ---
         // On évite le LLM si l'intention est évidente via des mots-clés forts.
 
+        //DÉTECTION SALUTATIONS (Instantane)
+        let greetings = [
+            "bonjour",
+            "hello",
+            "salut",
+            "hi",
+            "hey",
+            "ça va",
+            "how are you",
+        ];
+        if greetings.iter().any(|&g| lower_input.contains(g)) && lower_input.len() < 20 {
+            return EngineeringIntent::Chat;
+        }
+
+        // --- 1. COURT-CIRCUIT (Optimisation CPU & Déterminisme) ---
         // DÉTECTION QUALITÉ / TESTS
         if lower_input.contains("vérifi") // vérifie, vérification
             || lower_input.contains("verify")
@@ -170,17 +184,16 @@ impl IntentClassifier {
         }
 
         // --- 2. APPEL LLM (Fallback Intelligent) ---
-
         let system_prompt = "Tu es le Dispatcher IA de RAISE.
         Ton rôle est de classifier l'intention de l'utilisateur en JSON STRICT.
         
         FORMATS ATTENDUS :
-        1. Création : { \"intent\": \"create_element\", \"layer\": \"OA|SA|LA|PA|DATA|TRANSVERSE\", \"element_type\": \"Type\", \"name\": \"Nom\" }
-        2. Code : { \"intent\": \"generate_code\", \"language\": \"rust|python\", \"filename\": \"main.rs\", \"context\": \"description\" }
-        3. Qualité : { \"intent\": \"verify_quality\", \"scope\": \"code|model\", \"target\": \"Nom cible\" }
+        1. Création : { \"intent\": \"create_element\", ... }
+        2. Chat/Salutation : { \"intent\": \"chat\" }  <-- UTILISE CECI pour 'Bonjour', 'Qui es-tu ?', etc.
+        3. Inconnu : { \"intent\": \"unknown\" }
 
-        Exemple: 'Génère le code Rust pour Auth' -> { \"intent\": \"generate_code\", \"language\": \"rust\", \"filename\": \"auth.rs\", \"context\": \"Auth\" }
-        Exemple: 'Vérifie la qualité de Auth' -> { \"intent\": \"verify_quality\", \"scope\": \"model\", \"target\": \"Auth\" }";
+        IMPORTANT : Si l'utilisateur dit juste 'Bonjour' ou discute, réponds { \"intent\": \"chat\" }. 
+        Ne crée pas d'élément technique pour une simple salutation.";
 
         let response = self
             .llm

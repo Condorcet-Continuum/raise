@@ -3,17 +3,20 @@
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
+use raise::utils::config::test_mocks::inject_mock_config;
 use raise::utils::config::AppConfig;
 use raise::utils::{
     async_recursion,
     io::{self, Path, PathBuf},
     prelude::*,
-    Once,
+    Once, OnceLock,
 };
-use std::env;
+//use std::env;
 use tempfile::TempDir;
 
 static INIT: Once = Once::new();
+// 🎯 Utilisation d'un OnceLock pour partager le client LLM
+static SHARED_CLIENT: OnceLock<LlmClient> = OnceLock::new();
 
 #[allow(dead_code)]
 pub struct UnifiedTestEnv {
@@ -27,70 +30,53 @@ pub struct UnifiedTestEnv {
 
 pub async fn setup_test_env() -> UnifiedTestEnv {
     INIT.call_once(|| {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter("info")
-            .with_test_writer()
-            .try_init();
-
-        std::env::set_var("RAISE_ENV_MODE", "test");
-        AppConfig::init().expect("❌ Échec critique de l'initialisation AppConfig");
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        inject_mock_config();
     });
 
+    let app_config = AppConfig::get();
+
+    // 🎯 1. ISOLATION : On crée un dossier UNIQUE pour ce test précis
     let test_uuid = uuid::Uuid::new_v4().to_string();
     let temp_dir = tempfile::Builder::new()
-        .prefix(&format!("raise_test_{}_", test_uuid))
+        .prefix(&format!("raise_it_{}_", test_uuid))
         .tempdir()
         .expect("❌ Impossible de créer le dossier temporaire");
 
     let domain_path = temp_dir.path().to_path_buf();
-    let db_config = JsonDbConfig::new(domain_path.clone());
 
+    // 🎯 2. SATISFAIRE LLMCLIENT : On place le mock là où le Singleton l'attend
+    // Cela évite l'erreur "Modèle GGUF introuvable" sans casser l'isolation du test
+    let global_domain = app_config.get_path("PATH_RAISE_DOMAIN").unwrap();
+    let mock_model_file = global_domain.join("_system/ai-assets/models/mock.gguf");
+    if let Some(parent) = mock_model_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&mock_model_file, b"dummy content");
+
+    // 🎯 3. SCHÉMAS : On génère les schémas dans notre dossier ISOLÉ
     let space = "_system".to_string();
     let db = "_system".to_string();
+    let db_config = JsonDbConfig::new(domain_path.clone());
 
-    let db_root = db_config.db_root(&space, &db);
-    io::create_dir_all(&db_root).await.expect("create db root");
-
-    // GESTION DES SCHÉMAS
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let possible_paths = vec![
-        manifest_dir.join("../schemas/v1"),
-        manifest_dir.join("schemas/v1"),
-        manifest_dir.join("../../schemas/v1"),
-    ];
-
-    let src_schemas = match possible_paths.into_iter().find(|p| p.exists()) {
-        Some(path) => path,
-        None => {
-            eprintln!("⚠️ Schémas introuvables sur le disque. Génération de MOCKS...");
-            generate_mock_schemas(&temp_dir.path().join("mock_schemas_src"))
-                .await
-                .expect("Impossible de générer les schémas mocks")
-        }
-    };
-
-    let dest_schemas_root = db_config.db_schemas_root(&space, &db).join("v1");
-    copy_dir_recursive(&src_schemas, &dest_schemas_root)
+    let mock_src = domain_path.join("mock_schemas_src");
+    let src_schemas = generate_mock_schemas(&mock_src)
         .await
-        .expect("copy schemas");
+        .expect("fail mock schemas");
 
+    let dest_schemas = db_config.db_schemas_root(&space, &db).join("v1");
+    copy_dir_recursive(&src_schemas, &dest_schemas)
+        .await
+        .expect("fail copy schemas");
+
+    // Initialisation du stockage isolé
     let storage = StorageEngine::new(db_config);
     let mgr = CollectionsManager::new(&storage, &space, &db);
     mgr.init_db().await.expect("init_db failed");
 
-    let app_config = AppConfig::get();
-    let gemini_key = app_config
-        .ai_engines
-        .get("cloud_gemini")
-        .and_then(|e| e.api_key.clone())
-        .unwrap_or_default();
-    let local_url = app_config
-        .ai_engines
-        .get("primary_local")
-        .and_then(|e| e.api_url.clone())
-        .unwrap_or_else(|| "http://localhost:8081".into());
-
-    let client = LlmClient::new(&local_url, &gemini_key, None);
+    let client = SHARED_CLIENT
+        .get_or_init(|| LlmClient::new().expect("❌ Impossible d'initialiser le LlmClient partagé"))
+        .clone();
 
     UnifiedTestEnv {
         storage,
@@ -98,7 +84,7 @@ pub async fn setup_test_env() -> UnifiedTestEnv {
         space,
         db,
         domain_path,
-        _tmp_dir: temp_dir,
+        _tmp_dir: temp_dir, // Vital : maintient le dossier vivant pendant le test
     }
 }
 
@@ -243,6 +229,7 @@ async fn generate_mock_schemas(base_path: &Path) -> Result<PathBuf> {
     Ok(base_path.to_path_buf())
 }
 
+#[allow(dead_code)]
 #[async_recursion]
 async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     if !dst.exists() {

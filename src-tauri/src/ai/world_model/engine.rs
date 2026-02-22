@@ -3,6 +3,7 @@
 use candle_core::{DType, Device, Tensor, Var};
 use candle_nn::{VarBuilder, VarMap};
 
+use crate::utils::config::WorldModelConfig;
 use crate::utils::{io::Path, prelude::*, HashMap};
 
 use crate::ai::nlp::parser::CommandType;
@@ -38,39 +39,25 @@ pub struct NeuroSymbolicEngine {
     pub varmap: VarMap,
     pub quantizer: VectorQuantizer,
     pub predictor: WorldModelPredictor,
-
-    #[allow(dead_code)]
-    pub config_vocab_size: usize,
-    #[allow(dead_code)]
-    pub config_embedding_dim: usize,
-    #[allow(dead_code)]
-    pub config_action_dim: usize,
-    #[allow(dead_code)]
-    pub config_hidden_dim: usize,
+    pub config: WorldModelConfig,
 }
 
 impl NeuroSymbolicEngine {
-    pub fn new(
-        vocab_size: usize,
-        embedding_dim: usize,
-        action_dim: usize,
-        hidden_dim: usize,
-        varmap: VarMap,
-    ) -> Result<Self> {
+    pub fn new(config: WorldModelConfig, varmap: VarMap) -> Result<Self> {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
 
-        let quantizer = VectorQuantizer::new(vocab_size, embedding_dim, vb.pp("quantizer"))?;
-        let predictor =
-            WorldModelPredictor::new(embedding_dim, action_dim, hidden_dim, vb.pp("dynamics"))?;
+        // L'encodeur n'est pas encore refactoré, on lui passe les champs manuellement
+        let quantizer =
+            VectorQuantizer::new(config.vocab_size, config.embedding_dim, vb.pp("quantizer"))?;
+
+        // 🎯 Notre prédicteur prend enfin la config !
+        let predictor = WorldModelPredictor::new(&config, vb.pp("dynamics"))?;
 
         Ok(Self {
             varmap,
             quantizer,
             predictor,
-            config_vocab_size: vocab_size,
-            config_embedding_dim: embedding_dim,
-            config_action_dim: action_dim,
-            config_hidden_dim: hidden_dim,
+            config,
         })
     }
 
@@ -78,7 +65,7 @@ impl NeuroSymbolicEngine {
         let raw_perception = ArcadiaEncoder::encode_element(element)?;
         let token = self.quantizer.tokenize(&raw_perception)?;
         let state_quantized = self.quantizer.decode(&token)?;
-        let action_tensor = action.to_tensor(self.config_action_dim)?;
+        let action_tensor = action.to_tensor(self.config.action_dim)?;
 
         let predicted_future_state = self.predictor.forward(&state_quantized, &action_tensor)?;
         Ok(predicted_future_state)
@@ -104,13 +91,7 @@ impl NeuroSymbolicEngine {
         Ok(())
     }
 
-    pub async fn load_from_file<P: AsRef<Path>>(
-        path: P,
-        vocab_size: usize,
-        embedding_dim: usize,
-        action_dim: usize,
-        hidden_dim: usize,
-    ) -> Result<Self> {
+    pub async fn load_from_file<P: AsRef<Path>>(path: P, config: WorldModelConfig) -> Result<Self> {
         let buffer = tokio::fs::read(path).await?;
 
         let tensors = candle_core::safetensors::load_buffer(&buffer, &Device::Cpu)
@@ -127,7 +108,7 @@ impl NeuroSymbolicEngine {
             }
         }
 
-        Self::new(vocab_size, embedding_dim, action_dim, hidden_dim, varmap)
+        Self::new(config, varmap)
     }
 }
 
@@ -135,18 +116,33 @@ impl NeuroSymbolicEngine {
 mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
+    use crate::utils::config::WorldModelConfig;
     use candle_nn::VarMap;
-    use tempfile::NamedTempFile;
+    use tempfile::NamedTempFile; // 🎯 NOUVEL IMPORT
+
+    // Helper pour générer une config de test
+    fn get_test_config() -> WorldModelConfig {
+        WorldModelConfig {
+            vocab_size: 10,
+            embedding_dim: 16,
+            action_dim: 5,
+            hidden_dim: 32,
+            use_gpu: false,
+        }
+    }
 
     #[test]
     fn test_engine_simulation_flow() {
         let varmap = VarMap::new();
-        // CORRECTION : embedding_dim = 16 (8 layers + 8 categories) au lieu de 15
-        let engine = NeuroSymbolicEngine::new(10, 16, 5, 32, varmap).unwrap();
+        let config = get_test_config();
+
+        // 🎯 On passe la config au lieu des 4 entiers
+        let engine = NeuroSymbolicEngine::new(config, varmap).unwrap();
+
         let element = ArcadiaElement {
             id: "1".to_string(),
             name: NameType::default(),
-            kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string(), // URI valide
+            kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string(),
             description: None,
             properties: HashMap::new(),
         };
@@ -161,12 +157,13 @@ mod tests {
         let file = NamedTempFile::new().unwrap();
         let path = file.path();
         let varmap = VarMap::new();
-        // CORRECTION : embedding_dim = 16
-        let engine1 = NeuroSymbolicEngine::new(10, 16, 5, 32, varmap).unwrap();
+        let config = get_test_config();
+
+        let engine1 = NeuroSymbolicEngine::new(config.clone(), varmap).unwrap();
         engine1.save_to_file(path).await.expect("Save failed");
 
-        // CORRECTION : embedding_dim = 16
-        let engine2 = NeuroSymbolicEngine::load_from_file(path, 10, 16, 5, 32)
+        // 🎯 load_from_file prend maintenant la config
+        let engine2 = NeuroSymbolicEngine::load_from_file(path, config)
             .await
             .expect("Load failed");
 

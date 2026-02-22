@@ -1,4 +1,5 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use rand::Rng;
 
 pub struct KeyPair {
     signing_key: SigningKey,
@@ -12,7 +13,7 @@ impl KeyPair {
 
         // Correction du warning : rand 0.9 utilise rand::rng() au lieu de thread_rng()
         let mut rng = rand::rng();
-        use rand::RngCore;
+
         rng.fill_bytes(&mut bytes);
 
         let signing_key = SigningKey::from_bytes(&bytes);

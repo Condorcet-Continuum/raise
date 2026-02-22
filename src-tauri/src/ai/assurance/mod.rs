@@ -1,58 +1,73 @@
+// FICHIER : src-tauri/src/ai/assurance/mod.rs
+
 pub mod quality;
 pub mod xai;
 
 pub use quality::{QualityReport, QualityStatus};
 pub use xai::{XaiFrame, XaiMethod};
 
+use crate::json_db::{
+    collections::manager::CollectionsManager, // 🎯 Import du moteur de Base de Données
+    storage::{JsonDbConfig, StorageEngine},
+};
 use crate::utils::{
-    data,
-    io::{self},
+    config::AppConfig, // 🎯 Import de la configuration
     prelude::*,
     AppError,
 };
+use std::path::Path;
 
-// --- PERSISTANCE (Assurance Store) ---
+// --- PERSISTANCE (Assurance Store via JsonDB) ---
 pub mod persistence {
     use super::*;
 
-    /// Sauvegarde un rapport de qualité dans le dossier du projet
+    /// Sauvegarde un rapport de qualité dans le JsonDb (avec validation de schéma JSON-LD)
     pub async fn save_quality_report(domain_root: &Path, report: &QualityReport) -> Result<String> {
-        // Structure : un2/transverse/collections/quality_reports/<ID>.json
-        let relative_path = format!(
-            "un2/transverse/collections/quality_reports/{}.json",
-            report.id
-        );
-        let full_path = domain_root.join(&relative_path);
+        let config = AppConfig::get();
+        let domain = &config.system_domain;
+        let db = &config.system_db;
 
-        save_json(&full_path, report).await?;
-        Ok(relative_path)
+        // 🎯 Initialisation du moteur JsonDB
+        let db_config = JsonDbConfig::new(domain_root.to_path_buf());
+        let storage = StorageEngine::new(db_config);
+        let manager = CollectionsManager::new(&storage, domain, db);
+
+        // S'assure que la collection existe avant d'écrire
+        let _ = manager.create_collection("quality_reports", None).await;
+
+        let doc = crate::utils::data::to_value(report)
+            .map_err(|e| AppError::Database(format!("Erreur de sérialisation: {}", e)))?;
+
+        // 🎯 L'Upsert gère automatiquement l'indexation et la validation du schéma
+        manager
+            .upsert_document("quality_reports", doc)
+            .await
+            .map_err(|e| AppError::Database(format!("Erreur sauvegarde JSON DB: {}", e)))?;
+
+        Ok(report.id.clone())
     }
 
-    /// Sauvegarde une trame XAI dans le dossier du projet
+    /// Sauvegarde une trame XAI dans le JsonDb (avec validation de schéma JSON-LD)
     pub async fn save_xai_frame(domain_root: &Path, frame: &XaiFrame) -> Result<String> {
-        // Structure : un2/transverse/collections/xai_frames/<ID>.json
-        let relative_path = format!("un2/transverse/collections/xai_frames/{}.json", frame.id);
-        let full_path = domain_root.join(&relative_path);
+        let config = AppConfig::get();
+        let domain = &config.system_domain;
+        let db = &config.system_db;
 
-        save_json(&full_path, frame).await?;
-        Ok(relative_path)
-    }
+        let db_config = JsonDbConfig::new(domain_root.to_path_buf());
+        let storage = StorageEngine::new(db_config);
+        let manager = CollectionsManager::new(&storage, domain, db);
 
-    /// Helper interne pour l'écriture disque sécurisée
-    async fn save_json<T: Serialize>(path: &Path, data: &T) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            io::create_dir_all(parent).await.map_err(|e| {
-                AppError::custom_io(format!(
-                    "Impossible de créer le dossier {:?} : {}",
-                    parent, e
-                ))
-            })?;
-        }
-        let json = data::stringify_pretty(data)?;
-        io::write(path, json).await.map_err(|e| {
-            AppError::custom_io(format!("Échec écriture fichier {:?} : {}", path, e))
-        })?;
-        Ok(())
+        let _ = manager.create_collection("xai_frames", None).await;
+
+        let doc = crate::utils::data::to_value(frame)
+            .map_err(|e| AppError::Database(format!("Erreur de sérialisation: {}", e)))?;
+
+        manager
+            .upsert_document("xai_frames", doc)
+            .await
+            .map_err(|e| AppError::Database(format!("Erreur sauvegarde JSON DB: {}", e)))?;
+
+        Ok(frame.id.clone())
     }
 }
 
@@ -62,14 +77,26 @@ mod tests {
     use super::*;
     use crate::ai::assurance::quality::MetricCategory;
     use crate::ai::assurance::xai::ExplanationScope;
-    use crate::utils::io::{self, tempdir};
+    use crate::utils::config::test_mocks;
+    use crate::utils::io::tempdir; // 🎯 Sandbox
+
     #[tokio::test]
-    async fn test_save_assurance_artifacts() {
-        // 1. Setup environnement temporaire
+    async fn test_save_assurance_artifacts_with_json_db() {
+        // 🎯 Sandbox pour éviter de polluer le vrai répertoire
+        test_mocks::inject_mock_config();
+        let config = AppConfig::get();
+        let domain = &config.system_domain;
+        let db = &config.system_db;
+
         let dir = tempdir().unwrap();
         let root_path = dir.path();
 
-        // 2. Test Sauvegarde Quality Report
+        // Setup du manager pour vérifier la lecture à la fin du test
+        let db_config = JsonDbConfig::new(root_path.to_path_buf());
+        let storage = StorageEngine::new(db_config);
+        let manager = CollectionsManager::new(&storage, domain, db);
+
+        // 1. Test Sauvegarde Quality Report
         let mut report = QualityReport::new("model_test", "dataset_v1");
         report.add_metric(
             "Accuracy",
@@ -80,37 +107,34 @@ mod tests {
             true,
         );
 
-        let path_rel_report = persistence::save_quality_report(root_path, &report)
+        let report_id = persistence::save_quality_report(root_path, &report)
             .await
             .expect("Sauvegarde QualityReport échouée");
 
-        let full_path_report = root_path.join(path_rel_report);
-        assert!(
-            full_path_report.exists(),
-            "Le fichier QualityReport n'a pas été créé"
-        );
+        // 🎯 Vérification via le manager (Lecture DB au lieu d'un fichier direct)
+        let saved_report = manager
+            .get_document("quality_reports", &report_id)
+            .await
+            .unwrap()
+            .expect("Document QualityReport introuvable en DB");
 
-        // Vérification contenu
-        let content_report = io::read_to_string(&full_path_report).await.unwrap();
-        assert!(content_report.contains("Accuracy"));
-        assert!(content_report.contains("0.95"));
+        assert_eq!(saved_report["model_id"], "model_test");
+        assert_eq!(saved_report["global_score"], 100.0);
 
-        // 3. Test Sauvegarde XAI Frame
+        // 2. Test Sauvegarde XAI Frame
         let frame = XaiFrame::new("model_test", XaiMethod::Lime, ExplanationScope::Local);
 
-        let path_rel_xai = persistence::save_xai_frame(root_path, &frame)
+        let frame_id = persistence::save_xai_frame(root_path, &frame)
             .await
             .expect("Sauvegarde XaiFrame échouée");
 
-        let full_path_xai = root_path.join(path_rel_xai);
-        assert!(
-            full_path_xai.exists(),
-            "Le fichier XaiFrame n'a pas été créé"
-        );
+        // 🎯 Vérification via le manager
+        let saved_frame = manager
+            .get_document("xai_frames", &frame_id)
+            .await
+            .unwrap()
+            .expect("Document XAI introuvable en DB");
 
-        // Vérification contenu
-        let content_xai = io::read_to_string(&full_path_xai).await.unwrap();
-        assert!(content_xai.contains("Lime"));
-        assert!(content_xai.contains("model_test"));
+        assert_eq!(saved_frame["model_id"], "model_test");
     }
 }

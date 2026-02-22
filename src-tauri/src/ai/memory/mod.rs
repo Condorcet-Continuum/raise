@@ -1,7 +1,6 @@
 use crate::utils::{async_trait, data, prelude::*, HashMap};
 
-pub mod leann_store;
-pub mod qdrant_store;
+pub mod candle_store;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
@@ -29,51 +28,41 @@ pub trait VectorStore: Send + Sync {
 
 #[cfg(test)]
 mod integration_tests {
-    use super::qdrant_store::QdrantMemory;
     use super::{MemoryRecord, VectorStore};
-    use crate::utils::{config::AppConfig, prelude::*, sleep, Duration, Once, Uuid};
-
-    static INIT_TEST: Once = Once::new();
+    use crate::ai::memory::candle_store::CandleLocalStore;
+    use crate::utils::{io::tempdir, prelude::*, Uuid};
+    use candle_core::Device;
 
     #[tokio::test]
-    #[ignore]
-    async fn test_qdrant_lifecycle() {
-        // ✅ 1. bonjour SSOT !
-        INIT_TEST.call_once(|| {
-            let _ = AppConfig::init();
-        });
+    async fn test_candle_lifecycle() {
+        // ✅ 1. Création d'un espace isolé et 100% local (plus besoin d'URL ou de port !)
+        let dir = tempdir().unwrap();
+        let device = Device::Cpu;
+        let store_dir = dir.path().join("vector_store");
 
-        // ✅ 2. On récupère le port depuis la configuration centralisée
-        let config = AppConfig::get();
-        let port = config
-            .services
-            .get("qdrant_grpc")
-            .map(|s| s.port)
-            .unwrap_or(6334);
-
-        let url = format!("http://127.0.0.1:{}", port);
-
-        let store = QdrantMemory::new(&url)
-            .unwrap_or_else(|e| panic!("❌ Qdrant inaccessible sur {} : {}", url, e));
+        let store = CandleLocalStore::new(&store_dir, &device);
 
         let col = "integ_test_collection";
         store.init_collection(col, 4).await.expect("Init failed");
 
         let rec = MemoryRecord {
-            id: Uuid::new_v4().to_string(), // ✅ L'import Uuid fonctionne
-            content: "Test d'intégration".into(),
-            metadata: json!({"env": "test"}), // ✅ Correction de la typo : json! au lieu de data:json!
+            id: Uuid::new_v4().to_string(),
+            content: "Test d'intégration natif".into(),
+            metadata: json!({"env": "test"}),
             vectors: Some(vec![1.0, 0.0, 0.0, 0.0]),
         };
 
+        // ✅ 2. Ajout du document et sauvegarde explicite sur le disque
         store.add_documents(col, vec![rec.clone()]).await.unwrap();
-        sleep(Duration::from_millis(500)).await;
+        store.save().await.expect("Échec de la persistance locale");
 
-        // Appel avec 5 arguments
+        // ✅ 3. Recherche avec les 5 arguments
         let res = store
             .search_similarity(col, &[1.0, 0.0, 0.0, 0.0], 1, 0.0, None)
             .await
             .unwrap();
-        assert!(!res.is_empty());
+
+        assert!(!res.is_empty(), "La recherche doit remonter le document");
+        assert_eq!(res[0].content, "Test d'intégration natif");
     }
 }

@@ -3,28 +3,15 @@
 use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{data_agent::DataAgent, Agent, AgentContext};
-use raise::ai::llm::client::LlmClient;
-use std::sync::Arc;
+use raise::utils::Arc;
 
 #[tokio::test]
 #[ignore]
 async fn test_data_agent_creates_class_and_enum() {
-    dotenvy::dotenv().ok();
-
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone dans ai_suite/mod.rs.
     // On doit l'attendre pour récupérer l'environnement de test concret.
     let env = setup_test_env().await;
 
-    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
-    let local_url =
-        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let model_name = std::env::var("RAISE_MODEL_NAME").ok();
-
-    if !env.client.ping_local().await && api_key.is_empty() {
-        return;
-    }
-
-    let client = LlmClient::new(&local_url, &api_key, model_name);
     let test_root = env.storage.config.data_root.clone();
 
     // CORRECTION E0061 : Injection agent_id + session_id
@@ -35,7 +22,7 @@ async fn test_data_agent_creates_class_and_enum() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        client.clone(),
+        env.client.clone(),
         test_root.clone(),
         test_root.join("dataset"),
     );

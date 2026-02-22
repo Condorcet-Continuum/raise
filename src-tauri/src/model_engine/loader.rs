@@ -377,11 +377,12 @@ impl<'a> DataProvider for ModelLoader<'a> {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::{data::json, io::tempdir};
 
     #[tokio::test]
     async fn test_loader_index_and_semantic_resolution() {
+        inject_mock_config();
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
@@ -403,6 +404,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transverse_dispatch_comprehensive() {
+        inject_mock_config();
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
@@ -475,6 +477,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_access_on_transverse() {
+        inject_mock_config();
+
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);

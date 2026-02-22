@@ -1,41 +1,48 @@
 // FICHIER : src-tauri/src/traceability/compliance/do_178c.rs
 
 use super::{ComplianceChecker, ComplianceReport, Violation};
-use crate::model_engine::types::{NameType, ProjectModel};
 use crate::traceability::tracer::Tracer;
+use crate::utils::{prelude::*, HashMap};
 
 pub struct Do178cChecker;
 
 impl ComplianceChecker for Do178cChecker {
     fn name(&self) -> &str {
-        "DO-178C (Software Considerations in Airborne Systems)"
+        "DO-178C (Software Traceability)"
     }
 
-    fn check(&self, model: &ProjectModel) -> ComplianceReport {
-        let tracer = Tracer::new(model);
+    /// 🎯 Version robuste : Audit de la traçabilité SA -> LA
+    fn check(&self, tracer: &Tracer, docs: &HashMap<String, Value>) -> ComplianceReport {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
-        // Règle 1 : Couverture SA -> LA (Traceability)
-        for func in &model.sa.functions {
-            checked_count += 1;
-            let downstream = tracer.get_downstream_elements(&func.id);
+        for (id, doc) in docs {
+            // 🎯 Identification sémantique : Est-ce une fonction système (SA) ?
+            let is_system_function = doc
+                .get("@type")
+                .and_then(|t| t.as_str())
+                .map(|t| t.contains("SystemFunction"))
+                .unwrap_or(false)
+                || doc.get("kind").and_then(|k| k.as_str()) == Some("Function");
 
-            if downstream.is_empty() {
-                let func_name = match &func.name {
-                    NameType::String(s) => s.clone(),
-                    _ => "Inconnu".to_string(),
-                };
+            if is_system_function {
+                checked_count += 1;
 
-                violations.push(Violation {
-                    element_id: Some(func.id.clone()),
-                    rule_id: "DO178-TRACE-01".to_string(),
-                    description: format!(
-                        "Fonction système '{}' non allouée (Dead Code potentiel)",
-                        func_name
-                    ),
-                    severity: "High".to_string(),
-                });
+                // 🎯 Vérification de la traçabilité aval (Downstream) en O(1)
+                let downstream_ids = tracer.get_downstream_ids(id);
+
+                if downstream_ids.is_empty() {
+                    let name = doc.get("name").and_then(|n| n.as_str()).unwrap_or(id);
+                    violations.push(Violation {
+                        element_id: Some(id.clone()),
+                        rule_id: "DO178-TRACE-01".to_string(),
+                        description: format!(
+                            "La fonction '{}' n'est pas allouée à un composant logiciel (LA)",
+                            name
+                        ),
+                        severity: "High".to_string(),
+                    });
+                }
             }
         }
 
@@ -49,52 +56,60 @@ impl ComplianceChecker for Do178cChecker {
 }
 
 // =========================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES HYPER ROBUSTES
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::{data::json, HashMap};
+    use serde_json::json;
 
-    fn create_elem(id: &str, props: serde_json::Value) -> ArcadiaElement {
-        let mut properties = HashMap::new();
-        if let Some(obj) = props.as_object() {
-            for (k, v) in obj {
-                properties.insert(k.clone(), v.clone());
-            }
-        }
-        ArcadiaElement {
-            id: id.to_string(),
-            name: NameType::String(format!("Elem {}", id)),
-            kind: "Function".to_string(),
-            // CORRECTION : Initialisation du champ description ajouté récemment
-            description: None,
-            properties,
-        }
+    #[test]
+    fn test_do178_traceability_logic() {
+        let mut docs: HashMap<String, Value> = HashMap::new();
+
+        // 1. F1 est conforme : allouée à C1 (lien aval)
+        docs.insert(
+            "F1".to_string(),
+            json!({
+                "id": "F1",
+                "kind": "Function",
+                "allocatedTo": "C1"
+            }),
+        );
+
+        // 2. F2 est en violation : aucune allocation
+        docs.insert(
+            "F2".to_string(),
+            json!({
+                "id": "F2",
+                "kind": "Function"
+            }),
+        );
+
+        // 3. Cible du lien
+        docs.insert("C1".to_string(), json!({ "id": "C1", "kind": "Component" }));
+
+        // 🎯 Injection du graphe via from_json_list (Zéro dépendance ProjectModel)
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let checker = Do178cChecker;
+
+        let report = checker.check(&tracer, &docs);
+
+        assert_eq!(report.rules_checked, 2);
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].element_id, Some("F2".to_string()));
+        assert!(report.violations[0].description.contains("F2"));
     }
 
     #[test]
-    fn test_do178c_traceability() {
-        let mut model = ProjectModel::default();
-
-        // F1 est couverte (allouée à C1)
-        let f1 = create_elem("f1", json!({ "allocatedTo": ["c1"] }));
-        // F2 est orpheline
-        let f2 = create_elem("f2", json!({}));
-
-        // Cible (pour que le Tracer fonctionne)
-        let c1 = create_elem("c1", json!({}));
-
-        model.sa.functions = vec![f1, f2];
-        model.la.components = vec![c1];
-
+    fn test_do178_empty_model() {
+        let docs = HashMap::new();
+        let tracer = Tracer::from_json_list(vec![]);
         let checker = Do178cChecker;
-        let report = checker.check(&model);
 
-        assert!(!report.passed);
-        assert_eq!(report.rules_checked, 2);
-        assert_eq!(report.violations.len(), 1);
-        assert_eq!(report.violations[0].element_id, Some("f2".to_string()));
+        let report = checker.check(&tracer, &docs);
+
+        assert!(report.passed);
+        assert_eq!(report.rules_checked, 0);
     }
 }

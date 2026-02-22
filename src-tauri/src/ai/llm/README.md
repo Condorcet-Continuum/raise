@@ -91,7 +91,7 @@ use crate::ai::llm::{client, prompts, response_parser};
 
 async fn classify_user_request(user_input: &str) -> Result<serde_json::Value, String> {
     // 1. Initialisation
-    let llm_client = client::LlmClient::new("http://localhost:8081", "api_key", None);
+    let llm_client = client::LlmClient::new( );
 
     // 2. Prompting
     let full_prompt = format!("{}\nREQ: {}", prompts::INTENT_CLASSIFIER_PROMPT, user_input);

@@ -161,8 +161,8 @@ mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use std::collections::HashMap;
-    use tempfile::tempdir;
+    use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::{data::HashMap, io::tempdir};
 
     fn setup_loader() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -196,6 +196,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_compliance_transverse_naming() {
+        inject_mock_config();
+
         // Vérifie que les règles s'appliquent aussi aux éléments transverses
         let (_dir, config) = setup_loader();
         let storage = StorageEngine::new(config);

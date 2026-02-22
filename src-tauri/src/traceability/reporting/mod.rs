@@ -1,24 +1,28 @@
+// FICHIER : src-tauri/src/traceability/reporting/mod.rs
+
 pub mod audit_report;
 pub mod trace_matrix;
 
-// Re-exports pour simplifier l'accès depuis l'extérieur
-pub use audit_report::{AuditGenerator, AuditReport};
+// Re-exports pour simplifier l'accès depuis les agents ou l'interface
+pub use audit_report::{AuditGenerator, AuditReport, ModelStats};
 pub use trace_matrix::{MatrixGenerator, TraceabilityMatrix};
 
-// =========================================================================
-// TESTS UNITAIRES (Intégration du module)
-// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_reporting_module_visibility() {
-        // Vérifie que les types sont bien exportés et accessibles
-        let _matrix_type = std::any::type_name::<TraceabilityMatrix>();
-        let _report_type = std::any::type_name::<AuditReport>();
-
-        assert!(_matrix_type.contains("TraceabilityMatrix"));
-        assert!(_report_type.contains("AuditReport"));
+    fn test_reporting_exports_integrity() {
+        // Vérifie que les types sont accessibles et correctement nommés
+        // (Évite les régressions lors de renommages de fichiers)
+        let _test_stats = ModelStats {
+            total_elements: 0,
+            total_functions: 0,
+            total_components: 0,
+            total_requirements: 0,
+            total_scenarios: 0,
+            total_functional_chains: 0,
+        };
+        assert!(true);
     }
 }

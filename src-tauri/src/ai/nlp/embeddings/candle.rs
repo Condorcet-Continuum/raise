@@ -1,9 +1,8 @@
-use crate::utils::{data, prelude::*};
+use crate::utils::prelude::*;
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config};
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 pub struct CandleEngine {
@@ -19,38 +18,78 @@ impl CandleEngine {
             .or_else(|_| Device::new_cuda(0)) // Nvidia CUDA
             .unwrap_or(Device::Cpu); // Fallback CPU standard
 
-        println!("🕯️ [Candle] Moteur initialisé sur : {:?}", device);
+        println!("🕯️ [Candle NLP] Moteur initialisé sur : {:?}", device);
 
-        let api = Api::new().map_err(|e| AppError::from(format!("HF Api Erreur: {}", e)))?;
-        let repo = api.repo(Repo::new(
-            "sentence-transformers/all-MiniLM-L6-v2".to_string(),
-            RepoType::Model,
+        // 2. RÉCUPÉRATION DE LA CONFIGURATION DYNAMIQUE SSOT
+        let config_app = AppConfig::get();
+        let engine_cfg = config_app
+            .ai_engines
+            .get("primary_embedding")
+            .ok_or_else(|| {
+                AppError::Ai(
+                    "Moteur 'primary_embedding' introuvable dans la configuration".to_string(),
+                )
+            })?;
+
+        // Extraction des noms de fichiers (avec fallbacks)
+        let model_dir = &engine_cfg.model_name; // Ex: "minilm"
+        let config_filename = engine_cfg
+            .rust_config_file
+            .as_deref()
+            .unwrap_or("config.json");
+        let tokenizer_filename = engine_cfg
+            .rust_tokenizer_file
+            .as_deref()
+            .unwrap_or("tokenizer.json");
+        let weights_filename = engine_cfg
+            .rust_safetensors_file
+            .as_deref()
+            .unwrap_or("model.safetensors");
+
+        // 3. CONSTRUCTION DES CHEMINS LOCAUX ABSOLUS
+        let home = dirs::home_dir().ok_or_else(|| {
+            AppError::Ai("Impossible de trouver le dossier utilisateur (home)".to_string())
+        })?;
+
+        // On cible dynamiquement le dossier du modèle (ex: embeddings/minilm)
+        let base_path = home.join(format!(
+            "raise_domain/_system/ai-assets/embeddings/{}",
+            model_dir
         ));
 
-        let config_path = repo
-            .get("config.json")
-            .map_err(|e| AppError::from(e.to_string()))?;
-        let tokenizer_path = repo
-            .get("tokenizer.json")
-            .map_err(|e| AppError::from(e.to_string()))?;
-        let weights_path = repo
-            .get("model.safetensors")
-            .map_err(|e| AppError::from(e.to_string()))?;
+        let config_path = base_path.join(config_filename);
+        let tokenizer_path = base_path.join(tokenizer_filename);
+        let weights_path = base_path.join(weights_filename);
 
+        // 3. Vérification de sécurité stricte
+        if !weights_path.exists() || !config_path.exists() || !tokenizer_path.exists() {
+            return Err(AppError::Ai(format!(
+                "Fichiers d'embeddings introuvables en local. Vérifiez le dossier : {:?}",
+                base_path
+            )));
+        }
+
+        // 4. Chargement de la configuration
         let config_str = std::fs::read_to_string(&config_path)
             .map_err(|e| AppError::from(format!("Erreur lecture config: {}", e)))?;
 
-        let config: Config = data::parse(&config_str)?;
+        // Utilisation de serde_json (ou data::parse) pour lire la config Bert
+        let config: Config = serde_json::from_str(&config_str)
+            .map_err(|e| AppError::from(format!("Erreur parsing config: {}", e)))?;
 
-        let tokenizer = Tokenizer::from_file(tokenizer_path)
+        // 5. Chargement du Tokenizer
+        let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| AppError::from(format!("Erreur tokenizer: {}", e)))?;
 
+        // 6. Chargement des poids (Safetensors)
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)
+            VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device)
                 .map_err(|e| AppError::from(e.to_string()))?
         };
 
+        // 7. Initialisation du modèle Bert
         let model = BertModel::load(vb, &config).map_err(|e| AppError::from(e.to_string()))?;
+
         Ok(Self {
             model,
             tokenizer,

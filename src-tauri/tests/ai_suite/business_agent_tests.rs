@@ -4,33 +4,13 @@ use crate::common::setup_test_env;
 // On importe uniquement ce dont on a besoin
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{business_agent::BusinessAgent, Agent, AgentContext};
-use raise::ai::llm::client::LlmClient;
-use std::sync::Arc;
+use raise::utils::Arc;
 
 #[tokio::test]
 #[ignore]
 async fn test_business_agent_generates_oa_entities() {
-    dotenvy::dotenv().ok();
-
-    // CORRECTION E0609 : init_ai_test_env() est désormais async, on doit l'attendre
     let env = setup_test_env().await;
 
-    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
-    let local_url =
-        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-
-    // Config flexible du modèle
-    let model_name = std::env::var("RAISE_MODEL_NAME")
-        .map(|s| s.trim().replace("\"", "").to_string())
-        .ok();
-
-    // Skip si pas d'IA
-    if !env.client.ping_local().await && api_key.is_empty() {
-        println!("⚠️ SKIPPED: Pas d'IA disponible.");
-        return;
-    }
-
-    let client = LlmClient::new(&local_url, &api_key, model_name);
     let test_root = env.storage.config.data_root.clone();
 
     // CORRECTION E0061 : Fournit les 6 arguments requis incluant l'ID agent et session
@@ -41,7 +21,7 @@ async fn test_business_agent_generates_oa_entities() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        client.clone(),
+        env.client.clone(),
         test_root.clone(),
         test_root.join("dataset"),
     );

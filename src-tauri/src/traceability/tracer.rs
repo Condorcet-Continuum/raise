@@ -1,138 +1,172 @@
 // FICHIER : src-tauri/src/traceability/tracer.rs
 
-use crate::utils::HashMap;
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::jsonld::vocabulary::PropertyType;
+use crate::json_db::jsonld::{ContextManager, VocabularyRegistry};
+use crate::model_engine::types::ProjectModel;
+use crate::utils::{prelude::*, HashMap};
 
-use crate::model_engine::types::{ArcadiaElement, ProjectModel};
-
-/// Service principal de traçabilité.
-pub struct Tracer<'a> {
-    model: &'a ProjectModel,
-    // Index inversé : Target ID -> List of Source IDs
-    reverse_links: HashMap<String, Vec<String>>,
+/// Service principal de traçabilité basé sur un Graphe d'IDs.
+/// 🎯 OPTIMISATION : Plus de durée de vie 'a, le Traceur possède son propre graphe orienté.
+pub struct Tracer {
+    // Graphe orienté : Source ID -> List of Target IDs (Downstream)
+    downstream_links: HashMap<String, Vec<String>>,
+    // Index inversé : Target ID -> List of Source IDs (Upstream)
+    upstream_links: HashMap<String, Vec<String>>,
 }
 
-impl<'a> Tracer<'a> {
-    pub fn new(model: &'a ProjectModel) -> Self {
-        let mut tracer = Self {
-            model,
-            reverse_links: HashMap::new(),
-        };
-        tracer.index_links();
-        tracer
-    }
-
-    fn index_links(&mut self) {
-        let elements = self.collect_all_elements();
-        let mut reverse_map: HashMap<String, Vec<String>> = HashMap::new();
-
-        for element in elements {
-            for (key, value) in &element.properties {
-                if is_link_property(key) {
-                    if let Some(target_id) = value.as_str() {
-                        reverse_map
-                            .entry(target_id.to_string())
-                            .or_default()
-                            .push(element.id.clone());
-                    } else if let Some(targets) = value.as_array() {
-                        for t in targets {
-                            if let Some(target_id) = t.as_str() {
-                                reverse_map
-                                    .entry(target_id.to_string())
-                                    .or_default()
-                                    .push(element.id.clone());
-                            }
-                        }
-                    }
+impl Tracer {
+    /// 1. Initialisation depuis le nouveau JsonDb (Architecture Cible SSOT)
+    pub async fn from_db(manager: &CollectionsManager<'_>) -> Result<Self> {
+        let mut docs = Vec::new();
+        if let Ok(collections) = manager.list_collections().await {
+            for col in collections {
+                if let Ok(col_docs) = manager.list_all(&col).await {
+                    docs.extend(col_docs);
                 }
             }
         }
-        self.reverse_links = reverse_map;
+        Ok(Self::build_graph(docs))
     }
 
-    pub fn get_downstream_elements(&self, element_id: &str) -> Vec<&ArcadiaElement> {
-        let mut results = Vec::new();
-        if let Some(element) = self.find_element(element_id) {
-            for (key, value) in &element.properties {
-                if is_link_property(key) {
-                    if let Some(id) = value.as_str() {
-                        if let Some(found) = self.find_element(id) {
-                            results.push(found);
-                        }
-                    } else if let Some(ids) = value.as_array() {
-                        for id_val in ids {
-                            if let Some(id_str) = id_val.as_str() {
-                                if let Some(found) = self.find_element(id_str) {
-                                    results.push(found);
+    /// 2. Rétro-compatibilité : Initialisation depuis l'ancien ProjectModel
+    pub fn from_legacy_model(model: &ProjectModel) -> Self {
+        let mut docs = Vec::new();
+
+        let mut collect = |elements: &Vec<crate::model_engine::types::ArcadiaElement>| {
+            for e in elements {
+                if let Ok(val) = crate::utils::data::to_value(e) {
+                    docs.push(val);
+                }
+            }
+        };
+
+        collect(&model.sa.functions);
+        collect(&model.sa.components);
+        collect(&model.la.functions);
+        collect(&model.la.components);
+        collect(&model.pa.functions);
+        collect(&model.pa.components);
+
+        Self::build_graph(docs)
+    }
+    pub fn from_json_list(documents: Vec<Value>) -> Self {
+        Self::build_graph(documents)
+    }
+    /// Construit le graphe d'adjacence à partir de n'importe quel document JSON
+    fn build_graph(documents: Vec<Value>) -> Self {
+        let mut downstream: HashMap<String, Vec<String>> = HashMap::new();
+        let mut upstream: HashMap<String, Vec<String>> = HashMap::new();
+
+        let ctx = ContextManager::new();
+        let registry = VocabularyRegistry::global();
+
+        for doc in documents {
+            let id = match doc.get("id").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+
+            // On supporte le format Legacy (sous-objet "properties") et le format JsonDb pur (racine)
+            let properties_obj = doc
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .or_else(|| doc.as_object());
+
+            if let Some(props) = properties_obj {
+                for (key, value) in props {
+                    if is_link_property(key, &ctx, registry) {
+                        let mut targets = Vec::new();
+
+                        if let Some(target_id) = value.as_str() {
+                            targets.push(target_id.to_string());
+                        } else if let Some(arr) = value.as_array() {
+                            for t in arr {
+                                if let Some(target_id) = t.as_str() {
+                                    targets.push(target_id.to_string());
                                 }
                             }
                         }
+
+                        // Indexation croisée
+                        for target_id in &targets {
+                            upstream
+                                .entry(target_id.clone())
+                                .or_default()
+                                .push(id.clone());
+                        }
+
+                        downstream.entry(id.clone()).or_default().extend(targets);
                     }
                 }
             }
         }
-        results
-    }
 
-    pub fn get_upstream_elements(&self, element_id: &str) -> Vec<&ArcadiaElement> {
-        let mut results = Vec::new();
-        if let Some(source_ids) = self.reverse_links.get(element_id) {
-            for id in source_ids {
-                if let Some(found) = self.find_element(id) {
-                    results.push(found);
-                }
-            }
+        Self {
+            downstream_links: downstream,
+            upstream_links: upstream,
         }
-        results
     }
 
-    pub fn find_element(&self, id: &str) -> Option<&ArcadiaElement> {
-        self.collect_all_elements().into_iter().find(|e| e.id == id)
+    pub fn get_downstream_ids(&self, element_id: &str) -> Vec<String> {
+        self.downstream_links
+            .get(element_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
-    fn collect_all_elements(&self) -> Vec<&ArcadiaElement> {
-        let mut all = Vec::new();
-        all.extend(&self.model.sa.functions);
-        all.extend(&self.model.sa.components);
-        all.extend(&self.model.la.functions);
-        all.extend(&self.model.la.components);
-        all.extend(&self.model.pa.functions);
-        all.extend(&self.model.pa.components);
-        all
+    pub fn get_upstream_ids(&self, element_id: &str) -> Vec<String> {
+        self.upstream_links
+            .get(element_id)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
-fn is_link_property(key: &str) -> bool {
-    matches!(
+/// 🎯 L'INTELLIGENCE SÉMANTIQUE (JSON-LD)
+fn is_link_property(key: &str, ctx: &ContextManager, registry: &VocabularyRegistry) -> bool {
+    // 1. Compatibilité Legacy (Hardcoded Strings)
+    if matches!(
         key,
         "allocatedTo" | "realizedBy" | "satisfiedBy" | "verifiedBy" | "model_id"
-    )
+    ) {
+        return true;
+    }
+
+    // 2. Résolution Sémantique : Est-ce une ObjectProperty dans l'ontologie RAISE ?
+    let expanded_uri = ctx.expand_term(key);
+    if let Some(prop) = registry.get_property(&expanded_uri) {
+        return prop.property_type == PropertyType::ObjectProperty;
+    }
+
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::NameType;
+    use crate::model_engine::types::{ArcadiaElement, NameType};
     use crate::utils::data::json;
 
     #[test]
     fn test_reverse_indexing_ai_model() {
         let mut model = ProjectModel::default();
-        let mut props = HashMap::new();
+        let mut props = crate::utils::HashMap::new();
         props.insert("model_id".to_string(), json!("ai_1"));
 
         let report = ArcadiaElement {
             id: "rep_1".into(),
             name: NameType::String("Report".into()),
             kind: "QualityReport".into(),
-            // CORRECTION : Initialisation du champ description ajouté récemment
             description: None,
             properties: props,
         };
         model.pa.components.push(report);
 
-        let tracer = Tracer::new(&model);
-        let upstream = tracer.get_upstream_elements("ai_1");
+        let tracer = Tracer::from_legacy_model(&model);
+
+        let upstream = tracer.get_upstream_ids("ai_1");
         assert_eq!(upstream.len(), 1);
-        assert_eq!(upstream[0].id, "rep_1");
+        assert_eq!(upstream[0], "rep_1");
     }
 }

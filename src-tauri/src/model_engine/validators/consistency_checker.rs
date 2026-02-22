@@ -246,8 +246,8 @@ mod tests {
     use super::*;
     use crate::json_db::jsonld::vocabulary::{arcadia_types, namespaces};
     use crate::model_engine::types::NameType;
-    use serde_json::json;
-    use std::collections::HashMap;
+    use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::{data::HashMap, io::tempdir};
 
     fn create_dummy_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
         ArcadiaElement {
@@ -310,7 +310,7 @@ mod tests {
         // SETUP : Création d'un environnement DB avec une Exigence mal formée
         use crate::json_db::collections::manager::CollectionsManager;
         use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-        use tempfile::tempdir;
+        inject_mock_config();
 
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());

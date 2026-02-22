@@ -15,7 +15,7 @@ wasmtime = "41.0.0"
 [profile.dev]
 incremental = true
 opt-level = 0
-debug = 2            # Réduit drastiquement la RAM utilisée par le linker (défaut: 2)
+debug = 2             
 split-debuginfo = "off" # Aide sur Linux à ne pas tout charger en mémoire d'un coup
 strip = false
 

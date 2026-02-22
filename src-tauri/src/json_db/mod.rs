@@ -17,7 +17,6 @@ pub mod transactions;
 pub mod test_utils {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::config::AppConfig; // ✅ Import nécessaire
     use crate::utils::fs; // ✅ Utilisation de votre fs.rs centralisé
     use crate::utils::prelude::*;
     use crate::utils::Once;
@@ -45,9 +44,6 @@ pub mod test_utils {
                 .with_test_writer()
                 .try_init();
 
-            // On tente d'init la config, mais on ignore l'erreur si déjà init
-            let _ = AppConfig::init();
-            // Injection de mocks si nécessaire pour les chemins
             crate::utils::config::test_mocks::inject_mock_config();
         });
 

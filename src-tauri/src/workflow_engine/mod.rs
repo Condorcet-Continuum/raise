@@ -3,11 +3,11 @@
 pub mod compiler;
 pub mod critic;
 pub mod executor;
+pub mod handlers;
 pub mod mandate;
 pub mod scheduler;
 pub mod state_machine;
 pub mod tools;
-pub mod wasm_host;
 
 use crate::utils::{prelude::*, HashMap};
 
@@ -19,7 +19,7 @@ pub use scheduler::WorkflowScheduler;
 pub use state_machine::WorkflowStateMachine;
 
 /// Type d'un nœud dans le graphe (correspond au schema JSON)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeType {
     Task,       // Tâche standard (Agent IA)
@@ -72,6 +72,7 @@ pub struct WorkflowDefinition {
 
 /// Instance dynamique (l'Exécution en cours)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkflowInstance {
     pub id: String,
     pub workflow_id: String,

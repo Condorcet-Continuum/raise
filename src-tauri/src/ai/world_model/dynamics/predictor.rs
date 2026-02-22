@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/ai/world_model/dynamics/predictor.rs
 
+use crate::utils::config::WorldModelConfig;
 use crate::utils::prelude::*;
 use candle_core::{Module, Tensor};
 // On garde Activation car on va l'utiliser
@@ -19,21 +20,16 @@ impl WorldModelPredictor {
     /// * `state_dim` : Dimension du vecteur d'état (Latent).
     /// * `action_dim` : Dimension du vecteur d'action (ex: 10 pour 10 types de commandes).
     /// * `hidden_dim` : Taille de la couche cachée (Neurones).
-    pub fn new(
-        state_dim: usize,
-        action_dim: usize,
-        hidden_dim: usize,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    pub fn new(config: &WorldModelConfig, vb: VarBuilder) -> Result<Self> {
         // L'entrée de la couche 1 est la concaténation de State + Action
-        let input_dim = state_dim + action_dim;
+        let input_dim = config.embedding_dim + config.action_dim;
 
-        // ✅ Conversion explicite des erreurs lors de la création des couches
-        let l1 = linear(input_dim, hidden_dim, vb.pp("l1"))
+        let l1 = linear(input_dim, config.hidden_dim, vb.pp("l1"))
             .map_err(|e| AppError::from(e.to_string()))?;
 
-        let l2 = linear(hidden_dim, state_dim, vb.pp("l2"))
+        let l2 = linear(config.hidden_dim, config.embedding_dim, vb.pp("l2"))
             .map_err(|e| AppError::from(e.to_string()))?;
+
         Ok(Self { l1, l2 })
     }
 
@@ -73,20 +69,25 @@ mod tests {
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
 
-        let state_dim = 4;
-        let action_dim = 2;
-        let hidden_dim = 8;
+        // 🎯 Création d'une config sur-mesure pour le test
+        let config = WorldModelConfig {
+            vocab_size: 10,
+            embedding_dim: 4,
+            action_dim: 2,
+            hidden_dim: 8,
+            use_gpu: false,
+        };
 
-        let predictor = WorldModelPredictor::new(state_dim, action_dim, hidden_dim, vb).unwrap();
+        let predictor = WorldModelPredictor::new(&config, vb).unwrap();
 
         // Inputs fictifs (Batch = 1)
-        let state = Tensor::randn(0f32, 1f32, (1, state_dim), &Device::Cpu).unwrap();
-        let action = Tensor::randn(0f32, 1f32, (1, action_dim), &Device::Cpu).unwrap();
+        let state = Tensor::randn(0f32, 1f32, (1, config.embedding_dim), &Device::Cpu).unwrap();
+        let action = Tensor::randn(0f32, 1f32, (1, config.action_dim), &Device::Cpu).unwrap();
 
         // Forward pass
         let prediction = predictor.forward(&state, &action).unwrap();
 
         // Vérification : La sortie doit avoir la même forme que l'état (State_Dim)
-        assert_eq!(prediction.dims(), &[1, state_dim]);
+        assert_eq!(prediction.dims(), &[1, config.embedding_dim]);
     }
 }

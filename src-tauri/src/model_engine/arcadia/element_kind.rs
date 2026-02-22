@@ -29,6 +29,25 @@ pub enum ElementCategory {
     Capability, // Capability, Scenario
     Other,
 }
+impl Layer {
+    /// Le nombre total de couches (utilisé pour la taille du tenseur)
+    pub const COUNT: usize = 8;
+
+    /// Convertit automatiquement la variante en index numérique (0 à 7)
+    pub fn index(&self) -> usize {
+        *self as usize
+    }
+}
+
+impl ElementCategory {
+    /// Le nombre total de catégories (utilisé pour la taille du tenseur)
+    pub const COUNT: usize = 8;
+
+    /// Convertit automatiquement la variante en index numérique (0 à 7)
+    pub fn index(&self) -> usize {
+        *self as usize
+    }
+}
 
 /// Trait d'extension pour ajouter de l'intelligence sémantique à ArcadiaElement
 pub trait ArcadiaSemantics {

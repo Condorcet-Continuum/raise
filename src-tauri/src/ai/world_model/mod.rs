@@ -7,7 +7,7 @@ pub mod representation;
 pub mod training;
 
 pub use engine::{NeuroSymbolicEngine, WorldAction};
-pub use training::WorldTrainer; // <--- AJOUT pour accès facile
+pub use training::WorldTrainer;
 
 #[cfg(test)]
 mod tests {

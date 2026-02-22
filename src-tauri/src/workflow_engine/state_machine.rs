@@ -1,23 +1,29 @@
 // FICHIER : src-tauri/src/workflow_engine/state_machine.rs
+
 use super::{ExecutionStatus, WorkflowDefinition, WorkflowInstance};
 use crate::utils::prelude::*;
+// Intégration du moteur de règles
+use crate::rules_engine::ast::Expr;
+use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
 
 /// Moteur de règles de transition pour le workflow.
 /// C'est lui qui décide quel nœud doit s'exécuter ensuite.
-pub struct WorkflowStateMachine {
-    definition: WorkflowDefinition,
+pub struct WorkflowStateMachine<'a> {
+    // OPTIMISATION : Utilisation d'une référence pour éviter le clonage coûteux du graphe
+    definition: &'a WorkflowDefinition,
 }
 
-impl WorkflowStateMachine {
-    pub fn new(definition: WorkflowDefinition) -> Self {
+impl<'a> WorkflowStateMachine<'a> {
+    pub fn new(definition: &'a WorkflowDefinition) -> Self {
         Self { definition }
     }
 
     /// Détermine la liste des ID de nœuds qui peuvent être exécutés maintenant.
-    pub fn next_runnable_nodes(&self, instance: &WorkflowInstance) -> Vec<String> {
+    // MODIFICATION : async pour permettre l'évaluation dynamique par le rules_engine
+    pub async fn next_runnable_nodes(&self, instance: &WorkflowInstance) -> Vec<String> {
         let mut runnable = Vec::new();
 
-        // Si le workflow est en pause ou terminé, rien ne bouge
+        // Si le workflow est bloqué ou fini, rien ne bouge
         if instance.status == ExecutionStatus::Paused
             || instance.status == ExecutionStatus::Completed
             || instance.status == ExecutionStatus::Failed
@@ -28,12 +34,11 @@ impl WorkflowStateMachine {
         for node in &self.definition.nodes {
             let node_id = &node.id;
 
-            // 1. Si le nœud est déjà traité (Completed, Failed, Skipped), on passe
+            // 1. Si le nœud est déjà en cours ou traité, on l'ignore
             if let Some(status) = instance.node_states.get(node_id) {
                 if *status != ExecutionStatus::Pending && *status != ExecutionStatus::Running {
                     continue;
                 }
-                // Si Running, on ne le relance pas (sauf logique de retry, non implémentée ici)
                 if *status == ExecutionStatus::Running {
                     continue;
                 }
@@ -59,15 +64,16 @@ impl WorkflowStateMachine {
                 match instance.node_states.get(parent_id) {
                     Some(ExecutionStatus::Completed) => {
                         // Le parent est OK, mais l'arc a-t-il une condition ?
-                        if !self.check_transition_condition(parent_id, node_id, instance) {
+                        if !self
+                            .check_transition_condition(parent_id, node_id, instance)
+                            .await
+                        {
                             // Parent OK mais condition non remplie => Ce chemin est fermé
                             all_parents_done = false;
                             break;
                         }
                     }
                     Some(ExecutionStatus::Skipped) => {
-                        // Si un parent est skippé, l'enfant est skippé aussi (propagation)
-                        // (Géré lors de la transition, ici on considère juste qu'on ne peut pas run)
                         all_parents_done = false;
                         break;
                     }
@@ -86,8 +92,6 @@ impl WorkflowStateMachine {
 
             if parent_failed {
                 // Si un parent (ex: Veto) a échoué, ce nœud ne s'exécutera jamais.
-                // Idéalement, on devrait le marquer Skipped ou Failed ici,
-                // mais next_runnable ne fait que de la lecture.
                 continue;
             }
 
@@ -106,13 +110,9 @@ impl WorkflowStateMachine {
         node_id: &str,
         new_status: ExecutionStatus,
     ) -> Result<()> {
-        // Mise à jour de l'état du nœud
         instance.node_states.insert(node_id.to_string(), new_status);
 
-        // Gestion de la fin globale ou de l'échec
         if new_status == ExecutionStatus::Failed {
-            // Si c'est un Veto critique, tout le workflow échoue
-            // (Sauf si on avait une logique de try/catch, absente pour l'instant)
             tracing::error!("❌ Nœud {} échoué -> Arrêt du Workflow", node_id);
             instance.status = ExecutionStatus::Failed;
             return Ok(());
@@ -123,9 +123,6 @@ impl WorkflowStateMachine {
             tracing::info!("🏁 Fin du Workflow atteinte par le nœud {}", node_id);
             instance.status = ExecutionStatus::Completed;
         }
-
-        // TODO: Propagation du statut "Skipped" aux enfants des branches non prises
-        // Ce serait ici qu'on invaliderait les chemins alternatifs d'un Decision.
 
         Ok(())
     }
@@ -142,19 +139,15 @@ impl WorkflowStateMachine {
     }
 
     fn is_end_node(&self, node_id: &str) -> bool {
-        // Un nœud est final s'il n'a pas d'enfants sortants
-        // OU s'il est explicitement de type "End" (vérifié via la definition)
         if let Some(node) = self.definition.nodes.iter().find(|n| n.id == node_id) {
             if matches!(node.r#type, super::NodeType::End) {
                 return true;
             }
         }
-
         !self.definition.edges.iter().any(|e| e.from == node_id)
     }
 
-    /// Vérifie si la condition portée par l'arc (Edge) est valide
-    fn check_transition_condition(
+    async fn check_transition_condition(
         &self,
         from: &str,
         to: &str,
@@ -168,24 +161,54 @@ impl WorkflowStateMachine {
 
         if let Some(e) = edge {
             if let Some(condition_script) = &e.condition {
-                return self.evaluate_condition(condition_script, &instance.context);
+                return self
+                    .evaluate_condition(condition_script, &instance.context)
+                    .await;
             }
         }
 
-        // Pas de condition = toujours vrai
         true
     }
 
-    /// Évaluateur basique de condition (Moteur symbolique simple)
-    /// Supporte: "var == 'valeur'"
-    fn evaluate_condition(
+    async fn evaluate_condition(
         &self,
         script: &str,
         context: &std::collections::HashMap<String, Value>,
     ) -> bool {
-        // Parsing naïf pour le prototype : "variable == 'valeur'"
-        // Pour la prod : utiliser une lib comme `rhai` ou `json_logic`
+        let context_value = serde_json::to_value(context).unwrap_or(json!({}));
+        let provider = NoOpDataProvider;
 
+        // 1. Tente de lire le script comme un AST JSON pour le rules_engine
+        // OPTIMISATION ROBUSTE : On passe par une Value intermédiaire (comme dans l'Executor)
+        match serde_json::from_str::<Value>(script) {
+            Ok(val) => match serde_json::from_value::<Expr>(val) {
+                Ok(expr) => match Evaluator::evaluate(&expr, &context_value, &provider).await {
+                    Ok(res_cow) => {
+                        return match res_cow.as_ref() {
+                            Value::Bool(b) => *b,
+                            _ => false,
+                        };
+                    }
+                    Err(e) => {
+                        tracing::error!("❌ Erreur d'évaluation rules_engine: {}", e);
+                        return false;
+                    }
+                },
+                Err(ast_err) => {
+                    // On loggue L'ERREUR EXACTE de désérialisation pour pouvoir débugger
+                    tracing::warn!(
+                        "⚠️ Échec du parsing de l'AST JSON : {}. Script reçu : {}",
+                        ast_err,
+                        script
+                    );
+                }
+            },
+            Err(_) => {
+                // Ce n'est pas un JSON valide, on passe silencieusement au Legacy
+            }
+        }
+
+        // 2. Fallback (Legacy)
         if script.contains("==") {
             let parts: Vec<&str> = script.split("==").collect();
             if parts.len() == 2 {
@@ -193,24 +216,27 @@ impl WorkflowStateMachine {
                 let target_val_str = parts[1].trim().replace("'", "").replace("\"", "");
 
                 if let Some(actual_val) = context.get(key) {
-                    // Comparaison String
                     if let Some(s) = actual_val.as_str() {
                         return s == target_val_str;
                     }
-                    // Comparaison Bool
                     if let Some(b) = actual_val.as_bool() {
                         return b.to_string() == target_val_str;
                     }
+                    if let Some(n) = actual_val.as_f64() {
+                        return n.to_string() == target_val_str;
+                    }
                 }
-                return false; // Clé manquante ou type incompatible
             }
         }
 
-        // Si script non reconnu, on retourne false par sécurité (Fail-Safe)
-        tracing::warn!("⚠️ Script de condition non supporté : {}", script);
+        tracing::warn!("⚠️ Condition invalide ou non supportée : {}", script);
         false
     }
 }
+
+// =========================================================================
+// TESTS UNITAIRES (ROBUSTESSE MAXIMALE)
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -219,9 +245,9 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
 
-    fn create_dummy_def() -> WorkflowDefinition {
+    fn create_sequential_def() -> WorkflowDefinition {
         WorkflowDefinition {
-            id: "wf_1".into(),
+            id: "wf_seq".into(),
             entry: "start".into(),
             nodes: vec![
                 WorkflowNode {
@@ -258,14 +284,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_sequential_flow() {
-        let def = create_dummy_def();
-        let sm = WorkflowStateMachine::new(def);
-        let mut instance = WorkflowInstance::new("wf_1", HashMap::new());
+    #[tokio::test]
+    async fn test_sequential_flow() {
+        let def = create_sequential_def();
+        let sm = WorkflowStateMachine::new(&def);
+        let mut instance = WorkflowInstance::new("wf_seq", HashMap::new());
 
         // 1. Initial : Start doit être runnable
-        let next = sm.next_runnable_nodes(&instance);
+        let next = sm.next_runnable_nodes(&instance).await;
         assert_eq!(next, vec!["start"]);
 
         // 2. Start exécuté
@@ -273,12 +299,33 @@ mod tests {
             .unwrap();
 
         // 3. Mid doit être runnable
-        let next = sm.next_runnable_nodes(&instance);
+        let next = sm.next_runnable_nodes(&instance).await;
         assert_eq!(next, vec!["mid"]);
+
+        // 4. Mid exécuté
+        sm.transition(&mut instance, "mid", ExecutionStatus::Completed)
+            .unwrap();
+
+        // 5. End runnable
+        let next = sm.next_runnable_nodes(&instance).await;
+        assert_eq!(next, vec!["end"]);
     }
 
-    #[test]
-    fn test_conditional_branching_simple() {
+    #[tokio::test]
+    async fn test_end_node_completes_workflow() {
+        let def = create_sequential_def();
+        let sm = WorkflowStateMachine::new(&def);
+        let mut instance = WorkflowInstance::new("wf_seq", HashMap::new());
+
+        // L'exécution du nœud "end" (de type End) doit marquer l'instance comme Completed
+        sm.transition(&mut instance, "end", ExecutionStatus::Completed)
+            .unwrap();
+
+        assert_eq!(instance.status, ExecutionStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_legacy_conditional_branching() {
         let def = WorkflowDefinition {
             id: "wf_branch".into(),
             entry: "start".into(),
@@ -302,7 +349,7 @@ mod tests {
                 condition: Some("status == 'ok'".into()),
             }],
         };
-        let sm = WorkflowStateMachine::new(def);
+        let sm = WorkflowStateMachine::new(&def);
 
         // Cas A : Condition remplie
         let mut ctx_ok = HashMap::new();
@@ -312,7 +359,7 @@ mod tests {
             .node_states
             .insert("start".into(), ExecutionStatus::Completed);
 
-        assert_eq!(sm.next_runnable_nodes(&inst_ok), vec!["path_a"]);
+        assert_eq!(sm.next_runnable_nodes(&inst_ok).await, vec!["path_a"]);
 
         // Cas B : Condition non remplie
         let mut ctx_ko = HashMap::new();
@@ -322,6 +369,90 @@ mod tests {
             .node_states
             .insert("start".into(), ExecutionStatus::Completed);
 
-        assert!(sm.next_runnable_nodes(&inst_ko).is_empty());
+        assert!(
+            sm.next_runnable_nodes(&inst_ko).await.is_empty(),
+            "La branche ne doit pas s'activer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ast_conditional_branching() {
+        // CORRECTION : Syntaxe strictement en minuscules comme exigé par rules_engine::ast::Expr
+        let ast_condition = json!({ "gt": [{"var": "score"}, {"val": 8.0}] }).to_string();
+
+        let def = WorkflowDefinition {
+            id: "wf_ast".into(),
+            entry: "start".into(),
+            nodes: vec![
+                WorkflowNode {
+                    id: "start".into(),
+                    r#type: NodeType::Task,
+                    name: "S".into(),
+                    params: json!({}),
+                },
+                WorkflowNode {
+                    id: "path_ast".into(),
+                    r#type: NodeType::Task,
+                    name: "AST".into(),
+                    params: json!({}),
+                },
+            ],
+            edges: vec![WorkflowEdge {
+                from: "start".into(),
+                to: "path_ast".into(),
+                condition: Some(ast_condition),
+            }],
+        };
+        let sm = WorkflowStateMachine::new(&def);
+
+        // Cas A : Condition remplie (10.0 > 8.0)
+        let mut ctx_ok = HashMap::new();
+        ctx_ok.insert("score".into(), json!(10.0));
+        let mut inst_ok = WorkflowInstance::new("wf_ast", ctx_ok);
+        inst_ok
+            .node_states
+            .insert("start".into(), ExecutionStatus::Completed);
+
+        assert_eq!(sm.next_runnable_nodes(&inst_ok).await, vec!["path_ast"]);
+
+        // Cas B : Condition non remplie (5.0 n'est pas > 8.0)
+        let mut ctx_ko = HashMap::new();
+        ctx_ko.insert("score".into(), json!(5.0));
+        let mut inst_ko = WorkflowInstance::new("wf_ast", ctx_ko);
+        inst_ko
+            .node_states
+            .insert("start".into(), ExecutionStatus::Completed);
+
+        assert!(sm.next_runnable_nodes(&inst_ko).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_parent_failure_blocks_execution() {
+        let def = create_sequential_def();
+        let sm = WorkflowStateMachine::new(&def);
+        let mut instance = WorkflowInstance::new("wf_seq", HashMap::new());
+
+        // Si start échoue
+        sm.transition(&mut instance, "start", ExecutionStatus::Failed)
+            .unwrap();
+
+        // L'instance elle-même est marquée comme Failed par transition()
+        assert_eq!(instance.status, ExecutionStatus::Failed);
+
+        // Rien ne doit être exécutable
+        assert!(sm.next_runnable_nodes(&instance).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_instance_status_respected() {
+        let def = create_sequential_def();
+        let sm = WorkflowStateMachine::new(&def);
+        let mut instance = WorkflowInstance::new("wf_seq", HashMap::new());
+
+        // On bloque manuellement l'instance
+        instance.status = ExecutionStatus::Paused;
+
+        // Même si le premier nœud est prêt, le fait que l'instance soit en pause bloque tout
+        assert!(sm.next_runnable_nodes(&instance).await.is_empty());
     }
 }

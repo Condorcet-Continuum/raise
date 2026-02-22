@@ -3,34 +3,12 @@
 use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
-use raise::ai::llm::client::LlmClient;
-use std::sync::Arc;
+use raise::utils::Arc;
 
 #[tokio::test]
 #[ignore]
 async fn test_software_agent_creates_component_end_to_end() {
-    dotenvy::dotenv().ok();
-
-    // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
-    // On doit utiliser .await pour obtenir l'objet AiTestEnv concret.
     let env = setup_test_env().await;
-
-    // --- CONFIGURATION ROBUSTE (Comme code_gen_suite) ---
-    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
-
-    // Skip si pas de backend
-    if !env.client.ping_local().await && api_key.is_empty() {
-        println!("⚠️ SKIPPED: Pas de backend IA disponible.");
-        return;
-    }
-
-    let local_url =
-        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let model_name = std::env::var("RAISE_MODEL_NAME")
-        .map(|s| s.trim().replace("\"", "").to_string())
-        .ok();
-
-    let client = LlmClient::new(&local_url, &api_key, model_name);
 
     // --- CONTEXTE ---
     let test_data_root = env.storage.config.data_root.clone();
@@ -43,7 +21,7 @@ async fn test_software_agent_creates_component_end_to_end() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        client.clone(),
+        env.client.clone(),
         test_data_root.clone(),
         test_data_root.join("dataset"),
     );
@@ -91,24 +69,9 @@ async fn test_software_agent_creates_component_end_to_end() {
 #[tokio::test]
 #[ignore]
 async fn test_intent_classification_integration() {
-    dotenvy::dotenv().ok();
-
     // CORRECTION E0609 : .await ajouté ici également.
     let env = setup_test_env().await;
-
-    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
-    if !env.client.ping_local().await && api_key.is_empty() {
-        return;
-    }
-
-    let local_url =
-        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let model_name = std::env::var("RAISE_MODEL_NAME")
-        .map(|s| s.trim().replace("\"", "").to_string())
-        .ok();
-
-    let client = LlmClient::new(&local_url, &api_key, model_name);
-    let classifier = IntentClassifier::new(client);
+    let classifier = IntentClassifier::new(env.client);
 
     // --- CORRECTION : Prompt "Anti-Markdown" ---
     let input = "Instruction: Analyse cette demande et retourne le JSON strict. \

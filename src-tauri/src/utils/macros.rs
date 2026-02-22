@@ -5,13 +5,13 @@
 #[macro_export]
 macro_rules! user_info {
     // Cas 1 : Juste une clé, pas d'arguments
-    ($key:expr) => {
+    ($key:expr) => {{
         let msg = $crate::utils::i18n::t($key);
         println!("{}", msg);
         tracing::info!(event = "user_notification", key = $key, message = %msg);
-    };
+    }};
     // Cas 2 : Clé + Arguments de formatage
-    ($key:expr, $($arg:tt)*) => {
+    ($key:expr, $($arg:tt)*) => {{
         // On formate les arguments d'abord (ex: "Fichier {} manquant", "t.json")
         let args_formatted = format!($($arg)*);
         // On concatène la traduction (Prefixe) avec les arguments
@@ -20,39 +20,39 @@ macro_rules! user_info {
         println!("{}", full_msg);
         // On logue avec les détails
         tracing::info!(event = "user_notification", key = $key, message = %full_msg);
-    };
+    }};
 }
 
 /// Affiche un succès (vert) à l'utilisateur
 #[macro_export]
 macro_rules! user_success {
-    ($key:expr) => {
+    ($key:expr) => {{
         let msg = $crate::utils::i18n::t($key);
         println!("✅ {}", msg);
         tracing::info!(event = "user_success", key = $key, message = %msg);
-    };
-    ($key:expr, $($arg:tt)*) => {
+    }};
+    ($key:expr, $($arg:tt)*) => {{
         let args_formatted = format!($($arg)*);
         let full_msg = format!("{} {}", $crate::utils::i18n::t($key), args_formatted);
         println!("✅ {}", full_msg);
         tracing::info!(event = "user_success", key = $key, message = %full_msg);
-    };
+    }};
 }
 
 /// Affiche une erreur (stderr) à l'utilisateur
 #[macro_export]
 macro_rules! user_error {
-    ($key:expr) => {
+    ($key:expr) => {{
         let msg = $crate::utils::i18n::t($key);
         eprintln!("❌ {}", msg);
         tracing::error!(event = "user_error", key = $key, message = %msg);
-    };
-    ($key:expr, $($arg:tt)*) => {
+    }};
+    ($key:expr, $($arg:tt)*) => {{
         let args_formatted = format!($($arg)*);
         let full_msg = format!("{} {}", $crate::utils::i18n::t($key), args_formatted);
         eprintln!("❌ {}", full_msg);
         tracing::error!(event = "user_error", key = $key, message = %full_msg);
-    };
+    }};
 }
 
 // --- TESTS UNITAIRES ---

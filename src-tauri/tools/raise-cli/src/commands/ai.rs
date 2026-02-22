@@ -11,6 +11,7 @@ use raise::ai::agents::{
     transverse_agent::TransverseAgent, Agent, AgentContext,
 };
 use raise::ai::llm::client::LlmClient;
+use raise::ai::training::ai_train_domain_native;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 
 use raise::{
@@ -39,17 +40,31 @@ pub enum AiCommands {
         #[arg(long, short = 'x')]
         execute: bool,
     },
+
+    /// 🧠 Entraîne un adaptateur LoRA pour un domaine spécifique en local
+    #[command(visible_alias = "t")]
+    Train {
+        /// Forcer le domaine à entraîner (écrase la config utilisateur)
+        #[arg(short, long)]
+        domain: Option<String>,
+
+        /// Forcer la DB à utiliser
+        #[arg(long)]
+        db: Option<String>,
+
+        /// Forcer le nombre d'époques (ex: 5)
+        #[arg(short, long)]
+        epochs: Option<usize>,
+
+        /// Forcer le taux d'apprentissage (ex: 0.001)
+        #[arg(short, long)]
+        lr: Option<f64>,
+    },
 }
 
 pub async fn handle(args: AiArgs) -> Result<()> {
     let config = AppConfig::get();
-    let engine = config.ai_engines.get("cloud_gemini");
 
-    let api_key = engine.and_then(|e| e.api_key.clone()).unwrap_or_default();
-    let api_url = engine.and_then(|e| e.api_url.clone()).unwrap_or_default();
-    let model_name = engine.map(|e| e.model_name.clone());
-
-    // ✅ CORRECTION : Utilisation des nouveaux champs système
     let space = &config.system_domain;
     let db = &config.system_db;
 
@@ -64,7 +79,7 @@ pub async fn handle(args: AiArgs) -> Result<()> {
     io::ensure_dir(&domain_path).await?;
 
     // 2. MOTEURS ET CONTEXTE
-    let client = LlmClient::new(&api_url, &api_key, model_name);
+    let client = LlmClient::new()?;
     let storage = StorageEngine::new(JsonDbConfig::new(domain_path.clone()));
 
     let ctx = AgentContext::new(
@@ -72,29 +87,114 @@ pub async fn handle(args: AiArgs) -> Result<()> {
         db,
         Arc::new(storage),
         client.clone(),
-        domain_path,
+        domain_path.clone(),
         dataset_path,
     );
 
     // 3. EXÉCUTION
     match args.command.unwrap_or(AiCommands::Interactive) {
-        AiCommands::Interactive => run_interactive_mode(&ctx, client, &api_url).await?,
+        AiCommands::Interactive => run_interactive_mode(&ctx, client).await?,
         AiCommands::Classify { input, execute } => {
             process_input(&ctx, &input, client, execute).await
+        }
+        AiCommands::Train {
+            domain,
+            db,
+            epochs,
+            lr,
+        } => {
+            // 🎯 MAGIE SSOT : Résolution dynamique en Cascade !
+            let final_domain = domain
+                .or_else(|| config.user.as_ref().and_then(|u| u.default_domain.clone()))
+                .or_else(|| {
+                    config
+                        .workstation
+                        .as_ref()
+                        .and_then(|w| w.default_domain.clone())
+                })
+                .unwrap_or_else(|| config.system_domain.clone());
+
+            let final_db = db
+                .or_else(|| config.user.as_ref().and_then(|u| u.default_db.clone()))
+                .or_else(|| {
+                    config
+                        .workstation
+                        .as_ref()
+                        .and_then(|w| w.default_db.clone())
+                })
+                .unwrap_or_else(|| config.system_db.clone());
+
+            let final_epochs = epochs
+                .or_else(|| {
+                    config
+                        .user
+                        .as_ref()
+                        .and_then(|u| u.ai_training.as_ref())
+                        .and_then(|t| t.epochs)
+                })
+                .or_else(|| {
+                    config
+                        .workstation
+                        .as_ref()
+                        .and_then(|w| w.ai_training.as_ref())
+                        .and_then(|t| t.epochs)
+                })
+                .unwrap_or(3);
+
+            let final_lr = lr
+                .or_else(|| {
+                    config
+                        .user
+                        .as_ref()
+                        .and_then(|u| u.ai_training.as_ref())
+                        .and_then(|t| t.learning_rate)
+                })
+                .or_else(|| {
+                    config
+                        .workstation
+                        .as_ref()
+                        .and_then(|w| w.ai_training.as_ref())
+                        .and_then(|t| t.learning_rate)
+                })
+                .unwrap_or(config.deep_learning.learning_rate);
+
+            user_info!(
+                "AI_TRAINING_START",
+                "Domaine: {} | DB: {} | Epochs: {} | LR: {}",
+                final_domain,
+                final_db,
+                final_epochs,
+                final_lr
+            );
+
+            // Création d'une instance de stockage pointant exactement sur la base ciblée
+            let train_storage =
+                StorageEngine::new(JsonDbConfig::new(domain_path.join(space).join(&final_db)));
+
+            // Lancement du noyau pur d'entraînement
+            match ai_train_domain_native(
+                &train_storage,
+                space,
+                &final_db,
+                &final_domain,
+                final_epochs,
+                final_lr,
+            )
+            .await
+            {
+                Ok(msg) => user_success!("AI_TRAIN_SUCCESS", "{}", msg),
+                Err(e) => user_error!("AI_TRAIN_FAIL", "{}", e),
+            }
         }
     }
 
     Ok(())
 }
 
-async fn run_interactive_mode(
-    ctx: &AgentContext,
-    client: LlmClient,
-    url_display: &str,
-) -> Result<()> {
+async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> Result<()> {
     user_info!("AI_INTERACTIVE_WELCOME");
     user_info!("AI_INTERACTIVE_SEPARATOR");
-    user_info!("AI_LLM_CONNECTED", "{}", url_display);
+    user_info!("AI_LLM_CONNECTED", "local");
     user_info!("AI_STORAGE_PATH", "{:?}", ctx.paths.domain_root);
     user_info!("AI_EXIT_HINT");
 
@@ -201,6 +301,7 @@ async fn run_agent<A: Agent>(
 mod tests {
     use super::*;
     use clap::Parser;
+    use raise::utils::config::test_mocks;
 
     #[derive(Parser)]
     struct TestCli {
@@ -210,6 +311,8 @@ mod tests {
 
     #[test]
     fn test_ai_parsing_robustness() {
+        test_mocks::inject_mock_config();
+
         let cli = TestCli::parse_from(vec!["test"]);
         assert!(cli.args.command.is_none());
 
@@ -229,6 +332,8 @@ mod tests {
 
     #[test]
     fn test_intent_dispatch_layers() {
+        test_mocks::inject_mock_config();
+
         let test_cases = vec![
             ("SA", "System Agent"),
             ("PA", "Hardware Agent"),
@@ -269,6 +374,8 @@ mod tests {
 
     #[test]
     fn test_intent_dispatch_software_logic() {
+        test_mocks::inject_mock_config();
+
         let intent_la = EngineeringIntent::CreateElement {
             layer: "LA".into(),
             element_type: "LogicalComponent".into(),
@@ -285,6 +392,8 @@ mod tests {
 
     #[test]
     fn test_business_dispatch() {
+        test_mocks::inject_mock_config();
+
         let intent = EngineeringIntent::DefineBusinessUseCase {
             domain: "Aéronautique".into(),
             process_name: "Gestion Flux".into(),
@@ -297,5 +406,29 @@ mod tests {
         };
 
         assert!(is_business);
+    }
+
+    #[test]
+    fn test_ai_train_parsing() {
+        test_mocks::inject_mock_config();
+
+        let cli = TestCli::parse_from(vec![
+            "test", "train", "--domain", "safety", "--epochs", "10",
+        ]);
+
+        if let Some(AiCommands::Train {
+            domain,
+            epochs,
+            db,
+            lr,
+        }) = cli.args.command
+        {
+            assert_eq!(domain.unwrap(), "safety");
+            assert_eq!(epochs.unwrap(), 10);
+            assert!(db.is_none());
+            assert!(lr.is_none());
+        } else {
+            panic!("Échec du parsing de la commande Train");
+        }
     }
 }

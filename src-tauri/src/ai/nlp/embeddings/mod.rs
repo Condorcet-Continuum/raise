@@ -13,8 +13,8 @@ pub struct EmbeddingEngine {
 }
 
 enum EngineImplementation {
-    Fast(fast::FastEmbedEngine),
-    Candle(candle::CandleEngine),
+    Fast(Box<fast::FastEmbedEngine>),
+    Candle(Box<candle::CandleEngine>),
 }
 
 impl EmbeddingEngine {
@@ -35,11 +35,13 @@ impl EmbeddingEngine {
         let inner = match engine_type {
             EngineType::FastEmbed => {
                 println!("🧠 Init NLP Engine: FastEmbed (ONNX)");
-                EngineImplementation::Fast(fast::FastEmbedEngine::new()?)
+                let fast_engine = fast::FastEmbedEngine::new()?;
+                EngineImplementation::Fast(Box::new(fast_engine))
             }
             EngineType::Candle => {
                 println!("🕯️ Init NLP Engine: Candle (BERT Pure Rust)");
-                EngineImplementation::Candle(candle::CandleEngine::new()?)
+                let candle_engine = candle::CandleEngine::new()?;
+                EngineImplementation::Candle(Box::new(candle_engine))
             }
         };
         Ok(Self { inner })

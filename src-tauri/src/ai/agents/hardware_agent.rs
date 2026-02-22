@@ -295,6 +295,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_hardware_generation_integration() {
         // 1. Initialisation Mock Config
         inject_mock_config();
@@ -304,7 +306,7 @@ mod tests {
 
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
-        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
+        let llm = LlmClient::new().unwrap();
 
         // 2. Initialisation DB avec la config globale
         let app_cfg = AppConfig::get();
@@ -365,7 +367,8 @@ mod tests {
 
     // ✅ TEST RESTAURÉ : generate_hardware_in_user_domain
     #[tokio::test]
-    #[ignore] // Ignoré par défaut car il nécessite un environnement "réel" ou simulé complet
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn generate_hardware_in_user_domain() {
         inject_mock_config();
 
@@ -404,7 +407,7 @@ mod tests {
             .await
             .unwrap();
 
-        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
+        let llm = LlmClient::new().unwrap();
 
         let ctx = AgentContext::new(
             "zair",

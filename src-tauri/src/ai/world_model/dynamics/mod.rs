@@ -7,16 +7,25 @@ pub use predictor::WorldModelPredictor;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::config::WorldModelConfig;
     use candle_core::{DType, Device};
     use candle_nn::{VarBuilder, VarMap};
 
     #[test]
-    fn test_dynamics_public_api() {
+    fn test_predictor_instantiation() {
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
 
-        // On vérifie qu'on peut instancier le Predictor via l'API publique
-        let pred = WorldModelPredictor::new(10, 5, 20, vb);
-        assert!(pred.is_ok());
+        // 🎯 On crée la config
+        let config = WorldModelConfig {
+            embedding_dim: 16,
+            action_dim: 5,
+            hidden_dim: 32,
+            ..Default::default()
+        };
+
+        // 🎯 On passe la config par référence
+        let _predictor = predictor::WorldModelPredictor::new(&config, vb).unwrap();
+        assert!(true);
     }
 }

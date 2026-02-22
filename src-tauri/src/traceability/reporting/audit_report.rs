@@ -1,14 +1,13 @@
 // FICHIER : src-tauri/src/traceability/reporting/audit_report.rs
 
-use crate::model_engine::types::ProjectModel;
 use crate::traceability::compliance::{
-    ai_governance::AiGovernanceChecker, do_178c::Do178cChecker, eu_ai_act::EuAiActChecker,
-    iso_26262::Iso26262Checker, ComplianceChecker, ComplianceReport, Violation,
+    AiGovernanceChecker, ComplianceChecker, Do178cChecker, EuAiActChecker, Iec61508Checker,
+    Iso26262Checker,
 };
 use crate::traceability::tracer::Tracer;
-use serde::Serialize;
+use crate::utils::{prelude::*, HashMap};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct AuditReport {
     pub project_name: String,
     pub date: String,
@@ -16,12 +15,11 @@ pub struct AuditReport {
     pub model_stats: ModelStats,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default, Clone)]
 pub struct ModelStats {
     pub total_elements: usize,
     pub total_functions: usize,
     pub total_components: usize,
-    // AJOUT : Statistiques de la couche Transverse
     pub total_requirements: usize,
     pub total_scenarios: usize,
     pub total_functional_chains: usize,
@@ -30,181 +28,137 @@ pub struct ModelStats {
 pub struct AuditGenerator;
 
 impl AuditGenerator {
-    pub fn generate(model: &ProjectModel) -> AuditReport {
-        // 1. Exécution des Checkers Standards (Approche globale)
+    /// 🎯 GÉNÉRATEUR UNIVERSEL
+    /// Orchestre les audits et calcule les statistiques sémantiques.
+    pub fn generate(
+        tracer: &Tracer,
+        docs: &HashMap<String, Value>,
+        project_name: &str,
+    ) -> AuditReport {
+        // 1. Enregistrement des Checkers (Extensibilité O(1))
         let checkers: Vec<Box<dyn ComplianceChecker>> = vec![
             Box::new(Do178cChecker),
             Box::new(Iso26262Checker),
             Box::new(EuAiActChecker),
+            Box::new(Iec61508Checker),
+            Box::new(AiGovernanceChecker),
         ];
 
-        let mut results = Vec::new();
-        for checker in checkers {
-            let report = checker.check(model);
-            results.push(serde_json::to_value(report).unwrap());
-        }
+        // 2. Exécution et sérialisation des résultats
+        let compliance_results = checkers
+            .iter()
+            .map(|c| c.check(tracer, docs))
+            .filter_map(|r| serde_json::to_value(r).ok())
+            .collect();
 
-        // 2. Exécution de l'Audit IA (Approche spécifique via Tracer)
-        let ai_report = Self::run_ai_audit(model);
-        results.push(serde_json::to_value(ai_report).unwrap());
+        // 3. Calcul des statistiques
+        let model_stats = Self::calculate_stats(docs);
 
-        // 3. Synthèse
         AuditReport {
-            project_name: model.meta.name.clone(),
+            project_name: project_name.to_string(),
             date: chrono::Utc::now().to_rfc3339(),
-            compliance_results: results,
-            model_stats: ModelStats {
-                total_elements: model.meta.element_count,
-                // Somme des fonctions (SA/LA/PA)
-                total_functions: model.sa.functions.len()
-                    + model.la.functions.len()
-                    + model.pa.functions.len(),
-                // Somme des composants (SA/LA/PA)
-                total_components: model.sa.components.len()
-                    + model.la.components.len()
-                    + model.pa.components.len(),
-                // AJOUT : Comptage Transverse
-                total_requirements: model.transverse.requirements.len(),
-                total_scenarios: model.transverse.scenarios.len(),
-                total_functional_chains: model.transverse.functional_chains.len(),
-            },
+            compliance_results,
+            model_stats,
         }
     }
 
-    /// Logique spécifique pour scanner les modèles IA et vérifier leur conformité
-    fn run_ai_audit(model: &ProjectModel) -> ComplianceReport {
-        let tracer = Tracer::new(model);
-        let ai_checker = AiGovernanceChecker::new(&tracer);
+    /// Analyse sémantique des types pour le comptage
+    fn calculate_stats(docs: &HashMap<String, Value>) -> ModelStats {
+        // 🎯 FIX CLIPPY : Initialisation atomique
+        let mut stats = ModelStats {
+            total_elements: docs.len(),
+            ..ModelStats::default()
+        };
 
-        let mut violations = Vec::new();
-        let mut checked_count = 0;
+        for doc in docs.values() {
+            let kind = doc.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let type_iri = doc.get("@type").and_then(|v| v.as_str()).unwrap_or("");
 
-        // On scanne les composants de l'architecture physique (PA)
-        for component in &model.pa.components {
-            // L'auditeur renvoie Some(...) seulement si c'est un composant IA
-            if let Some(report) = ai_checker.audit_element(component) {
-                checked_count += 1;
-
-                if !report.is_compliant {
-                    for issue in report.issues {
-                        violations.push(Violation {
-                            element_id: Some(report.component_id.clone()),
-                            rule_id: "AI-GOV-CHECK".to_string(),
-                            description: format!(
-                                "Composant IA '{}' non conforme : {}",
-                                report.component_name, issue
-                            ),
-                            severity: "Critical".to_string(),
-                        });
-                    }
-                }
+            // Matching robuste sur le Kind ou l'IRI JSON-LD
+            if kind == "Function" || type_iri.contains("Function") {
+                stats.total_functions += 1;
+            } else if kind == "Component" || type_iri.contains("Component") {
+                stats.total_components += 1;
+            } else if kind == "Requirement" || type_iri.contains("Requirement") {
+                stats.total_requirements += 1;
+            } else if kind == "Scenario" || type_iri.contains("Scenario") {
+                stats.total_scenarios += 1;
+            } else if kind == "FunctionalChain" || type_iri.contains("FunctionalChain") {
+                stats.total_functional_chains += 1;
             }
         }
-
-        ComplianceReport {
-            standard: "RAISE AI Governance".to_string(),
-            passed: violations.is_empty(),
-            rules_checked: checked_count,
-            violations,
-        }
+        stats
     }
 }
 
 // =========================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES HYPER ROBUSTES
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
-    use crate::utils::{data::json, HashMap};
+    use serde_json::json;
 
-    fn create_dummy_element(id: &str) -> ArcadiaElement {
-        ArcadiaElement {
-            id: id.to_string(),
-            name: NameType::String(format!("Elem {}", id)),
-            kind: "Dummy".to_string(),
-            description: None,
-            properties: HashMap::new(),
-        }
-    }
-
-    // Helper: Création d'un composant tagué comme IA
-    fn create_ai_component(id: &str) -> ArcadiaElement {
-        let mut props = HashMap::new();
-        props.insert("nature".to_string(), json!("AI_Model"));
-        ArcadiaElement {
-            id: id.to_string(),
-            name: NameType::String(format!("AI {}", id)),
-            kind: "Component".to_string(),
-            description: None,
-            properties: props,
-        }
-    }
-
+    /// 🎯 TEST 1 : Vérification de l'intégralité du rapport
     #[test]
-    fn test_audit_generator_structure_with_transverse() {
-        let mut model = ProjectModel::default();
-        model.meta = ProjectMeta {
-            name: "Projet Test".to_string(),
-            element_count: 10,
-            ..Default::default()
-        };
-        // Ajout d'éléments classiques
-        model.sa.functions = vec![create_dummy_element("f1")];
+    fn test_audit_generate_full_report() {
+        let mut docs = HashMap::new();
+        docs.insert("F1".into(), json!({ "id": "F1", "kind": "Function" }));
 
-        // Ajout d'éléments Transverses
-        model
-            .transverse
-            .requirements
-            .push(create_dummy_element("REQ-1"));
-        model
-            .transverse
-            .scenarios
-            .push(create_dummy_element("SCEN-1"));
+        let tracer = Tracer::from_json_list(vec![]);
+        let report = AuditGenerator::generate(&tracer, &docs, "Test Project");
 
-        let report = AuditGenerator::generate(&model);
-
-        assert_eq!(report.project_name, "Projet Test");
+        assert_eq!(report.project_name, "Test Project");
+        // On attend 5 résultats (un par checker enregistré)
+        assert_eq!(report.compliance_results.len(), 5);
         assert_eq!(report.model_stats.total_functions, 1);
-
-        // Assertions Transverses
-        assert_eq!(
-            report.model_stats.total_requirements, 1,
-            "Compte exigences incorrect"
-        );
-        assert_eq!(
-            report.model_stats.total_scenarios, 1,
-            "Compte scénarios incorrect"
-        );
-        assert_eq!(report.model_stats.total_functional_chains, 0); // Pas ajouté
     }
 
+    /// 🎯 TEST 2 : Robustesse du comptage sémantique (Stats)
     #[test]
-    fn test_audit_detects_ai_issues() {
-        let mut model = ProjectModel::default();
+    fn test_calculate_stats_semantic_mapping() {
+        let mut docs = HashMap::new();
+        docs.insert("1".into(), json!({ "kind": "Function" }));
+        docs.insert("2".into(), json!({ "@type": "raise:SystemComponent" }));
+        docs.insert("3".into(), json!({ "kind": "Requirement" }));
+        docs.insert("4".into(), json!({ "kind": "Scenario" }));
+        docs.insert("5".into(), json!({ "kind": "FunctionalChain" }));
+        // Élément inconnu (ne doit pas fausser les comptes spécifiques)
+        docs.insert("6".into(), json!({ "kind": "Unknown" }));
 
-        // On insère un modèle IA "nu" (sans preuve de qualité/XAI)
-        let ai_comp = create_ai_component("ai_vision");
-        model.pa.components = vec![ai_comp];
+        let stats = AuditGenerator::calculate_stats(&docs);
 
-        let report = AuditGenerator::generate(&model);
+        assert_eq!(stats.total_elements, 6);
+        assert_eq!(stats.total_functions, 1);
+        assert_eq!(stats.total_components, 1);
+        assert_eq!(stats.total_requirements, 1);
+        assert_eq!(stats.total_scenarios, 1);
+        assert_eq!(stats.total_functional_chains, 1);
+    }
 
-        // On cherche la section AI Governance
-        let governance_result = report
-            .compliance_results
-            .iter()
-            .find(|r| r["standard"] == "RAISE AI Governance")
-            .expect("Le rapport de gouvernance IA est manquant");
+    /// 🎯 TEST 3 : Résilience aux données JSON malformées
+    #[test]
+    fn test_robustness_malformed_json() {
+        let mut docs = HashMap::new();
+        // Un document vide ou sans les champs attendus ne doit pas faire paniquer le générateur
+        docs.insert("empty".into(), json!({}));
+        docs.insert("null_kind".into(), json!({ "kind": null }));
 
-        // Il doit être en échec car pas de preuves
-        assert_eq!(governance_result["passed"], false);
+        let tracer = Tracer::from_json_list(vec![]);
+        let report = AuditGenerator::generate(&tracer, &docs, "Robustness Test");
 
-        let violations = governance_result["violations"].as_array().unwrap();
-        assert!(!violations.is_empty());
-        assert!(violations[0]["description"]
-            .as_str()
-            .unwrap()
-            .contains("Missing valid Quality Report"));
+        assert_eq!(report.model_stats.total_elements, 2);
+        assert_eq!(report.model_stats.total_functions, 0);
+        assert!(report.compliance_results.len() > 0);
+    }
+
+    /// 🎯 TEST 4 : Intégrité de la date ISO-8601
+    #[test]
+    fn test_audit_date_format() {
+        let tracer = Tracer::from_json_list(vec![]);
+        let report = AuditGenerator::generate(&tracer, &HashMap::new(), "Date Test");
+
+        // Vérifie que la date est au format rfc3339 (contient 'T' et 'Z' ou offset)
+        assert!(report.date.contains('T'));
     }
 }

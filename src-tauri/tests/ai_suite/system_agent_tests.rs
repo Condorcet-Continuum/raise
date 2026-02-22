@@ -3,35 +3,15 @@
 use crate::common::setup_test_env;
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
-use raise::ai::llm::client::LlmClient;
-use std::sync::Arc;
+use raise::utils::Arc;
 
 #[tokio::test]
 #[ignore]
 async fn test_system_agent_creates_function_end_to_end() {
-    dotenvy::dotenv().ok();
-
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit l'attendre pour accéder aux champs client et storage.
     let env = setup_test_env().await;
 
-    // 1. Config Robuste (Identique aux autres agents)
-    let api_key = std::env::var("RAISE_GEMINI_KEY").unwrap_or_default();
-    let local_url =
-        std::env::var("RAISE_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-
-    // Fallback propre pour le modèle
-    let model_name = std::env::var("RAISE_MODEL_NAME")
-        .map(|s| s.trim().replace("\"", "").to_string())
-        .ok();
-
-    // Skip si pas d'IA disponible
-    if !env.client.ping_local().await && api_key.is_empty() {
-        println!("⚠️ SKIPPED: Pas d'IA disponible.");
-        return;
-    }
-
-    let client = LlmClient::new(&local_url, &api_key, model_name);
     let test_root = env.storage.config.data_root.clone();
 
     // CORRECTION E0061 : Injection agent_id + session_id
@@ -42,7 +22,7 @@ async fn test_system_agent_creates_function_end_to_end() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        client.clone(),
+        env.client.clone(),
         test_root.clone(),
         test_root.join("dataset"),
     );

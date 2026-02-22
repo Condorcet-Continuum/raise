@@ -1,10 +1,6 @@
 use rand::prelude::*;
 
-pub fn single_point_crossover<T: Clone>(
-    parent1: &[T],
-    parent2: &[T],
-    rng: &mut dyn RngCore,
-) -> Vec<T> {
+pub fn single_point_crossover<T: Clone>(parent1: &[T], parent2: &[T], rng: &mut dyn Rng) -> Vec<T> {
     assert_eq!(parent1.len(), parent2.len(), "Parent size mismatch");
     let len = parent1.len();
     if len == 0 {
@@ -20,7 +16,7 @@ pub fn single_point_crossover<T: Clone>(
     child
 }
 
-pub fn uniform_crossover<T: Clone>(parent1: &[T], parent2: &[T], rng: &mut dyn RngCore) -> Vec<T> {
+pub fn uniform_crossover<T: Clone>(parent1: &[T], parent2: &[T], rng: &mut dyn Rng) -> Vec<T> {
     assert_eq!(parent1.len(), parent2.len(), "Parent size mismatch");
 
     parent1
@@ -36,7 +32,7 @@ pub fn uniform_crossover<T: Clone>(parent1: &[T], parent2: &[T], rng: &mut dyn R
         .collect()
 }
 
-pub fn sbx_crossover(p1: f32, p2: f32, eta: f32, rng: &mut dyn RngCore) -> (f32, f32) {
+pub fn sbx_crossover(p1: f32, p2: f32, eta: f32, rng: &mut dyn Rng) -> (f32, f32) {
     if rng.random::<f32>() > 0.5 {
         // UPDATE
         return (p1, p2);

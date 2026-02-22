@@ -192,8 +192,8 @@ mod tests {
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::NameType;
     use crate::rules_engine::ast::Expr;
-    use std::collections::HashMap;
-    use tempfile::tempdir;
+    use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::{data::HashMap, io::tempdir};
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -253,6 +253,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_dynamic_rule_on_transverse_requirement() {
+        inject_mock_config();
+
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);

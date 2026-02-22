@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/traceability/impact_analyzer.rs
-use crate::utils::{prelude::*, HashSet};
 
 use super::tracer::Tracer;
+use crate::utils::{prelude::*, HashSet};
 
 #[derive(Debug, Serialize)]
 pub struct ImpactReport {
@@ -15,12 +15,13 @@ pub struct ImpactedItem {
     pub distance: usize,
 }
 
-pub struct ImpactAnalyzer<'a> {
-    tracer: Tracer<'a>,
+/// 🎯 OPTIMISATION : L'analyseur possède son Traceur, plus aucun problème de lifetime !
+pub struct ImpactAnalyzer {
+    tracer: Tracer,
 }
 
-impl<'a> ImpactAnalyzer<'a> {
-    pub fn new(tracer: Tracer<'a>) -> Self {
+impl ImpactAnalyzer {
+    pub fn new(tracer: Tracer) -> Self {
         Self { tracer }
     }
 
@@ -44,7 +45,7 @@ impl<'a> ImpactAnalyzer<'a> {
         results: &mut Vec<ImpactedItem>,
     ) {
         if depth > max || !visited.insert(id.to_string()) {
-            return;
+            return; // Prévention des boucles infinies (Cycles)
         }
 
         if depth > 0 {
@@ -54,11 +55,12 @@ impl<'a> ImpactAnalyzer<'a> {
             });
         }
 
-        for next in self.tracer.get_downstream_elements(id) {
-            self.traverse(&next.id, depth + 1, max, visited, results);
+        // 🎯 L'algorithme se déplace de pure ID en ID
+        for next_id in self.tracer.get_downstream_ids(id) {
+            self.traverse(&next_id, depth + 1, max, visited, results);
         }
-        for next in self.tracer.get_upstream_elements(id) {
-            self.traverse(&next.id, depth + 1, max, visited, results);
+        for next_id in self.tracer.get_upstream_ids(id) {
+            self.traverse(&next_id, depth + 1, max, visited, results);
         }
     }
 }
@@ -79,7 +81,6 @@ mod tests {
             id: "A".into(),
             name: NameType::String("A".into()),
             kind: "F".into(),
-            // CORRECTION : Initialisation du champ description
             description: None,
             properties: p1,
         });
@@ -87,12 +88,12 @@ mod tests {
             id: "B".into(),
             name: NameType::String("B".into()),
             kind: "F".into(),
-            // CORRECTION : Initialisation du champ description
             description: None,
             properties: Default::default(),
         });
 
-        let tracer = Tracer::new(&model);
+        // Test avec l'adaptateur de rétro-compatibilité
+        let tracer = Tracer::from_legacy_model(&model);
         let analyzer = ImpactAnalyzer::new(tracer);
         let report = analyzer.analyze("B", 1);
 

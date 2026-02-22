@@ -1,11 +1,11 @@
 // FICHIER : src-tauri/tests/code_gen_suite/rust_tests.rs
 
-use crate::common::setup_test_env; // REVERSION : Retour à l'import fonctionnel depuis common
+use crate::common::setup_test_env;
 use raise::code_generator::{CodeGeneratorService, TargetLanguage};
 use raise::utils::data::json;
 use raise::utils::io;
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone pour supporter .await
+#[tokio::test]
 async fn test_rust_skeleton_generation() {
     let env = setup_test_env().await;
 
@@ -18,9 +18,9 @@ async fn test_rust_skeleton_generation() {
         "id": "uuid-test-pure",
         "name": "Moteur Physique",
         "description": "Simule la gravité.",
-        "type": "oa:OperationalActor"
+        // 🎯 Utilise 'kind' avec l'URI complète pour l'alignement Arcadia
+        "kind": "https://raise.io/ontology/arcadia/oa#OperationalActor"
     });
-
     // 2. Génération
     let paths = service
         .generate_for_element(&actor, TargetLanguage::Rust)

@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/commands/ai_commands.rs
 
+use crate::utils::config::AppConfig;
 use crate::utils::{data::HashMap, io::PathBuf, prelude::*, Arc};
 use std::sync::Mutex as SyncMutex;
 use tokio::sync::Mutex as AsyncMutex;
@@ -14,7 +15,7 @@ use crate::ai::llm::NativeLlmState;
 use crate::ai::deep_learning::{
     models::sequence_net::SequenceNet, serialization, trainer::Trainer,
 };
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 
 // Imports World Model
@@ -170,11 +171,23 @@ pub async fn ask_native_llm(
 }
 
 #[command]
-pub fn init_dl_model(state: State<'_, DlState>, i: usize, h: usize, o: usize) -> Result<String> {
-    let device = Device::Cpu;
+pub fn init_dl_model(state: State<'_, DlState>) -> Result<String> {
+    // 🎯 On récupère la config globale (SSOT)
+    let config = &AppConfig::get().deep_learning;
+    let device = config.to_device();
+
     let varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let model = SequenceNet::new(i, h, o, vb).map_err(|e| e.to_string())?;
+
+    // On utilise les dimensions de la config au lieu des paramètres i, h, o
+    let model = SequenceNet::new(
+        config.input_size,
+        config.hidden_size,
+        config.output_size,
+        vb,
+    )
+    .map_err(|e| e.to_string())?;
+
     *state.model.lock().unwrap() = Some(model);
     *state.varmap.lock().unwrap() = Some(varmap);
     Ok("OK".to_string())
@@ -182,13 +195,17 @@ pub fn init_dl_model(state: State<'_, DlState>, i: usize, h: usize, o: usize) ->
 
 #[command]
 pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> Result<Vec<f32>> {
+    let config = &AppConfig::get().deep_learning;
+    let device = config.to_device(); // 🎯 Utilise le périphérique config (CUDA si BlackWell)
+
     let guard = state.model.lock().unwrap();
     if let Some(model) = &*guard {
-        let t = Tensor::from_vec(input.clone(), (1, 1, input.len()), &Device::Cpu)
+        let t = Tensor::from_vec(input.clone(), (1, 1, input.len()), &device)
             .map_err(|e| AppError::from(e.to_string()))?;
         let out = model
             .forward(&t)
             .map_err(|e| AppError::from(e.to_string()))?;
+
         out.flatten_all()
             .map_err(|e| AppError::from(e.to_string()))?
             .to_vec1::<f32>()
@@ -200,14 +217,20 @@ pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> Result<V
 
 #[command]
 pub fn train_dl_step(state: State<'_, DlState>, input: Vec<f32>, target: u32) -> Result<f64> {
+    let config = &AppConfig::get().deep_learning;
+    let device = config.to_device();
+
     let mg = state.model.lock().unwrap();
     let vg = state.varmap.lock().unwrap();
+
     if let (Some(m), Some(v)) = (&*mg, &*vg) {
-        let t_in = Tensor::from_vec(input.clone(), (1, 1, input.len()), &Device::Cpu)
+        let t_in = Tensor::from_vec(input.clone(), (1, 1, input.len()), &device)
             .map_err(|e| AppError::from(e.to_string()))?;
-        let t_tgt = Tensor::from_vec(vec![target], (1, 1), &Device::Cpu)
+        let t_tgt = Tensor::from_vec(vec![target], (1, 1), &device)
             .map_err(|e| AppError::from(e.to_string()))?;
-        Trainer::new(v, 0.01)
+
+        // 🎯 Utilisation du constructeur intelligent
+        Trainer::from_config(v, config)
             .train_step(m, &t_in, &t_tgt)
             .map_err(|e| AppError::from(e.to_string()))
     } else {
@@ -227,15 +250,11 @@ pub fn save_dl_model(state: State<'_, DlState>, path: String) -> Result<String> 
 }
 
 #[command]
-pub fn load_dl_model(
-    state: State<'_, DlState>,
-    path: String,
-    i: usize,
-    h: usize,
-    o: usize,
-) -> Result<String> {
-    let m = serialization::load_model(PathBuf::from(path), i, h, o, &Device::Cpu)
-        .map_err(|e| e.to_string())?;
+pub fn load_dl_model(state: State<'_, DlState>, path: String) -> Result<String> {
+    let config = &AppConfig::get().deep_learning;
+
+    let m = serialization::load_model(PathBuf::from(path), config).map_err(|e| e.to_string())?;
+
     *state.model.lock().unwrap() = Some(m);
     *state.varmap.lock().unwrap() = None;
     Ok("Loaded".to_string())

@@ -1,6 +1,7 @@
 use crate::ai::deep_learning::models::sequence_net::SequenceNet;
+use crate::utils::config::DeepLearningConfig;
 use crate::utils::io::Path;
-use candle_core::{DType, Device, Result};
+use candle_core::{DType, Result};
 use candle_nn::{VarBuilder, VarMap};
 
 /// Sauvegarde les poids du modèle dans un fichier au format SafeTensors.
@@ -18,18 +19,15 @@ pub fn save_model(varmap: &VarMap, path: impl AsRef<Path>) -> Result<()> {
 /// * `path` - Chemin du fichier .safetensors.
 /// * `input_size`, `hidden_size`, `output_size` - Hyperparamètres de l'architecture.
 /// * `device` - Périphérique sur lequel charger le modèle (CPU/CUDA).
-pub fn load_model(
-    path: impl AsRef<Path>,
-    input_size: usize,
-    hidden_size: usize,
-    output_size: usize,
-    device: &Device,
-) -> Result<SequenceNet> {
-    // Chargement via mmap pour la rapidité (bloc unsafe requis par candle pour mmap)
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, device)? };
-
-    // Reconstruction du modèle avec les poids chargés
-    SequenceNet::new(input_size, hidden_size, output_size, vb)
+pub fn load_model(path: impl AsRef<Path>, config: &DeepLearningConfig) -> Result<SequenceNet> {
+    let device = config.to_device();
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, &device)? };
+    SequenceNet::new(
+        config.input_size,
+        config.hidden_size,
+        config.output_size,
+        vb,
+    )
 }
 
 /// Charge des poids dans un VarMap existant (utile pour le Fine-Tuning ou reprendre un entraînement).
@@ -41,52 +39,53 @@ pub fn load_checkpoint(varmap: &mut VarMap, path: impl AsRef<Path>) -> Result<()
 mod tests {
     use super::*;
     use crate::ai::deep_learning::trainer::Trainer;
+    use crate::utils::config::{test_mocks, AppConfig}; // 🎯 Import des mocks
     use crate::utils::io::{self, Path};
-    use candle_core::Tensor;
+    use candle_core::{DType, Tensor};
 
     #[tokio::test]
     async fn test_save_and_load_consistency() -> Result<()> {
-        let device = Device::Cpu;
+        // 1. Initialisation du Singleton avec le "moule de test" (10, 20, 5, LR=0.1)
+        test_mocks::inject_mock_config();
+        let config = &AppConfig::get().deep_learning;
+        let device = config.to_device();
         let path = "/tmp/test_raise_model.safetensors";
 
-        // 1. Création et modification d'un modèle "Source"
+        // 2. Création du modèle Source avec les dimensions de la config (SSOT)
         let varmap_source = VarMap::new();
         let vb_source = VarBuilder::from_varmap(&varmap_source, DType::F32, &device);
-        let model_source = SequenceNet::new(10, 20, 5, vb_source)?;
+        let model_source = SequenceNet::new(
+            config.input_size,
+            config.hidden_size,
+            config.output_size,
+            vb_source,
+        )?;
 
-        // On fait un pas d'entraînement pour modifier les poids initiaux
-        let trainer = Trainer::new(&varmap_source, 0.1);
-        let input = Tensor::randn(0f32, 1.0, (1, 5, 10), &device)?;
+        // Entraînement rapide pour modifier les poids
+        let trainer = Trainer::new(&varmap_source, config.learning_rate);
+        let input = Tensor::randn(0f32, 1.0, (1, 5, config.input_size), &device)?;
         let target = Tensor::zeros((1, 5), DType::U32, &device)?;
         trainer.train_step(&model_source, &input, &target)?;
 
-        // Prédiction témoin avant sauvegarde
         let output_source = model_source.forward(&input)?;
 
-        // 2. Sauvegarde
+        // 3. Sauvegarde
         save_model(&varmap_source, path)?;
-        assert!(Path::new(path).exists());
 
-        // 3. Chargement dans un nouveau modèle "Target"
-        // Note: On n'utilise pas de VarMap ici, le VarBuilder est créé directement depuis le fichier
-        let model_loaded = load_model(path, 10, 20, 5, &device)?;
+        // 🎯 4. CHARGEMENT CORRIGÉ (2 arguments au lieu de 5)
+        // On passe simplement l'objet config qui contient déjà input/hidden/output/device
+        let model_loaded = load_model(path, config)?;
 
-        // 4. Vérification : Les prédictions doivent être IDENTIQUES
+        // 5. Vérification
         let output_loaded = model_loaded.forward(&input)?;
-
         let diff = (output_source - output_loaded)?
             .abs()?
             .sum_all()?
             .to_scalar::<f32>()?;
 
-        // Nettoyage
         let _ = io::remove_file(Path::new(path)).await;
 
-        assert!(
-            diff < 1e-5,
-            "Le modèle chargé diffère du modèle original (diff: {})",
-            diff
-        );
+        assert!(diff < 1e-5, "Le modèle chargé diffère (diff: {})", diff);
         Ok(())
     }
 }

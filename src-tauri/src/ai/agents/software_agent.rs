@@ -277,6 +277,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_software_generation_integration() {
         // 1. Initialisation Mock Config (CRITIQUE)
         inject_mock_config();
@@ -288,7 +290,7 @@ mod tests {
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
         // Mock LLM si non disponible
-        let llm = LlmClient::new("http://localhost:11434", "dummy", None);
+        let llm = LlmClient::new().unwrap();
 
         // 2. Initialisation DB via AppConfig
         let app_cfg = AppConfig::get();

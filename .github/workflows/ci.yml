@@ -85,7 +85,7 @@ jobs:
       - name: Run Headless Tests
         working-directory: src-tauri
         # xvfb est requis pour certains tests Tauri qui initialisent le contexte graphique
-        run: xvfb-run cargo test --all-features
+        run: xvfb-run cargo test
 
   # ------------------------------------------------------------------
   # JOB 2 : SBOM

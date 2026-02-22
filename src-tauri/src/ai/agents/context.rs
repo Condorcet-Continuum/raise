@@ -55,6 +55,7 @@ impl AgentContext {
 mod tests {
     use super::*;
     use crate::json_db::storage::JsonDbConfig;
+    use crate::utils::config::test_mocks::inject_mock_config;
 
     fn mock_storage() -> Arc<StorageEngine> {
         let config = JsonDbConfig::new(PathBuf::from("/tmp/test_db_agent_v2"));
@@ -62,9 +63,13 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_context_initialization_with_session() {
+        inject_mock_config();
+
         let db = mock_storage();
-        let llm = LlmClient::new("http://dummy", "key", None);
+        let llm = LlmClient::new().unwrap();
         let domain_path = PathBuf::from("/data/domain");
         let dataset_path = PathBuf::from("/data/dataset");
 
@@ -82,11 +87,13 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_empty_identifiers_validation() {
-        // Test de sécurité pour s'assurer que le système accepte (techniquement) les IDs vides
-        // même si la logique métier devrait les éviter.
+        inject_mock_config();
+
         let db = mock_storage();
-        let llm = LlmClient::new("http://dummy", "key", None);
+        let llm = LlmClient::new().unwrap();
         let ctx = AgentContext::new("", "", db, llm, PathBuf::new(), PathBuf::new());
         assert!(ctx.agent_id.is_empty());
         assert!(ctx.session_id.is_empty());

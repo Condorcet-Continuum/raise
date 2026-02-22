@@ -29,6 +29,12 @@ pub struct AppConfig {
 
     pub core: CoreConfig,
 
+    #[serde(default)]
+    pub world_model: WorldModelConfig,
+
+    #[serde(default)]
+    pub deep_learning: DeepLearningConfig,
+
     // Gestion transparente de la conversion Liste -> Map via Serde
     #[serde(deserialize_with = "deserialize_paths_flexible")]
     pub paths: HashMap<String, String>,
@@ -52,6 +58,7 @@ pub struct ScopeConfig {
     pub default_domain: Option<String>,
     pub default_db: Option<String>,
     pub language: Option<String>,
+    pub ai_training: Option<AiTrainingConfig>,
 }
 
 // --- HELPERS SERDE ---
@@ -121,10 +128,36 @@ pub struct AiEngineConfig {
     pub status: String,
     pub provider: String,
     pub model_name: String,
-    pub api_url: Option<String>,
-    pub api_key: Option<String>,
     pub rust_repo_id: Option<String>,
     pub rust_model_file: Option<String>,
+    pub rust_tokenizer_file: Option<String>,
+    pub rust_config_file: Option<String>,
+    pub rust_safetensors_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AiTrainingConfig {
+    pub epochs: Option<usize>,
+    pub learning_rate: Option<f64>,
+    pub batch_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldModelConfig {
+    pub vocab_size: usize,
+    pub embedding_dim: usize, // Ex: 16 (Layer 8 + Category 8)
+    pub action_dim: usize,    // Ex: 5
+    pub hidden_dim: usize,    // Ex: 32
+    pub use_gpu: bool,        // Préparation pour la gestion CUDA
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DeepLearningConfig {
+    pub input_size: usize,
+    pub hidden_size: usize,
+    pub output_size: usize,
+    pub learning_rate: f64,
+    pub device: String, // "cpu" ou "cuda"
 }
 
 impl std::fmt::Debug for AiEngineConfig {
@@ -246,6 +279,37 @@ impl AppConfig {
             tmp.join("logs").to_string_lossy().to_string(),
         );
 
+        // 🎯 AJOUT : On crée un mock du moteur Candle pour que les tests puissent s'initialiser
+        let mut mock_ai_engines = HashMap::new();
+        mock_ai_engines.insert(
+            "primary_local".to_string(),
+            AiEngineConfig {
+                status: "enabled".to_string(),
+                provider: "candle_native".to_string(),
+                model_name: "llama3-1b".to_string(),
+                rust_repo_id: Some("Qwen/Qwen2.5-1.5B-Instruct-GGUF".to_string()),
+                rust_model_file: Some("qwen2.5-1.5b-instruct-q4_k_m.gguf".to_string()),
+                rust_tokenizer_file: Some("tokenizer.json".to_string()),
+                rust_config_file: None,
+                rust_safetensors_file: None,
+            },
+        );
+        // 🎯 AJOUT : Le moteur d'embeddings (MiniLM)
+        mock_ai_engines.insert(
+            "primary_embedding".to_string(),
+            AiEngineConfig {
+                status: "enabled".to_string(),
+                provider: "candle_embeddings".to_string(),
+                model_name: "minilm".to_string(),
+                rust_repo_id: Some(
+                    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2".to_string(),
+                ),
+                rust_model_file: None,
+                rust_tokenizer_file: Some("tokenizer.json".to_string()),
+                rust_config_file: Some("config.json".to_string()),
+                rust_safetensors_file: Some("model.safetensors".to_string()),
+            },
+        );
         AppConfig {
             name: Some(HashMap::from([(
                 "en".to_string(),
@@ -262,9 +326,17 @@ impl AppConfig {
                 vector_store_provider: "memory".to_string(),
                 language: "en".to_string(),
             },
+            world_model: WorldModelConfig::default(),
+            deep_learning: DeepLearningConfig {
+                input_size: 10,
+                hidden_size: 20,
+                output_size: 5,
+                learning_rate: 0.1, // 🎯 Spécialement optimisé pour que tes tests passent vite !
+                device: "cpu".to_string(),
+            },
             paths,
             services: HashMap::new(),
-            ai_engines: HashMap::new(),
+            ai_engines: mock_ai_engines, // 🎯 AJOUT : On injecte notre mock ici
             integrations: IntegrationsConfig::default(),
         }
     }
@@ -303,6 +375,9 @@ impl AppConfig {
                     .get("language")
                     .and_then(|v| v.as_str())
                     .map(String::from),
+                ai_training: ws_json
+                    .get("ai_training")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
             });
         }
 
@@ -328,6 +403,9 @@ impl AppConfig {
                     .get("language")
                     .and_then(|v| v.as_str())
                     .map(String::from),
+                ai_training: user_json
+                    .get("ai_training")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
             });
         }
 
@@ -367,7 +445,52 @@ impl AppConfig {
         None
     }
 }
+impl Default for WorldModelConfig {
+    fn default() -> Self {
+        Self {
+            vocab_size: 10,
+            embedding_dim: 16,
+            action_dim: 5,
+            hidden_dim: 32,
+            use_gpu: cfg!(feature = "cuda"),
+        }
+    }
+}
 
+// 🎯 AJOUT: Implémenter PartialEq pour que les tests de AppConfig passent
+impl PartialEq for WorldModelConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.vocab_size == other.vocab_size
+            && self.embedding_dim == other.embedding_dim
+            && self.action_dim == other.action_dim
+            && self.hidden_dim == other.hidden_dim
+            && self.use_gpu == other.use_gpu
+    }
+}
+
+impl Default for DeepLearningConfig {
+    fn default() -> Self {
+        Self {
+            input_size: 10,
+            hidden_size: 20,
+            output_size: 5,
+            learning_rate: 0.01,
+            device: if cfg!(feature = "cuda") {
+                "cuda".into()
+            } else {
+                "cpu".into()
+            },
+        }
+    }
+}
+impl DeepLearningConfig {
+    pub fn to_device(&self) -> candle_core::Device {
+        match self.device.as_str() {
+            "cuda" => candle_core::Device::new_cuda(0).unwrap_or(candle_core::Device::Cpu),
+            _ => candle_core::Device::Cpu,
+        }
+    }
+}
 // --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
@@ -381,6 +504,7 @@ mod tests {
             default_domain: Some("dev_domain".to_string()),
             default_db: Some("dev_db".to_string()),
             language: Some("fr".to_string()),
+            ai_training: None,
         };
         assert_eq!(scope.id, "dev-machine");
         assert_eq!(scope.default_domain.as_deref(), Some("dev_domain"));

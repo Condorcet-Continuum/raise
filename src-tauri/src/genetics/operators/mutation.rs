@@ -1,7 +1,7 @@
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 
-pub fn swap_mutation<T>(genes: &mut [T], mutation_rate: f32, rng: &mut dyn RngCore) {
+pub fn swap_mutation<T>(genes: &mut [T], mutation_rate: f32, rng: &mut dyn Rng) {
     if genes.len() < 2 {
         return;
     }
@@ -13,13 +13,9 @@ pub fn swap_mutation<T>(genes: &mut [T], mutation_rate: f32, rng: &mut dyn RngCo
     }
 }
 
-pub fn uniform_mutation<T, F>(
-    genes: &mut [T],
-    mutation_rate: f32,
-    rng: &mut dyn RngCore,
-    sampler: F,
-) where
-    F: Fn(&mut dyn RngCore) -> T,
+pub fn uniform_mutation<T, F>(genes: &mut [T], mutation_rate: f32, rng: &mut dyn Rng, sampler: F)
+where
+    F: Fn(&mut dyn Rng) -> T,
 {
     for gene in genes.iter_mut() {
         if rng.random::<f32>() < mutation_rate {
@@ -28,7 +24,7 @@ pub fn uniform_mutation<T, F>(
     }
 }
 
-pub fn gaussian_mutation(genes: &mut [f32], mutation_rate: f32, sigma: f32, rng: &mut dyn RngCore) {
+pub fn gaussian_mutation(genes: &mut [f32], mutation_rate: f32, sigma: f32, rng: &mut dyn Rng) {
     let normal = Normal::new(0.0, sigma).unwrap();
     for gene in genes.iter_mut() {
         if rng.random::<f32>() < mutation_rate {

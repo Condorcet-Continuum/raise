@@ -1,13 +1,10 @@
 // FICHIER : src-tauri/src/commands/traceability_commands.rs
 
-use crate::utils::{data, prelude::*};
-
-use crate::model_engine::types::ArcadiaElement;
+use crate::model_engine::types::{ArcadiaElement, ProjectModel};
+use crate::utils::{data, prelude::*, HashMap};
 use crate::AppState;
 use tauri::State;
 
-// Import des services du module de traçabilité
-// Ces modules ont été mis à jour pour inclure la couche Transverse
 use crate::traceability::{
     impact_analyzer::{ImpactAnalyzer, ImpactReport},
     reporting::{
@@ -17,67 +14,102 @@ use crate::traceability::{
     tracer::Tracer,
 };
 
-/// Commande : Analyse d'Impact
-/// Déclenche le calcul de propagation des changements à partir d'un élément racine.
-/// Prend désormais en compte les liens vers les Exigences et Scénarios.
+/// Helper interne : Convertit le modèle Arcadia en index de documents JSON
+/// 🎯 Indispensable pour alimenter les nouveaux générateurs découplés.
+fn get_model_docs(model: &ProjectModel) -> HashMap<String, Value> {
+    let mut docs = HashMap::new();
+    let mut collect = |elements: &Vec<ArcadiaElement>| {
+        for e in elements {
+            if let Ok(val) = data::to_value(e) {
+                docs.insert(e.id.clone(), val);
+            }
+        }
+    };
+
+    // Collecte sur toutes les couches
+    collect(&model.sa.functions);
+    collect(&model.sa.components);
+    collect(&model.la.functions);
+    collect(&model.la.components);
+    collect(&model.pa.functions);
+    collect(&model.pa.components);
+    // Couche Transverse
+    collect(&model.transverse.requirements);
+    collect(&model.transverse.scenarios);
+
+    docs
+}
+
 #[tauri::command]
 pub fn analyze_impact(
     state: State<AppState>,
     element_id: String,
     depth: usize,
 ) -> Result<ImpactReport> {
-    // Gestion robuste de l'erreur de Mutex (PoisonError)
     let model = state.model.lock().map_err(|e| e.to_string())?;
 
-    // Initialisation du moteur de traçabilité
-    let tracer = Tracer::new(&model);
+    // 🎯 FIX : Utilisation du constructeur de rétro-compatibilité
+    let tracer = Tracer::from_legacy_model(&model);
 
-    // Lancement de l'analyse
     let analyzer = ImpactAnalyzer::new(tracer);
     let report = analyzer.analyze(&element_id, depth);
 
     Ok(report)
 }
 
-/// Commande : Rapport d'Audit Global
-/// Exécute tous les checkers de conformité (DO-178C, EU AI Act, etc.)
-/// Retourne un rapport incluant les statistiques de la couche Transverse.
 #[tauri::command]
 pub fn run_compliance_audit(state: State<AppState>) -> Result<AuditReport> {
     let model = state.model.lock().map_err(|e| e.to_string())?;
 
-    // AuditGenerator a été mis à jour pour compter les Requirements/Scenarios
-    let report = AuditGenerator::generate(&model);
+    // 🎯 FIX : Préparation des données pour le générateur universel
+    let docs = get_model_docs(&model);
+    let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+
+    // AuditGenerator prend désormais 3 arguments
+    let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name);
 
     Ok(report)
 }
 
-/// Commande : Matrice de Traçabilité
-/// Génère la vue tabulaire de couverture SA -> LA
 #[tauri::command]
 pub fn get_traceability_matrix(state: State<AppState>) -> Result<TraceabilityMatrix> {
     let model = state.model.lock().map_err(|e| e.to_string())?;
 
-    let matrix = MatrixGenerator::generate_sa_to_la(&model);
+    let docs = get_model_docs(&model);
+    let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+
+    // 🎯 FIX : Utilisation du générateur de couverture universel
+    let matrix = MatrixGenerator::generate_coverage(&tracer, &docs, "Function");
 
     Ok(matrix)
 }
 
-/// Commande : Navigation de Voisinage
-/// Retourne les parents (Upstream) et les enfants (Downstream)
 #[tauri::command]
 pub fn get_element_neighbors(state: State<AppState>, element_id: String) -> Result<data::Value> {
     let model = state.model.lock().map_err(|e| e.to_string())?;
+    let docs = get_model_docs(&model);
 
-    let tracer = Tracer::new(&model);
+    // 🎯 FIX : Utilisation du nouveau Tracer
+    let tracer = Tracer::from_legacy_model(&model);
 
-    // Récupération des références (incluant potentiellement des liens transverses)
-    let upstream_refs = tracer.get_upstream_elements(&element_id);
-    let downstream_refs = tracer.get_downstream_elements(&element_id);
+    // Récupération des IDs
+    let upstream_ids = tracer.get_upstream_ids(&element_id);
+    let downstream_ids = tracer.get_downstream_ids(&element_id);
 
-    // Clonage pour le DTO (ArcadiaElement implémente Clone)
-    let upstream: Vec<ArcadiaElement> = upstream_refs.into_iter().cloned().collect();
-    let downstream: Vec<ArcadiaElement> = downstream_refs.into_iter().cloned().collect();
+    // Résolution des objets complets via l'index
+    let mut upstream = Vec::new();
+    for id in upstream_ids {
+        if let Some(val) = docs.get(&id) {
+            upstream.push(val.clone());
+        }
+    }
+
+    let mut downstream = Vec::new();
+    for id in downstream_ids {
+        if let Some(val) = docs.get(&id) {
+            downstream.push(val.clone());
+        }
+    }
 
     Ok(serde_json::json!({
         "center_id": element_id,
