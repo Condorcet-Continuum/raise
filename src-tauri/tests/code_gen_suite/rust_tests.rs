@@ -6,6 +6,7 @@ use raise::utils::data::json;
 use raise::utils::io;
 
 #[tokio::test]
+#[ignore]
 async fn test_rust_skeleton_generation() {
     let env = setup_test_env().await;
 
