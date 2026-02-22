@@ -172,6 +172,8 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_candle_mini_lm_loading() {
         let engine = CandleEngine::new();
         assert!(
@@ -181,6 +183,8 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_candle_dimensions() {
         let mut engine = CandleEngine::new().expect("Init failed");
         let vec = engine.embed_query("Test dimensions").expect("Embed failed");
@@ -190,6 +194,8 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_candle_normalization() {
         // Vérifie que le vecteur est normalisé (L2 norm ≈ 1.0)
         // C'est CRUCIAL pour que la Cosine Similarity fonctionne dans Qdrant

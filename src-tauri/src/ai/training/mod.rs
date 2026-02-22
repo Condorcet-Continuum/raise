@@ -162,6 +162,8 @@ mod tests {
     use crate::utils::io::tempdir;
 
     #[tokio::test]
+    #[serial_test::serial] // Protection RTX 5060 en local
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_train_domain_native_empty_data() {
         crate::utils::config::test_mocks::inject_mock_config();
 
