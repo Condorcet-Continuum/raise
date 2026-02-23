@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/rules_suite/rules_integration.rs
 
-use crate::common::setup_test_env; // ✅ Utilisation du socle commun
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::prelude::*;
@@ -9,7 +9,7 @@ use std::fs;
 #[tokio::test]
 async fn test_end_to_end_rules_execution() {
     // 1. SETUP ROBUSTE
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let config = &env.storage.config;
 
     // On utilise l'espace et la DB fournis par l'environnement

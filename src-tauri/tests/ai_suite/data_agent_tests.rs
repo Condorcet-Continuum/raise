@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/data_agent_tests.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{data_agent::DataAgent, Agent, AgentContext};
 use raise::utils::Arc;
@@ -10,7 +10,7 @@ use raise::utils::Arc;
 async fn test_data_agent_creates_class_and_enum() {
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone dans ai_suite/mod.rs.
     // On doit l'attendre pour récupérer l'environnement de test concret.
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     let test_root = env.storage.config.data_root.clone();
 
@@ -22,7 +22,9 @@ async fn test_data_agent_creates_class_and_enum() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        env.client.clone(),
+        env.client
+            .clone()
+            .expect("LlmClient must be enabled for tests"),
         test_root.clone(),
         test_root.join("dataset"),
     );

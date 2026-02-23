@@ -1,13 +1,13 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_idempotent.rs
 
-use crate::common::setup_test_env; // Notre socle SSOT
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
 use raise::json_db::storage::JsonDbConfig;
 
 #[tokio::test]
 async fn drop_is_idempotent_and_recreate_works() {
     // 1. Initialisation de l'environnement isolé
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     // On recrée la config à partir du dossier isolé
     let cfg = JsonDbConfig {

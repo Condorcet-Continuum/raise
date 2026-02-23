@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/epbs_agent_tests.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{epbs_agent::EpbsAgent, Agent, AgentContext};
 use raise::utils::Arc;
@@ -10,7 +10,7 @@ use raise::utils::Arc;
 async fn test_epbs_agent_creates_configuration_item() {
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit utiliser .await pour récupérer l'objet AiTestEnv.
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     let test_root = env.storage.config.data_root.clone();
 
@@ -22,7 +22,9 @@ async fn test_epbs_agent_creates_configuration_item() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        env.client.clone(),
+        env.client
+            .clone()
+            .expect("LlmClient must be enabled for tests"),
         test_root.clone(),
         test_root.join("dataset"),
     );

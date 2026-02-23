@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/business_agent_tests.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 // On importe uniquement ce dont on a besoin
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{business_agent::BusinessAgent, Agent, AgentContext};
@@ -9,7 +9,7 @@ use raise::utils::Arc;
 #[tokio::test]
 #[ignore]
 async fn test_business_agent_generates_oa_entities() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     let test_root = env.storage.config.data_root.clone();
 
@@ -21,7 +21,9 @@ async fn test_business_agent_generates_oa_entities() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        env.client.clone(),
+        env.client
+            .clone()
+            .expect("LlmClient must be enabled for tests"),
         test_root.clone(),
         test_root.join("dataset"),
     );

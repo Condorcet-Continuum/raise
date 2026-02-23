@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_query_integration.rs
 
-use crate::common::{seed_mock_datasets, setup_test_env};
+use crate::common::{seed_mock_datasets, setup_test_env, LlmMode};
 use raise::json_db::{
     collections::manager::CollectionsManager,
     query::{
@@ -70,7 +70,7 @@ async fn seed_article(
 
 #[tokio::test]
 async fn query_get_article_by_id() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let base_doc = load_test_doc(&env.domain_path).await;
 
@@ -88,7 +88,7 @@ async fn query_get_article_by_id() {
 
 #[tokio::test]
 async fn query_find_one_article_by_handle() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let base_doc = load_test_doc(&env.domain_path).await;
 
@@ -123,7 +123,7 @@ async fn query_find_one_article_by_handle() {
 
 #[tokio::test]
 async fn query_find_many_with_sort_and_limit() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let base_doc = load_test_doc(&env.domain_path).await;
 

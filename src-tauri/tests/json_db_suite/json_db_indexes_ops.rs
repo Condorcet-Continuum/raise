@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_indexes_ops.rs
 
-use crate::common::setup_test_env; // Notre socle SSOT
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::io;
 use raise::utils::prelude::*;
@@ -8,7 +8,7 @@ use raise::utils::prelude::*;
 #[tokio::test]
 async fn test_create_and_drop_index_lifecycle() {
     // 1. SETUP ENVIRONNEMENT (Isolé et unifié)
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     // Le CollectionsManager est déjà initialisé dans UnifiedTestEnv,
     // mais on en crée une instance locale pour plus de clarté dans le test.

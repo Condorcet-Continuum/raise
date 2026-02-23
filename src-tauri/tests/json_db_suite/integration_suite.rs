@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/json_db_suite/integration_suite.rs
 
-use crate::common::setup_test_env; // Notre fameux socle !
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::{
     collections::manager::CollectionsManager,
     indexes::manager::IndexManager,
@@ -13,7 +13,7 @@ use raise::utils::{prelude::*, Arc}; // SSOT : Apporte json!, Arc, Value, etc.
 #[tokio::test]
 async fn test_json_db_global_scenario() {
     // 1. SETUP ENVIRONNEMENT (Robuste & Isolé)
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     // Le TransactionManager a besoin de la configuration enveloppée dans un Arc
     let config = Arc::new(JsonDbConfig {

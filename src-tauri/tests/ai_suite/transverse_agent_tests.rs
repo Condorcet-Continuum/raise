@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/transverse_agent_tests.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{transverse_agent::TransverseAgent, Agent, AgentContext};
 use raise::utils::Arc;
@@ -10,7 +10,7 @@ use raise::utils::Arc;
 async fn test_transverse_agent_ivvq_cycle() {
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit l'attendre pour obtenir l'objet AiTestEnv concret.
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     let test_root = env.storage.config.data_root.clone();
 
@@ -22,7 +22,9 @@ async fn test_transverse_agent_ivvq_cycle() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        env.client.clone(),
+        env.client
+            .clone()
+            .expect("LlmClient must be enabled for tests"),
         test_root.clone(),
         test_root.join("dataset"),
     );

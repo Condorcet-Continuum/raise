@@ -18,17 +18,24 @@ static INIT: Once = Once::new();
 // 🎯 Utilisation d'un OnceLock pour partager le client LLM
 static SHARED_CLIENT: OnceLock<LlmClient> = OnceLock::new();
 
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub enum LlmMode {
+    Enabled,
+    Disabled,
+}
+
 #[allow(dead_code)]
 pub struct UnifiedTestEnv {
     pub storage: StorageEngine,
-    pub client: LlmClient,
+    pub client: Option<LlmClient>,
     pub space: String,
     pub db: String,
     pub domain_path: PathBuf,
     pub _tmp_dir: TempDir,
 }
 
-pub async fn setup_test_env() -> UnifiedTestEnv {
+pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
         inject_mock_config();
@@ -47,12 +54,27 @@ pub async fn setup_test_env() -> UnifiedTestEnv {
 
     // 🎯 2. SATISFAIRE LLMCLIENT : On place le mock là où le Singleton l'attend
     // Cela évite l'erreur "Modèle GGUF introuvable" sans casser l'isolation du test
-    let global_domain = app_config.get_path("PATH_RAISE_DOMAIN").unwrap();
-    let mock_model_file = global_domain.join("_system/ai-assets/models/mock.gguf");
-    if let Some(parent) = mock_model_file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&mock_model_file, b"dummy content");
+    let client = match llm_mode {
+        LlmMode::Enabled => {
+            let global_domain = app_config.get_path("PATH_RAISE_DOMAIN").unwrap();
+            let mock_model_file = global_domain.join("_system/ai-assets/models/mock.gguf");
+            if let Some(parent) = mock_model_file.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&mock_model_file, b"dummy content");
+
+            // On retourne Some(...) sans mettre de ";" à la fin du bloc
+            Some(
+                SHARED_CLIENT
+                    .get_or_init(|| {
+                        LlmClient::new().expect("❌ Impossible d'initialiser le LlmClient partagé")
+                    })
+                    .clone(),
+            )
+        }
+        // ✅ Correction de la typo 'lmMode' -> 'LlmMode'
+        LlmMode::Disabled => None,
+    };
 
     // 🎯 3. SCHÉMAS : On génère les schémas dans notre dossier ISOLÉ
     let space = "_system".to_string();
@@ -73,10 +95,6 @@ pub async fn setup_test_env() -> UnifiedTestEnv {
     let storage = StorageEngine::new(db_config);
     let mgr = CollectionsManager::new(&storage, &space, &db);
     mgr.init_db().await.expect("init_db failed");
-
-    let client = SHARED_CLIENT
-        .get_or_init(|| LlmClient::new().expect("❌ Impossible d'initialiser le LlmClient partagé"))
-        .clone();
 
     UnifiedTestEnv {
         storage,

@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/code_gen_suite/agent_tests.rs
 
-use crate::common::setup_test_env; // REVERSION : Retour à l'import fonctionnel depuis common
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
 use raise::utils::Arc;
@@ -9,7 +9,7 @@ use raise::utils::Arc;
 #[ignore]
 async fn test_software_agent_creates_component_end_to_end() {
     // CORRECTION : setup_test_env() est asynchrone, on l'attend pour obtenir AiTestEnv.
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     // --- CONTEXTE ---
     let test_data_root = env.storage.config.data_root.clone();
@@ -22,7 +22,9 @@ async fn test_software_agent_creates_component_end_to_end() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        env.client.clone(),
+        env.client
+            .clone()
+            .expect("LlmClient must be enabled for tests"),
         test_data_root.clone(),
         test_data_root.join("dataset"),
     );
@@ -70,9 +72,13 @@ async fn test_software_agent_creates_component_end_to_end() {
 #[tokio::test]
 #[ignore]
 async fn test_intent_classification_integration() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
-    let classifier = IntentClassifier::new(env.client);
+    let classifier = IntentClassifier::new(
+        env.client
+            .clone()
+            .expect("LlmClient doit être activé (LlmMode::Enabled) pour ce test"),
+    );
 
     // --- TEST 1 : CREATION ---
     let input = "Crée une fonction système nommée 'DemarrerMoteur'";

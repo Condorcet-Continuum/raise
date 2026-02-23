@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/json_db_suite/schema_consistency.rs
 
-use crate::common::setup_test_env; // Notre socle SSOT
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::utils::io;
@@ -10,7 +10,7 @@ use walkdir::WalkDir; // Pour explorer les schémas récursivement
 #[tokio::test]
 async fn test_structural_integrity_json_schema() {
     // 1. Initialisation de l'environnement isolé (copie les schémas auto)
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = &env.storage.config;
 
     let schemas_root = cfg.db_schemas_root(&env.space, &env.db).join("v1");
@@ -62,7 +62,7 @@ async fn test_structural_integrity_json_schema() {
 #[tokio::test]
 async fn test_semantic_consistency_json_ld() {
     // On initialise juste pour le logging et les utilitaires
-    let _env = setup_test_env().await;
+    let _env = setup_test_env(LlmMode::Disabled).await;
 
     let processor = JsonLdProcessor::new();
     let vocab_registry = VocabularyRegistry::new();
@@ -129,7 +129,7 @@ async fn test_semantic_consistency_json_ld() {
 
 #[tokio::test]
 async fn test_detect_actor_duality() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = &env.storage.config;
     let schemas_root = cfg.db_schemas_root(&env.space, &env.db).join("v1");
 

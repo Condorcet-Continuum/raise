@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/system_agent_tests.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
 use raise::utils::Arc;
@@ -10,7 +10,7 @@ use raise::utils::Arc;
 async fn test_system_agent_creates_function_end_to_end() {
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit l'attendre pour accéder aux champs client et storage.
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     let test_root = env.storage.config.data_root.clone();
 
@@ -22,7 +22,9 @@ async fn test_system_agent_creates_function_end_to_end() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        env.client.clone(),
+        env.client
+            .clone()
+            .expect("LlmClient must be enabled for BusinessAgent tests"),
         test_root.clone(),
         test_root.join("dataset"),
     );

@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/json_db_suite/workunits_x_compute.rs
 
-use crate::common::setup_test_env; // Notre socle SSOT unifié
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::{self, CollectionsManager};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::utils::prelude::*; // Apporte json!, Value, Uuid, etc.
@@ -8,7 +8,7 @@ use raise::utils::prelude::*; // Apporte json!, Value, Uuid, etc.
 #[tokio::test]
 async fn workunit_compute_then_validate_minimal() {
     // 1. Initialisation de l'environnement (Sandboxing total)
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     // 2. Chargement du registre des schémas depuis la DB isolée
     let reg = SchemaRegistry::from_db(&env.storage.config, &env.space, &env.db)
@@ -59,7 +59,7 @@ async fn workunit_compute_then_validate_minimal() {
 #[tokio::test]
 async fn finance_compute_minimal() {
     // 1. Initialisation de l'environnement
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
 
     let reg = SchemaRegistry::from_db(&env.storage.config, &env.space, &env.db)

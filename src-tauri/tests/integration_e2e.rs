@@ -4,7 +4,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::model_engine::arcadia;
 use raise::model_engine::loader::ModelLoader;
@@ -13,13 +13,12 @@ use raise::rules_engine::ast::{Expr, Rule};
 use raise::utils::prelude::*; // Plus besoin de 'io::tempdir'
 
 #[tokio::test]
-#[ignore]
 async fn test_full_stack_integration() {
     // =========================================================================
     // ÉTAPE 1 : Infrastructure (JSON-DB)
     // =========================================================================
     // ✅ Utilisation de l'environnement standardisé (Config + Schémas + Logs)
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     // On utilise le manager pointant sur l'espace de test isolé généré par setup_test_env
     let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);

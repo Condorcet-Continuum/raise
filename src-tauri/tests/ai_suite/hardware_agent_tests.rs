@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/hardware_agent_tests.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{hardware_agent::HardwareAgent, Agent, AgentContext};
 use raise::utils::Arc;
@@ -10,7 +10,7 @@ use raise::utils::Arc;
 async fn test_hardware_agent_handles_both_electronics_and_infra() {
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone suite à la migration
     // vers le moteur de stockage asynchrone. On doit l'attendre pour obtenir l'environnement.
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     let test_root = env.storage.config.data_root.clone();
 
@@ -22,7 +22,9 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        env.client.clone(),
+        env.client
+            .clone()
+            .expect("LlmClient must be enabled for BusinessAgent tests"),
         test_root.clone(),
         test_root.join("dataset"),
     );

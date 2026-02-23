@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/json_db_suite/dataset_integration.rs
 
-use crate::common::{seed_mock_datasets, setup_test_env}; // Notre nouveau socle !
+use crate::common::{seed_mock_datasets, setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::io::{self};
 use raise::utils::prelude::*; // SSOT : Apporte Value, json, Result, etc.
@@ -8,7 +8,7 @@ use raise::utils::prelude::*; // SSOT : Apporte Value, json, Result, etc.
 #[tokio::test]
 async fn debug_import_exchange_item() {
     // 1. Initialisation de l'environnement isolé
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
 
     // 2. Création du fichier factice (remplace l'ancienne méthode)

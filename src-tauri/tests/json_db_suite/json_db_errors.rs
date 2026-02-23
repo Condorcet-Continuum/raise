@@ -1,13 +1,13 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_errors.rs
 
-use crate::common::setup_test_env; // Notre socle SSOT
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::storage::file_storage::{create_db, open_db};
 use raise::json_db::storage::JsonDbConfig;
 
 #[tokio::test]
 async fn open_missing_db_fails() {
     // 1. Initialisation de l'environnement isolé
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     // 2. Création de la config de stockage pointant vers notre dossier isolé
     let cfg = JsonDbConfig {
@@ -29,7 +29,7 @@ async fn open_missing_db_fails() {
 #[tokio::test]
 async fn create_db_is_idempotent() {
     // 1. Initialisation de l'environnement isolé
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     let cfg = JsonDbConfig {
         data_root: env.domain_path.clone(),

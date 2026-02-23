@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_lifecycle.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
@@ -11,7 +11,7 @@ use raise::utils::prelude::*;
 #[tokio::test]
 async fn db_lifecycle_minimal() {
     // 1. Initialisation de l'environnement isolé (UUID unique par thread)
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = JsonDbConfig {
         data_root: env.domain_path.clone(),
     };
@@ -92,7 +92,7 @@ async fn db_lifecycle_minimal() {
 
 #[tokio::test]
 async fn test_collection_drop_cleans_system_index() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let collection = "temp_collection_to_drop";
 
@@ -154,7 +154,7 @@ async fn test_collection_drop_cleans_system_index() {
 #[tokio::test]
 async fn test_system_index_strict_conformance() {
     // 1. Initialisation de l'environnement
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let cfg = &env.storage.config;
 

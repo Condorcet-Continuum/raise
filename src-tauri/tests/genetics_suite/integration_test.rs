@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/genetics_suite/integration_test.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::genetics::bridge::GeneticsAdapter;
 use raise::genetics::engine::GeneticConfig;
 use raise::genetics::evaluators::architecture::ArchitectureEvaluator;
@@ -16,7 +16,7 @@ use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 #[ignore]
 async fn test_genetics_integration_with_json_db() {
     // 1. Initialisation robuste
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     // 2. Manager sur un espace de test dédié
     let manager = CollectionsManager::new(&env.storage, "testing", "arcadia");

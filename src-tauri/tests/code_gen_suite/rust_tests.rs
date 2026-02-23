@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/code_gen_suite/rust_tests.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::code_generator::{CodeGeneratorService, TargetLanguage};
 use raise::utils::data::json;
 use raise::utils::io;
@@ -8,7 +8,7 @@ use raise::utils::io;
 #[tokio::test]
 #[ignore]
 async fn test_rust_skeleton_generation() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     // On utilise le dossier temporaire de l'environnement comme sortie
     let service = CodeGeneratorService::new(env.domain_path.clone());

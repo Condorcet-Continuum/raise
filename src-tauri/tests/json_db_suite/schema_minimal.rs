@@ -1,13 +1,13 @@
 // FICHIER : src-tauri/tests/json_db_suite/schema_minimal.rs
 
-use crate::common::setup_test_env; // Notre socle SSOT
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::utils::prelude::*; // Apporte json!, Value, etc.
 
 #[tokio::test]
 async fn schema_instantiate_validate_minimal() {
     // 1. Initialisation de l'environnement (Sandboxing total)
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = &env.storage.config;
 
     // 2. Chargement du registre des schémas depuis la DB isolée

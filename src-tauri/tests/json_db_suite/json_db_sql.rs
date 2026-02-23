@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_sql.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::query::sql::{parse_sql, SqlRequest};
 use raise::json_db::query::QueryEngine;
@@ -53,7 +53,7 @@ async fn exec_sql_read(engine: &QueryEngine<'_>, sql: &str) -> raise::json_db::q
 
 #[tokio::test]
 async fn test_sql_select_by_kind() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let col = "actors_kind";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -71,7 +71,7 @@ async fn test_sql_select_by_kind() {
 
 #[tokio::test]
 async fn test_sql_numeric_comparison_x_props() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let col = "actors_age";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -89,7 +89,7 @@ async fn test_sql_numeric_comparison_x_props() {
 
 #[tokio::test]
 async fn test_sql_logical_and_mixed() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let col = "actors_logical";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -113,7 +113,7 @@ async fn test_sql_logical_and_mixed() {
 
 #[tokio::test]
 async fn test_sql_like_display_name() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let col = "actors_like";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -131,7 +131,7 @@ async fn test_sql_like_display_name() {
 
 #[tokio::test]
 async fn test_sql_order_by_x_prop() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let col = "actors_order";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -162,7 +162,7 @@ async fn test_sql_order_by_x_prop() {
 
 #[tokio::test]
 async fn test_sql_json_array_contains() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let col = "actors_tags";
     seed_actors(&mgr, col, &env.space, &env.db).await;

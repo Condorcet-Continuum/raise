@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/genetics_suite/full_flow_test.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::genetics::bridge::GeneticsAdapter;
 use raise::genetics::engine::GeneticConfig;
 use raise::genetics::evaluators::architecture::ArchitectureEvaluator;
@@ -13,10 +13,9 @@ use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 
 #[tokio::test]
-#[ignore]
 async fn test_arcadia_to_genetics_pipeline() {
     // 1. Initialisation robuste (Config + Schémas système)
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
 
     // 2. Création d'un manager sur un workspace spécifique au test
     let manager = CollectionsManager::new(&env.storage, "test_workspace", "arcadia_db");

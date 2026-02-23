@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/software_agent_tests.rs
 
-use crate::common::setup_test_env;
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
 use raise::utils::Arc;
@@ -8,7 +8,7 @@ use raise::utils::Arc;
 #[tokio::test]
 #[ignore]
 async fn test_software_agent_creates_component_end_to_end() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Enabled).await;
 
     // --- CONTEXTE ---
     let test_data_root = env.storage.config.data_root.clone();
@@ -21,7 +21,9 @@ async fn test_software_agent_creates_component_end_to_end() {
         agent_id,
         &session_id,
         Arc::new(env.storage.clone()),
-        env.client.clone(),
+        env.client
+            .clone()
+            .expect("LlmClient must be enabled for BusinessAgent tests"),
         test_data_root.clone(),
         test_data_root.join("dataset"),
     );
@@ -70,8 +72,12 @@ async fn test_software_agent_creates_component_end_to_end() {
 #[ignore]
 async fn test_intent_classification_integration() {
     // CORRECTION E0609 : .await ajouté ici également.
-    let env = setup_test_env().await;
-    let classifier = IntentClassifier::new(env.client);
+    let env = setup_test_env(LlmMode::Enabled).await;
+    let classifier = IntentClassifier::new(
+        env.client
+            .clone()
+            .expect("LlmClient est requis pour l'IntentClassifier (utilisez LlmMode::Enabled)"),
+    );
 
     // --- CORRECTION : Prompt "Anti-Markdown" ---
     let input = "Instruction: Analyse cette demande et retourne le JSON strict. \

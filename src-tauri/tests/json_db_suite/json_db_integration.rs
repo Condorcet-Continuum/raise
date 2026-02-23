@@ -1,13 +1,13 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_integration.rs
 
-use crate::common::setup_test_env; // Nouveau socle SSOT
+use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::prelude::*; // Apporte Value, json!, Result, etc.
 
 #[tokio::test]
 async fn query_get_article_by_id() {
     // 1. Initialisation de l'environnement isolé
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
 
     // 2. Création de la collection
@@ -53,7 +53,7 @@ async fn query_get_article_by_id() {
 
 #[tokio::test]
 async fn query_find_one_article_by_handle() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
 
     mgr.create_collection("articles", None)
@@ -88,7 +88,7 @@ async fn query_find_one_article_by_handle() {
 
 #[tokio::test]
 async fn query_find_many_with_sort_and_limit_simulated() {
-    let env = setup_test_env().await;
+    let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
 
     mgr.create_collection("articles", None)
