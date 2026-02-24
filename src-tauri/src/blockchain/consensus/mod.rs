@@ -51,7 +51,7 @@ impl ConsensusEngine {
     }
 
     /// Vérifie l'autorité et mémorise le commit s'il est valide.
-    pub fn register_proposal(&mut self, commit: ArcadiaCommit) -> Result<()> {
+    pub fn register_proposal(&mut self, commit: ArcadiaCommit) -> RaiseResult<()> {
         if !self.config.authorized_validators.contains(&commit.author) {
             return Err(AppError::Validation(format!(
                 "Commit rejeté : auteur {} non autorisé",
@@ -65,7 +65,7 @@ impl ConsensusEngine {
     }
 
     /// Enregistre un vote. Si le quorum est atteint, retourne le commit finalisé.
-    pub fn process_vote(&mut self, vote: Vote) -> Result<Option<ArcadiaCommit>> {
+    pub fn process_vote(&mut self, vote: Vote) -> RaiseResult<Option<ArcadiaCommit>> {
         if !self
             .config
             .authorized_validators

@@ -13,7 +13,7 @@ pub struct MigrationVersion {
 }
 
 impl MigrationVersion {
-    pub fn parse(version_str: &str) -> Result<Self> {
+    pub fn parse(version_str: &str) -> RaiseResult<Self> {
         let parts: Vec<&str> = version_str.split('.').collect();
         if parts.len() != 3 {
             return Err(AppError::Validation(format!(

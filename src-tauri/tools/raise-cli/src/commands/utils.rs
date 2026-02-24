@@ -1,4 +1,4 @@
-// FICHIER : src-tauri/src/bin/raise-cli/utils.rs
+// FICHIER : src-tauri/tools/raise-cli/src/commands/utils.rs
 
 use clap::{Args, Subcommand};
 use raise::{
@@ -9,6 +9,10 @@ use raise::{
         prelude::*,
     },
 };
+
+// 🎯 NOUVEAU : Imports pour vérifier la BDD
+use raise::json_db::collections::manager::CollectionsManager;
+use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 
 /// Outils de maintenance et d'inspection système pour RAISE.
 #[derive(Args, Clone, Debug)]
@@ -28,13 +32,11 @@ pub enum UtilsCommands {
 pub async fn handle(args: UtilsArgs) -> Result<()> {
     match args.command {
         UtilsCommands::Info => {
-            // Singleton Config (Doit être initialisé avant)
             let config = AppConfig::get();
 
             println!("--- 🛠️ RAISE SYSTEM INFO ---");
             user_info!("VERSION", "{}", env!("CARGO_PKG_VERSION"));
 
-            // Champs valides confirmés par le compilateur
             let env_mode = if cfg!(debug_assertions) {
                 "development"
             } else {
@@ -42,23 +44,33 @@ pub async fn handle(args: UtilsArgs) -> Result<()> {
             };
             user_info!("SYS_ENV", "Environnement : {}", env_mode);
 
-            // Utilisation robuste de get_path
             let db_root = config.get_path("PATH_RAISE_DOMAIN");
             user_info!("DB_ROOT", "{:?}", db_root);
 
-            let primary_engine = config.ai_engines.get("primary_local");
+            let mut provider = String::from("Non configuré");
+            let mut model = String::from("Inconnu");
+            let mut status = String::from("disabled");
 
-            let provider = primary_engine
-                .map(|e| e.provider.as_str())
-                .unwrap_or("Non configuré");
+            // 🎯 Vérification du composant LLM directement en base de données
+            if let Some(ref path) = db_root {
+                let storage = StorageEngine::new(JsonDbConfig::new(path.clone()));
+                let manager =
+                    CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
-            let model = primary_engine
-                .and_then(|e| e.rust_model_file.as_deref())
-                .unwrap_or("Inconnu");
-
-            let status = primary_engine
-                .map(|e| e.status.as_str())
-                .unwrap_or("disabled");
+                if let Ok(settings) = AppConfig::get_component_settings(&manager, "llm").await {
+                    provider = settings
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Local")
+                        .to_string();
+                    model = settings
+                        .get("rust_model_file")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Inconnu")
+                        .to_string();
+                    status = "enabled".to_string();
+                }
+            }
 
             user_info!(
                 "LLM_ENGINE",
@@ -97,7 +109,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_utils_ping() {
-        // Ping ne dépend pas de la config, donc pas besoin d'init
         let args = UtilsArgs {
             command: UtilsCommands::Ping,
         };
@@ -106,16 +117,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_utils_info() {
-        // ✅ CORRECTION : Utilisation du Mock Mémoire
-        // Au lieu de chercher un fichier json sur le disque (fragile),
-        // on injecte la config directement en mémoire.
         raise::utils::config::test_mocks::inject_mock_config();
 
         let args = UtilsArgs {
             command: UtilsCommands::Info,
         };
 
-        // Cela ne devrait plus paniquer sur AppConfig::get()
         assert!(handle(args).await.is_ok());
     }
 }

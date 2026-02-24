@@ -1,9 +1,11 @@
-// FICHIER : src-tauri/src/graph_store/mod.rs
+// FICHIER : src-tauri/src/ai/graph_store/mod.rs
 
 use crate::ai::memory::{candle_store::CandleLocalStore, MemoryRecord, VectorStore};
 use crate::ai::nlp::embeddings::EmbeddingEngine;
 use crate::json_db::jsonld::JsonLdProcessor;
-// 🎯 Import de AppConfig et AppError (si non présents dans prelude)
+
+// 🎯 Imports mis à jour
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::{
     config::AppConfig, error::AppError, io, io::PathBuf, prelude::*, Arc, AsyncMutex,
 };
@@ -19,7 +21,8 @@ pub struct GraphStore {
 }
 
 impl GraphStore {
-    pub async fn new(storage_path: PathBuf) -> Result<Self> {
+    // 🎯 AJOUT DU MANAGER DANS LA SIGNATURE
+    pub async fn new(storage_path: PathBuf, manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         let app_config = AppConfig::get();
         let use_vectors =
             app_config.core.graph_mode == "internal" || app_config.core.graph_mode == "db";
@@ -34,7 +37,8 @@ impl GraphStore {
         if use_vectors {
             println!("🕸️ [GraphStore] Vectorisation Native activée (JSON-LD + Candle)");
 
-            match EmbeddingEngine::new() {
+            // 🎯 AJOUT DU MANAGER ET DU .await ICI
+            match EmbeddingEngine::new(manager).await {
                 Ok(engine) => {
                     embedder = Some(Arc::new(AsyncMutex::new(engine)));
 
@@ -71,21 +75,18 @@ impl GraphStore {
         collection: &str,
         id: &str,
         mut data: serde_json::Value,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         // 🎯 OPTIMISATION JSON-LD 1 : Normalisation de l'ID
-        // Si le document n'a pas d'URI sémantique (@id), on lui en force une
         if self.processor.get_id(&data).is_none() {
             data["@id"] = json!(format!("{}:{}", collection, id));
         }
 
-        // 🎯 OPTIMISATION JSON-LD 2 : Validation stricte (Optionnel mais recommandé)
-        // On s'assure que le graphe a toujours au moins un ID et un Type
+        // 🎯 OPTIMISATION JSON-LD 2 : Validation stricte
         if let Err(e) = self
             .processor
             .validate_required_fields(&data, &["@id", "@type"])
         {
             eprintln!("⚠️ Warning Sémantique pour {}: {}", id, e);
-            // On peut choisir de rejeter ou juste d'avertir
         }
 
         let text_to_embed = extract_text_content(&data);
@@ -104,7 +105,7 @@ impl GraphStore {
                         vectors: Some(vector),
                     };
 
-                    // 🎯 ALIGNEMENT SSOT : On utilise la dimension de la configuration (ex: 16 ou 384)
+                    // 🎯 ALIGNEMENT SSOT : On utilise la dimension de la configuration
                     let _ = v_store
                         .init_collection(collection, self.embedding_dim as u64)
                         .await;
@@ -140,7 +141,7 @@ impl GraphStore {
         collection: &str,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<serde_json::Value>> {
+    ) -> RaiseResult<Vec<serde_json::Value>> {
         if let (Some(emb_mutex), Some(v_store)) = (&self.embedder, &self.vector_store) {
             let mut engine = emb_mutex.lock().await;
             let query_vector = engine.embed_query(query)?;
@@ -152,7 +153,6 @@ impl GraphStore {
 
             let mut results = Vec::new();
             for rec in records {
-                // Pour chaque ID trouvé, on recharge le document JSON complet depuis le disque
                 let file_path = self
                     .storage_path
                     .join("collections")
@@ -170,7 +170,7 @@ impl GraphStore {
         }
     }
 
-    pub async fn remove_entity(&self, collection: &str, id: &str) -> Result<()> {
+    pub async fn remove_entity(&self, collection: &str, id: &str) -> RaiseResult<()> {
         let file_path = self
             .storage_path
             .join("collections")
@@ -185,7 +185,7 @@ impl GraphStore {
         from: (&str, &str),
         relation: &str,
         to: (&str, &str),
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         let (from_col, from_id) = from;
         let file_path = self
             .storage_path
@@ -236,9 +236,10 @@ fn extract_text_content(data: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::utils::config::test_mocks::inject_mock_config;
     use crate::utils::io::tempdir;
-    use crate::utils::{AsyncMutex, OnceLock};
+    use crate::utils::{AsyncMutex, OnceLock}; // 🎯 Import requis
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {
         static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
@@ -247,13 +248,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_native_graph_store_end_to_end() {
-        // 1. Initialisation de l'environnement de test (Sandbox)
         let _guard = get_hf_lock().lock().await;
         inject_mock_config();
 
         let dir = tempdir().unwrap();
-        // Le GraphStore utilisera le CPU et embedding_dim=16 via le test mock
-        let store = GraphStore::new(dir.path().to_path_buf()).await.unwrap();
+
+        // 🎯 Création de la DB de mock pour le GraphStore
+        let app_config = AppConfig::get();
+        let storage_cfg = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(storage_cfg);
+        let manager =
+            CollectionsManager::new(&storage, &app_config.system_domain, &app_config.system_db);
+        manager.init_db().await.unwrap();
+
+        // 🎯 Injection du modèle NLP pour éviter le plantage
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "nlp",
+            crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })
+        ).await;
+
+        // 🎯 On passe le manager
+        let store = GraphStore::new(dir.path().to_path_buf(), &manager)
+            .await
+            .unwrap();
 
         // 1. Indexation
         let data = json!({

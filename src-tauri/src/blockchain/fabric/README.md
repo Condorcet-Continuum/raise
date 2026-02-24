@@ -70,7 +70,7 @@ app.manage(Mutex::new(FabricClient::from_config(profile)) as SharedFabricClient)
 **Action :** Écriture sur le Ledger (Consensus requis).
 
 - **Processus** : Forge une proposition gRPC, la signe avec l'identité locale, et l'envoie aux peers pour endossement.
-- **Retour** : Un `Result<String, BlockchainError>` contenant l'ID de transaction unique.
+- **Retour** : Un `RaiseResult<String, BlockchainError>` contenant l'ID de transaction unique.
 
 ### 2. Requête (`query_transaction`)
 

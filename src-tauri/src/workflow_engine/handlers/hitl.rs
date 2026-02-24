@@ -16,7 +16,7 @@ impl NodeHandler for GateHitlHandler {
         node: &WorkflowNode,
         _context: &mut HashMap<String, Value>,
         _shared_ctx: &HandlerContext<'_>,
-    ) -> crate::utils::Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         tracing::warn!(
             "⏸️ Workflow en pause (Validation Humaine Requise) : '{}'",
             node.name

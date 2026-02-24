@@ -12,8 +12,12 @@ pub struct MemoryRecord {
 
 #[async_trait]
 pub trait VectorStore: Send + Sync {
-    async fn init_collection(&self, collection_name: &str, vector_size: u64) -> Result<()>;
-    async fn add_documents(&self, collection_name: &str, records: Vec<MemoryRecord>) -> Result<()>;
+    async fn init_collection(&self, collection_name: &str, vector_size: u64) -> RaiseResult<()>;
+    async fn add_documents(
+        &self,
+        collection_name: &str,
+        records: Vec<MemoryRecord>,
+    ) -> RaiseResult<()>;
 
     // Signature à 5 paramètres (hors self)
     async fn search_similarity(
@@ -23,7 +27,7 @@ pub trait VectorStore: Send + Sync {
         limit: u64,
         score_threshold: f32,
         filter: Option<HashMap<String, String>>,
-    ) -> Result<Vec<MemoryRecord>>;
+    ) -> RaiseResult<Vec<MemoryRecord>>;
 }
 
 #[cfg(test)]

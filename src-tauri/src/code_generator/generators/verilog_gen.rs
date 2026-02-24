@@ -21,7 +21,7 @@ impl LanguageGenerator for VerilogGenerator {
         &self,
         element: &Value,
         template_engine: &TemplateEngine,
-    ) -> Result<Vec<GeneratedFile>> {
+    ) -> RaiseResult<Vec<GeneratedFile>> {
         let name = element
             .get("name")
             .and_then(|v| v.as_str())

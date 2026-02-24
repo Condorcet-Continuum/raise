@@ -71,7 +71,7 @@ impl LanguageGenerator for RustGenerator {
         &self,
         element: &Value,
         template_engine: &TemplateEngine,
-    ) -> Result<Vec<GeneratedFile>> {
+    ) -> RaiseResult<Vec<GeneratedFile>> {
         let component: ArcadiaComponent = crate::utils::data::from_value(element.clone())
             .unwrap_or(ArcadiaComponent {
                 id: element
@@ -156,7 +156,7 @@ impl RustGenerator {
         functions: &[String],
         context: &Value, // ✅ CHANGÉ : &Context -> &Value
         template_engine: &TemplateEngine,
-    ) -> Result<Vec<GeneratedFile>> {
+    ) -> RaiseResult<Vec<GeneratedFile>> {
         let crate_name = impl_specs
             .artifact_name
             .clone()

@@ -17,7 +17,7 @@ pub struct ArcadiaEncoder;
 
 impl ArcadiaEncoder {
     /// Encode la couche (Layer) en vecteur One-Hot [1, 8]
-    pub fn encode_layer(layer: Layer) -> Result<Tensor> {
+    pub fn encode_layer(layer: Layer) -> RaiseResult<Tensor> {
         let index = match layer {
             Layer::OperationalAnalysis => 0,
             Layer::SystemAnalysis => 1,
@@ -33,7 +33,7 @@ impl ArcadiaEncoder {
     }
 
     /// Encode la catégorie fonctionnelle en vecteur One-Hot [1, 8]
-    pub fn encode_category(category: ElementCategory) -> Result<Tensor> {
+    pub fn encode_category(category: ElementCategory) -> RaiseResult<Tensor> {
         let index = match category {
             ElementCategory::Component => 0,
             ElementCategory::Function => 1,
@@ -50,7 +50,7 @@ impl ArcadiaEncoder {
 
     /// Encode un élément complet (Concaténation Layer + Category)
     /// Dimension de sortie : [1, 16] (8 + 8)
-    pub fn encode_element(element: &ArcadiaElement) -> Result<Tensor> {
+    pub fn encode_element(element: &ArcadiaElement) -> RaiseResult<Tensor> {
         // 1. Extraction sémantique via le Trait existant
         let layer = element.get_layer();
         let category = element.get_category();
@@ -67,7 +67,7 @@ impl ArcadiaEncoder {
     }
 
     /// Helper pour générer un vecteur One-Hot
-    fn one_hot(index: usize, size: usize) -> Result<Tensor> {
+    fn one_hot(index: usize, size: usize) -> RaiseResult<Tensor> {
         let mut data = vec![0f32; size];
         if index < size {
             data[index] = 1.0;

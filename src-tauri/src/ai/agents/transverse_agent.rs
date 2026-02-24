@@ -26,7 +26,7 @@ impl TransverseAgent {
         user: &str,
         doc_type: &str,
         original_name: &str,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
         if original_name == "skip_llm" {
             return Ok(json!({}));
         }
@@ -58,7 +58,7 @@ impl TransverseAgent {
         ctx: &AgentContext,
         name: &str,
         history_context: &str,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -147,7 +147,7 @@ impl Agent for TransverseAgent {
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
-    ) -> Result<Option<AgentResult>> {
+    ) -> RaiseResult<Option<AgentResult>> {
         let mut session = load_session(ctx)
             .await
             .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
@@ -237,21 +237,18 @@ impl Agent for TransverseAgent {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::config::AppConfig;
     use crate::utils::{
         io::{self, tempdir},
         Arc,
     };
-    // ✅ CORRECTION : Import explicite de CollectionsManager pour les tests
-    // (nécessaire car il n'est plus importé dans le module principal)
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::config::AppConfig;
 
     #[test]
     fn test_transverse_id() {
@@ -259,10 +256,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_verify_quality_logic() {
-        // 1. Initialisation Mock Config
         inject_mock_config();
 
         let dir = tempdir().unwrap();
@@ -271,16 +267,18 @@ mod tests {
 
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
-        let llm = LlmClient::new().unwrap();
 
-        // 2. Setup DB Manager via AppConfig
         let app_cfg = AppConfig::get();
-        // ✅ CORRECTIF : system_domain / system_db
         let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
-        // On ignore l'erreur si la DB existe déjà (mock)
         let _ = manager.init_db().await;
 
-        // 3. SEED DB : Injection d'un composant fictif
+        // 🎯 Injection du LLM Mocké
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
+
         let comp_doc = json!({
             "id": "comp-123",
             "name": "Mon Composant",
@@ -292,7 +290,8 @@ mod tests {
             .await
             .unwrap();
 
-        // 4. Setup Context
+        // 🎯 Client LLM et Context avec .await
+        let llm = LlmClient::new(&manager).await.unwrap();
         let ctx = AgentContext::new(
             "tester",
             "sess_qual_01",
@@ -300,10 +299,11 @@ mod tests {
             llm,
             domain_root.clone(),
             dataset_root,
-        );
+        )
+        .await;
+
         let agent = TransverseAgent::new();
 
-        // 5. Setup FS : Simulation de l'existence des fichiers
         let src_gen = domain_root.join("src-gen").join("mon_composant");
         let full_path = src_gen.join("Cargo.toml");
         io::create_dir_all(&src_gen).await.unwrap();
@@ -311,7 +311,6 @@ mod tests {
             .await
             .unwrap();
 
-        // 6. Execute Intent
         let intent = EngineeringIntent::VerifyQuality {
             scope: "code".into(),
             target: "Mon Composant".into(),
@@ -331,18 +330,27 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_verify_quality_missing_in_db() {
         inject_mock_config();
 
-        // Test cas d'échec : Composant absent de la DB
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().into());
         let db = Arc::new(StorageEngine::new(config));
-        let llm = LlmClient::new().unwrap();
 
-        let ctx = AgentContext::new("t", "s", db, llm, dir.path().into(), dir.path().into());
+        let app_cfg = AppConfig::get();
+        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
+        let _ = manager.init_db().await;
+
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
+
+        let llm = LlmClient::new(&manager).await.unwrap();
+        let ctx = AgentContext::new("t", "s", db, llm, dir.path().into(), dir.path().into()).await;
         let agent = TransverseAgent::new();
 
         let intent = EngineeringIntent::VerifyQuality {

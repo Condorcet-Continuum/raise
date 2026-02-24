@@ -76,7 +76,7 @@ pub struct Linear {
 
 - Constructeur simple qui prend la propriété des tenseurs.
 
-2. **`forward(&self, x: &Tensor) -> Result<Tensor>`**
+2. **`forward(&self, x: &Tensor) -> RaiseResult<Tensor>`**
 
 - Applique l'opération affine :
   $$
@@ -158,13 +158,13 @@ _Note : §\sigma§ est la fonction Sigmoïde §\frac{1}{1+e^{-x}}§._
 
 ### Méthodes Requises
 
-1. **`new(in_dim: usize, hidden_dim: usize, vb: VarBuilder) -> Result<Self>`**
+1. **`new(in_dim: usize, hidden_dim: usize, vb: VarBuilder) -> RaiseResult<Self>`**
 
 - Initialise les poids avec **Xavier Uniform** pour `weight_ih`.
 - Initialise les poids avec **Orthogonal** pour `weight_hh` (Crucial pour la stabilité des gradients temporels).
 - Initialise les biais à zéro.
 
-2. **`forward(&self, input: &Tensor, hidden: &Tensor, cell: &Tensor) -> Result<(Tensor, Tensor)>`**
+2. **`forward(&self, input: &Tensor, hidden: &Tensor, cell: &Tensor) -> RaiseResult<(Tensor, Tensor)>`**
 
 - Implémente strictement les équations ci-dessus.
 - Retourne un tuple `(next_hidden, next_cell)`.
@@ -177,7 +177,7 @@ _Note : §\sigma§ est la fonction Sigmoïde §\frac{1}{1+e^{-x}}§._
 use candle_core::{Tensor, Result};
 
 // Un pas de temps unique
-fn run_step(lstm: &LSTMCell, x: &Tensor, h: &Tensor, c: &Tensor) -> Result<(Tensor, Tensor)> {
+fn run_step(lstm: &LSTMCell, x: &Tensor, h: &Tensor, c: &Tensor) -> RaiseResult<(Tensor, Tensor)> {
     let (new_h, new_c) = lstm.forward(x, h, c)?;
     Ok((new_h, new_c))
 }

@@ -8,7 +8,7 @@ use crate::model_engine::arcadia; // <-- Accès au vocabulaire sémantique
 pub struct SoftwareTransformer;
 
 impl ModelTransformer for SoftwareTransformer {
-    fn transform(&self, element: &Value) -> Result<Value> {
+    fn transform(&self, element: &Value) -> RaiseResult<Value> {
         // 1. Extraction des métadonnées de base via constantes
         let name = element
             .get(arcadia::PROP_NAME)
@@ -37,7 +37,7 @@ impl ModelTransformer for SoftwareTransformer {
                         "name": n,
                         "id": i,
                         "visibility": "pub",
-                        "return_type": "Result<()>",
+                        "return_type": "RaiseResult<()>",
                         "description": format!("Implémentation de la fonction {}", n)
                     }));
                 }

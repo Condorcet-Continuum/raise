@@ -49,6 +49,7 @@ pub struct NetworkStatus {
     pub uptime_seconds: Option<u64>,
 }
 
+// 🎯 Le type Result exclusif à ce module
 type Result<T> = std::result::Result<T, VpnError>;
 
 #[derive(Clone)]
@@ -95,7 +96,6 @@ impl InnernetClient {
     pub async fn connect(&self) -> Result<()> {
         tracing::info!("Connecting to Innernet network: {}", self.config.name);
 
-        // Correction Warning: Suppression du & inutile devant le tableau
         let output = self.run_command(["up", &self.config.name]).await?;
 
         if !output.status.success() {
@@ -127,7 +127,6 @@ impl InnernetClient {
     pub async fn disconnect(&self) -> Result<()> {
         tracing::info!("Disconnecting from Innernet network: {}", self.config.name);
 
-        // Correction Warning: Suppression du & inutile
         let output = self.run_command(["down", &self.config.name]).await?;
 
         if !output.status.success() {
@@ -150,6 +149,7 @@ impl InnernetClient {
     }
 
     /// Récupère le statut actuel du réseau
+    // 🎯 CORRECTION : On utilise Result au lieu de RaiseResult
     pub async fn get_status(&self) -> Result<NetworkStatus> {
         // Tentative de mise à jour des peers si possible
         if let Ok(peers) = self.fetch_peers().await {
@@ -164,11 +164,13 @@ impl InnernetClient {
     }
 
     /// Liste tous les peers du réseau
+    // 🎯 CORRECTION : On utilise Result au lieu de RaiseResult
     pub async fn list_peers(&self) -> Result<Vec<Peer>> {
         self.fetch_peers().await
     }
 
     /// Ajoute un nouveau peer via un code d'invitation
+    // 🎯 CORRECTION : On utilise Result au lieu de RaiseResult
     pub async fn add_peer(&self, _invitation_code: &str) -> Result<String> {
         tracing::info!("Adding peer with invitation code");
         // TODO: Implémentation réelle avec fichier temporaire pour l'invitation
@@ -176,7 +178,6 @@ impl InnernetClient {
     }
 
     /// Exécute une commande Innernet (Async)
-    /// Accepte n'importe quel itérable de chaînes de caractères
     async fn run_command<I, S>(&self, args: I) -> Result<Output>
     where
         I: IntoIterator<Item = S>,
@@ -191,7 +192,6 @@ impl InnernetClient {
 
     /// Récupère l'IP de l'interface
     async fn get_interface_ip(&self) -> Result<String> {
-        // Correction Warning: Suppression du & inutile
         let output = self.run_command(["show", &self.config.name]).await?;
 
         if !output.status.success() {
@@ -221,7 +221,6 @@ impl InnernetClient {
     /// Récupère la liste des peers via WireGuard
     async fn fetch_peers(&self) -> Result<Vec<Peer>> {
         let output = Command::new("wg")
-            // Correction Warning: Suppression du & inutile
             .args(["show", &self.config.interface])
             .output()
             .await
@@ -236,6 +235,7 @@ impl InnernetClient {
     }
 
     /// Parse la sortie de `wg show`
+    // 🎯 CORRECTION : On utilise Result au lieu de RaiseResult
     fn parse_wg_output(&self, output: &str) -> Result<Vec<Peer>> {
         let mut peers = Vec::new();
         let mut current_peer: Option<Peer> = None;
@@ -289,7 +289,6 @@ impl InnernetClient {
     /// Ping un peer spécifique
     pub async fn ping_peer(&self, peer_ip: &str) -> Result<bool> {
         let output = Command::new("ping")
-            // Correction Warning: Suppression du & inutile
             .args(["-c", "1", "-W", "2", peer_ip])
             .output()
             .await

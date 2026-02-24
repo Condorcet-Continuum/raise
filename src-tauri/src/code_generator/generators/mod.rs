@@ -19,7 +19,7 @@ pub trait LanguageGenerator: Send + Sync {
         &self,
         element: &Value,
         template_engine: &TemplateEngine,
-    ) -> Result<Vec<GeneratedFile>>;
+    ) -> RaiseResult<Vec<GeneratedFile>>;
 }
 
 #[cfg(test)]
@@ -30,7 +30,7 @@ mod tests {
 
     struct MockGenerator;
     impl LanguageGenerator for MockGenerator {
-        fn generate(&self, _: &Value, _: &TemplateEngine) -> Result<Vec<GeneratedFile>> {
+        fn generate(&self, _: &Value, _: &TemplateEngine) -> RaiseResult<Vec<GeneratedFile>> {
             Ok(vec![])
         }
     }

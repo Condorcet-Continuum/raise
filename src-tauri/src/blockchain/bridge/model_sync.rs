@@ -16,7 +16,7 @@ impl<'a> ModelSync<'a> {
     }
 
     /// Applique les mutations d'un commit au ProjectModel global.
-    pub fn sync_commit(&self, commit: &ArcadiaCommit) -> Result<()> {
+    pub fn sync_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
         let mut model_guard = self
             .app_state
             .model
@@ -30,7 +30,7 @@ impl<'a> ModelSync<'a> {
         Ok(())
     }
 
-    fn apply_mutation(&self, model: &mut ProjectModel, mutation: &Mutation) -> Result<()> {
+    fn apply_mutation(&self, model: &mut ProjectModel, mutation: &Mutation) -> RaiseResult<()> {
         match mutation.operation {
             MutationOp::Create | MutationOp::Update => {
                 let element: ArcadiaElement =
@@ -47,7 +47,7 @@ impl<'a> ModelSync<'a> {
         Ok(())
     }
 
-    fn upsert_element(&self, model: &mut ProjectModel, element: ArcadiaElement) -> Result<()> {
+    fn upsert_element(&self, model: &mut ProjectModel, element: ArcadiaElement) -> RaiseResult<()> {
         let target_vec = self.resolve_model_vector(model, &element.kind)?;
 
         if let Some(pos) = target_vec.iter().position(|e| e.id == element.id) {
@@ -58,7 +58,7 @@ impl<'a> ModelSync<'a> {
         Ok(())
     }
 
-    fn delete_element(&self, model: &mut ProjectModel, id: &str) -> Result<()> {
+    fn delete_element(&self, model: &mut ProjectModel, id: &str) -> RaiseResult<()> {
         let all_vectors = vec![
             &mut model.oa.actors,
             &mut model.oa.activities,
@@ -84,7 +84,7 @@ impl<'a> ModelSync<'a> {
         &self,
         model: &'b mut ProjectModel,
         kind: &str,
-    ) -> Result<&'b mut Vec<ArcadiaElement>> {
+    ) -> RaiseResult<&'b mut Vec<ArcadiaElement>> {
         match kind {
             "OperationalActor" => Ok(&mut model.oa.actors),
             "OperationalActivity" => Ok(&mut model.oa.activities),

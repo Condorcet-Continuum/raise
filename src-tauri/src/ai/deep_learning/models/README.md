@@ -86,7 +86,7 @@ pub fn new(
     hidden_size: usize,
     output_size: usize,
     vb: VarBuilder
-) -> Result<Self>
+) -> RaiseResult<Self>
 
 ```
 
@@ -96,7 +96,7 @@ pub fn new(
 #### 2. `forward(...)`
 
 ```rust
-pub fn forward(&self, input_seq: &Tensor) -> Result<Tensor>
+pub fn forward(&self, input_seq: &Tensor) -> RaiseResult<Tensor>
 
 ```
 
@@ -118,7 +118,7 @@ pub fn forward_step(
     &self,
     input_step: &Tensor,
     state: (Tensor, Tensor)
-) -> Result<(Tensor, (Tensor, Tensor))>
+) -> RaiseResult<(Tensor, (Tensor, Tensor))>
 
 ```
 

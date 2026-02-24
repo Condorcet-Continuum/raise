@@ -23,6 +23,17 @@ pub enum EvalError {
     Generic(String),
 }
 
+// 🎯 NOUVEAU : Conversion automatique pour que les autres modules
+// puissent faire "Evaluator::evaluate(...)?" sans se soucier du type d'erreur !
+impl From<EvalError> for crate::utils::error::AppError {
+    fn from(err: EvalError) -> Self {
+        crate::utils::error::AppError::Validation(format!(
+            "Erreur d'évaluation des règles : {}",
+            err
+        ))
+    }
+}
+
 /// Trait permettant aux règles d'accéder à des données externes (Lookups)
 #[async_trait]
 pub trait DataProvider: Send + Sync {
@@ -40,6 +51,7 @@ impl DataProvider for NoOpDataProvider {
 pub struct Evaluator;
 
 impl Evaluator {
+    // 🎯 CORRECTION : Utilisation de std::result::Result pour accepter 2 paramètres (Succès, EvalError)
     pub async fn evaluate<'a>(
         expr: &'a Expr,
         context: &'a Value,
@@ -353,6 +365,7 @@ impl Evaluator {
 
 // --- Helpers ---
 
+// 🎯 CORRECTION : Idem ici, on remplace RaiseResult par std::result::Result
 async fn compare_nums<'a, F>(
     a: &Expr,
     b: &Expr,

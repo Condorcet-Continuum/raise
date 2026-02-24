@@ -102,7 +102,7 @@ Voici comment instancier et entraîner un réseau complet depuis le code princip
 use crate::ai::deep_learning::{models::SequenceNet, trainer::Trainer};
 use candle_core::{VarBuilder, Device, DType};
 
-pub fn train_custom_model() -> Result<()> {
+pub fn train_custom_model() -> RaiseResult<()> {
     let device = Device::Cpu; // Ou Device::new_cuda(0) si disponible
 
     // 1. Définition des hyperparamètres

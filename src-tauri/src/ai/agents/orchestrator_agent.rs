@@ -16,7 +16,11 @@ impl OrchestratorAgent {
     }
 
     /// Demande de clarification à l'utilisateur via le LLM
-    async fn handle_clarification(&self, ctx: &AgentContext, user_input: &str) -> Result<String> {
+    async fn handle_clarification(
+        &self,
+        ctx: &AgentContext,
+        user_input: &str,
+    ) -> RaiseResult<String> {
         let sys = "Tu es l'Orchestrateur de RAISE. Ton rôle est de coordonner les agents MBSE (Business, System, Software, Hardware, Transverse).";
         let user = format!("L'utilisateur a dit : '{}'. C'est trop vague pour une action d'ingénierie. Demande poliment quelle étape (spécification, conception, code, test) il souhaite aborder.", user_input);
 
@@ -37,7 +41,7 @@ impl Agent for OrchestratorAgent {
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
-    ) -> Result<Option<AgentResult>> {
+    ) -> RaiseResult<Option<AgentResult>> {
         let mut session = load_session(ctx)
             .await
             .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
@@ -111,6 +115,9 @@ mod tests {
     use crate::utils::config::test_mocks::inject_mock_config;
     use crate::utils::{io::tempdir, Arc};
 
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::config::AppConfig;
+
     #[test]
     fn test_orchestrator_id() {
         assert_eq!(OrchestratorAgent::new().id(), "orchestrator_agent");
@@ -126,8 +133,22 @@ mod tests {
         let domain_root = dir.path().to_path_buf();
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
-        let llm = LlmClient::new().unwrap();
 
+        let app_cfg = AppConfig::get();
+        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
+        let _ = manager.init_db().await;
+
+        // 🎯 Injection du LLM Mocké
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
+
+        // 🎯 LlmClient avec le manager et .await
+        let llm = LlmClient::new(&manager).await.unwrap();
+
+        // 🎯 AgentContext avec .await
         let ctx = AgentContext::new(
             "tester",
             "sess_orch_01",
@@ -135,7 +156,8 @@ mod tests {
             llm,
             domain_root.clone(),
             domain_root.clone(),
-        );
+        )
+        .await;
 
         let agent = OrchestratorAgent::new();
         let intent = EngineeringIntent::Unknown;
@@ -162,9 +184,20 @@ mod tests {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let db = Arc::new(StorageEngine::new(config));
-        let llm = LlmClient::new().unwrap();
 
-        let ctx = AgentContext::new("t", "s", db, llm, dir.path().into(), dir.path().into());
+        let app_cfg = AppConfig::get();
+        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
+        let _ = manager.init_db().await;
+
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
+
+        let llm = LlmClient::new(&manager).await.unwrap();
+
+        let ctx = AgentContext::new("t", "s", db, llm, dir.path().into(), dir.path().into()).await;
         let agent = OrchestratorAgent::new();
 
         let intent = EngineeringIntent::CreateElement {

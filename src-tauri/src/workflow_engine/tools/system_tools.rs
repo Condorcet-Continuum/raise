@@ -40,7 +40,7 @@ impl AgentTool for SystemMonitorTool {
     }
 
     /// Exécute la lecture des métriques en interrogeant la persistance du Jumeau Numérique.
-    async fn execute(&self, _params: &Value) -> Result<Value> {
+    async fn execute(&self, _params: &Value) -> RaiseResult<Value> {
         tracing::info!("🔍 [SystemMonitorTool] Lecture du Jumeau Numérique via JSON-DB...");
 
         // 1. Accès à la configuration et initialisation du moteur de stockage

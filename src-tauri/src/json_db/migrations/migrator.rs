@@ -20,7 +20,7 @@ impl<'a> Migrator<'a> {
     }
 
     /// Initialise la table de suivi des migrations (_migrations) - ASYNC
-    pub async fn init(&self) -> Result<()> {
+    pub async fn init(&self) -> RaiseResult<()> {
         let exists = self
             .manager
             .list_collections()
@@ -35,7 +35,7 @@ impl<'a> Migrator<'a> {
     }
 
     /// Exécute les migrations en attente - ASYNC
-    pub async fn run_migrations(&self, declared_migrations: Vec<Migration>) -> Result<()> {
+    pub async fn run_migrations(&self, declared_migrations: Vec<Migration>) -> RaiseResult<()> {
         self.init().await?;
 
         // 1. Récupérer les migrations déjà appliquées
@@ -73,7 +73,7 @@ impl<'a> Migrator<'a> {
         Ok(())
     }
 
-    async fn apply_migration(&self, migration: &Migration) -> Result<()> {
+    async fn apply_migration(&self, migration: &Migration) -> RaiseResult<()> {
         // Exécution atomique des étapes (Up)
         for step in &migration.up {
             self.execute_step(step).await?;
@@ -92,7 +92,7 @@ impl<'a> Migrator<'a> {
         Ok(())
     }
 
-    async fn execute_step(&self, step: &MigrationStep) -> Result<()> {
+    async fn execute_step(&self, step: &MigrationStep) -> RaiseResult<()> {
         match step {
             MigrationStep::CreateCollection { name, schema } => {
                 let schema_str = schema.as_str().map(|s| s.to_string());
@@ -168,7 +168,11 @@ impl<'a> Migrator<'a> {
         Ok(())
     }
 
-    async fn transform_all_documents<F>(&self, collection: &str, mut transformer: F) -> Result<()>
+    async fn transform_all_documents<F>(
+        &self,
+        collection: &str,
+        mut transformer: F,
+    ) -> RaiseResult<()>
     where
         F: FnMut(&mut Value) -> bool,
     {

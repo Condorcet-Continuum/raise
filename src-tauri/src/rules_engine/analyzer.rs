@@ -14,7 +14,7 @@ impl Analyzer {
         deps
     }
 
-    pub fn validate_depth(expr: &Expr, max_depth: usize) -> Result<()> {
+    pub fn validate_depth(expr: &Expr, max_depth: usize) -> RaiseResult<()> {
         Self::check_depth(expr, 0, max_depth)
     }
 
@@ -123,7 +123,7 @@ impl Analyzer {
         }
     }
 
-    fn check_depth(expr: &Expr, current: usize, max: usize) -> Result<()> {
+    fn check_depth(expr: &Expr, current: usize, max: usize) -> RaiseResult<()> {
         if current > max {
             return Err(AppError::Validation(format!(
                 "Profondeur maximale dépassée ({})",

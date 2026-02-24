@@ -17,7 +17,7 @@ pub async fn write_entry(
     space: &str,
     db: &str,
     tx: &Transaction,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let dir = get_wal_dir(config, space, db);
 
     io::ensure_dir(&dir).await?;
@@ -37,7 +37,12 @@ pub async fn write_entry(
 }
 
 /// Supprime une entrée du WAL (utilisé lors du Commit ou Rollback)
-pub async fn remove_entry(config: &JsonDbConfig, space: &str, db: &str, tx_id: &str) -> Result<()> {
+pub async fn remove_entry(
+    config: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    tx_id: &str,
+) -> RaiseResult<()> {
     let file_path = get_wal_dir(config, space, db).join(format!("{}.json", tx_id));
 
     if io::exists(&file_path).await {
@@ -48,7 +53,11 @@ pub async fn remove_entry(config: &JsonDbConfig, space: &str, db: &str, tx_id: &
 }
 
 /// (Optionnel) Charge les transactions en attente
-pub async fn list_pending(config: &JsonDbConfig, space: &str, db: &str) -> Result<Vec<String>> {
+pub async fn list_pending(
+    config: &JsonDbConfig,
+    space: &str,
+    db: &str,
+) -> RaiseResult<Vec<String>> {
     let dir = get_wal_dir(config, space, db);
     let mut pending_ids = Vec::new();
 

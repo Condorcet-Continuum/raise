@@ -17,7 +17,7 @@ impl NodeHandler for WasmHandler {
         node: &WorkflowNode,
         context: &mut HashMap<String, Value>,
         shared_ctx: &HandlerContext<'_>,
-    ) -> crate::utils::Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         let plugin_id = node
             .params
             .get("plugin_id")

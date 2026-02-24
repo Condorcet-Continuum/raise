@@ -35,5 +35,5 @@ pub trait NodeHandler: Send + Sync {
         node: &WorkflowNode,
         context: &mut HashMap<String, Value>,
         shared_ctx: &HandlerContext<'_>,
-    ) -> crate::utils::Result<ExecutionStatus>;
+    ) -> RaiseResult<ExecutionStatus>;
 }

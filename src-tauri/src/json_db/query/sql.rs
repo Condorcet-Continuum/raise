@@ -23,7 +23,7 @@ pub enum SqlRequest {
     Write(Vec<TransactionRequest>),
 }
 
-pub fn parse_sql(sql: &str) -> Result<SqlRequest> {
+pub fn parse_sql(sql: &str) -> RaiseResult<SqlRequest> {
     let dialect = GenericDialect {};
 
     let ast = Parser::parse_sql(&dialect, sql)
@@ -53,7 +53,7 @@ pub fn parse_sql(sql: &str) -> Result<SqlRequest> {
 
 // --- TRADUCTION INSERT ---
 
-fn translate_insert(insert: &Insert) -> Result<Vec<TransactionRequest>> {
+fn translate_insert(insert: &Insert) -> RaiseResult<Vec<TransactionRequest>> {
     // CORRECTION DÉFINITIVE : Utilisation du champ `table`
     let collection = insert.table.to_string();
 
@@ -101,7 +101,7 @@ fn translate_insert(insert: &Insert) -> Result<Vec<TransactionRequest>> {
     Ok(operations)
 }
 
-fn translate_query(sql_query: &SqlQuery) -> Result<Query> {
+fn translate_query(sql_query: &SqlQuery) -> RaiseResult<Query> {
     let query_string = sql_query.to_string().to_uppercase();
 
     // --- EXTRACTION DU LIMIT ---
@@ -160,7 +160,7 @@ fn translate_select(
     limit: Option<usize>,
     offset: Option<usize>,
     sort: Option<Vec<SortField>>,
-) -> Result<Query> {
+) -> RaiseResult<Query> {
     if select.from.len() != 1 {
         return Err(AppError::Database(
             "SELECT doit cibler exactement une collection".to_string(),
@@ -223,7 +223,7 @@ fn translate_select(
     })
 }
 
-fn translate_order_by(expr: &OrderByExpr) -> Result<SortField> {
+fn translate_order_by(expr: &OrderByExpr) -> RaiseResult<SortField> {
     let field = expr_to_field_name(&expr.expr)?;
     let order = match expr.options.asc {
         Some(false) => SortOrder::Desc,
@@ -232,7 +232,7 @@ fn translate_order_by(expr: &OrderByExpr) -> Result<SortField> {
     Ok(SortField { field, order })
 }
 
-fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
+fn translate_expr(expr: &Expr) -> RaiseResult<QueryFilter> {
     match expr {
         Expr::Nested(inner) => translate_expr(inner),
         Expr::BinaryOp { left, op, right } => match op {
@@ -293,7 +293,7 @@ fn translate_expr(expr: &Expr) -> Result<QueryFilter> {
     }
 }
 
-fn expr_to_field_name(expr: &Expr) -> Result<String> {
+fn expr_to_field_name(expr: &Expr) -> RaiseResult<String> {
     match expr {
         Expr::Identifier(ident) => Ok(ident.value.clone()),
         Expr::CompoundIdentifier(idents) => Ok(idents
@@ -308,7 +308,7 @@ fn expr_to_field_name(expr: &Expr) -> Result<String> {
     }
 }
 
-fn expr_to_value(expr: &Expr) -> Result<Value> {
+fn expr_to_value(expr: &Expr) -> RaiseResult<Value> {
     match expr {
         Expr::Value(value_with_span) => sql_value_to_json(&value_with_span.value),
         Expr::UnaryOp {
@@ -334,7 +334,7 @@ fn expr_to_value(expr: &Expr) -> Result<Value> {
     }
 }
 
-fn sql_value_to_json(val: &SqlValue) -> Result<Value> {
+fn sql_value_to_json(val: &SqlValue) -> RaiseResult<Value> {
     match val {
         SqlValue::Number(n, _) => {
             if let Ok(i) = n.parse::<i64>() {

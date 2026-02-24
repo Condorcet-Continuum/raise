@@ -1,5 +1,7 @@
 use crate::ai::memory::{candle_store::CandleLocalStore, MemoryRecord, VectorStore};
 use crate::ai::nlp::{embeddings::EmbeddingEngine, splitting};
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::utils::config::AppConfig;
 use crate::utils::{io::PathBuf, prelude::*, Uuid};
 use candle_core::Device;
 
@@ -11,19 +13,25 @@ pub struct RagRetriever {
 
 impl RagRetriever {
     /// Initialise le RAG en se basant EXCLUSIVEMENT sur la configuration globale
-    pub async fn new() -> Result<Self> {
+    pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         let config = AppConfig::get();
         let storage_path = config
             .get_path("PATH_RAISE_DOMAIN")
             .unwrap_or_else(|| PathBuf::from("./raise_default_domain"));
 
-        Self::new_internal(storage_path).await
+        Self::new_internal(storage_path, manager).await
     }
 
-    /// Constructeur interne pour injecter le path (Idéal pour les tests)
-    pub async fn new_internal(storage_path: PathBuf) -> Result<Self> {
-        let embedder = EmbeddingEngine::new()
+    /// Constructeur interne pour injecter le path et le manager (Idéal pour les tests)
+    pub async fn new_internal(
+        storage_path: PathBuf,
+        manager: &CollectionsManager<'_>,
+    ) -> RaiseResult<Self> {
+        // 🎯 L'injection de dépendance avec .await est ici !
+        let embedder = EmbeddingEngine::new(manager)
+            .await
             .map_err(|e| AppError::Ai(format!("Échec init Embedder: {}", e)))?;
+
         let collection_name = "raise_knowledge_base".to_string();
 
         println!("📚 [RAG] Initialisation du backend : CANDLE (100% Natif)");
@@ -41,7 +49,7 @@ impl RagRetriever {
         })
     }
 
-    pub async fn index_document(&mut self, content: &str, source: &str) -> Result<usize> {
+    pub async fn index_document(&mut self, content: &str, source: &str) -> RaiseResult<usize> {
         let chunks = splitting::split_text_into_chunks(content, 512);
         if chunks.is_empty() {
             return Ok(0);
@@ -74,7 +82,7 @@ impl RagRetriever {
         Ok(chunks.len())
     }
 
-    pub async fn retrieve(&mut self, query: &str, limit: u64) -> Result<String> {
+    pub async fn retrieve(&mut self, query: &str, limit: u64) -> RaiseResult<String> {
         let query_vector = self.embedder.embed_query(query)?;
 
         // Seuil ajusté pour le modèle multilingue
@@ -125,6 +133,7 @@ impl RagRetriever {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::utils::config::test_mocks::inject_mock_config;
     use crate::utils::io::tempdir;
     use crate::utils::{AsyncMutex, OnceLock};
@@ -134,13 +143,28 @@ mod tests {
         LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
-    #[tokio::test]
-    async fn test_rag_candle_end_to_end() {
+    // Helper pour initialiser la DB pour les tests du RAG
+    async fn setup_mock_rag_env() -> (StorageEngine, AppConfig) {
         inject_mock_config();
+        let config = AppConfig::get();
+        let storage_cfg = JsonDbConfig::new(config.get_path("PATH_RAISE_DOMAIN").unwrap());
+        let storage = StorageEngine::new(storage_cfg);
+        (storage, config.clone())
+    }
 
+    #[tokio::test]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_rag_candle_end_to_end() {
         let _guard = get_hf_lock().lock().await;
         let dir = tempdir().unwrap();
-        let mut rag = RagRetriever::new_internal(dir.path().to_path_buf())
+
+        // Initialisation de la dépendance
+        let (storage, config) = setup_mock_rag_env().await;
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        manager.init_db().await.unwrap();
+        crate::utils::config::test_mocks::inject_mock_component(&manager, "nlp", crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+
+        let mut rag = RagRetriever::new_internal(dir.path().to_path_buf(), &manager)
             .await
             .unwrap();
 
@@ -161,12 +185,17 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_candle_empty_results() {
-        inject_mock_config();
-
         let _guard = get_hf_lock().lock().await;
         let dir = tempdir().unwrap();
-        let mut rag = RagRetriever::new_internal(dir.path().to_path_buf())
+
+        let (storage, config) = setup_mock_rag_env().await;
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        manager.init_db().await.unwrap();
+        crate::utils::config::test_mocks::inject_mock_component(&manager, "nlp", crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+
+        let mut rag = RagRetriever::new_internal(dir.path().to_path_buf(), &manager)
             .await
             .unwrap();
 
@@ -181,14 +210,18 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_candle_persistence() {
-        inject_mock_config();
-
         let _guard = get_hf_lock().lock().await;
         let dir = tempdir().unwrap();
 
+        let (storage, config) = setup_mock_rag_env().await;
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        manager.init_db().await.unwrap();
+        crate::utils::config::test_mocks::inject_mock_component(&manager, "nlp", crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+
         {
-            let mut rag = RagRetriever::new_internal(dir.path().to_path_buf())
+            let mut rag = RagRetriever::new_internal(dir.path().to_path_buf(), &manager)
                 .await
                 .unwrap();
             rag.index_document("La persistance Zstd est hyper rapide.", "doc_io")
@@ -197,7 +230,7 @@ mod tests {
         }
 
         {
-            let mut new_rag = RagRetriever::new_internal(dir.path().to_path_buf())
+            let mut new_rag = RagRetriever::new_internal(dir.path().to_path_buf(), &manager)
                 .await
                 .unwrap();
             let context = new_rag
@@ -209,12 +242,17 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_chunking_logic() {
-        inject_mock_config();
-
         let _guard = get_hf_lock().lock().await;
         let dir = tempdir().unwrap();
-        let mut rag = RagRetriever::new_internal(dir.path().to_path_buf())
+
+        let (storage, config) = setup_mock_rag_env().await;
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        manager.init_db().await.unwrap();
+        crate::utils::config::test_mocks::inject_mock_component(&manager, "nlp", crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+
+        let mut rag = RagRetriever::new_internal(dir.path().to_path_buf(), &manager)
             .await
             .unwrap();
 

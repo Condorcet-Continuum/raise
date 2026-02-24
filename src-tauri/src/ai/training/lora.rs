@@ -1,4 +1,6 @@
-use candle_core::{Device, Result, Tensor};
+use crate::utils::prelude::*;
+
+use candle_core::{Device, Tensor};
 use candle_nn::{Linear, Module, VarMap};
 
 pub struct LoraLinear {
@@ -15,7 +17,7 @@ impl LoraLinear {
         alpha: f64,
         varmap: &mut VarMap,
         device: &Device,
-    ) -> Result<Self> {
+    ) -> RaiseResult<Self> {
         let (out_dims, in_dims) = old_linear.weight().shape().dims2()?;
         let dtype = old_linear.weight().dtype();
 
@@ -48,7 +50,7 @@ impl LoraLinear {
 }
 
 impl Module for LoraLinear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor) -> std::result::Result<Tensor, candle_core::Error> {
         // Calcul standard
         let standard_output = self.old_linear.forward(x)?;
 
@@ -70,7 +72,7 @@ mod tests {
     use candle_nn::VarMap;
 
     #[test]
-    fn test_lora_linear_forward_shape() -> Result<()> {
+    fn test_lora_linear_forward_shape() -> RaiseResult<()> {
         let device = Device::Cpu;
         let mut varmap = VarMap::new();
 

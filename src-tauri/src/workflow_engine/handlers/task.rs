@@ -18,7 +18,7 @@ impl NodeHandler for TaskHandler {
         node: &WorkflowNode,
         context: &mut HashMap<String, Value>,
         shared_ctx: &HandlerContext<'_>,
-    ) -> crate::utils::Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         let mut orch = shared_ctx.orchestrator.lock().await;
 
         let mission = format!(

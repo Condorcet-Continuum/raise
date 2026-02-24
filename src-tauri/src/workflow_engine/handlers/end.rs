@@ -16,7 +16,7 @@ impl NodeHandler for EndHandler {
         node: &WorkflowNode,
         _context: &mut HashMap<String, Value>,
         _shared_ctx: &HandlerContext<'_>,
-    ) -> crate::utils::Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         tracing::info!("🏁 Nœud de fin atteint : '{}'", node.name);
         Ok(ExecutionStatus::Completed)
     }

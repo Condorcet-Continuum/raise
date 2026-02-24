@@ -40,7 +40,7 @@ impl QueryOptimizer {
     }
 
     /// Optimise une requête
-    pub fn optimize(&self, mut query: Query) -> Result<Query> {
+    pub fn optimize(&self, mut query: Query) -> RaiseResult<Query> {
         // 1. Simplifier les filtres
         if self.config.simplify_filters {
             if let Some(ref mut filter) = query.filter {
@@ -61,7 +61,7 @@ impl QueryOptimizer {
         Ok(query)
     }
 
-    fn simplify_filter(&self, filter: QueryFilter) -> Result<QueryFilter> {
+    fn simplify_filter(&self, filter: QueryFilter) -> RaiseResult<QueryFilter> {
         let mut simplified = filter.clone();
 
         // Déduplication basique
@@ -75,7 +75,7 @@ impl QueryOptimizer {
         Ok(simplified)
     }
 
-    fn reorder_conditions(&self, mut filter: QueryFilter) -> Result<QueryFilter> {
+    fn reorder_conditions(&self, mut filter: QueryFilter) -> RaiseResult<QueryFilter> {
         // Trie par sélectivité estimée (plus petit score = plus sélectif/rapide = exécuté en premier)
         filter
             .conditions
@@ -128,7 +128,7 @@ impl QueryOptimizer {
         unique
     }
 
-    fn optimize_pagination(&self, mut query: Query) -> Result<Query> {
+    fn optimize_pagination(&self, mut query: Query) -> RaiseResult<Query> {
         const MAX_REASONABLE_LIMIT: usize = 1000;
 
         // Plafonner la limite si elle est excessive

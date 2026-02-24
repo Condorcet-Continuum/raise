@@ -72,7 +72,7 @@ pub struct Observability {
 
 impl Mandate {
     /// Charge un mandat depuis la base de données (Collection "mandates") - ASYNC
-    pub async fn fetch_from_store(manager: &CollectionsManager<'_>, id: &str) -> Result<Self> {
+    pub async fn fetch_from_store(manager: &CollectionsManager<'_>, id: &str) -> RaiseResult<Self> {
         let doc = manager
             .get_document("mandates", id)
             .await

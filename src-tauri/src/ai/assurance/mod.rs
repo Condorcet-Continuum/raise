@@ -22,7 +22,10 @@ pub mod persistence {
     use super::*;
 
     /// Sauvegarde un rapport de qualité dans le JsonDb (avec validation de schéma JSON-LD)
-    pub async fn save_quality_report(domain_root: &Path, report: &QualityReport) -> Result<String> {
+    pub async fn save_quality_report(
+        domain_root: &Path,
+        report: &QualityReport,
+    ) -> RaiseResult<String> {
         let config = AppConfig::get();
         let domain = &config.system_domain;
         let db = &config.system_db;
@@ -48,7 +51,7 @@ pub mod persistence {
     }
 
     /// Sauvegarde une trame XAI dans le JsonDb (avec validation de schéma JSON-LD)
-    pub async fn save_xai_frame(domain_root: &Path, frame: &XaiFrame) -> Result<String> {
+    pub async fn save_xai_frame(domain_root: &Path, frame: &XaiFrame) -> RaiseResult<String> {
         let config = AppConfig::get();
         let domain = &config.system_domain;
         let db = &config.system_db;

@@ -489,7 +489,7 @@ impl VocabularyRegistry {
         }
     }
 
-    pub async fn load_layer_from_file(&self, layer: &str, path: &Path) -> Result<()> {
+    pub async fn load_layer_from_file(&self, layer: &str, path: &Path) -> RaiseResult<()> {
         let content = io::read_to_string(path)
             .await
             .map_err(|e| format!("Impossible de lire le fichier {}: {}", path.display(), e))?;

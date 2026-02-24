@@ -1,4 +1,5 @@
-use candle_core::{Result, Tensor};
+use crate::utils::prelude::*;
+use candle_core::Tensor;
 
 /// Couche entièrement connectée (Dense / Linear).
 pub struct Linear {
@@ -11,7 +12,7 @@ impl Linear {
         Self { weight, bias }
     }
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor) -> RaiseResult<Tensor> {
         let w_t = self.weight.t()?;
         let mut output = x.matmul(&w_t)?;
 
@@ -29,7 +30,7 @@ mod tests {
     use candle_core::Device;
 
     #[test]
-    fn test_linear_shapes() -> Result<()> {
+    fn test_linear_shapes() -> RaiseResult<()> {
         let device = Device::Cpu;
         let input = Tensor::randn(0f32, 1.0, (2, 3), &device)?;
         let weight = Tensor::randn(0f32, 1.0, (4, 3), &device)?;
@@ -43,7 +44,7 @@ mod tests {
     }
 
     #[test]
-    fn test_linear_values() -> Result<()> {
+    fn test_linear_values() -> RaiseResult<()> {
         let device = Device::Cpu;
         let input = Tensor::from_slice(&[1f32, 2f32], (1, 2), &device)?;
         let weight = Tensor::from_slice(&[0.5f32, 0.5f32], (1, 2), &device)?;

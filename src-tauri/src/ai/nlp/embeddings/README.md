@@ -72,7 +72,7 @@ src-tauri/src/ai/nlp/embeddings/
 ```rust
 use crate::ai::nlp::embeddings::{EmbeddingEngine, EngineType};
 
-async fn example() -> Result<()> {
+async fn example() -> RaiseResult<()> {
     // 1. Initialisation (Auto-détection GPU/CPU)
     // Télécharge les modèles automatiquement au premier lancement (~90 Mo)
     let mut engine = EmbeddingEngine::new()?;

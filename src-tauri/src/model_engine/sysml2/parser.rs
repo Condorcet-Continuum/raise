@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/model_engine/sysml2/parser.rs
 
+use crate::utils::prelude::*;
+
 use pest::Parser;
 use pest_derive::Parser;
 
@@ -7,10 +9,10 @@ use pest_derive::Parser;
 #[grammar = "model_engine/sysml2/grammar.pest"]
 pub struct Sysml2Parser;
 
-pub fn parse_sysml_text(
-    input: &str,
-) -> Result<pest::iterators::Pairs<'_, Rule>, pest::error::Error<Rule>> {
+pub fn parse_sysml_text(input: &str) -> RaiseResult<pest::iterators::Pairs<'_, Rule>> {
     Sysml2Parser::parse(Rule::file, input)
+        // 🎯 CORRECTION : On convertit l'erreur de Pest en AppError
+        .map_err(|e| AppError::Validation(format!("Erreur de parsing SysML v2 : {}", e)))
 }
 
 #[cfg(test)]

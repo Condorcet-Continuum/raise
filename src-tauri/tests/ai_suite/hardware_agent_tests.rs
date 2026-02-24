@@ -27,7 +27,8 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
             .expect("LlmClient must be enabled for BusinessAgent tests"),
         test_root.clone(),
         test_root.join("dataset"),
-    );
+    )
+    .await;
 
     let agent = HardwareAgent::new();
 

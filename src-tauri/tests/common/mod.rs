@@ -3,20 +3,20 @@
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use raise::utils::config::test_mocks::inject_mock_config;
+use raise::utils::config::test_mocks::{inject_mock_component, inject_mock_config};
 use raise::utils::config::AppConfig;
 use raise::utils::{
     async_recursion,
     io::{self, Path, PathBuf},
     prelude::*,
-    Once, OnceLock,
+    Once,
 };
-//use std::env;
 use tempfile::TempDir;
+use tokio::sync::OnceCell;
 
 static INIT: Once = Once::new();
-// 🎯 Utilisation d'un OnceLock pour partager le client LLM
-static SHARED_CLIENT: OnceLock<LlmClient> = OnceLock::new();
+// 🎯 Utilisation d'un OnceCell asynchrone pour partager le client LLM
+static SHARED_CLIENT: OnceCell<LlmClient> = OnceCell::const_new();
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -52,31 +52,7 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
 
     let domain_path = temp_dir.path().to_path_buf();
 
-    // 🎯 2. SATISFAIRE LLMCLIENT : On place le mock là où le Singleton l'attend
-    // Cela évite l'erreur "Modèle GGUF introuvable" sans casser l'isolation du test
-    let client = match llm_mode {
-        LlmMode::Enabled => {
-            let global_domain = app_config.get_path("PATH_RAISE_DOMAIN").unwrap();
-            let mock_model_file = global_domain.join("_system/ai-assets/models/mock.gguf");
-            if let Some(parent) = mock_model_file.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(&mock_model_file, b"dummy content");
-
-            // On retourne Some(...) sans mettre de ";" à la fin du bloc
-            Some(
-                SHARED_CLIENT
-                    .get_or_init(|| {
-                        LlmClient::new().expect("❌ Impossible d'initialiser le LlmClient partagé")
-                    })
-                    .clone(),
-            )
-        }
-        // ✅ Correction de la typo 'lmMode' -> 'LlmMode'
-        LlmMode::Disabled => None,
-    };
-
-    // 🎯 3. SCHÉMAS : On génère les schémas dans notre dossier ISOLÉ
+    // 🎯 2. INITIALISATION DB & MANAGER AVANT LE LLM
     let space = "_system".to_string();
     let db = "_system".to_string();
     let db_config = JsonDbConfig::new(domain_path.clone());
@@ -95,6 +71,37 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     let storage = StorageEngine::new(db_config);
     let mgr = CollectionsManager::new(&storage, &space, &db);
     mgr.init_db().await.expect("init_db failed");
+
+    // 🎯 3. INJECTION DU MOCK IA EN BASE (Requis pour l'init LLM)
+    inject_mock_component(
+        &mgr,
+        "llm",
+        json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+    ).await;
+
+    // 🎯 4. SATISFAIRE LLMCLIENT AVEC LE MANAGER
+    let client = match llm_mode {
+        LlmMode::Enabled => {
+            let global_domain = app_config.get_path("PATH_RAISE_DOMAIN").unwrap();
+            let mock_model_file = global_domain.join("_system/ai-assets/models/mock.gguf");
+            if let Some(parent) = mock_model_file.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&mock_model_file, b"dummy content");
+
+            // On utilise tokio::sync::OnceCell pour un appel async
+            let shared = SHARED_CLIENT
+                .get_or_init(|| async {
+                    LlmClient::new(&mgr)
+                        .await
+                        .expect("❌ Impossible d'initialiser le LlmClient partagé")
+                })
+                .await;
+
+            Some(shared.clone())
+        }
+        LlmMode::Disabled => None,
+    };
 
     UnifiedTestEnv {
         storage,

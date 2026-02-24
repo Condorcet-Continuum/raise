@@ -10,7 +10,7 @@ pub struct DialogueToModelTransformer;
 
 impl DialogueToModelTransformer {
     /// Convertit un JSON d'intention (issu du LLM) en structure ArcadiaElement
-    pub fn create_element_from_intent(intent: &Value) -> Result<ArcadiaElement> {
+    pub fn create_element_from_intent(intent: &Value) -> RaiseResult<ArcadiaElement> {
         // 1. Validation des champs requis
         let name_str = intent
             .get("name")

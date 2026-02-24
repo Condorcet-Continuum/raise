@@ -22,7 +22,7 @@ impl EpbsAgent {
         name: &str,
         raw_type: &str,
         history_context: &str,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -66,7 +66,7 @@ impl Agent for EpbsAgent {
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
-    ) -> Result<Option<AgentResult>> {
+    ) -> RaiseResult<Option<AgentResult>> {
         let mut session = load_session(ctx)
             .await
             .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));

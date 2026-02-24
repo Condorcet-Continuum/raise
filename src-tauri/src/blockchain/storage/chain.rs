@@ -19,7 +19,7 @@ impl Ledger {
     }
 
     /// Ajoute un commit à la chaîne locale après vérification de sa validité.
-    pub fn append_commit(&mut self, commit: ArcadiaCommit) -> Result<()> {
+    pub fn append_commit(&mut self, commit: ArcadiaCommit) -> RaiseResult<()> {
         // 1. Vérification de la signature et de l'intégrité
         if !commit.verify() {
             return Err(AppError::from("Signature ou intégrité du commit invalide"));

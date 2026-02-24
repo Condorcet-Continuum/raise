@@ -17,21 +17,25 @@ pub async fn ai_train_domain_native(
     domain: &str,
     epochs: usize,
     lr: f64,
-) -> Result<String> {
+) -> RaiseResult<String> {
     let _device = Device::new_cuda(0).unwrap_or(Device::Cpu);
-
     // ---------------------------------------------------------
-    // 1. RÉCUPÉRATION DU TOKENIZER DEPUIS LA CONFIG SSOT
+    // 1. RÉCUPÉRATION DU TOKENIZER DEPUIS LA DB
     // ---------------------------------------------------------
     let config_app = AppConfig::get();
-    let engine_cfg = config_app.ai_engines.get("primary_local").ok_or_else(|| {
-        AppError::Ai("Moteur 'primary_local' introuvable dans la configuration".to_string())
-    })?;
+    let manager = crate::json_db::collections::manager::CollectionsManager::new(
+        storage,
+        &config_app.system_domain,
+        &config_app.system_db,
+    );
 
-    let tokenizer_filename = engine_cfg
-        .rust_tokenizer_file
-        .as_deref()
+    let settings = AppConfig::get_component_settings(&manager, "llm").await?;
+
+    let tokenizer_filename = settings
+        .get("rust_tokenizer_file")
+        .and_then(|v| v.as_str())
         .unwrap_or("tokenizer.json");
+
     let home =
         dirs::home_dir().ok_or_else(|| AppError::Ai("Dossier home introuvable".to_string()))?;
 
@@ -162,7 +166,7 @@ mod tests {
     use crate::utils::io::tempdir;
 
     #[tokio::test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_train_domain_native_empty_data() {
         crate::utils::config::test_mocks::inject_mock_config();
@@ -171,7 +175,22 @@ mod tests {
         let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
         let storage = StorageEngine::new(config);
 
-        // Appel direct du noyau pur avec des références
+        let app_config = AppConfig::get();
+        let manager = crate::json_db::collections::manager::CollectionsManager::new(
+            &storage,
+            &app_config.system_domain,
+            &app_config.system_db,
+        );
+        manager.init_db().await.unwrap();
+
+        // 🎯 Injection du composant requis par l'entraînement !
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm",
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json" }),
+        )
+        .await;
+
         let result = ai_train_domain_native(&storage, "space", "db", "nonexistent", 1, 0.001).await;
 
         assert!(result.is_err());

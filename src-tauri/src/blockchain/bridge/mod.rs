@@ -29,7 +29,7 @@ impl<'a> ArcadiaBridge<'a> {
 
     /// Point d'entrée pour traiter un nouveau commit finalisé par le réseau.
     /// Assure la persistance sur disque suivie de la mise à jour de l'état en mémoire.
-    pub async fn process_new_commit(&self, commit: &ArcadiaCommit) -> Result<()> {
+    pub async fn process_new_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
         // 1. Persistance physique dans la JSON-DB
         self.db_adapter.apply_commit(commit).await.map_err(|e| {
             AppError::from(format!(
@@ -66,6 +66,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bridge_full_cycle_logic() {
+        crate::utils::config::test_mocks::inject_mock_config();
         // Setup Environnement
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());

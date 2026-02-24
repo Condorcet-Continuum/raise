@@ -75,7 +75,7 @@ Le choix du moteur se fait à l'initialisation. Grâce au polymorphisme, le rest
 ```rust
 use crate::ai::memory::{leann_store::LeannMemory, qdrant_store::QdrantMemory, VectorStore};
 
-async fn setup_memory(use_cloud: bool) -> Result<Box<dyn VectorStore>, anyhow::Error> {
+async fn setup_memory(use_cloud: bool) -> RaiseResult<Box<dyn VectorStore>, anyhow::Error> {
     let store: Box<dyn VectorStore> = if use_cloud {
         let port = std::env::var("PORT_QDRANT_GRPC").unwrap_or("6334".to_string());
         Box::new(QdrantMemory::new(&format!("http://127.0.0.1:{}", port))?)

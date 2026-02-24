@@ -13,7 +13,7 @@ use futures::executor::block_on;
 use wasmtime::{Caller, Extern, Linker};
 
 /// Enregistre les fonctions du Pont Cognitif dans le linker WASM.
-pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> Result<()> {
+pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResult<()> {
     // ========================================================================
     // 1. SYSTÈME & LOGS
     // ========================================================================
@@ -212,7 +212,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> Result<()>
                 let ctx = caller.data();
                 (ctx.storage.clone(), ctx.space.clone(), ctx.db.clone())
             };
-            let result: Result<Vec<Rule>> = block_on(async move {
+            let result: RaiseResult<Vec<Rule>> = block_on(async move {
                 let mgr = CollectionsManager::new(&storage, &space, &db);
                 let mut store = RuleStore::new(&mgr);
                 store.sync_from_db().await?;
@@ -247,7 +247,7 @@ fn read_string_from_wasm(
     memory: &wasmtime::Memory,
     ptr: i32,
     len: i32,
-) -> Result<String> {
+) -> RaiseResult<String> {
     let data = memory
         .data(&caller)
         .get(ptr as usize..(ptr + len) as usize)
@@ -255,7 +255,11 @@ fn read_string_from_wasm(
     String::from_utf8(data.to_vec()).map_err(|e| AppError::from(format!("Erreur UTF-8: {}", e)))
 }
 
-fn read_json_request(caller: &mut Caller<'_, PluginContext>, ptr: i32, len: i32) -> Result<Value> {
+fn read_json_request(
+    caller: &mut Caller<'_, PluginContext>,
+    ptr: i32,
+    len: i32,
+) -> RaiseResult<Value> {
     let mem = get_memory(caller).ok_or(anyhow::anyhow!("No memory exported"))?;
     let json_str = read_string_from_wasm(caller, &mem, ptr, len)?;
     Ok(serde_json::from_str(&json_str)?)

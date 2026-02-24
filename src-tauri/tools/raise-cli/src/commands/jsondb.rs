@@ -1,7 +1,6 @@
 use clap::{Args, Subcommand};
 
 // --- IMPORTS RAISE ---
-
 use raise::json_db::{
     collections::manager::CollectionsManager,
     indexes::manager::IndexManager,
@@ -13,10 +12,10 @@ use raise::json_db::{
 use raise::{
     user_error, user_info, user_success,
     utils::{
-        data::{self, Deserialize, Map, Value},
+        data::{self, Deserialize, Value},
         io::{self, Path, PathBuf},
         prelude::*,
-        Arc, Future, Pin,
+        Arc,
     },
 };
 
@@ -247,10 +246,7 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
         }
         JsondbCommands::Insert { collection, data } => {
             let json_val = parse_data(&data).await?;
-            let resolved_json = resolve_references(json_val, &col_mgr).await?;
-            let res = col_mgr
-                .insert_with_schema(&collection, resolved_json)
-                .await?;
+            let res = col_mgr.insert_with_schema(&collection, json_val).await?;
 
             let id = res.get("id").and_then(|v| v.as_str()).unwrap_or("?");
             user_success!("JSONDB_INSERT_SUCCESS", "{}", id);
@@ -261,16 +257,12 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
             data,
         } => {
             let json_val = parse_data(&data).await?;
-            let resolved_json = resolve_references(json_val, &col_mgr).await?;
-            col_mgr
-                .update_document(&collection, &id, resolved_json)
-                .await?;
+            col_mgr.update_document(&collection, &id, json_val).await?;
             user_success!("JSONDB_UPDATE_SUCCESS", "{}", id);
         }
         JsondbCommands::Upsert { collection, data } => {
             let json_val = parse_data(&data).await?;
-            let resolved_json = resolve_references(json_val, &col_mgr).await?;
-            let status = col_mgr.upsert_document(&collection, resolved_json).await?;
+            let status = col_mgr.upsert_document(&collection, json_val).await?;
             user_success!("JSONDB_UPSERT_SUCCESS", "{:?}", status);
         }
         JsondbCommands::Delete { collection, id } => {
@@ -333,8 +325,7 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
                 vec![json]
             };
             for doc in docs {
-                let resolved = resolve_references(doc, &col_mgr).await?;
-                col_mgr.insert_with_schema(&collection, resolved).await?;
+                col_mgr.insert_with_schema(&collection, doc).await?;
             }
             user_success!("JSONDB_IMPORT_SUCCESS");
         }
@@ -400,65 +391,6 @@ async fn bootstrap_ontologies(root_dir: &Path, space: &str) {
 
 fn print_examples() {
     user_info!("JSONDB_USAGE_TITLE");
-}
-
-fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
-    if !s.starts_with("ref:") {
-        return None;
-    }
-    let parts: Vec<&str> = s.splitn(4, ':').collect();
-    if parts.len() == 4 {
-        Some((parts[1], parts[2], parts[3]))
-    } else {
-        None
-    }
-}
-
-fn resolve_references<'a>(
-    data: Value,
-    col_mgr: &'a CollectionsManager,
-) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
-    Box::pin(async move {
-        match data {
-            Value::String(s) => {
-                if let Some((col, field, val)) = parse_smart_link(&s) {
-                    let mut query = Query::new(col);
-                    query.filter = Some(QueryFilter {
-                        operator: FilterOperator::And,
-                        conditions: vec![Condition::eq(field, val.into())],
-                    });
-                    let result = QueryEngine::new(col_mgr).execute_query(query).await?;
-                    if let Some(doc) = result.documents.first() {
-                        let id = doc
-                            .get("id")
-                            .or_else(|| doc.get("_id"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        Ok(Value::String(id.to_string()))
-                    } else {
-                        Ok(Value::String(s))
-                    }
-                } else {
-                    Ok(Value::String(s))
-                }
-            }
-            Value::Array(arr) => {
-                let mut new_arr = Vec::new();
-                for item in arr {
-                    new_arr.push(resolve_references(item, col_mgr).await?);
-                }
-                Ok(Value::Array(new_arr))
-            }
-            Value::Object(map) => {
-                let mut new_map = Map::new();
-                for (k, v) in map {
-                    new_map.insert(k, resolve_references(v, col_mgr).await?);
-                }
-                Ok(Value::Object(new_map))
-            }
-            _ => Ok(data),
-        }
-    })
 }
 
 // --- TESTS UNITAIRES (Patrimoine Conservé & Adapté) ---
@@ -562,36 +494,6 @@ mod tests {
             }
             _ => panic!("Parsing delete failed"),
         }
-    }
-
-    #[test]
-    fn test_parse_smart_link_valid() {
-        let input = "ref:oa_actors:name:Sécurité";
-        let res = parse_smart_link(input);
-        assert!(res.is_some());
-        let (col, field, val) = res.unwrap();
-        assert_eq!(col, "oa_actors");
-        assert_eq!(field, "name");
-        assert_eq!(val, "Sécurité");
-    }
-
-    #[test]
-    fn test_parse_smart_link_invalid_prefix() {
-        assert!(parse_smart_link("uuid:1234-5678").is_none());
-    }
-
-    #[test]
-    fn test_parse_smart_link_missing_parts() {
-        assert!(parse_smart_link("ref:oa_actors:name").is_none());
-    }
-
-    #[test]
-    fn test_parse_smart_link_complex_value() {
-        let input = "ref:oa_actors:description:Ceci:est:une:description";
-        let res = parse_smart_link(input);
-        assert!(res.is_some());
-        let (_col, _field, val) = res.unwrap();
-        assert_eq!(val, "Ceci:est:une:description");
     }
 
     #[test]

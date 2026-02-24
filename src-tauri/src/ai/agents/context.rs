@@ -25,7 +25,7 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
-    pub fn new(
+    pub async fn new(
         agent_id: &str,
         session_id: &str,
         db: Arc<StorageEngine>,
@@ -54,47 +54,68 @@ impl AgentContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::JsonDbConfig;
     use crate::utils::config::test_mocks::inject_mock_config;
+    use crate::utils::config::AppConfig;
 
-    fn mock_storage() -> Arc<StorageEngine> {
-        let config = JsonDbConfig::new(PathBuf::from("/tmp/test_db_agent_v2"));
-        Arc::new(StorageEngine::new(config))
+    async fn setup_test_env() -> (Arc<StorageEngine>, AppConfig) {
+        inject_mock_config();
+        let config = AppConfig::get();
+        let storage_cfg = JsonDbConfig::new(PathBuf::from("/tmp/test_db_agent_v2"));
+        (Arc::new(StorageEngine::new(storage_cfg)), config.clone())
     }
 
-    #[test]
+    #[tokio::test] // 🎯 Les tests deviennent asynchrones
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    fn test_context_initialization_with_session() {
-        inject_mock_config();
+    async fn test_context_initialization_with_session() {
+        let (db, config) = setup_test_env().await;
+        let manager = CollectionsManager::new(&db, &config.system_domain, &config.system_db);
+        manager.init_db().await.unwrap();
 
-        let db = mock_storage();
-        let llm = LlmClient::new().unwrap();
+        // Injection du composant LLM pour le test
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
+
+        let llm = LlmClient::new(&manager).await.unwrap();
         let domain_path = PathBuf::from("/data/domain");
         let dataset_path = PathBuf::from("/data/dataset");
 
         let ctx = AgentContext::new(
             "agent_001",
             "session_abc",
-            db,
+            db.clone(),
             llm,
             domain_path.clone(),
             dataset_path.clone(),
-        );
+        )
+        .await; // 🎯 Le fameux .await manquant !
 
         assert_eq!(ctx.agent_id, "agent_001");
         assert_eq!(ctx.session_id, "session_abc");
     }
 
-    #[test]
+    #[tokio::test] // 🎯 Les tests deviennent asynchrones
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    fn test_empty_identifiers_validation() {
-        inject_mock_config();
+    async fn test_empty_identifiers_validation() {
+        let (db, config) = setup_test_env().await;
+        let manager = CollectionsManager::new(&db, &config.system_domain, &config.system_db);
+        manager.init_db().await.unwrap();
 
-        let db = mock_storage();
-        let llm = LlmClient::new().unwrap();
-        let ctx = AgentContext::new("", "", db, llm, PathBuf::new(), PathBuf::new());
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
+
+        let llm = LlmClient::new(&manager).await.unwrap();
+        let ctx = AgentContext::new("", "", db.clone(), llm, PathBuf::new(), PathBuf::new()).await;
+
         assert!(ctx.agent_id.is_empty());
         assert!(ctx.session_id.is_empty());
     }

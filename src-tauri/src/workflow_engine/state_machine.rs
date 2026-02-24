@@ -109,7 +109,7 @@ impl<'a> WorkflowStateMachine<'a> {
         instance: &mut WorkflowInstance,
         node_id: &str,
         new_status: ExecutionStatus,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         instance.node_states.insert(node_id.to_string(), new_status);
 
         if new_status == ExecutionStatus::Failed {

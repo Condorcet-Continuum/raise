@@ -13,7 +13,7 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     /// Initialise le store dans un dossier donné (ex: .raise/chats/)
-    pub async fn new(base_path: &Path) -> Result<Self> {
+    pub async fn new(base_path: &Path) -> RaiseResult<Self> {
         if !base_path.exists() {
             io::create_dir_all(base_path).await.map_err(|e| {
                 AppError::custom_io(format!("Impossible de créer le dossier des chats : {}", e))
@@ -25,7 +25,7 @@ impl MemoryStore {
     }
 
     /// Sauvegarde une session
-    pub async fn save_session(&self, session: &ConversationSession) -> Result<()> {
+    pub async fn save_session(&self, session: &ConversationSession) -> RaiseResult<()> {
         let file_path = self.get_path(&session.id);
         let json = data::stringify_pretty(session)?;
         io::write(file_path, json)
@@ -35,7 +35,7 @@ impl MemoryStore {
     }
 
     /// Charge une session existante ou en crée une nouvelle si absente
-    pub async fn load_or_create(&self, session_id: &str) -> Result<ConversationSession> {
+    pub async fn load_or_create(&self, session_id: &str) -> RaiseResult<ConversationSession> {
         let file_path = self.get_path(session_id);
 
         if file_path.exists() {
@@ -48,7 +48,7 @@ impl MemoryStore {
     }
 
     /// Liste toutes les sessions disponibles
-    pub async fn list_sessions(&self) -> Result<Vec<String>> {
+    pub async fn list_sessions(&self) -> RaiseResult<Vec<String>> {
         let mut sessions = Vec::new();
         if self.storage_path.exists() {
             let mut dir = io::read_dir(&self.storage_path).await.map_err(|e| {

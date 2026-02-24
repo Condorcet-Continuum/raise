@@ -1,4 +1,5 @@
 use crate::ai::llm::candle_engine::CandleLlmEngine;
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::{prelude::*, Arc, AsyncMutex};
 
 // On garde l'énumération pour la rétrocompatibilité avec tes agents existants,
@@ -17,9 +18,9 @@ pub struct LlmClient {
 }
 
 impl LlmClient {
-    pub fn new() -> Result<Self> {
+    pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         // Initialisation directe du moteur IA local
-        let engine = CandleLlmEngine::new()?;
+        let engine = CandleLlmEngine::new(manager).await?;
         Ok(Self {
             engine: Arc::new(AsyncMutex::new(engine)),
         })
@@ -30,7 +31,7 @@ impl LlmClient {
         _backend: LlmBackend, // 🎯 Ignoré : Tout passe désormais en mode 100% hors-ligne !
         system_prompt: &str,
         user_prompt: &str,
-    ) -> Result<String> {
+    ) -> RaiseResult<String> {
         let mut engine = self.engine.lock().await;
         // On génère 1024 tokens par défaut
         engine.generate(system_prompt, user_prompt, 1024)

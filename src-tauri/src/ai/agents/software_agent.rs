@@ -27,7 +27,7 @@ impl SoftwareAgent {
         Self {}
     }
 
-    async fn ask_llm(&self, ctx: &AgentContext, system: &str, user: &str) -> Result<String> {
+    async fn ask_llm(&self, ctx: &AgentContext, system: &str, user: &str) -> RaiseResult<String> {
         ctx.llm
             .ask(LlmBackend::LocalLlama, system, user)
             .await
@@ -40,7 +40,7 @@ impl SoftwareAgent {
         name: &str,
         description: &str,
         history_context: &str,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -81,7 +81,7 @@ impl Agent for SoftwareAgent {
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
-    ) -> Result<Option<AgentResult>> {
+    ) -> RaiseResult<Option<AgentResult>> {
         let mut session = load_session(ctx)
             .await
             .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
@@ -248,9 +248,7 @@ mod tests {
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::utils::{io::tempdir, Arc};
 
-    // ✅ CORRECTION : Import explicite de CollectionsManager pour les tests
     use crate::json_db::collections::manager::CollectionsManager;
-    // ✅ CORRECTION : Injection du mock de config
     use crate::utils::config::test_mocks::inject_mock_config;
     use crate::utils::config::AppConfig;
 
@@ -259,11 +257,9 @@ mod tests {
         assert_eq!(SoftwareAgent::new().id(), "software_engineer");
     }
 
-    // ✅ NOUVEAU TEST AJOUTÉ : Vérification des triggers de délégation
     #[tokio::test]
     async fn test_software_delegation_triggers() {
         let _agent = SoftwareAgent::new();
-        // Simulation d'un message tel que généré dans le process
         let msg = AclMessage::new(
             Performative::Request,
             "software_engineer",
@@ -277,10 +273,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_software_generation_integration() {
-        // 1. Initialisation Mock Config (CRITIQUE)
+        // 1. Initialisation Mock Config
         inject_mock_config();
 
         let dir = tempdir().unwrap();
@@ -289,15 +285,18 @@ mod tests {
 
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
-        // Mock LLM si non disponible
-        let llm = LlmClient::new().unwrap();
 
         // 2. Initialisation DB via AppConfig
         let app_cfg = AppConfig::get();
-        // ✅ CORRECTIF : system_domain / system_db
         let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
-        // On ignore l'erreur si la DB existe déjà
         let _ = manager.init_db().await;
+
+        // 🎯 Injection du composant LLM pour le test
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
 
         // 3. SEED DB : Injection du composant logique pour qu'il soit trouvé
         let comp_doc = json!({
@@ -313,6 +312,10 @@ mod tests {
             .await
             .unwrap();
 
+        // 🎯 Instanciation du client LLM AVEC le manager
+        let llm = LlmClient::new(&manager).await.unwrap();
+
+        // 🎯 Le .await manquant !
         let ctx = AgentContext::new(
             "dev",
             "sess_sw_01",
@@ -320,7 +323,8 @@ mod tests {
             llm,
             domain_root.clone(),
             dataset_root,
-        );
+        )
+        .await;
 
         let agent = SoftwareAgent::new();
 
@@ -336,7 +340,6 @@ mod tests {
         match result {
             Ok(Some(res)) => {
                 println!("✅ Succès Agent : {}", res.message);
-                // On vérifie que les artefacts sont créés
                 assert!(!res.artifacts.is_empty(), "Aucun artefact généré !");
 
                 if let Some(msg) = res.outgoing_message {
@@ -349,7 +352,6 @@ mod tests {
                 if err_msg.contains("Composant 'Nvidia Jetson Controller' introuvable") {
                     panic!("L'injection de donnée a échoué : {}", err_msg);
                 } else {
-                    // Si LLM pas dispo, on tolère
                     println!(
                         "⚠️ Test ignoré ou erreur attendue (ex: LLM offline) : {}",
                         err_msg

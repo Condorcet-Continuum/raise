@@ -19,7 +19,7 @@ impl<'a> DbAdapter<'a> {
     }
 
     /// Applique l'intégralité d'un commit Arcadia dans la base de données locale.
-    pub async fn apply_commit(&self, commit: &ArcadiaCommit) -> Result<()> {
+    pub async fn apply_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
         for mutation in &commit.mutations {
             self.apply_mutation(mutation).await?;
         }
@@ -27,7 +27,7 @@ impl<'a> DbAdapter<'a> {
     }
 
     /// Traduit une mutation individuelle en opération de stockage via le CollectionsManager.
-    async fn apply_mutation(&self, mutation: &Mutation) -> Result<()> {
+    async fn apply_mutation(&self, mutation: &Mutation) -> RaiseResult<()> {
         let collection = self.resolve_collection(&mutation.element_id, &mutation.payload)?;
 
         match mutation.operation {
@@ -57,7 +57,7 @@ impl<'a> DbAdapter<'a> {
     }
 
     /// Détermine la collection cible en fonction de l'URI ou du type de l'élément.
-    fn resolve_collection(&self, element_id: &str, payload: &Value) -> Result<String> {
+    fn resolve_collection(&self, element_id: &str, payload: &Value) -> RaiseResult<String> {
         // 1. Détection par type explicite (@type)
         if let Some(kind) = payload.get("@type").and_then(|v| v.as_str()) {
             return Ok(self.map_type_to_collection(kind));
@@ -105,6 +105,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_db_adapter_upsert_logic() {
+        crate::utils::config::test_mocks::inject_mock_config();
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);

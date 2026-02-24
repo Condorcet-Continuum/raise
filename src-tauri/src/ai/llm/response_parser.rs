@@ -2,7 +2,7 @@ use crate::utils::{data, prelude::*};
 
 /// Tente d'extraire et de parser un objet JSON depuis une réponse brute de LLM.
 /// Gère les blocs Markdown (```json ... ```) et le texte superflu.
-pub fn extract_json(raw_text: &str) -> Result<Value> {
+pub fn extract_json(raw_text: &str) -> RaiseResult<Value> {
     let clean_text = extract_code_block(raw_text);
 
     // Tentative de parsing

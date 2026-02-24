@@ -44,7 +44,7 @@ impl<'a> ModelLoader<'a> {
 
     // --- INDEXATION ---
 
-    pub async fn index_project(&self) -> Result<usize> {
+    pub async fn index_project(&self) -> RaiseResult<usize> {
         let mut idx = self.index.write().await;
         idx.clear();
 
@@ -87,7 +87,7 @@ impl<'a> ModelLoader<'a> {
 
     // --- ACCÈS UNITAIRE ---
 
-    pub async fn get_element(&self, id: &str) -> Result<ArcadiaElement> {
+    pub async fn get_element(&self, id: &str) -> RaiseResult<ArcadiaElement> {
         let collection = {
             let idx = self.index.read().await;
             idx.get(id).cloned()
@@ -110,7 +110,7 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
-    pub async fn get_json(&self, id: &str) -> Result<Value> {
+    pub async fn get_json(&self, id: &str) -> RaiseResult<Value> {
         let collection = {
             let idx = self.index.read().await;
             idx.get(id).cloned()
@@ -126,7 +126,7 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
-    fn json_to_element(&self, doc: Value, layer_hint: Option<&str>) -> Result<ArcadiaElement> {
+    fn json_to_element(&self, doc: Value, layer_hint: Option<&str>) -> RaiseResult<ArcadiaElement> {
         let id = doc
             .get("id")
             .and_then(|v| v.as_str())
@@ -180,7 +180,7 @@ impl<'a> ModelLoader<'a> {
 
     // --- HYDRATATION ---
 
-    pub async fn fetch_hydrated_element(&self, element_id: &str) -> Result<Value> {
+    pub async fn fetch_hydrated_element(&self, element_id: &str) -> RaiseResult<Value> {
         let mut element = self.get_json(element_id).await?;
 
         let relations = [
@@ -200,7 +200,7 @@ impl<'a> ModelLoader<'a> {
         Ok(element)
     }
 
-    pub async fn hydrate_element(&self, element: &mut Value, fields: &[&str]) -> Result<()> {
+    pub async fn hydrate_element(&self, element: &mut Value, fields: &[&str]) -> RaiseResult<()> {
         for field in fields {
             if let Some(target_val) = element.get_mut(*field) {
                 if let Some(arr) = target_val.as_array_mut() {
@@ -233,7 +233,7 @@ impl<'a> ModelLoader<'a> {
 
     // --- CHARGEMENT COMPLET ---
 
-    pub async fn load_full_model(&self) -> Result<ProjectModel> {
+    pub async fn load_full_model(&self) -> RaiseResult<ProjectModel> {
         let count = self.index_project().await?;
 
         let all_ids: Vec<String> = {

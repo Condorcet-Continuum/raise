@@ -70,7 +70,7 @@ Tous les transformateurs implémentent ce trait générique :
 pub trait ModelTransformer {
     /// Transforme une entrée (souvent le ProjectModel ou une String)
     /// en une sortie (Code, JSON, Rapport).
-    fn transform(&self, input: &serde_json::Value) -> anyhow::Result<serde_json::Value>;
+    fn transform(&self, input: &serde_json::Value) -> anyhow::RaiseResult<serde_json::Value>;
 }
 
 ```

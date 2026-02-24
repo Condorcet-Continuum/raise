@@ -33,17 +33,12 @@ impl TemplateEngine {
         Self { tera }
     }
 
-    pub fn render(&self, template_name: &str, context: &Value) -> Result<String> {
-        let tera_ctx = tera::Context::from_value(context.clone())
-            .map_err(|e| AppError::System(anyhow::anyhow!("Tera Context Error: {}", e)))?;
+    pub fn render(&self, template_name: &str, context: &Value) -> RaiseResult<String> {
+        // 🎯 Magie du `?` : tera::Error est automatiquement converti en AppError !
+        let tera_ctx = tera::Context::from_value(context.clone())?;
+        let content = self.tera.render(template_name, &tera_ctx)?;
 
-        self.tera.render(template_name, &tera_ctx).map_err(|e| {
-            AppError::System(anyhow::anyhow!(
-                "Tera Render Error [{}]: {}",
-                template_name,
-                e
-            ))
-        })
+        Ok(content)
     }
 
     /// 🚀 GÉNÉRATION PHYSIQUE SÉCURISÉE
@@ -53,7 +48,7 @@ impl TemplateEngine {
         template_name: &str,
         context: &Value,
         relative_path: impl AsRef<Path>,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         let content = self.render(template_name, context)?;
         scope
             .write(relative_path.as_ref(), content.as_bytes())
@@ -68,14 +63,15 @@ impl TemplateEngine {
         Ok(())
     }
 
-    pub fn add_raw_template(&mut self, name: &str, content: &str) -> Result<()> {
-        self.tera
-            .add_raw_template(name, content)
-            .map_err(|e| AppError::System(anyhow::anyhow!("Invalid Template '{}': {}", name, e)))?;
+    pub fn add_raw_template(&mut self, name: &str, content: &str) -> RaiseResult<()> {
+        // 🎯 Magie du `?` ici aussi
+        self.tera.add_raw_template(name, content)?;
         Ok(())
     }
 }
 
+// ⚠️ Note importante : Dans ce module interne, on GARDE le `tera::Result`
+// car l'interface `tera::Filter` exige ce type de retour exact.
 mod filters {
     use super::*;
     use heck::{ToLowerCamelCase, ToPascalCase, ToShoutySnakeCase, ToSnakeCase};

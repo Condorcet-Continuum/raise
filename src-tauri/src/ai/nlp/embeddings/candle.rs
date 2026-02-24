@@ -12,7 +12,9 @@ pub struct CandleEngine {
 }
 
 impl CandleEngine {
-    pub fn new() -> Result<Self> {
+    pub async fn new(
+        manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
+    ) -> RaiseResult<Self> {
         // 1. DÉTECTION DYNAMIQUE DU MATÉRIEL (GPU > CPU)
         let device = Device::new_metal(0) // Apple Silicon (M1/M2/M3)
             .or_else(|_| Device::new_cuda(0)) // Nvidia CUDA
@@ -20,30 +22,26 @@ impl CandleEngine {
 
         println!("🕯️ [Candle NLP] Moteur initialisé sur : {:?}", device);
 
-        // 2. RÉCUPÉRATION DE LA CONFIGURATION DYNAMIQUE SSOT
-        let config_app = AppConfig::get();
-        let engine_cfg = config_app
-            .ai_engines
-            .get("primary_embedding")
-            .ok_or_else(|| {
-                AppError::Ai(
-                    "Moteur 'primary_embedding' introuvable dans la configuration".to_string(),
-                )
-            })?;
+        // 2. RÉCUPÉRATION DE LA CONFIGURATION DEPUIS LA DB
+        let settings =
+            crate::utils::config::AppConfig::get_component_settings(manager, "nlp").await?;
 
         // Extraction des noms de fichiers (avec fallbacks)
-        let model_dir = &engine_cfg.model_name; // Ex: "minilm"
-        let config_filename = engine_cfg
-            .rust_config_file
-            .as_deref()
+        let model_dir = settings
+            .get("model_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("minilm");
+        let config_filename = settings
+            .get("rust_config_file")
+            .and_then(|v| v.as_str())
             .unwrap_or("config.json");
-        let tokenizer_filename = engine_cfg
-            .rust_tokenizer_file
-            .as_deref()
+        let tokenizer_filename = settings
+            .get("rust_tokenizer_file")
+            .and_then(|v| v.as_str())
             .unwrap_or("tokenizer.json");
-        let weights_filename = engine_cfg
-            .rust_safetensors_file
-            .as_deref()
+        let weights_filename = settings
+            .get("rust_safetensors_file")
+            .and_then(|v| v.as_str())
             .unwrap_or("model.safetensors");
 
         // 3. CONSTRUCTION DES CHEMINS LOCAUX ABSOLUS
@@ -97,7 +95,7 @@ impl CandleEngine {
         })
     }
 
-    fn forward_one(&self, text: &str) -> Result<Vec<f32>> {
+    fn forward_one(&self, text: &str) -> RaiseResult<Vec<f32>> {
         let tokens = self
             .tokenizer
             .encode(text, true)
@@ -137,7 +135,7 @@ impl CandleEngine {
         Ok(vec)
     }
 
-    pub fn embed_batch(&mut self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+    pub fn embed_batch(&mut self, texts: Vec<String>) -> RaiseResult<Vec<Vec<f32>>> {
         // Note: Pour une optimisation future, on pourrait tokeniser tout le batch
         // et faire un seul appel forward(), mais cela demande de gérer le Padding manuellement.
         // Avec le GPU activé, cette boucle sera déjà très rapide pour des petits lots.
@@ -148,12 +146,12 @@ impl CandleEngine {
         Ok(results)
     }
 
-    pub fn embed_query(&mut self, text: &str) -> Result<Vec<f32>> {
+    pub fn embed_query(&mut self, text: &str) -> RaiseResult<Vec<f32>> {
         self.forward_one(text)
     }
 }
 
-fn normalize_l2(v: &Tensor) -> Result<Tensor> {
+fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
     let sum_sq = v
         .sqr()
         .map_err(|e| AppError::from(e.to_string()))?
@@ -167,45 +165,114 @@ fn normalize_l2(v: &Tensor) -> Result<Tensor> {
 }
 
 // --- TESTS UNITAIRES ---
+// --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    async fn setup_test_db() -> crate::json_db::storage::StorageEngine {
+        crate::utils::config::test_mocks::inject_mock_config();
+        let config = crate::utils::config::AppConfig::get();
+        let storage_cfg = crate::json_db::storage::JsonDbConfig::new(
+            config.get_path("PATH_RAISE_DOMAIN").unwrap(),
+        );
+        crate::json_db::storage::StorageEngine::new(storage_cfg)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    fn test_candle_mini_lm_loading() {
-        let engine = CandleEngine::new();
+    async fn test_candle_mini_lm_loading() {
+        let storage = setup_test_db().await;
+        let config = crate::utils::config::AppConfig::get();
+        let manager = crate::json_db::collections::manager::CollectionsManager::new(
+            &storage,
+            &config.system_domain,
+            &config.system_db,
+        );
+        manager.init_db().await.unwrap();
+
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "nlp",
+            crate::utils::json::json!({
+                "model_name": "minilm",
+                "rust_config_file": "config.json",
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_safetensors_file": "model.safetensors"
+            }),
+        )
+        .await;
+
+        let engine = CandleEngine::new(&manager).await;
         assert!(
             engine.is_ok(),
             "Le modèle MiniLM doit se charger correctement via HF Hub"
         );
     }
 
-    #[test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[tokio::test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    fn test_candle_dimensions() {
-        let mut engine = CandleEngine::new().expect("Init failed");
+    async fn test_candle_dimensions() {
+        let storage = setup_test_db().await;
+        let config = crate::utils::config::AppConfig::get();
+        let manager = crate::json_db::collections::manager::CollectionsManager::new(
+            &storage,
+            &config.system_domain,
+            &config.system_db,
+        );
+        manager.init_db().await.unwrap();
+
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "nlp",
+            crate::utils::json::json!({
+                "model_name": "minilm",
+                "rust_config_file": "config.json",
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_safetensors_file": "model.safetensors"
+            }),
+        )
+        .await;
+
+        let mut engine = CandleEngine::new(&manager).await.expect("Init failed");
         let vec = engine.embed_query("Test dimensions").expect("Embed failed");
 
-        // all-MiniLM-L6-v2 fait 384 dimensions
         assert_eq!(vec.len(), 384);
     }
 
-    #[test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[tokio::test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    fn test_candle_normalization() {
-        // Vérifie que le vecteur est normalisé (L2 norm ≈ 1.0)
-        // C'est CRUCIAL pour que la Cosine Similarity fonctionne dans Qdrant
-        let mut engine = CandleEngine::new().expect("Init failed");
+    async fn test_candle_normalization() {
+        let storage = setup_test_db().await;
+        let config = crate::utils::config::AppConfig::get();
+        let manager = crate::json_db::collections::manager::CollectionsManager::new(
+            &storage,
+            &config.system_domain,
+            &config.system_db,
+        );
+        manager.init_db().await.unwrap();
+
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "nlp",
+            crate::utils::json::json!({
+                "model_name": "minilm",
+                "rust_config_file": "config.json",
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_safetensors_file": "model.safetensors"
+            }),
+        )
+        .await;
+
+        let mut engine = CandleEngine::new(&manager).await.expect("Init failed");
         let vec = engine.embed_query("Mathematiques").expect("Embed failed");
 
         let sum_sq: f32 = vec.iter().map(|x| x * x).sum();
         let norm = sum_sq.sqrt();
 
-        // On tolère une petite erreur de virgule flottante
         assert!(
             (norm - 1.0).abs() < 1e-4,
             "Le vecteur doit être normalisé (Norme proche de 1.0), actuel: {}",

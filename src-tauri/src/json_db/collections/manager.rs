@@ -2,9 +2,11 @@
 
 use crate::json_db::indexes::IndexManager;
 use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
+use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
 use crate::json_db::storage::{file_storage, StorageEngine};
 use crate::rules_engine::{EvalError, Evaluator, Rule, RuleStore};
+use crate::utils::{Future, Pin};
 
 use super::collection;
 use super::data_provider::CachedDataProvider;
@@ -30,7 +32,7 @@ impl<'a> CollectionsManager<'a> {
         }
     }
 
-    pub async fn init_db(&self) -> Result<bool> {
+    pub async fn init_db(&self) -> RaiseResult<bool> {
         let created = file_storage::create_db(&self.storage.config, &self.space, &self.db).await?;
         if created {
             self.ensure_system_index().await?;
@@ -38,7 +40,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(created)
     }
 
-    pub async fn drop_db(&self) -> Result<bool> {
+    pub async fn drop_db(&self) -> RaiseResult<bool> {
         let db_path = self.storage.config.db_root(&self.space, &self.db);
         if !db_path.exists() {
             return Ok(false);
@@ -154,7 +156,7 @@ impl<'a> CollectionsManager<'a> {
     }
 
     /// Charge le registre approprié en fonction de l'URI.
-    async fn get_registry_for_uri(&self, uri: &str) -> Result<SchemaRegistry> {
+    async fn get_registry_for_uri(&self, uri: &str) -> RaiseResult<SchemaRegistry> {
         let app_config = AppConfig::get();
         let sys_domain = &app_config.system_domain;
         let sys_db = &app_config.system_db;
@@ -175,17 +177,17 @@ impl<'a> CollectionsManager<'a> {
 
     // --- MÉTHODES DE LECTURE ---
 
-    pub async fn get_document(&self, collection: &str, id: &str) -> Result<Option<Value>> {
+    pub async fn get_document(&self, collection: &str, id: &str) -> RaiseResult<Option<Value>> {
         self.storage
             .read_document(&self.space, &self.db, collection, id)
             .await
     }
 
-    pub async fn get(&self, collection: &str, id: &str) -> Result<Option<Value>> {
+    pub async fn get(&self, collection: &str, id: &str) -> RaiseResult<Option<Value>> {
         self.get_document(collection, id).await
     }
 
-    pub async fn read_many(&self, collection: &str, ids: &[String]) -> Result<Vec<Value>> {
+    pub async fn read_many(&self, collection: &str, ids: &[String]) -> RaiseResult<Vec<Value>> {
         let mut docs = Vec::with_capacity(ids.len());
         for id in ids {
             let doc_opt = self
@@ -204,16 +206,16 @@ impl<'a> CollectionsManager<'a> {
         Ok(docs)
     }
 
-    pub async fn list_all(&self, collection: &str) -> Result<Vec<Value>> {
+    pub async fn list_all(&self, collection: &str) -> RaiseResult<Vec<Value>> {
         collection::list_documents(&self.storage.config, &self.space, &self.db, collection).await
     }
 
-    pub async fn list_collections(&self) -> Result<Vec<String>> {
+    pub async fn list_collections(&self) -> RaiseResult<Vec<String>> {
         collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db).await
     }
 
     // --- GESTION INDEX SYSTÈME ---
-    pub async fn ensure_system_index(&self) -> Result<()> {
+    pub async fn ensure_system_index(&self) -> RaiseResult<()> {
         let sys_path = self
             .storage
             .config
@@ -234,7 +236,7 @@ impl<'a> CollectionsManager<'a> {
         self.save_system_index(&mut system_doc).await
     }
 
-    async fn save_system_index(&self, doc: &mut Value) -> Result<()> {
+    async fn save_system_index(&self, doc: &mut Value) -> RaiseResult<()> {
         let sys_path = self
             .storage
             .config
@@ -274,7 +276,11 @@ impl<'a> CollectionsManager<'a> {
 
     // --- GESTION DES COLLECTIONS ---
 
-    pub async fn create_collection(&self, name: &str, schema_uri: Option<String>) -> Result<()> {
+    pub async fn create_collection(
+        &self,
+        name: &str,
+        schema_uri: Option<String>,
+    ) -> RaiseResult<()> {
         if !self.storage.config.db_root(&self.space, &self.db).exists() {
             self.init_db().await?;
         }
@@ -306,26 +312,26 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    pub async fn drop_collection(&self, name: &str) -> Result<()> {
+    pub async fn drop_collection(&self, name: &str) -> RaiseResult<()> {
         collection::drop_collection(&self.storage.config, &self.space, &self.db, name).await?;
         self.remove_collection_from_system_index(name).await?;
         Ok(())
     }
 
     // --- INDEXES SECONDAIRES ---
-    pub async fn create_index(&self, collection: &str, field: &str, kind: &str) -> Result<()> {
+    pub async fn create_index(&self, collection: &str, field: &str, kind: &str) -> RaiseResult<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         idx_mgr.create_index(collection, field, kind).await
     }
 
-    pub async fn drop_index(&self, collection: &str, field: &str) -> Result<()> {
+    pub async fn drop_index(&self, collection: &str, field: &str) -> RaiseResult<()> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         idx_mgr.drop_index(collection, field).await
     }
 
     // --- HELPER INDEX SYSTÈME & RÉSOLUTION SCHÉMA ---
 
-    async fn resolve_schema_from_index(&self, col_name: &str) -> Result<String> {
+    async fn resolve_schema_from_index(&self, col_name: &str) -> RaiseResult<String> {
         let sys_path = self
             .storage
             .config
@@ -352,7 +358,11 @@ impl<'a> CollectionsManager<'a> {
         Ok(self.resolve_best_schema_uri(raw_path))
     }
 
-    async fn update_system_index_collection(&self, col_name: &str, schema_uri: &str) -> Result<()> {
+    async fn update_system_index_collection(
+        &self,
+        col_name: &str,
+        schema_uri: &str,
+    ) -> RaiseResult<()> {
         let sys_path = self
             .storage
             .config
@@ -382,7 +392,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    async fn remove_collection_from_system_index(&self, col_name: &str) -> Result<()> {
+    async fn remove_collection_from_system_index(&self, col_name: &str) -> RaiseResult<()> {
         let sys_path = self
             .storage
             .config
@@ -408,7 +418,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    async fn add_item_to_index(&self, col_name: &str, id: &str) -> Result<()> {
+    async fn add_item_to_index(&self, col_name: &str, id: &str) -> RaiseResult<()> {
         let sys_path = self
             .storage
             .config
@@ -457,7 +467,7 @@ impl<'a> CollectionsManager<'a> {
 
     // --- ÉCRITURE ET MISE À JOUR ---
 
-    pub async fn insert_raw(&self, collection: &str, doc: &Value) -> Result<()> {
+    pub async fn insert_raw(&self, collection: &str, doc: &Value) -> RaiseResult<()> {
         let id = doc
             .get("id")
             .and_then(|v| v.as_str())
@@ -486,7 +496,8 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    pub async fn insert_with_schema(&self, collection: &str, mut doc: Value) -> Result<Value> {
+    pub async fn insert_with_schema(&self, collection: &str, mut doc: Value) -> RaiseResult<Value> {
+        doc = self.resolve_document_references(doc).await?;
         self.prepare_document(collection, &mut doc).await?;
         self.insert_raw(collection, &doc).await?;
         Ok(doc)
@@ -497,12 +508,13 @@ impl<'a> CollectionsManager<'a> {
         collection: &str,
         id: &str,
         patch_data: Value,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
+        let resolved_patch = self.resolve_document_references(patch_data).await?;
         let old_doc_opt = self.get_document(collection, id).await?;
         let mut doc = old_doc_opt
             .ok_or_else(|| AppError::Database("Document introuvable pour update".to_string()))?;
 
-        json_merge(&mut doc, patch_data);
+        json_merge(&mut doc, resolved_patch);
 
         if let Some(obj) = doc.as_object_mut() {
             obj.insert("id".to_string(), Value::String(id.to_string()));
@@ -522,11 +534,23 @@ impl<'a> CollectionsManager<'a> {
         Ok(doc)
     }
 
-    pub async fn upsert_document(&self, collection: &str, data: Value) -> Result<String> {
+    pub async fn upsert_document(&self, collection: &str, mut data: Value) -> RaiseResult<String> {
+        // 1. On résout les références de tout le document avant de commencer
+        data = self.resolve_document_references(data).await?;
+
+        // 2. Extraction des clés d'identification potentielles
         let id_opt = data
             .get("id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let name_opt = data.get("name").cloned();
+
+        // 3. Validation stricte : Il faut au moins un ID ou un Name
+        if id_opt.is_none() && name_opt.is_none() {
+            return Err(AppError::Validation(
+                "Upsert nécessite un champ 'id' ou 'name' pour identifier le document.".to_string(),
+            ));
+        }
 
         let mut target_id = None;
 
@@ -536,6 +560,26 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
+        // 5. Tentative 2 : Fallback sur la recherche par "name"
+        if target_id.is_none() {
+            if let Some(name_val) = name_opt {
+                let mut query = Query::new(collection);
+                query.filter = Some(QueryFilter {
+                    operator: FilterOperator::And,
+                    // Condition::eq gère parfaitement l'égalité profonde (Deep Equals) des objets JSON
+                    conditions: vec![Condition::eq("name", name_val)],
+                });
+                query.limit = Some(1); // On s'arrête au premier trouvé
+
+                let result = QueryEngine::new(self).execute_query(query).await?;
+
+                if let Some(existing_doc) = result.documents.first() {
+                    if let Some(found_id) = existing_doc.get("id").and_then(|v| v.as_str()) {
+                        target_id = Some(found_id.to_string());
+                    }
+                }
+            }
+        }
         match target_id {
             Some(id) => {
                 self.update_document(collection, &id, data).await?;
@@ -549,7 +593,7 @@ impl<'a> CollectionsManager<'a> {
         }
     }
 
-    pub async fn delete_document(&self, collection: &str, id: &str) -> Result<bool> {
+    pub async fn delete_document(&self, collection: &str, id: &str) -> RaiseResult<bool> {
         let old_doc = self.get_document(collection, id).await?;
         self.storage
             .delete_document(&self.space, &self.db, collection, id)
@@ -561,7 +605,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(true)
     }
 
-    pub async fn prepare_document(&self, collection: &str, doc: &mut Value) -> Result<()> {
+    pub async fn prepare_document(&self, collection: &str, doc: &mut Value) -> RaiseResult<()> {
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("id") {
                 obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
@@ -637,7 +681,7 @@ impl<'a> CollectionsManager<'a> {
     }
 
     // --- OPTIMISATION SEMANTIQUE ---
-    fn apply_semantic_logic(&self, doc: &mut Value, schema_uri: Option<&str>) -> Result<()> {
+    fn apply_semantic_logic(&self, doc: &mut Value, schema_uri: Option<&str>) -> RaiseResult<()> {
         let layer_hint = if let Some(uri) = schema_uri {
             if uri.contains("/oa/") {
                 Some("oa")
@@ -712,6 +756,11 @@ impl<'a> CollectionsManager<'a> {
         }
         Ok(())
     }
+
+    /// Résout automatiquement les références "ref:..." dans un document JSON
+    pub async fn resolve_document_references(&self, document: Value) -> RaiseResult<Value> {
+        resolve_refs_recursive(document, self).await
+    }
 }
 
 fn json_merge(a: &mut Value, b: Value) {
@@ -733,7 +782,7 @@ pub async fn apply_business_rules(
     old_doc: Option<&Value>,
     registry: &SchemaRegistry,
     schema_uri: &str,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let mut store = RuleStore::new(manager);
 
     if let Err(e) = store.sync_from_db().await {
@@ -869,6 +918,70 @@ fn set_value_by_path(doc: &mut Value, path: &str, value: Value) -> bool {
         }
     }
     false
+}
+
+// ============================================================================
+// RÉSOLUTION DE RÉFÉRENCES (SMART LINKS)
+// ============================================================================
+
+fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
+    if !s.starts_with("ref:") {
+        return None;
+    }
+    let parts: Vec<&str> = s.splitn(4, ':').collect();
+    if parts.len() == 4 {
+        Some((parts[1], parts[2], parts[3]))
+    } else {
+        None
+    }
+}
+
+fn resolve_refs_recursive<'a>(
+    data: Value,
+    col_mgr: &'a CollectionsManager<'a>,
+) -> Pin<Box<dyn Future<Output = RaiseResult<Value>> + Send + 'a>> {
+    Box::pin(async move {
+        match data {
+            Value::String(s) => {
+                if let Some((col, field, val)) = parse_smart_link(&s) {
+                    let mut query = Query::new(col);
+                    query.filter = Some(QueryFilter {
+                        operator: FilterOperator::And,
+                        conditions: vec![Condition::eq(field, val.into())],
+                    });
+
+                    let result = QueryEngine::new(col_mgr).execute_query(query).await?;
+                    if let Some(doc) = result.documents.first() {
+                        let id = doc
+                            .get("id")
+                            .or_else(|| doc.get("_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        Ok(Value::String(id.to_string()))
+                    } else {
+                        Ok(Value::String(s))
+                    }
+                } else {
+                    Ok(Value::String(s))
+                }
+            }
+            Value::Array(arr) => {
+                let mut new_arr = Vec::new();
+                for item in arr {
+                    new_arr.push(resolve_refs_recursive(item, col_mgr).await?);
+                }
+                Ok(Value::Array(new_arr))
+            }
+            Value::Object(map) => {
+                let mut new_map = crate::utils::data::Map::new();
+                for (k, v) in map {
+                    new_map.insert(k, resolve_refs_recursive(v, col_mgr).await?);
+                }
+                Ok(Value::Object(new_map))
+            }
+            _ => Ok(data),
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1014,5 +1127,40 @@ mod tests {
 
         assert_eq!(final_doc["val"], "B");
         assert_eq!(final_doc["id"], "config-01");
+    }
+
+    // ============================================================================
+    // TESTS : RÉSOLUTION DE RÉFÉRENCES (SMART LINKS)
+    // ============================================================================
+
+    #[test]
+    fn test_parse_smart_link_valid() {
+        // Appelle directement la fonction privée qu'on vient d'ajouter dans manager.rs
+        let input = "ref:oa_actors:name:Sécurité";
+        let res = super::parse_smart_link(input);
+        assert!(res.is_some());
+        let (col, field, val) = res.unwrap();
+        assert_eq!(col, "oa_actors");
+        assert_eq!(field, "name");
+        assert_eq!(val, "Sécurité");
+    }
+
+    #[test]
+    fn test_parse_smart_link_invalid_prefix() {
+        assert!(super::parse_smart_link("uuid:1234-5678").is_none());
+    }
+
+    #[test]
+    fn test_parse_smart_link_missing_parts() {
+        assert!(super::parse_smart_link("ref:oa_actors:name").is_none());
+    }
+
+    #[test]
+    fn test_parse_smart_link_complex_value() {
+        let input = "ref:oa_actors:description:Ceci:est:une:description";
+        let res = super::parse_smart_link(input);
+        assert!(res.is_some());
+        let (_col, _field, val) = res.unwrap();
+        assert_eq!(val, "Ceci:est:une:description");
     }
 }

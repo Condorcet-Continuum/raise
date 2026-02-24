@@ -26,7 +26,8 @@ async fn test_business_agent_generates_oa_entities() {
             .expect("LlmClient must be enabled for tests"),
         test_root.clone(),
         test_root.join("dataset"),
-    );
+    )
+    .await;
 
     let agent = BusinessAgent::new();
 

@@ -11,7 +11,7 @@ pub enum DropMode {
     Hard,
 }
 
-pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()> {
+pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResult<()> {
     let db_path = config.db_root(space, db);
     if !io::exists(&db_path).await {
         return Err(AppError::Io(std::io::Error::new(
@@ -24,7 +24,7 @@ pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<()>
 
 /// Crée l'arborescence physique de la base de données.
 /// Note : Architecture "Zéro Copie", les schémas ne sont plus copiés ici.
-pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<bool> {
+pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResult<bool> {
     let db_root = config.db_root(space, db);
 
     if io::exists(&db_root).await {
@@ -48,7 +48,12 @@ pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<b
     Ok(true)
 }
 
-pub async fn drop_db(config: &JsonDbConfig, space: &str, db: &str, mode: DropMode) -> Result<()> {
+pub async fn drop_db(
+    config: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    mode: DropMode,
+) -> RaiseResult<()> {
     let db_path = config.db_root(space, db);
     if !io::exists(&db_path).await {
         return Ok(());
@@ -77,7 +82,7 @@ pub async fn write_document(
     collection: &str,
     id: &str,
     doc: &Value,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let col_path = config.db_collection_path(space, db, collection);
     io::create_dir_all(&col_path).await?;
     let file_path = col_path.join(format!("{}.json", id));
@@ -91,7 +96,7 @@ pub async fn read_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> Result<Option<Value>> {
+) -> RaiseResult<Option<Value>> {
     let file_path = config
         .db_collection_path(space, db, collection)
         .join(format!("{}.json", id));
@@ -110,7 +115,7 @@ pub async fn delete_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let file_path = config
         .db_collection_path(space, db, collection)
         .join(format!("{}.json", id));
@@ -121,16 +126,16 @@ pub async fn delete_document(
     Ok(())
 }
 
-pub async fn atomic_write<P: AsRef<Path>>(path: P, content: &[u8]) -> Result<()> {
+pub async fn atomic_write<P: AsRef<Path>>(path: P, content: &[u8]) -> RaiseResult<()> {
     io::write_atomic(path.as_ref(), content).await?;
     Ok(())
 }
 
-pub async fn atomic_write_binary<P: AsRef<Path>>(path: P, content: &[u8]) -> Result<()> {
+pub async fn atomic_write_binary<P: AsRef<Path>>(path: P, content: &[u8]) -> RaiseResult<()> {
     atomic_write(path, content).await
 }
 
-pub async fn save_database_index(path: &io::Path, data: &Value) -> Result<()> {
+pub async fn save_database_index(path: &io::Path, data: &Value) -> RaiseResult<()> {
     io::write_json_compressed_atomic(path, data).await
 }
 

@@ -30,7 +30,7 @@ impl SchemaRegistry {
         }
     }
 
-    pub async fn from_db(config: &JsonDbConfig, space: &str, db: &str) -> Result<Self> {
+    pub async fn from_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResult<Self> {
         // Préfixe standard : db://space/db/schemas/v1/
         let base_prefix = format!("db://{}/{}/schemas/v1/", space, db);
 
@@ -51,7 +51,7 @@ impl SchemaRegistry {
     }
 
     #[async_recursion]
-    async fn scan_directory(&mut self, root: &Path, current_dir: &Path) -> Result<()> {
+    async fn scan_directory(&mut self, root: &Path, current_dir: &Path) -> RaiseResult<()> {
         // Utilisation de read_dir de la façade
         let mut entries = io::read_dir(current_dir).await?;
 
@@ -113,7 +113,7 @@ mod tests {
     use crate::utils::{io::tempdir, json::json};
 
     #[tokio::test]
-    async fn test_registry_loading() -> Result<()> {
+    async fn test_registry_loading() -> RaiseResult<()> {
         // 1. Setup environnement
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());

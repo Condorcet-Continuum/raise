@@ -58,7 +58,7 @@ CONTEXTE TECHNIQUE :
 RÈGLES DE GÉNÉRATION DE CODE :
 1. Fournis toujours le code complet, pas de "..." ou de placeholders sauf si nécessaire.
 2. Ajoute des commentaires explicatifs brefs dans le code.
-3. Gère les erreurs proprement (Result<T, E>, unwrap() interdit en prod).
+3. Gère les erreurs proprement (RaiseResult<T, E>, unwrap() interdit en prod).
 4. Si tu écris du Rust, assure-toi qu'il compile (vérifie les imports).
 5. N'entoure pas le code de texte inutile ("Voici le code..."), donne juste le bloc Markdown.
 "#;

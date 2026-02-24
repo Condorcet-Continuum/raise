@@ -27,7 +27,7 @@ pub trait AgentTool: Send + Sync + Debug {
     fn name(&self) -> &str;           // Identifiant unique (ex: "read_system_metrics")
     fn description(&self) -> &str;    // Manuel d'utilisation pour le LLM
     fn parameters_schema(&self) -> Value; // Validation JSON Schema des entrées
-    async fn execute(&self, args: &Value) -> Result<Value>; // Logique métier asynchrone
+    async fn execute(&self, args: &Value) -> RaiseResult<Value>; // Logique métier asynchrone
 }
 
 ```
@@ -62,7 +62,7 @@ impl AgentTool for FileReadTool {
         })
     }
 
-    async fn execute(&self, args: &Value) -> Result<Value> {
+    async fn execute(&self, args: &Value) -> RaiseResult<Value> {
         let path = args.get("path").and_then(|v| v.as_str()).ok_or("Path required")?;
         let content = fs::read_to_string(path).map_err(|e| format!("IO Error: {}", e))?;
         Ok(json!({ "content": content, "size": content.len() }))

@@ -17,7 +17,7 @@ fn build_register_request(
     uri: &str,
     version: &str,
     schema_json: &str,
-) -> Result<ChaincodeMessage, String> {
+) -> RaiseResult<ChaincodeMessage, String> {
     // Validation du JSON d'entrée
     let schema_def: Value =
         serde_json::from_str(schema_json).map_err(|e| format!("JSON du schéma invalide: {}", e))?;
@@ -55,7 +55,7 @@ pub async fn cmd_register_schema(
     uri: String,
     version: String,
     schema_json: String,
-) -> Result<String, String> {
+) -> RaiseResult<String, String> {
     println!("🔌 [Tauri] Préparation de la transaction pour {}...", uri);
 
     let message = build_register_request(&uri, &version, &schema_json)?;

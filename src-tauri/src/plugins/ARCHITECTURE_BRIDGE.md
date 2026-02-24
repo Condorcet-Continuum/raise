@@ -77,7 +77,7 @@ L'accès technique n'implique pas l'autorisation métier. Chaque appel vers une 
 ### Pseudo-Code de Médiation (`cognitive.rs`)
 
 ```rust
-fn host_db_write(ctx: &mut PluginContext, collection: &str, data: Json) -> Result<i32> {
+fn host_db_write(ctx: &mut PluginContext, collection: &str, data: Json) -> RaiseResult<i32> {
     // 1. Vérification du Mandat (Gouvernance)
     if !ctx.mandate.can_write_collection(collection) {
         tracing::warn!("⛔ Tentative d'écriture non autorisée par le mandat");

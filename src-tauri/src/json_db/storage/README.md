@@ -98,7 +98,7 @@ Lors de l'initialisation (`create_db`), il extrait automatiquement ces fichiers 
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
 
-fn main() -> Result<()> {
+fn main() -> RaiseResult<()> {
     // 1. Configuration
     let config = JsonDbConfig::new(PathBuf::from("./data"));
     let storage = StorageEngine::new(config);

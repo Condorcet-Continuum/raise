@@ -86,6 +86,7 @@ mod tests {
     #[tokio::test]
     async fn test_rule_store_indexing() {
         // Setup de l'environnement DB temporaire
+        crate::utils::config::test_mocks::inject_mock_config();
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);

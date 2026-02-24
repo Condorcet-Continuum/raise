@@ -18,7 +18,7 @@ pub async fn update_btree_index(
     doc_id: &str,
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     // Appel au driver qui doit être async
     driver::update::<BTreeMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
@@ -34,7 +34,7 @@ pub async fn search_btree_index(
     collection: &str,
     def: &IndexDefinition,
     value: &Value,
-) -> Result<Vec<String>> {
+) -> RaiseResult<Vec<String>> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     let key = value.to_string();
     // Appel au driver qui doit être async

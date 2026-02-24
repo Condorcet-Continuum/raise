@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/workflow_engine/scheduler.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::{HashMap, Result};
+use crate::utils::{prelude::*, HashMap};
 use crate::workflow_engine::{
     executor::WorkflowExecutor, state_machine::WorkflowStateMachine, ExecutionStatus,
     WorkflowDefinition, WorkflowInstance,
@@ -28,7 +28,7 @@ impl WorkflowScheduler {
         &mut self,
         mandate_id: &str,
         manager: &CollectionsManager<'_>,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         tracing::info!("📥 Chargement de la mission (Mandat: {})", mandate_id);
         let workflow = WorkflowExecutor::load_and_prepare_workflow(manager, mandate_id).await?;
         self.definitions.insert(workflow.id.clone(), workflow);
@@ -40,7 +40,7 @@ impl WorkflowScheduler {
         &self,
         workflow_id: &str,
         manager: &CollectionsManager<'_>,
-    ) -> Result<WorkflowInstance> {
+    ) -> RaiseResult<WorkflowInstance> {
         let def = self.definitions.get(workflow_id).ok_or_else(|| {
             crate::utils::AppError::NotFound(format!("Définition '{}' introuvable", workflow_id))
         })?;
@@ -75,7 +75,7 @@ impl WorkflowScheduler {
         &self,
         instance: &mut WorkflowInstance,
         manager: &CollectionsManager<'_>,
-    ) -> Result<bool> {
+    ) -> RaiseResult<bool> {
         let def = self.definitions.get(&instance.workflow_id).ok_or_else(|| {
             crate::utils::AppError::NotFound(format!(
                 "Définition '{}' non chargée",
@@ -149,7 +149,7 @@ impl WorkflowScheduler {
         &self,
         instance_id: &str,
         manager: &CollectionsManager<'_>,
-    ) -> Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         let doc = manager
             .get_document("workflow_instances", instance_id)
             .await
@@ -180,7 +180,7 @@ impl WorkflowScheduler {
         node_id: &str,
         approved: bool,
         manager: &CollectionsManager<'_>,
-    ) -> Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         let doc = manager
             .get_document("workflow_instances", instance_id)
             .await
@@ -216,7 +216,7 @@ impl WorkflowScheduler {
         &self,
         instance: &mut WorkflowInstance,
         manager: &CollectionsManager<'_>,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         instance.updated_at = chrono::Utc::now().timestamp();
         let json_val =
             serde_json::to_value(&instance).map_err(crate::utils::AppError::Serialization)?;

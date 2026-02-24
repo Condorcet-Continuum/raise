@@ -1,7 +1,9 @@
+use crate::utils::prelude::*;
+
 use crate::ai::deep_learning::models::sequence_net::SequenceNet;
 use crate::utils::config::DeepLearningConfig;
 use crate::utils::io::Path;
-use candle_core::{DType, Result};
+use candle_core::DType;
 use candle_nn::{VarBuilder, VarMap};
 
 /// Sauvegarde les poids du modèle dans un fichier au format SafeTensors.
@@ -9,8 +11,9 @@ use candle_nn::{VarBuilder, VarMap};
 /// # Arguments
 /// * `varmap` - Le conteneur de variables (poids) à sauvegarder.
 /// * `path` - Le chemin de destination (ex: "model.safetensors").
-pub fn save_model(varmap: &VarMap, path: impl AsRef<Path>) -> Result<()> {
-    varmap.save(path)
+pub fn save_model(varmap: &VarMap, path: impl AsRef<Path>) -> RaiseResult<()> {
+    varmap.save(path)?;
+    Ok(())
 }
 
 /// Charge un modèle SequenceNet complet depuis un fichier pour l'inférence.
@@ -19,7 +22,7 @@ pub fn save_model(varmap: &VarMap, path: impl AsRef<Path>) -> Result<()> {
 /// * `path` - Chemin du fichier .safetensors.
 /// * `input_size`, `hidden_size`, `output_size` - Hyperparamètres de l'architecture.
 /// * `device` - Périphérique sur lequel charger le modèle (CPU/CUDA).
-pub fn load_model(path: impl AsRef<Path>, config: &DeepLearningConfig) -> Result<SequenceNet> {
+pub fn load_model(path: impl AsRef<Path>, config: &DeepLearningConfig) -> RaiseResult<SequenceNet> {
     let device = config.to_device();
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[path], DType::F32, &device)? };
     SequenceNet::new(
@@ -31,8 +34,9 @@ pub fn load_model(path: impl AsRef<Path>, config: &DeepLearningConfig) -> Result
 }
 
 /// Charge des poids dans un VarMap existant (utile pour le Fine-Tuning ou reprendre un entraînement).
-pub fn load_checkpoint(varmap: &mut VarMap, path: impl AsRef<Path>) -> Result<()> {
-    varmap.load(path)
+pub fn load_checkpoint(varmap: &mut VarMap, path: impl AsRef<Path>) -> RaiseResult<()> {
+    varmap.load(path)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -44,7 +48,7 @@ mod tests {
     use candle_core::{DType, Tensor};
 
     #[tokio::test]
-    async fn test_save_and_load_consistency() -> Result<()> {
+    async fn test_save_and_load_consistency() -> RaiseResult<()> {
         // 1. Initialisation du Singleton avec le "moule de test" (10, 20, 5, LR=0.1)
         test_mocks::inject_mock_config();
         let config = &AppConfig::get().deep_learning;

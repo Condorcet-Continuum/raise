@@ -9,9 +9,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
-
 /// Singleton global pour la configuration
 static CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
@@ -42,13 +39,10 @@ pub struct AppConfig {
     #[serde(deserialize_with = "deserialize_paths_flexible")]
     pub paths: HashMap<String, String>,
 
-    // 🎯 Pointeurs UUID vers la Base de Données
-    pub active_dapp: String,
     #[serde(default)]
-    pub active_services: Vec<String>,
+    pub services: HashMap<String, ServiceConfig>,
     #[serde(default)]
-    pub active_components: Vec<String>,
-
+    pub ai_engines: HashMap<String, AiEngineConfig>,
     #[serde(default)]
     pub integrations: IntegrationsConfig,
 
@@ -64,6 +58,7 @@ pub struct ScopeConfig {
     pub default_domain: Option<String>,
     pub default_db: Option<String>,
     pub language: Option<String>,
+    pub ai_training: Option<AiTrainingConfig>,
 }
 
 // --- HELPERS SERDE ---
@@ -119,13 +114,41 @@ pub struct CoreConfig {
     pub language: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServiceConfig {
+    pub status: String,
+    pub kind: String,
+    pub host: String,
+    pub port: u16,
+    pub protocol: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiEngineConfig {
+    pub status: String,
+    pub provider: String,
+    pub model_name: String,
+    pub rust_repo_id: Option<String>,
+    pub rust_model_file: Option<String>,
+    pub rust_tokenizer_file: Option<String>,
+    pub rust_config_file: Option<String>,
+    pub rust_safetensors_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AiTrainingConfig {
+    pub epochs: Option<usize>,
+    pub learning_rate: Option<f64>,
+    pub batch_size: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldModelConfig {
     pub vocab_size: usize,
-    pub embedding_dim: usize,
-    pub action_dim: usize,
-    pub hidden_dim: usize,
-    pub use_gpu: bool,
+    pub embedding_dim: usize, // Ex: 16 (Layer 8 + Category 8)
+    pub action_dim: usize,    // Ex: 5
+    pub hidden_dim: usize,    // Ex: 32
+    pub use_gpu: bool,        // Préparation pour la gestion CUDA
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -134,7 +157,16 @@ pub struct DeepLearningConfig {
     pub hidden_size: usize,
     pub output_size: usize,
     pub learning_rate: f64,
-    pub device: String,
+    pub device: String, // "cpu" ou "cuda"
+}
+
+impl std::fmt::Debug for AiEngineConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AiEngineConfig")
+            .field("status", &self.status)
+            .field("provider", &self.provider)
+            .finish()
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -190,41 +222,7 @@ impl AppConfig {
         self.paths.get(id).map(PathBuf::from)
     }
 
-    pub async fn get_component_settings(
-        manager: &CollectionsManager<'_>,
-        component_id: &str,
-    ) -> Result<Value> {
-        let mut query = Query::new("components");
-        query.filter = Some(QueryFilter {
-            operator: FilterOperator::And,
-            conditions: vec![Condition::eq(
-                "identity.component_id",
-                Value::String(component_id.to_string()),
-            )],
-        });
-
-        let result = QueryEngine::new(manager)
-            .execute_query(query)
-            .await
-            .map_err(|e| {
-                AppError::Ai(format!("Erreur DB pour composant {}: {}", component_id, e))
-            })?;
-
-        let comp_doc = result.documents.first().ok_or_else(|| {
-            AppError::Ai(format!(
-                "Composant '{}' introuvable en base de données",
-                component_id
-            ))
-        })?;
-
-        comp_doc.get("settings").cloned().ok_or_else(|| {
-            AppError::Ai(format!(
-                "Le composant '{}' n'a pas de bloc settings",
-                component_id
-            ))
-        })
-    }
-
+    /// Charge la configuration de test (sandbox)
     fn load_test_sandbox() -> Result<Self> {
         let manifest = env::var("CARGO_MANIFEST_DIR")
             .map_err(|e| AppError::Config(format!("Env CARGO_MANIFEST_DIR manquant: {}", e)))?;
@@ -241,10 +239,13 @@ impl AppConfig {
         let mut config: AppConfig = serde_json::from_str(&content)
             .map_err(|e| AppError::Config(format!("Erreur parsing config test: {}", e)))?;
 
+        // Isolation dynamique des chemins /tmp pour éviter les conflits de tests
         if let Some(domain_path) = config.paths.get_mut("PATH_RAISE_DOMAIN") {
+            // ✅ CORRECTION COMPILATION : On rend explicite la conversion en &str
             let temp_dir = env::temp_dir();
             let temp_str = temp_dir.to_string_lossy();
 
+            // Le cast 'as &str' lève l'ambiguïté sur AsRef
             if domain_path.starts_with("/tmp") || domain_path.starts_with(temp_str.as_ref() as &str)
             {
                 let unique_id = format!(
@@ -278,6 +279,37 @@ impl AppConfig {
             tmp.join("logs").to_string_lossy().to_string(),
         );
 
+        // 🎯 AJOUT : On crée un mock du moteur Candle pour que les tests puissent s'initialiser
+        let mut mock_ai_engines = HashMap::new();
+        mock_ai_engines.insert(
+            "primary_local".to_string(),
+            AiEngineConfig {
+                status: "enabled".to_string(),
+                provider: "candle_native".to_string(),
+                model_name: "Qwen2.5".to_string(),
+                rust_repo_id: Some("Qwen/Qwen2.5-1.5B-Instruct-GGUF".to_string()),
+                rust_model_file: Some("qwen2.5-1.5b-instruct-q4_k_m.gguf".to_string()),
+                rust_tokenizer_file: Some("tokenizer.json".to_string()),
+                rust_config_file: None,
+                rust_safetensors_file: None,
+            },
+        );
+        // 🎯 AJOUT : Le moteur d'embeddings (MiniLM)
+        mock_ai_engines.insert(
+            "primary_embedding".to_string(),
+            AiEngineConfig {
+                status: "enabled".to_string(),
+                provider: "candle_embeddings".to_string(),
+                model_name: "minilm".to_string(),
+                rust_repo_id: Some(
+                    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2".to_string(),
+                ),
+                rust_model_file: None,
+                rust_tokenizer_file: Some("tokenizer.json".to_string()),
+                rust_config_file: Some("config.json".to_string()),
+                rust_safetensors_file: Some("model.safetensors".to_string()),
+            },
+        );
         AppConfig {
             name: Some(HashMap::from([(
                 "en".to_string(),
@@ -299,13 +331,12 @@ impl AppConfig {
                 input_size: 10,
                 hidden_size: 20,
                 output_size: 5,
-                learning_rate: 0.1,
+                learning_rate: 0.1, // 🎯 Spécialement optimisé pour que tes tests passent vite !
                 device: "cpu".to_string(),
             },
             paths,
-            active_dapp: "mock-dapp-id".to_string(),
-            active_services: vec!["mock-service-id".to_string()],
-            active_components: vec!["mock-comp-id-1".to_string()],
+            services: HashMap::new(),
+            ai_engines: mock_ai_engines, // 🎯 AJOUT : On injecte notre mock ici
             integrations: IntegrationsConfig::default(),
         }
     }
@@ -322,6 +353,7 @@ impl AppConfig {
         let mut config: AppConfig = serde_json::from_value(system_json)
             .map_err(|e| AppError::Config(format!("Erreur parsing System Config: {}", e)))?;
 
+        // Charge la Workstation
         let hostname = env::var("HOSTNAME")
             .or_else(|_| env::var("COMPUTERNAME"))
             .unwrap_or_else(|_| "localhost".to_string());
@@ -343,9 +375,13 @@ impl AppConfig {
                     .get("language")
                     .and_then(|v| v.as_str())
                     .map(String::from),
+                ai_training: ws_json
+                    .get("ai_training")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
             });
         }
 
+        // Charge le User
         let username = env::var("USER")
             .or_else(|_| env::var("USERNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
@@ -367,6 +403,9 @@ impl AppConfig {
                     .get("language")
                     .and_then(|v| v.as_str())
                     .map(String::from),
+                ai_training: user_json
+                    .get("ai_training")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
             });
         }
 
@@ -418,6 +457,7 @@ impl Default for WorldModelConfig {
     }
 }
 
+// 🎯 AJOUT: Implémenter PartialEq pour que les tests de AppConfig passent
 impl PartialEq for WorldModelConfig {
     fn eq(&self, other: &Self) -> bool {
         self.vocab_size == other.vocab_size
@@ -451,7 +491,6 @@ impl DeepLearningConfig {
         }
     }
 }
-
 // --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
@@ -465,6 +504,7 @@ mod tests {
             default_domain: Some("dev_domain".to_string()),
             default_db: Some("dev_db".to_string()),
             language: Some("fr".to_string()),
+            ai_training: None,
         };
         assert_eq!(scope.id, "dev-machine");
         assert_eq!(scope.default_domain.as_deref(), Some("dev_domain"));
@@ -476,7 +516,6 @@ mod tests {
             "name": null,
             "system_domain": "_system",
             "system_db": "_system",
-            "active_dapp": "mock-dapp", // Ajout requis
             "core": {
                 "env_mode": "test",
                 "graph_mode": "none",
@@ -485,6 +524,8 @@ mod tests {
                 "language": "en"
             },
             "paths": { "PATH_TEST": "/tmp" },
+            "services": {},
+            "ai_engines": {},
             "integrations": {},
             "workstation": {
                 "id": "host1",
@@ -514,7 +555,6 @@ mod tests {
         let json_data = json!({
             "system_domain": "_sys",
             "system_db": "_db",
-            "active_dapp": "mock-dapp", // Ajout requis
             "core": {
                 "env_mode": "test",
                 "graph_mode": "none",
@@ -525,7 +565,7 @@ mod tests {
             "paths": [
                 { "id": "P1", "value": "/v1" }
             ],
-            "integrations": {}
+            "services": {}, "ai_engines": {}, "integrations": {}
         });
 
         let config: AppConfig = serde_json::from_value(json_data).unwrap();
@@ -536,21 +576,6 @@ mod tests {
 // --- MODULE MOCKS PUBLIC (Pour integration tests) ---
 pub mod test_mocks {
     use super::*;
-    use crate::json_db::collections::manager::CollectionsManager;
-    use serde_json::json;
-
-    pub async fn inject_mock_component(
-        manager: &CollectionsManager<'_>,
-        comp_id: &str,
-        settings: Value,
-    ) {
-        let doc = json!({
-            "id": format!("mock-{}", comp_id),
-            "identity": { "component_id": comp_id },
-            "settings": settings
-        });
-        let _ = manager.insert_raw("components", &doc).await;
-    }
 
     pub fn inject_mock_config() {
         if CONFIG.get().is_some() {

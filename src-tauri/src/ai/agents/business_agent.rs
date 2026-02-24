@@ -24,7 +24,7 @@ impl BusinessAgent {
         domain: &str,
         description: &str,
         history_context: &str,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
         let entities = entity_extractor::extract_entities(description);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -65,7 +65,7 @@ impl Agent for BusinessAgent {
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
-    ) -> Result<Option<AgentResult>> {
+    ) -> RaiseResult<Option<AgentResult>> {
         // 1. CHARGEMENT DE LA MÉMOIRE (Session)
         let mut session = load_session(ctx)
             .await

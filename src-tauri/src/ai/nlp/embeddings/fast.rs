@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::utils::prelude::*;
+
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 pub struct FastEmbedEngine {
@@ -6,26 +7,27 @@ pub struct FastEmbedEngine {
 }
 
 impl FastEmbedEngine {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> RaiseResult<Self> {
         // CORRECTION : Utilisation de .with_show_download_progress(true)
         let options =
             InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true);
 
-        let model = TextEmbedding::try_new(options).context("❌ FastEmbed Init Failed")?;
+        let model = TextEmbedding::try_new(options)
+            .map_err(|e| AppError::Ai(format!("❌ FastEmbed Init Failed: {}", e)))?;
 
         Ok(Self { model })
     }
 
-    pub fn embed_batch(&mut self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        self.model.embed(texts, None)
+    pub fn embed_batch(&mut self, texts: Vec<String>) -> RaiseResult<Vec<Vec<f32>>> {
+        Ok(self.model.embed(texts, None)?)
     }
 
-    pub fn embed_query(&mut self, text: &str) -> Result<Vec<f32>> {
+    pub fn embed_query(&mut self, text: &str) -> RaiseResult<Vec<f32>> {
         let embeddings = self.model.embed(vec![text.to_string()], None)?;
         embeddings
             .into_iter()
             .next()
-            .context("No embedding generated")
+            .ok_or_else(|| AppError::NotFound("Aucun embedding généré par le modèle".to_string()))
     }
 }
 

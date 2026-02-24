@@ -12,7 +12,7 @@ impl InjectionAnalyzer {
     /// Les templates doivent utiliser la syntaxe:
     /// `// AI_INJECTION_POINT: [Clé]` ... `// END_AI_INJECTION_POINT`
     /// ou `-- AI_INJECTION_POINT: [Clé]` (pour SQL/VHDL/Lua)
-    pub async fn extract_injections(file_path: &Path) -> Result<HashMap<String, String>> {
+    pub async fn extract_injections(file_path: &Path) -> RaiseResult<HashMap<String, String>> {
         let mut injections = HashMap::new();
 
         if !file_path.exists() {

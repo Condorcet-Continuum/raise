@@ -17,7 +17,7 @@ pub mod transactions;
 pub mod test_utils {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::fs; // ✅ Utilisation de votre fs.rs centralisé
+    use crate::utils::fs;
     use crate::utils::prelude::*;
     use crate::utils::Once;
     use std::path::PathBuf;
@@ -164,6 +164,71 @@ pub mod test_utils {
         let _ = fs::write_json_atomic(
             &ex_path,
             &json!({ "name": "GPS Position", "mechanism": "Flow" }),
+        )
+        .await;
+        let system_collections = data_root.join("_system/_system/collections");
+
+        // 1. Création de la fausse dApp
+        let dapp_id = "mock-dapp-id";
+        let dapp_path = system_collections.join("dapps");
+        let _ = fs::create_dir_all(&dapp_path).await;
+        let _ = fs::write_json_atomic(
+            &dapp_path.join(format!("{}.json", dapp_id)),
+            &json!({
+                "id": dapp_id,
+                "handle": "raise-core",
+                "name": "raise_core",
+                "pluginConfig": { "rustPackageName": "raise_core" }
+            }),
+        )
+        .await;
+
+        // 2. Création du faux Service AI
+        let service_id = "mock-ai-service-id";
+        let services_path = system_collections.join(format!("dapps/{}/services", dapp_id));
+        let _ = fs::create_dir_all(&services_path).await;
+        let _ = fs::write_json_atomic(
+            &services_path.join(format!("{}.json", service_id)),
+            &json!({
+                "id": service_id,
+                "identity": { "service_id": "AI", "status": "enabled" }
+            }),
+        )
+        .await;
+
+        // 3. Création des faux Composants (ex: LLM et Embeddings pour Candle)
+        let components_path = system_collections.join(format!(
+            "dapps/{}/services/{}/components",
+            dapp_id, service_id
+        ));
+        let _ = fs::create_dir_all(&components_path).await;
+
+        // Composant LLM
+        let _ = fs::write_json_atomic(
+            &components_path.join("mock-llm-comp.json"),
+            &json!({
+                "id": "mock-llm-comp",
+                "identity": { "component_id": "llm", "version": "1.0.0" },
+                "settings": {
+                    "provider": "candle_native",
+                    "model_name": "llama3-1b-test",
+                    "rust_repo_id": "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+                }
+            }),
+        )
+        .await;
+
+        // Composant Mémoire/Embeddings
+        let _ = fs::write_json_atomic(
+            &components_path.join("mock-mem-comp.json"),
+            &json!({
+                "id": "mock-mem-comp",
+                "identity": { "component_id": "memory", "version": "1.0.0" },
+                "settings": {
+                    "provider": "candle_embeddings",
+                    "model_name": "minilm-test"
+                }
+            }),
         )
         .await;
     }

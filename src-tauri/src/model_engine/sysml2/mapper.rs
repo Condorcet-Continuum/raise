@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/model_engine/sysml2/mapper.rs
 
+use crate::utils::prelude::*;
+
 use super::parser::{Rule, Sysml2Parser};
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
 use pest::Parser;
@@ -12,7 +14,7 @@ impl Sysml2ToArcadiaMapper {
         Self
     }
 
-    pub fn transform(&self, sysml_content: &str) -> Result<ProjectModel, String> {
+    pub fn transform(&self, sysml_content: &str) -> RaiseResult<ProjectModel> {
         let mut model = ProjectModel::default();
 
         let parsed_file = Sysml2Parser::parse(Rule::file, sysml_content)

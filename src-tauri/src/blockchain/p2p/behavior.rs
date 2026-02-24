@@ -1,4 +1,5 @@
 // src-tauri/src/blockchain/p2p/behavior.rs
+use crate::utils::prelude::*;
 
 use crate::blockchain::p2p::protocol::{ArcadiaNetMessage, ArcadiaResponse};
 use libp2p::gossipsub;
@@ -22,7 +23,7 @@ pub struct ArcadiaBehavior {
 
 impl ArcadiaBehavior {
     /// Initialise un nouveau comportement réseau avec les clés locales.
-    pub fn new(local_key: identity::Keypair) -> Result<Self, String> {
+    pub fn new(local_key: identity::Keypair) -> RaiseResult<Self> {
         let peer_id = local_key.public().to_peer_id();
 
         // 1. Configuration de Kademlia : Stockage en mémoire pour Raise.

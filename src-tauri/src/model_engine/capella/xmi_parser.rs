@@ -12,7 +12,7 @@ pub struct CapellaXmiParser;
 
 impl CapellaXmiParser {
     /// Parse un fichier .capella et remplit le ProjectModel donné
-    pub fn parse_file(path: &Path, model: &mut ProjectModel) -> Result<()> {
+    pub fn parse_file(path: &Path, model: &mut ProjectModel) -> RaiseResult<()> {
         let mut reader = Reader::from_file(path).map_err(|e| {
             crate::utils::AppError::from(format!("Impossible de lire le fichier XMI : {}", e))
         })?;
@@ -26,7 +26,7 @@ impl CapellaXmiParser {
     fn parse_xml<B: std::io::BufRead>(
         reader: &mut Reader<B>,
         model: &mut ProjectModel,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         let mut buf = Vec::new();
 
         loop {

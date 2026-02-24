@@ -24,7 +24,7 @@ pub async fn create_collection_if_missing(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let root = collection_root(cfg, space, db, collection);
     io::ensure_dir(&root).await?;
     Ok(())
@@ -37,7 +37,7 @@ pub async fn read_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> Result<Value> {
+) -> RaiseResult<Value> {
     let path = doc_path(cfg, space, db, collection, id);
     let doc = io::read_json(&path).await?;
     Ok(doc)
@@ -51,7 +51,7 @@ pub async fn create_document(
     collection: &str,
     id: &str,
     document: &Value,
-) -> Result<()> {
+) -> RaiseResult<()> {
     create_collection_if_missing(cfg, space, db, collection).await?;
     let path = doc_path(cfg, space, db, collection, id);
     io::write_json_atomic(&path, document).await?;
@@ -65,7 +65,7 @@ pub async fn update_document(
     collection: &str,
     id: &str,
     document: &Value,
-) -> Result<()> {
+) -> RaiseResult<()> {
     create_document(cfg, space, db, collection, id, document).await
 }
 
@@ -75,7 +75,7 @@ pub async fn delete_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let path = doc_path(cfg, space, db, collection, id);
     io::remove_file(&path).await?;
     Ok(())
@@ -87,7 +87,7 @@ pub async fn drop_collection(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let root = collection_root(cfg, space, db, collection);
     io::remove_dir_all(&root).await?;
     Ok(())
@@ -100,18 +100,14 @@ pub async fn list_document_ids(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<Vec<String>> {
+) -> RaiseResult<Vec<String>> {
     let root = collection_root(cfg, space, db, collection);
     let mut out = Vec::new();
     if !io::exists(&root).await {
         return Ok(out);
     }
     let mut entries = io::read_dir(&root).await?;
-    while let Some(e) = entries
-        .next_entry()
-        .await
-        .map_err(crate::utils::AppError::Io)?
-    {
+    while let Some(e) = entries.next_entry().await.map_err(AppError::Io)? {
         let p = e.path();
         if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
@@ -130,7 +126,7 @@ pub async fn list_documents(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<Vec<Value>> {
+) -> RaiseResult<Vec<Value>> {
     let ids = list_document_ids(cfg, space, db, collection).await?;
     let mut docs = Vec::with_capacity(ids.len());
     for id in ids {
@@ -145,18 +141,14 @@ pub async fn list_collection_names_fs(
     cfg: &JsonDbConfig,
     space: &str,
     db: &str,
-) -> Result<Vec<String>> {
+) -> RaiseResult<Vec<String>> {
     let root = cfg.db_root(space, db).join("collections");
     let mut out = Vec::new();
     if !io::exists(&root).await {
         return Ok(out);
     }
     let mut entries = io::read_dir(&root).await?;
-    while let Some(e) = entries
-        .next_entry()
-        .await
-        .map_err(crate::utils::AppError::Io)?
-    {
+    while let Some(e) = entries.next_entry().await.map_err(AppError::Io)? {
         let ty = e.file_type().await?;
         if ty.is_dir() {
             if let Ok(name) = e.file_name().into_string() {

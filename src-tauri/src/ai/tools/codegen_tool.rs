@@ -30,7 +30,7 @@ impl CodeGenTool {
 
     /// Récupère le document complet depuis la base de données via son ID interne.
     /// Parcourt les collections probables car l'ID est unique globalement.
-    async fn fetch_component(&self, id: &str) -> Result<Value> {
+    async fn fetch_component(&self, id: &str) -> RaiseResult<Value> {
         let manager = CollectionsManager::new(&self.db, &self.space, &self.db_name);
 
         // Liste des collections où peuvent se trouver les composants générables
@@ -52,7 +52,7 @@ impl CodeGenTool {
     }
 
     /// Détermine le langage cible depuis le JSON du composant
-    fn determine_language(&self, component: &Value) -> Result<TargetLanguage> {
+    fn determine_language(&self, component: &Value) -> RaiseResult<TargetLanguage> {
         let tech = component
             .get("implementation")
             .and_then(|i| i.get("technology"))

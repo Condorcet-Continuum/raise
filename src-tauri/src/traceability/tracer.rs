@@ -17,7 +17,7 @@ pub struct Tracer {
 
 impl Tracer {
     /// 1. Initialisation depuis le nouveau JsonDb (Architecture Cible SSOT)
-    pub async fn from_db(manager: &CollectionsManager<'_>) -> Result<Self> {
+    pub async fn from_db(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         let mut docs = Vec::new();
         if let Ok(collections) = manager.list_collections().await {
             for col in collections {

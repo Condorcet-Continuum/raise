@@ -1,4 +1,6 @@
-use candle_core::{Result, Tensor};
+use crate::utils::prelude::*;
+
+use candle_core::Tensor;
 use candle_nn::{Activation, Init, Module, VarBuilder};
 
 /// Cellule LSTM (Long Short-Term Memory) standard.
@@ -12,7 +14,7 @@ pub struct LSTMCell {
 
 impl LSTMCell {
     /// Initialise une nouvelle cellule LSTM avec des poids aléatoires.
-    pub fn new(input_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(input_size: usize, hidden_size: usize, vb: VarBuilder) -> RaiseResult<Self> {
         let gate_size = 4 * hidden_size;
 
         // CORRECTION : Initialisation aléatoire (Randn) au lieu de Zéro
@@ -53,7 +55,7 @@ impl LSTMCell {
         input: &Tensor,
         hidden_state: &Tensor,
         cell_state: &Tensor,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> RaiseResult<(Tensor, Tensor)> {
         let w_ih_t = self.weight_ih.t()?;
         let w_hh_t = self.weight_hh.t()?;
 
@@ -87,7 +89,7 @@ mod tests {
     use candle_nn::VarMap;
 
     #[test]
-    fn test_lstm_dimensions() -> Result<()> {
+    fn test_lstm_dimensions() -> RaiseResult<()> {
         let device = Device::Cpu;
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);

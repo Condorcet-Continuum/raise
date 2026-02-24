@@ -16,7 +16,7 @@ impl VectorQuantizer {
     /// Initialise un nouveau Quantizer
     /// * `num_embeddings`: Taille du vocabulaire (K)
     /// * `embedding_dim`: Dimension des vecteurs (D)
-    pub fn new(num_embeddings: usize, embedding_dim: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(num_embeddings: usize, embedding_dim: usize, vb: VarBuilder) -> RaiseResult<Self> {
         // On initialise l'embedding table via Candle
         let embedding = candle_nn::embedding(num_embeddings, embedding_dim, vb)
             .map_err(|e| AppError::from(e.to_string()))?;
@@ -26,7 +26,7 @@ impl VectorQuantizer {
     /// Fonction principale : Transforme un vecteur d'entrée en Token (Index)
     /// Input: [Batch, Dim]
     /// Output: [Batch] (Indices des concepts les plus proches)
-    pub fn tokenize(&self, z: &Tensor) -> Result<Tensor> {
+    pub fn tokenize(&self, z: &Tensor) -> RaiseResult<Tensor> {
         // 1. Calcul de la distance euclidienne au carré avec tous les vecteurs du codebook
         // ||z - e||^2 = ||z||^2 + ||e||^2 - 2 <z, e>
 
@@ -70,7 +70,7 @@ impl VectorQuantizer {
     /// Décode un Token pour retrouver son vecteur prototype
     /// Input: [Batch] (Indices)
     /// Output: [Batch, Dim]
-    pub fn decode(&self, indices: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, indices: &Tensor) -> RaiseResult<Tensor> {
         let vectors = self
             .embedding
             .forward(indices)

@@ -14,7 +14,7 @@ pub struct AnalysisResult {
 
 /// Trait que tout analyseur de modèle doit respecter
 pub trait Analyzer {
-    fn analyze(&self, model: &Value) -> Result<AnalysisResult>;
+    fn analyze(&self, model: &Value) -> RaiseResult<AnalysisResult>;
 }
 
 #[cfg(test)]

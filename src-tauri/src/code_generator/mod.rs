@@ -50,7 +50,7 @@ impl CodeGeneratorService {
         &self,
         element: &Value,
         lang: TargetLanguage,
-    ) -> Result<Vec<PathBuf>> {
+    ) -> RaiseResult<Vec<PathBuf>> {
         // 1. Analyse des dépendances
         let _analysis = self.dep_analyzer.analyze(element)?;
 

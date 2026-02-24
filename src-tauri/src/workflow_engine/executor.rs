@@ -14,7 +14,6 @@ use crate::plugins::manager::PluginManager;
 
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::Result;
 
 /// L'Exécuteur est le routeur principal. Il délègue la logique aux Handlers spécialisés.
 pub struct WorkflowExecutor {
@@ -63,7 +62,7 @@ impl WorkflowExecutor {
     pub async fn load_and_prepare_workflow(
         manager: &CollectionsManager<'_>,
         mandate_id: &str,
-    ) -> Result<WorkflowDefinition> {
+    ) -> RaiseResult<WorkflowDefinition> {
         let mandate = Mandate::fetch_from_store(manager, mandate_id).await?;
 
         tracing::info!(
@@ -93,7 +92,7 @@ impl WorkflowExecutor {
         &self,
         node: &WorkflowNode,
         context: &mut HashMap<String, Value>,
-    ) -> Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         tracing::info!("⚙️ Exécution : {} ({:?})", node.name, node.r#type);
 
         let shared_ctx = HandlerContext {

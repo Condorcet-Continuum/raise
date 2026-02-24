@@ -99,7 +99,7 @@ impl IndexMap for BTreeMap<String, Vec<String>> {
 
 // --- Logique I/O Générique (Async) ---
 
-pub async fn load<T: IndexMap>(path: &Path) -> Result<T> {
+pub async fn load<T: IndexMap>(path: &Path) -> RaiseResult<T> {
     if !io::exists(path).await {
         return Ok(T::default());
     }
@@ -115,13 +115,13 @@ pub async fn load<T: IndexMap>(path: &Path) -> Result<T> {
     Ok(T::from_records(records))
 }
 
-pub async fn save<T: IndexMap>(path: &Path, index: &T) -> Result<()> {
+pub async fn save<T: IndexMap>(path: &Path, index: &T) -> RaiseResult<()> {
     let records = index.to_records();
     crate::utils::io::write_bincode_compressed_atomic(path, &records).await?;
     Ok(())
 }
 
-pub async fn search<T: IndexMap>(path: &Path, key: &str) -> Result<Vec<String>> {
+pub async fn search<T: IndexMap>(path: &Path, key: &str) -> RaiseResult<Vec<String>> {
     let index: T = load(path).await?;
     Ok(index.get_doc_ids(key).cloned().unwrap_or_default())
 }
@@ -132,7 +132,7 @@ pub async fn update<T: IndexMap>(
     doc_id: &str,
     old_doc: Option<&json::Value>,
     new_doc: Option<&json::Value>,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let mut index: T = load(path).await?;
     let mut changed = false;
 

@@ -18,7 +18,7 @@ impl NodeHandler for GatePolicyHandler {
         node: &WorkflowNode,
         context: &mut HashMap<String, Value>,
         _shared_ctx: &HandlerContext<'_>, // Pas besoin d'outils externes pour évaluer l'AST
-    ) -> crate::utils::Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         let rule_name = node
             .params
             .get("rule")

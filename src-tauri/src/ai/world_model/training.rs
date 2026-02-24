@@ -14,7 +14,7 @@ pub struct WorldTrainer<'a> {
 }
 
 impl<'a> WorldTrainer<'a> {
-    pub fn new(engine: &'a NeuroSymbolicEngine, lr: f64) -> Result<Self> {
+    pub fn new(engine: &'a NeuroSymbolicEngine, lr: f64) -> RaiseResult<Self> {
         let vars = engine.varmap.all_vars();
         // ✅ Conversion de l'erreur Candle lors de la création de l'optimiseur
         let opt = AdamW::new(
@@ -33,7 +33,7 @@ impl<'a> WorldTrainer<'a> {
         state_t: &ArcadiaElement,
         action: WorldAction,
         state_t1_actual: &ArcadiaElement,
-    ) -> Result<f64> {
+    ) -> RaiseResult<f64> {
         let predicted_tensor = self.engine.simulate(state_t, action)?;
 
         let raw_t1 = ArcadiaEncoder::encode_element(state_t1_actual)?;

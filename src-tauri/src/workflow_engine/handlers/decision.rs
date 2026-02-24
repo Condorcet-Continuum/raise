@@ -17,7 +17,7 @@ impl NodeHandler for DecisionHandler {
         node: &WorkflowNode,
         context: &mut HashMap<String, Value>,
         _shared_ctx: &HandlerContext<'_>,
-    ) -> crate::utils::Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         tracing::info!("🗳️ Algorithme de Condorcet : {}", node.name);
 
         let default_weights = serde_json::Map::new();

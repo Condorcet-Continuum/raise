@@ -7,7 +7,7 @@ use super::{
 
 use crate::utils::prelude::*;
 
-pub fn parse_projection(fields: &[String]) -> Result<Projection> {
+pub fn parse_projection(fields: &[String]) -> RaiseResult<Projection> {
     if fields.is_empty() {
         return Err(AppError::NotFound("message".to_string()));
     }
@@ -66,7 +66,7 @@ impl QueryBuilder {
         }
     }
 
-    pub fn select(mut self, fields: Vec<String>) -> Result<Self> {
+    pub fn select(mut self, fields: Vec<String>) -> RaiseResult<Self> {
         self.query.projection = Some(parse_projection(&fields)?);
         Ok(self)
     }
@@ -99,7 +99,7 @@ impl QueryBuilder {
     }
 }
 
-pub fn parse_sort_specs(specs: &[String]) -> Result<Vec<SortField>> {
+pub fn parse_sort_specs(specs: &[String]) -> RaiseResult<Vec<SortField>> {
     let mut out = Vec::new();
     for spec in specs {
         out.push(parse_single_sort_spec(spec)?);
@@ -107,7 +107,7 @@ pub fn parse_sort_specs(specs: &[String]) -> Result<Vec<SortField>> {
     Ok(out)
 }
 
-fn parse_single_sort_spec(spec: &str) -> Result<SortField> {
+fn parse_single_sort_spec(spec: &str) -> RaiseResult<SortField> {
     let spec = spec.trim();
     if let Some(f) = spec.strip_prefix('+') {
         return Ok(SortField {
@@ -138,7 +138,7 @@ fn parse_single_sort_spec(spec: &str) -> Result<SortField> {
     })
 }
 
-pub fn parse_filter_from_json(value: &Value) -> Result<QueryFilter> {
+pub fn parse_filter_from_json(value: &Value) -> RaiseResult<QueryFilter> {
     let obj = value
         .as_object()
         .ok_or_else(|| AppError::Validation("Not an object".to_string()))?;

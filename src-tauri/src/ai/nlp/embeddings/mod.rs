@@ -1,3 +1,4 @@
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*;
 
 pub mod candle;
@@ -18,36 +19,39 @@ enum EngineImplementation {
 }
 
 impl EmbeddingEngine {
-    pub fn new() -> Result<Self> {
-        // CHANGEMENT ICI : On passe Candle par défaut pour profiter du GPU
-        // Si Candle échoue (ex: pas internet pour télécharger le modèle), on pourrait fallback sur FastEmbed
+    pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         println!("🧠 Init NLP Engine: Tentative Candle (GPU)...");
-        match Self::new_with_type(EngineType::Candle) {
+        match Self::new_with_type(EngineType::Candle, manager).await {
             Ok(engine) => Ok(engine),
             Err(e) => {
                 eprintln!("⚠️ Echec Candle ({}), bascule sur FastEmbed (CPU)", e);
-                Self::new_with_type(EngineType::FastEmbed)
+                Self::new_with_type(EngineType::FastEmbed, manager).await
             }
         }
     }
 
-    pub fn new_with_type(engine_type: EngineType) -> Result<Self> {
+    // 🎯 NOUVEAU : Asynchrone et demande le manager
+    pub async fn new_with_type(
+        engine_type: EngineType,
+        manager: &CollectionsManager<'_>,
+    ) -> RaiseResult<Self> {
         let inner = match engine_type {
             EngineType::FastEmbed => {
                 println!("🧠 Init NLP Engine: FastEmbed (ONNX)");
+                // FastEmbed n'utilise potentiellement pas la BDD, on l'appelle tel quel (ou on l'adapte si besoin)
                 let fast_engine = fast::FastEmbedEngine::new()?;
                 EngineImplementation::Fast(Box::new(fast_engine))
             }
             EngineType::Candle => {
                 println!("🕯️ Init NLP Engine: Candle (BERT Pure Rust)");
-                let candle_engine = candle::CandleEngine::new()?;
+                let candle_engine = candle::CandleEngine::new(manager).await?;
                 EngineImplementation::Candle(Box::new(candle_engine))
             }
         };
         Ok(Self { inner })
     }
 
-    pub fn embed_batch(&mut self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+    pub fn embed_batch(&mut self, texts: Vec<String>) -> RaiseResult<Vec<Vec<f32>>> {
         match &mut self.inner {
             EngineImplementation::Fast(e) => e
                 .embed_batch(texts)
@@ -58,7 +62,7 @@ impl EmbeddingEngine {
         }
     }
 
-    pub fn embed_query(&mut self, text: &str) -> Result<Vec<f32>> {
+    pub fn embed_query(&mut self, text: &str) -> RaiseResult<Vec<f32>> {
         match &mut self.inner {
             EngineImplementation::Fast(e) => e
                 .embed_query(text)
@@ -74,21 +78,62 @@ impl EmbeddingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
-    #[test]
-    fn test_default_engine_init() {
-        let engine = EmbeddingEngine::new();
+    async fn setup_test_manager() -> (StorageEngine, crate::utils::config::AppConfig) {
+        crate::utils::config::test_mocks::inject_mock_config();
+        let config = crate::utils::config::AppConfig::get();
+        let storage_cfg = JsonDbConfig::new(config.get_path("PATH_RAISE_DOMAIN").unwrap());
+        (StorageEngine::new(storage_cfg), config.clone())
+    }
+
+    #[tokio::test]
+    async fn test_default_engine_init() {
+        let (storage, config) = setup_test_manager().await;
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        manager.init_db().await.unwrap();
+
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "nlp",
+            crate::utils::json::json!({
+                "model_name": "minilm",
+                "rust_config_file": "config.json",
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_safetensors_file": "model.safetensors"
+            }),
+        )
+        .await;
+
+        let engine = EmbeddingEngine::new(&manager).await;
         assert!(
             engine.is_ok(),
             "Le moteur par défaut doit s'initialiser sans erreur"
         );
     }
 
-    #[test]
-    fn test_engine_switching() {
+    #[tokio::test]
+    async fn test_engine_switching() {
+        let (storage, config) = setup_test_manager().await;
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        manager.init_db().await.unwrap();
+
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "nlp",
+            crate::utils::json::json!({
+                "model_name": "minilm",
+                "rust_config_file": "config.json",
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_safetensors_file": "model.safetensors"
+            }),
+        )
+        .await;
+
         // Test FastEmbed
-        let mut fast_engine =
-            EmbeddingEngine::new_with_type(EngineType::FastEmbed).expect("FastEmbed init failed");
+        let mut fast_engine = EmbeddingEngine::new_with_type(EngineType::FastEmbed, &manager)
+            .await
+            .expect("FastEmbed init failed");
         let vec_fast = fast_engine.embed_query("Test Fast").expect("Embed failed");
         assert_eq!(
             vec_fast.len(),
@@ -96,8 +141,10 @@ mod tests {
             "FastEmbed (BGE-Small) doit sortir 384 dims"
         );
 
-        // Test Candle (Si l'environnement le permet, sinon on skip ou on log)
-        if let Ok(mut candle_engine) = EmbeddingEngine::new_with_type(EngineType::Candle) {
+        // Test Candle
+        if let Ok(mut candle_engine) =
+            EmbeddingEngine::new_with_type(EngineType::Candle, &manager).await
+        {
             let vec_candle = candle_engine
                 .embed_query("Test Candle")
                 .expect("Embed failed");

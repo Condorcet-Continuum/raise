@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/plugins/runtime.rs
 
-use crate::utils::{prelude::*, Arc, Mutex, Result};
+use crate::utils::{prelude::*, Arc, Mutex};
 
 use super::cognitive;
 use crate::ai::orchestrator::AiOrchestrator;
@@ -43,7 +43,7 @@ impl CognitivePlugin {
         space: &str,
         db: &str,
         ai: Option<Arc<Mutex<AiOrchestrator>>>,
-    ) -> Result<Self> {
+    ) -> RaiseResult<Self> {
         let engine = Engine::default();
         let mut linker = Linker::new(&engine);
 
@@ -79,7 +79,7 @@ impl CognitivePlugin {
     }
 
     /// Exécute le point d'entrée "run" du plugin.
-    pub fn run(&mut self) -> Result<i32> {
+    pub fn run(&mut self) -> RaiseResult<i32> {
         let run_func = self
             .instance
             .get_typed_func::<(), i32>(&mut self.store, "run")

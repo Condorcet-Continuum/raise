@@ -16,7 +16,7 @@ pub async fn update_hash_index(
     doc_id: &str,
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
     // On spécifie le type concret HashMap pour le driver générique (appel async)
     driver::update::<HashMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
@@ -30,7 +30,7 @@ pub async fn search_hash_index(
     collection: &str,
     def: &IndexDefinition,
     value: &Value,
-) -> Result<Vec<String>> {
+) -> RaiseResult<Vec<String>> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
 
     // IMPORTANT : La clé stockée dans l'index est la représentation stringifiée du JSON.

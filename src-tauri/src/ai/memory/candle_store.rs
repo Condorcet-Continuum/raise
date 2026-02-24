@@ -30,7 +30,7 @@ impl CandleLocalStore {
     }
 
     /// Reconstruit la matrice de recherche à partir des records.
-    fn compute_matrix(records: &[MemoryRecord], device: &Device) -> Result<Option<Tensor>> {
+    fn compute_matrix(records: &[MemoryRecord], device: &Device) -> RaiseResult<Option<Tensor>> {
         let valid_vectors: Vec<&Vec<f32>> =
             records.iter().filter_map(|r| r.vectors.as_ref()).collect();
 
@@ -49,7 +49,7 @@ impl CandleLocalStore {
     }
 
     /// Sauvegarde asynchrone et atomique (Records + Vecteurs).
-    pub async fn save(&self) -> Result<()> {
+    pub async fn save(&self) -> RaiseResult<()> {
         let state = self.state.read().await;
         let json_path = self.storage_path.join("memory_records.json.zstd");
 
@@ -73,7 +73,7 @@ impl CandleLocalStore {
     }
 
     /// Chargement asynchrone.
-    pub async fn load(&self) -> Result<()> {
+    pub async fn load(&self) -> RaiseResult<()> {
         let json_path = self.storage_path.join("memory_records.json.zstd");
         if !io::exists(&json_path).await {
             return Ok(());
@@ -91,11 +91,11 @@ impl CandleLocalStore {
 
 #[async_trait]
 impl VectorStore for CandleLocalStore {
-    async fn init_collection(&self, _col: &str, _size: u64) -> Result<()> {
+    async fn init_collection(&self, _col: &str, _size: u64) -> RaiseResult<()> {
         io::ensure_dir(&self.storage_path).await
     }
 
-    async fn add_documents(&self, _col: &str, mut records: Vec<MemoryRecord>) -> Result<()> {
+    async fn add_documents(&self, _col: &str, mut records: Vec<MemoryRecord>) -> RaiseResult<()> {
         let mut state = self.state.write().await;
         state.records.append(&mut records);
         state.vector_matrix = Self::compute_matrix(&state.records, &self.device)?;
@@ -109,7 +109,7 @@ impl VectorStore for CandleLocalStore {
         limit: u64,
         threshold: f32,
         filter: Option<HashMap<String, String>>, // Utilise utils::HashMap
-    ) -> Result<Vec<MemoryRecord>> {
+    ) -> RaiseResult<Vec<MemoryRecord>> {
         let state = self.state.read().await;
         let matrix = match &state.vector_matrix {
             Some(m) => m,

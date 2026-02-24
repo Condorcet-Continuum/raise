@@ -17,7 +17,7 @@ pub struct WorldAction {
 }
 
 impl WorldAction {
-    pub fn to_tensor(&self, dim: usize) -> Result<Tensor> {
+    pub fn to_tensor(&self, dim: usize) -> RaiseResult<Tensor> {
         let mut data = vec![0f32; dim];
         let idx = match self.intent {
             CommandType::Create => 0,
@@ -43,7 +43,7 @@ pub struct NeuroSymbolicEngine {
 }
 
 impl NeuroSymbolicEngine {
-    pub fn new(config: WorldModelConfig, varmap: VarMap) -> Result<Self> {
+    pub fn new(config: WorldModelConfig, varmap: VarMap) -> RaiseResult<Self> {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
 
         // L'encodeur n'est pas encore refactoré, on lui passe les champs manuellement
@@ -61,7 +61,7 @@ impl NeuroSymbolicEngine {
         })
     }
 
-    pub fn simulate(&self, element: &ArcadiaElement, action: WorldAction) -> Result<Tensor> {
+    pub fn simulate(&self, element: &ArcadiaElement, action: WorldAction) -> RaiseResult<Tensor> {
         let raw_perception = ArcadiaEncoder::encode_element(element)?;
         let token = self.quantizer.tokenize(&raw_perception)?;
         let state_quantized = self.quantizer.decode(&token)?;
@@ -80,7 +80,7 @@ impl NeuroSymbolicEngine {
         extracted
     }
 
-    pub async fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+    pub async fn save_to_file<P: AsRef<Path>>(&self, path: P) -> RaiseResult<()> {
         let path = path.as_ref().to_owned();
         let tensors = self.extract_tensors_sync();
 
@@ -91,7 +91,10 @@ impl NeuroSymbolicEngine {
         Ok(())
     }
 
-    pub async fn load_from_file<P: AsRef<Path>>(path: P, config: WorldModelConfig) -> Result<Self> {
+    pub async fn load_from_file<P: AsRef<Path>>(
+        path: P,
+        config: WorldModelConfig,
+    ) -> RaiseResult<Self> {
         let buffer = tokio::fs::read(path).await?;
 
         let tensors = candle_core::safetensors::load_buffer(&buffer, &Device::Cpu)

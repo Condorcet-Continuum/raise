@@ -53,7 +53,7 @@ impl<'a> TransactionManager<'a> {
     }
 
     /// API PUBLIQUE INTELLIGENTE (ASYNCHRONE)
-    pub async fn execute_smart(&self, requests: Vec<TransactionRequest>) -> Result<()> {
+    pub async fn execute_smart(&self, requests: Vec<TransactionRequest>) -> RaiseResult<()> {
         let mut prepared_ops = Vec::new();
 
         let storage = StorageEngine::new(self.config.clone());
@@ -190,7 +190,7 @@ impl<'a> TransactionManager<'a> {
         .await
     }
 
-    async fn load_dataset_file(&self, path: &str) -> Result<Value> {
+    async fn load_dataset_file(&self, path: &str) -> RaiseResult<Value> {
         let config = AppConfig::get();
 
         // 1. On récupère le domaine de base (qui est garanti d'exister)
@@ -221,7 +221,7 @@ impl<'a> TransactionManager<'a> {
         collection: &str,
         id: Option<String>,
         handle: Option<String>,
-    ) -> Result<String> {
+    ) -> RaiseResult<String> {
         if let Some(i) = id {
             return Ok(i);
         }
@@ -253,16 +253,16 @@ impl<'a> TransactionManager<'a> {
         )))
     }
 
-    pub async fn execute<F>(&self, op_block: F) -> Result<()>
+    pub async fn execute<F>(&self, op_block: F) -> RaiseResult<()>
     where
-        F: FnOnce(&mut Transaction) -> Result<()>,
+        F: FnOnce(&mut Transaction) -> RaiseResult<()>,
     {
         self.execute_internal(op_block).await
     }
 
-    async fn execute_internal<F>(&self, op_block: F) -> Result<()>
+    async fn execute_internal<F>(&self, op_block: F) -> RaiseResult<()>
     where
-        F: FnOnce(&mut Transaction) -> Result<()>,
+        F: FnOnce(&mut Transaction) -> RaiseResult<()>,
     {
         let mut tx = Transaction::new();
         op_block(&mut tx)?;
@@ -311,7 +311,7 @@ impl<'a> TransactionManager<'a> {
         }
     }
 
-    async fn write_wal(&self, tx: &Transaction) -> Result<()> {
+    async fn write_wal(&self, tx: &Transaction) -> RaiseResult<()> {
         let wal_path = self.config.db_root(&self.space, &self.db).join("wal");
 
         io::ensure_dir(&wal_path).await?;
@@ -322,7 +322,7 @@ impl<'a> TransactionManager<'a> {
     }
 
     /// Applique les opérations et gère le rollback "runtime" des index et fichiers
-    async fn apply_transaction(&self, tx: &Transaction) -> Result<()> {
+    async fn apply_transaction(&self, tx: &Transaction) -> RaiseResult<()> {
         let storage = StorageEngine::new(self.config.clone());
         let mut idx = IndexManager::new(&storage, &self.space, &self.db);
 
@@ -556,7 +556,7 @@ impl<'a> TransactionManager<'a> {
         &self,
         idx: &mut IndexManager<'_>,
         undo_stack: Vec<UndoAction>,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         #[cfg(debug_assertions)]
         println!(
             "⚠️ Rollback en cours ({} opérations à annuler)...",
@@ -622,7 +622,7 @@ impl<'a> TransactionManager<'a> {
         Ok(())
     }
 
-    async fn apply_schema_logic(&self, collection: &str, doc: &mut Value) -> Result<()> {
+    async fn apply_schema_logic(&self, collection: &str, doc: &mut Value) -> RaiseResult<()> {
         let meta_path = self
             .config
             .db_collection_path(&self.space, &self.db, collection)
@@ -659,7 +659,7 @@ impl<'a> TransactionManager<'a> {
         collection: &str,
         id: &str,
         is_delete: bool,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         let filename = format!("{}.json", id);
         if let Some(cols) = system_index
             .get_mut("collections")
@@ -692,7 +692,7 @@ impl<'a> TransactionManager<'a> {
         Ok(())
     }
 
-    async fn commit_wal(&self, tx: &Transaction) -> Result<()> {
+    async fn commit_wal(&self, tx: &Transaction) -> RaiseResult<()> {
         let path = self
             .config
             .db_root(&self.space, &self.db)
@@ -704,7 +704,7 @@ impl<'a> TransactionManager<'a> {
         Ok(())
     }
 
-    async fn rollback_wal(&self, tx: &Transaction) -> Result<()> {
+    async fn rollback_wal(&self, tx: &Transaction) -> RaiseResult<()> {
         self.commit_wal(tx).await
     }
 }

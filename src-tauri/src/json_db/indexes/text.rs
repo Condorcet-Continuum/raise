@@ -25,7 +25,7 @@ pub async fn update_text_index(
     doc_id: &str,
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
 
     // On charge manuellement car la logique de mise à jour est spécifique (Multi-clés par document)
@@ -81,7 +81,7 @@ pub async fn search_text_index(
     collection: &str,
     def: &IndexDefinition,
     query: &str,
-) -> Result<Vec<String>> {
+) -> RaiseResult<Vec<String>> {
     let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
 
     // Normalisation de la requête pour matcher les tokens stockés

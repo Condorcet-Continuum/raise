@@ -19,7 +19,7 @@ pub struct AirdParser;
 impl AirdParser {
     /// Extrait les positions (layout) des éléments graphiques depuis un fichier .aird
     /// Retourne une Map : Target_UUID -> Layout
-    pub fn extract_layout(path: &Path) -> Result<HashMap<String, DiagramLayout>> {
+    pub fn extract_layout(path: &Path) -> RaiseResult<HashMap<String, DiagramLayout>> {
         let mut reader = Reader::from_file(path)
             .map_err(|e| AppError::from(format!("Erreur de lecture du fichier Aird: {}", e)))?;
         // CORRECTION API Quick-XML

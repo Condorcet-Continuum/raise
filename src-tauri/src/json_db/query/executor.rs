@@ -22,7 +22,7 @@ pub trait IndexProvider: Send + Sync {
         collection: &'a str,
         field: &'a str,
         value: &'a Value,
-    ) -> BoxFuture<'a, Result<Vec<String>>>;
+    ) -> BoxFuture<'a, RaiseResult<Vec<String>>>;
 }
 
 // --- IMPLÉMENTATION NO-OP (BOUCHON) ---
@@ -36,7 +36,7 @@ impl IndexProvider for NoOpIndexProvider {
         _c: &'a str,
         _f: &'a str,
         _v: &'a Value,
-    ) -> BoxFuture<'a, Result<Vec<String>>> {
+    ) -> BoxFuture<'a, RaiseResult<Vec<String>>> {
         Box::pin(async { Ok(vec![]) })
     }
 }
@@ -62,7 +62,7 @@ impl<'a> IndexProvider for RealIndexProvider<'a> {
         collection: &'b str,
         field: &'b str,
         value: &'b Value,
-    ) -> BoxFuture<'b, Result<Vec<String>>> {
+    ) -> BoxFuture<'b, RaiseResult<Vec<String>>> {
         Box::pin(async move { self.manager.search(collection, field, value).await })
     }
 }
@@ -90,37 +90,48 @@ impl<'a> QueryEngine<'a> {
         self
     }
 
-    pub async fn execute_query(&self, mut query: Query) -> Result<QueryResult> {
+    pub async fn execute_query(&self, mut query: Query) -> RaiseResult<QueryResult> {
         let optimizer = QueryOptimizer::new();
         query = optimizer.optimize(query)?;
 
-        // 1. CHARGEMENT (Index vs Scan)
-        let index_candidate = self.find_index_candidate(&query).await;
+        // 1. CHARGEMENT (Index vs Scan avec Résolution Fractale)
+        let collection_paths = self.resolve_collection_path(&query.collection).await?;
+        let mut documents = Vec::new();
 
-        let mut documents = match index_candidate {
-            Some((field, value)) => {
-                let clean_val = self.strip_quotes(&value);
-                let clean_field = self.resolve_index_field(&field, &query.collection);
+        for actual_collection_path in collection_paths {
+            let mut sub_query = query.clone();
+            sub_query.collection = actual_collection_path.clone();
 
-                #[cfg(debug_assertions)]
-                println!(
-                    "⚡ QueryEngine: Index Hit sur {}.{}",
-                    query.collection, clean_field
-                );
+            let index_candidate = self.find_index_candidate(&sub_query).await;
 
-                let ids = self
-                    .index_provider
-                    .search(&query.collection, &clean_field, &clean_val)
-                    .await?;
+            let mut batch_docs = match index_candidate {
+                Some((field, value)) => {
+                    let clean_val = self.strip_quotes(&value);
+                    let clean_field = self.resolve_index_field(&field, &actual_collection_path);
 
-                self.manager.read_many(&query.collection, &ids).await?
-            }
-            None => {
-                #[cfg(debug_assertions)]
-                println!("🐢 QueryEngine: Full Scan sur {}", query.collection);
-                self.manager.list_all(&query.collection).await?
-            }
-        };
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "⚡ QueryEngine: Index Hit sur {}.{}",
+                        actual_collection_path, clean_field
+                    );
+
+                    let ids = self
+                        .index_provider
+                        .search(&actual_collection_path, &clean_field, &clean_val)
+                        .await?;
+
+                    self.manager
+                        .read_many(&actual_collection_path, &ids)
+                        .await?
+                }
+                None => {
+                    #[cfg(debug_assertions)]
+                    println!("🐢 QueryEngine: Full Scan sur {}", actual_collection_path);
+                    self.manager.list_all(&actual_collection_path).await?
+                }
+            };
+            documents.append(&mut batch_docs);
+        }
 
         // 2. FILTRAGE
         if let Some(filter) = &query.filter {
@@ -554,6 +565,47 @@ impl<'a> QueryEngine<'a> {
             doc.clone()
         }
     }
+
+    // Résolution intelligente des chemins de collection
+    async fn resolve_collection_path(&self, target_collection: &str) -> RaiseResult<Vec<String>> {
+        // Si le chemin contient déjà des '/', on assume qu'il est absolu
+        if target_collection.contains('/') {
+            return Ok(vec![target_collection.to_string()]);
+        }
+
+        let index_path = self
+            .manager
+            .storage
+            .config
+            .db_root(&self.manager.space, &self.manager.db)
+            .join("_system.json");
+        let mut resolved_paths = Vec::new();
+
+        if let Ok(content) = tokio::fs::read_to_string(&index_path).await {
+            if let Ok(index_json) = crate::utils::data::parse::<Value>(&content) {
+                if let Some(collections) = index_json
+                    .pointer("/collections")
+                    .and_then(|v| v.as_object())
+                {
+                    for (path, _) in collections {
+                        // On cherche si le chemin exact OU le dossier final correspond (ex: dapps/.../components)
+                        if path == target_collection
+                            || path.ends_with(&format!("/{}", target_collection))
+                        {
+                            resolved_paths.push(path.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Si non trouvé dans l'index, on fallback sur la racine classique
+        if resolved_paths.is_empty() {
+            resolved_paths.push(target_collection.to_string());
+        }
+
+        Ok(resolved_paths)
+    }
 }
 
 // ============================================================================
@@ -592,7 +644,7 @@ mod tests {
             _c: &'a str,
             field: &'a str,
             _val: &'a Value,
-        ) -> BoxFuture<'a, Result<Vec<String>>> {
+        ) -> BoxFuture<'a, RaiseResult<Vec<String>>> {
             let idx = self.indexes.clone();
             let f = field.to_string();
             Box::pin(async move {

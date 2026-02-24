@@ -1,5 +1,7 @@
+use crate::utils::prelude::*;
+
 use crate::ai::deep_learning::layers::{linear::Linear, rnn_cell::LSTMCell};
-use candle_core::{DType, Result, Tensor};
+use candle_core::{DType, Tensor};
 use candle_nn::{Init, VarBuilder};
 
 /// Modèle de séquence complet (RNN).
@@ -15,7 +17,7 @@ impl SequenceNet {
         hidden_size: usize,
         output_size: usize,
         vb: VarBuilder,
-    ) -> Result<Self> {
+    ) -> RaiseResult<Self> {
         let lstm = LSTMCell::new(input_size, hidden_size, vb.pp("lstm"))?;
 
         // CORRECTION : Initialisation aléatoire pour la tête de lecture aussi
@@ -41,7 +43,7 @@ impl SequenceNet {
         })
     }
 
-    pub fn forward(&self, input_seq: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, input_seq: &Tensor) -> RaiseResult<Tensor> {
         let (batch_size, seq_len, _) = input_seq.dims3()?;
         let device = input_seq.device();
 
@@ -73,7 +75,7 @@ mod tests {
     use candle_nn::VarMap;
 
     #[test]
-    fn test_sequence_net_flow() -> Result<()> {
+    fn test_sequence_net_flow() -> RaiseResult<()> {
         let device = Device::Cpu;
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);

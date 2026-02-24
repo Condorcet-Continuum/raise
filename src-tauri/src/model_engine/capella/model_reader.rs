@@ -8,7 +8,7 @@ pub struct CapellaReader;
 
 impl CapellaReader {
     /// Lit un fichier .capella et retourne un ProjectModel complet
-    pub fn read_model(path: &Path) -> Result<ProjectModel> {
+    pub fn read_model(path: &Path) -> RaiseResult<ProjectModel> {
         let mut model = ProjectModel::default();
 
         // 1. Parsing du XMI (Structure Sémantique)

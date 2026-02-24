@@ -17,7 +17,7 @@ impl NodeHandler for McpHandler {
         node: &WorkflowNode,
         context: &mut HashMap<String, Value>,
         shared_ctx: &HandlerContext<'_>,
-    ) -> crate::utils::Result<ExecutionStatus> {
+    ) -> RaiseResult<ExecutionStatus> {
         let tool_name = node
             .params
             .get("tool_name")

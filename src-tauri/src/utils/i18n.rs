@@ -117,6 +117,7 @@ mod tests {
 
     // Helper pour générer un environnement de DB temporaire
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
+        crate::utils::config::test_mocks::inject_mock_config();
         let dir = tempfile::tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         (dir, config)

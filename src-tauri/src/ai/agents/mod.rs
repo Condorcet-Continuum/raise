@@ -122,7 +122,7 @@ pub trait Agent: Send + Sync {
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
-    ) -> Result<Option<AgentResult>>;
+    ) -> RaiseResult<Option<AgentResult>>;
 }
 
 // --- 🛠️ AGENT TOOLBOX (OPTIMISÉE) ---
@@ -157,7 +157,7 @@ pub mod tools {
         layer: &str,
         collection: &str,
         doc: &Value,
-    ) -> Result<CreatedArtifact> {
+    ) -> RaiseResult<CreatedArtifact> {
         let doc_id = doc["id"]
             .as_str()
             .ok_or_else(|| AppError::Validation("L'artefact n'a pas d'ID valide".into()))?
@@ -237,7 +237,7 @@ pub mod tools {
         None
     }
 
-    pub async fn load_session(ctx: &AgentContext) -> Result<AgentSession> {
+    pub async fn load_session(ctx: &AgentContext) -> RaiseResult<AgentSession> {
         // On stocke les sessions dans le système pour persistance globale
         let manager = CollectionsManager::new(&ctx.db, "un2", "_system");
 
@@ -260,7 +260,7 @@ pub mod tools {
         }
     }
 
-    pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> Result<()> {
+    pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> RaiseResult<()> {
         let manager = CollectionsManager::new(&ctx.db, "un2", "_system");
         let json_doc = data::to_value(session)?;
         manager.upsert_document("agent_sessions", json_doc).await?;

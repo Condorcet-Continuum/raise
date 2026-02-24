@@ -14,30 +14,26 @@ pub struct CandleLlmEngine {
 }
 
 impl CandleLlmEngine {
-    pub fn new() -> Result<Self> {
+    pub async fn new(
+        manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
+    ) -> RaiseResult<Self> {
         // 1. Récupération de la configuration globale dynamique
-        let config = crate::utils::config::AppConfig::get();
-        let engine_cfg = config.ai_engines.get("primary_local").ok_or_else(|| {
-            crate::utils::error::AppError::Ai(
-                "Moteur 'primary_local' introuvable dans la configuration".to_string(),
-            )
-        })?;
+        let settings =
+            crate::utils::config::AppConfig::get_component_settings(manager, "llm").await?;
 
-        // 2. Récupération des noms de fichiers (avec fallback par sécurité)
-        let model_filename = engine_cfg
-            .rust_model_file
-            .as_deref()
+        // 2. Lecture simple des paramètres
+        let model_filename = settings
+            .get("rust_model_file")
+            .and_then(|v| v.as_str())
             .unwrap_or("qwen2.5-1.5b-instruct-q4_k_m.gguf");
-        let tokenizer_filename = engine_cfg
-            .rust_tokenizer_file
-            .as_deref()
+        let tokenizer_filename = settings
+            .get("rust_tokenizer_file")
+            .and_then(|v| v.as_str())
             .unwrap_or("tokenizer.json");
 
         // 3. Construction des chemins LOCAUX absolus (100% Hors-ligne)
         let home = dirs::home_dir().ok_or_else(|| {
-            crate::utils::error::AppError::Ai(
-                "Impossible de trouver le dossier utilisateur (home)".to_string(),
-            )
+            AppError::Ai("Impossible de trouver le dossier utilisateur (home)".to_string())
         })?;
 
         let base_path = home.join("raise_domain/_system/ai-assets/models");
@@ -46,13 +42,13 @@ impl CandleLlmEngine {
 
         // 4. Vérification de sécurité stricte
         if !model_path.exists() {
-            return Err(crate::utils::error::AppError::Ai(format!(
+            return Err(AppError::Ai(format!(
                 "Modèle GGUF introuvable en local : {:?}",
                 model_path
             )));
         }
         if !tokenizer_path.exists() {
-            return Err(crate::utils::error::AppError::Ai(format!(
+            return Err(AppError::Ai(format!(
                 "Tokenizer introuvable en local : {:?}",
                 tokenizer_path
             )));
@@ -66,22 +62,20 @@ impl CandleLlmEngine {
 
         // 6. Chargement du Tokenizer depuis le fichier local
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| crate::utils::error::AppError::Ai(format!("Erreur Tokenizer: {}", e)))?;
+            .map_err(|e| AppError::Ai(format!("Erreur Tokenizer: {}", e)))?;
 
         // 7. Chargement du modèle GGUF depuis le fichier local
-        let mut file = std::fs::File::open(&model_path).map_err(|e| {
-            crate::utils::error::AppError::Ai(format!("Erreur ouverture GGUF: {}", e))
-        })?;
+        let mut file = std::fs::File::open(&model_path)
+            .map_err(|e| AppError::Ai(format!("Erreur ouverture GGUF: {}", e)))?;
 
-        let model = gguf_file::Content::read(&mut file).map_err(|e| {
-            crate::utils::error::AppError::Ai(format!("Erreur lecture GGUF: {}", e))
-        })?;
+        let model = gguf_file::Content::read(&mut file)
+            .map_err(|e| AppError::Ai(format!("Erreur lecture GGUF: {}", e)))?;
 
         // 8. Initialisation de l'architecture Qwen2
         let weights = candle_transformers::models::quantized_qwen2::ModelWeights::from_gguf(
             model, &mut file, &device,
         )
-        .map_err(|e| crate::utils::error::AppError::Ai(format!("Erreur poids Qwen2: {}", e)))?;
+        .map_err(|e| AppError::Ai(format!("Erreur poids Qwen2: {}", e)))?;
 
         // 9. Initialisation du processeur de texte (Température 0.7 par défaut)
         let logits_processor = LogitsProcessor::new(299792458, Some(0.7), None);
@@ -108,7 +102,7 @@ impl CandleLlmEngine {
         system_prompt: &str,
         user_prompt: &str,
         max_tokens: usize,
-    ) -> Result<String> {
+    ) -> RaiseResult<String> {
         let formatted_prompt = Self::format_prompt(system_prompt, user_prompt);
 
         let tokens = self
@@ -174,7 +168,6 @@ impl CandleLlmEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks::inject_mock_config;
 
     #[test]
     fn test_qwen_chatml_format() {
@@ -184,15 +177,34 @@ mod tests {
         assert_eq!(CandleLlmEngine::format_prompt(sys, user), expected);
     }
 
-    #[test]
+    #[tokio::test]
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    fn test_quick_inference() {
-        inject_mock_config();
-        println!("Init Engine (Qwen 2.5 1.5B - Rapide)...");
+    async fn test_quick_inference() {
+        crate::utils::config::test_mocks::inject_mock_config();
+        let config = crate::utils::config::AppConfig::get();
+        let storage_cfg = crate::json_db::storage::JsonDbConfig::new(
+            config.get_path("PATH_RAISE_DOMAIN").unwrap(),
+        );
+        let storage = crate::json_db::storage::StorageEngine::new(storage_cfg);
+        let manager = crate::json_db::collections::manager::CollectionsManager::new(
+            &storage,
+            &config.system_domain,
+            &config.system_db,
+        );
+        manager.init_db().await.unwrap();
 
-        // Ce test va utiliser le mock pour trouver la config primary_local
-        let mut engine = CandleLlmEngine::new().expect("Echec Init Engine");
+        // Appel magique de ton Mock Helper !
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm",
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
+
+        // On passe le manager au moteur
+        let mut engine = CandleLlmEngine::new(&manager)
+            .await
+            .expect("Echec Init Engine");
 
         println!("🤖 Generating...");
         let response = engine

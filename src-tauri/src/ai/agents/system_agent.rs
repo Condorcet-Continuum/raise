@@ -26,7 +26,7 @@ impl SystemAgent {
         name: &str,
         element_type: &str,
         history_context: &str,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -74,7 +74,7 @@ impl Agent for SystemAgent {
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
-    ) -> Result<Option<AgentResult>> {
+    ) -> RaiseResult<Option<AgentResult>> {
         // 1. CHARGEMENT SESSION
         let mut session = load_session(ctx)
             .await

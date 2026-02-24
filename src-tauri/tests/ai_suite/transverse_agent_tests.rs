@@ -27,7 +27,8 @@ async fn test_transverse_agent_ivvq_cycle() {
             .expect("LlmClient must be enabled for tests"),
         test_root.clone(),
         test_root.join("dataset"),
-    );
+    )
+    .await;
 
     let agent = TransverseAgent::new();
 

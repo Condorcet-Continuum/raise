@@ -97,7 +97,7 @@ impl ContextManager {
 
     /// Charge le contexte d'une couche spécifique depuis le Registre Sémantique
     /// C'est la clé pour que le Loader puisse résoudre "Class" ou "OperationalActor" sans préfixe.
-    pub fn load_layer_context(&mut self, layer: &str) -> Result<()> {
+    pub fn load_layer_context(&mut self, layer: &str) -> RaiseResult<()> {
         let registry = VocabularyRegistry::global();
         if let Some(ctx_json) = registry.get_context_for_layer(layer) {
             self.parse_context_block(&ctx_json)
@@ -109,14 +109,14 @@ impl ContextManager {
     }
 
     /// Charge un contexte depuis un document JSON-LD (@context)
-    pub fn load_from_doc(&mut self, doc: &Value) -> Result<()> {
+    pub fn load_from_doc(&mut self, doc: &Value) -> RaiseResult<()> {
         if let Some(ctx) = doc.get("@context") {
             self.parse_context_block(ctx)?;
         }
         Ok(())
     }
 
-    fn parse_context_block(&mut self, ctx: &Value) -> Result<()> {
+    fn parse_context_block(&mut self, ctx: &Value) -> RaiseResult<()> {
         match ctx {
             Value::Object(map) => {
                 for (key, val) in map {

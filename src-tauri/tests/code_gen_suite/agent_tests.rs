@@ -27,7 +27,8 @@ async fn test_software_agent_creates_component_end_to_end() {
             .expect("LlmClient must be enabled for tests"),
         test_data_root.clone(),
         test_data_root.join("dataset"),
-    );
+    )
+    .await;
 
     let agent = SoftwareAgent::new();
 

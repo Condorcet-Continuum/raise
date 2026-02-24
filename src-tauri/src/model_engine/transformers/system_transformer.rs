@@ -8,7 +8,7 @@ use crate::model_engine::arcadia; // <-- Vocabulaire
 pub struct SystemTransformer;
 
 impl ModelTransformer for SystemTransformer {
-    fn transform(&self, element: &Value) -> Result<Value> {
+    fn transform(&self, element: &Value) -> RaiseResult<Value> {
         let name = element
             .get(arcadia::PROP_NAME)
             .and_then(|v| v.as_str())

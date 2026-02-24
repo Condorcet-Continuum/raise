@@ -3,7 +3,7 @@
 pub mod cache;
 pub mod file_storage;
 
-use crate::utils::error::Result;
+use crate::utils::error::RaiseResult;
 use crate::utils::io::PathBuf;
 use crate::utils::json::{Deserialize, Serialize, Value};
 
@@ -19,7 +19,7 @@ impl JsonDbConfig {
         Self { data_root }
     }
 
-    pub fn from(path_str: String) -> Result<Self> {
+    pub fn from(path_str: String) -> RaiseResult<Self> {
         Ok(Self {
             data_root: PathBuf::from(path_str),
         })
@@ -63,7 +63,7 @@ impl StorageEngine {
         collection: &str,
         id: &str,
         doc: &Value,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         // 1. Écriture disque atomique et asynchrone
         file_storage::write_document(&self.config, space, db, collection, id, doc).await?;
 
@@ -81,7 +81,7 @@ impl StorageEngine {
         db: &str,
         collection: &str,
         id: &str,
-    ) -> Result<Option<Value>> {
+    ) -> RaiseResult<Option<Value>> {
         let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
 
         // 1. Vérification du cache
@@ -107,7 +107,7 @@ impl StorageEngine {
         db: &str,
         collection: &str,
         id: &str,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         // Suppression disque
         file_storage::delete_document(&self.config, space, db, collection, id).await?;
 

@@ -20,7 +20,7 @@ impl WorldModelPredictor {
     /// * `state_dim` : Dimension du vecteur d'état (Latent).
     /// * `action_dim` : Dimension du vecteur d'action (ex: 10 pour 10 types de commandes).
     /// * `hidden_dim` : Taille de la couche cachée (Neurones).
-    pub fn new(config: &WorldModelConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(config: &WorldModelConfig, vb: VarBuilder) -> RaiseResult<Self> {
         // L'entrée de la couche 1 est la concaténation de State + Action
         let input_dim = config.embedding_dim + config.action_dim;
 
@@ -36,7 +36,7 @@ impl WorldModelPredictor {
     /// Prédit l'état futur.
     /// * `state` : [Batch, State_Dim]
     /// * `action` : [Batch, Action_Dim]
-    pub fn forward(&self, state: &Tensor, action: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, state: &Tensor, action: &Tensor) -> RaiseResult<Tensor> {
         // ✅ Conversion des erreurs pour chaque opération de tenseur
         let x = Tensor::cat(&[state, action], 1).map_err(|e| AppError::from(e.to_string()))?;
 

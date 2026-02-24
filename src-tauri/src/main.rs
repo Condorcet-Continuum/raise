@@ -39,10 +39,11 @@ use raise::blockchain::p2p::protocol::ArcadiaNetMessage;
 use raise::ai::llm::candle_engine::CandleLlmEngine;
 use raise::ai::llm::NativeLlmState;
 
+use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::jsonld::VocabularyRegistry;
 use raise::json_db::migrations::migrator::Migrator;
 use raise::json_db::migrations::{Migration, MigrationStep};
-use raise::json_db::storage::{JsonDbConfig, StorageEngine};
+use raise::json_db::storage::{JsonDbConfig, StorageEngine}; // 🎯 IMPORT REQUIS
 
 use raise::plugins::manager::PluginManager;
 
@@ -50,7 +51,7 @@ use raise::plugins::manager::PluginManager;
 use raise::commands::ai_commands::AiState;
 use raise::commands::workflow_commands::WorkflowStore;
 use raise::workflow_engine::executor::WorkflowExecutor;
-use raise::workflow_engine::scheduler::WorkflowScheduler; // 🎯 FIX : Import de l'Exécuteur
+use raise::workflow_engine::scheduler::WorkflowScheduler;
 
 pub use raise::model_engine::types::ProjectModel;
 use raise::AppState;
@@ -100,10 +101,19 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 load_arcadia_ontologies(&ontology_path).await;
             });
+
             // 4. GRAPH STORE
             let graph_path = db_root.join("graph_store");
+            let storage_for_graph = storage.clone();
+            let domain_for_graph = app_config.system_domain.clone();
+            let db_for_graph = app_config.system_db.clone();
+
             let graph_store_result =
-                tauri::async_runtime::block_on(async { GraphStore::new(graph_path).await });
+                tauri::async_runtime::block_on(async {
+                    // 🎯 Instanciation du manager pour le GraphStore
+                    let manager = CollectionsManager::new(&storage_for_graph, &domain_for_graph, &db_for_graph);
+                    GraphStore::new(graph_path, &manager).await
+                });
 
             if let Ok(store) = graph_store_result {
                 app.manage(store);
@@ -183,8 +193,14 @@ fn main() {
 
             // --- BACKGROUND: IA NATIF ---
             let native_handle = app.handle().clone();
+            let storage_for_ia = storage_engine.clone();
+            let domain_for_ia = app_config.system_domain.clone();
+            let db_for_ia = app_config.system_db.clone();
+
             tauri::async_runtime::spawn(async move {
-                match CandleLlmEngine::new() {
+                // 🎯 Création du manager pour l'IA et appel asynchrone
+                let manager = CollectionsManager::new(&storage_for_ia, &domain_for_ia, &db_for_ia);
+                match CandleLlmEngine::new(&manager).await {
                     Ok(engine) => {
                         let state = native_handle.state::<NativeLlmState>();
                         *state.0.lock().unwrap() = Some(engine);
@@ -223,7 +239,6 @@ fn main() {
                             let ai_state = app_handle_clone.state::<AiState>();
                             *ai_state.0.lock().await = Some(shared_orch.clone());
 
-                            // 🎯 FIX ICI : Instanciation propre de la nouvelle architecture !
                             let executor = WorkflowExecutor::new(shared_orch.clone(), plugin_mgr_for_wf);
 
                             let wf_state = app_handle_clone.state::<AsyncMutex<WorkflowStore>>();

@@ -27,7 +27,8 @@ async fn test_data_agent_creates_class_and_enum() {
             .expect("LlmClient must be enabled for tests"),
         test_root.clone(),
         test_root.join("dataset"),
-    );
+    )
+    .await;
 
     let agent = DataAgent::new();
 

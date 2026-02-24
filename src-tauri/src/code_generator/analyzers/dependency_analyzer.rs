@@ -95,7 +95,7 @@ impl DependencyAnalyzer {
 }
 
 impl Analyzer for DependencyAnalyzer {
-    fn analyze(&self, model: &Value) -> Result<AnalysisResult> {
+    fn analyze(&self, model: &Value) -> RaiseResult<AnalysisResult> {
         let mut result = AnalysisResult::default();
         self.extract_dependencies(model, &mut result);
         Ok(result)

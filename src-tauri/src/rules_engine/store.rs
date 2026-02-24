@@ -27,7 +27,7 @@ impl<'a> RuleStore<'a> {
     }
 
     /// Initialise le store en chargeant les règles depuis la collection système (Async)
-    pub async fn sync_from_db(&mut self) -> Result<()> {
+    pub async fn sync_from_db(&mut self) -> RaiseResult<()> {
         let stored_rules = self
             .db_manager
             .list_all("_system_rules")
@@ -46,7 +46,7 @@ impl<'a> RuleStore<'a> {
     }
 
     /// Enregistre une règle de manière idempotente (Async)
-    pub async fn register_rule(&mut self, collection: &str, rule: Rule) -> Result<()> {
+    pub async fn register_rule(&mut self, collection: &str, rule: Rule) -> RaiseResult<()> {
         // OPTIMISATION : Vérifier si la règle existe déjà et est identique
         if let Some(existing_rule) = self.rules_cache.get(&rule.id) {
             if *existing_rule == rule {
@@ -128,6 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_idempotency_and_retrieval() {
+        crate::utils::config::test_mocks::inject_mock_config();
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = StorageEngine::new(config);

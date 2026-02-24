@@ -42,7 +42,7 @@ impl HardwareAgent {
         name: &str,
         element_type: &str,
         history_context: &str,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
         let category = self.determine_category(name, element_type);
         let instruction = if category == "Electronics" {
             "Contexte: Design Électronique (VHDL/Verilog)."
@@ -94,7 +94,7 @@ impl Agent for HardwareAgent {
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
-    ) -> Result<Option<AgentResult>> {
+    ) -> RaiseResult<Option<AgentResult>> {
         let mut session = load_session(ctx)
             .await
             .unwrap_or_else(|_| super::AgentSession::new(&ctx.session_id, &ctx.agent_id));
@@ -295,10 +295,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_hardware_generation_integration() {
-        // 1. Initialisation Mock Config
         inject_mock_config();
 
         let dir = tempdir().unwrap();
@@ -306,15 +305,18 @@ mod tests {
 
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
-        let llm = LlmClient::new().unwrap();
 
-        // 2. Initialisation DB avec la config globale
         let app_cfg = AppConfig::get();
-        // ✅ CORRECTIF : system_domain / system_db
         let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
         let _ = manager.init_db().await;
 
-        // 3. SEED DB : Injection du composant
+        // 🎯 Injection du composant LLM
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
+
         let comp_doc = json!({
             "id": "fpga-001",
             "name": "FPGA Controller",
@@ -331,6 +333,9 @@ mod tests {
             .await
             .unwrap();
 
+        // 🎯 .await sur LLM et AgentContext !
+        let llm = LlmClient::new(&manager).await.unwrap();
+
         let ctx = AgentContext::new(
             "tester",
             "sess_hw_01",
@@ -338,7 +343,8 @@ mod tests {
             llm,
             domain_root.clone(),
             domain_root.clone(),
-        );
+        )
+        .await;
 
         let agent = HardwareAgent::new();
 
@@ -365,9 +371,8 @@ mod tests {
         }
     }
 
-    // ✅ TEST RESTAURÉ : generate_hardware_in_user_domain
     #[tokio::test]
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn generate_hardware_in_user_domain() {
         inject_mock_config();
@@ -381,15 +386,19 @@ mod tests {
             std::fs::create_dir_all(&domain_root).unwrap();
         }
 
-        println!("🌍 Environnement cible : {:?}", domain_root);
-
         let config = JsonDbConfig::new(domain_root.clone());
         let db = Arc::new(StorageEngine::new(config));
 
-        // ✅ CORRECTIF : system_domain / system_db
         let manager =
             CollectionsManager::new(&db, &app_config.system_domain, &app_config.system_db);
         let _ = manager.init_db().await;
+
+        // 🎯 Injection du composant LLM
+        crate::utils::config::test_mocks::inject_mock_component(
+            &manager,
+            "llm", 
+            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        ).await;
 
         let comp_doc = json!({
             "id": "fpga-video-proc",
@@ -407,7 +416,8 @@ mod tests {
             .await
             .unwrap();
 
-        let llm = LlmClient::new().unwrap();
+        // 🎯 .await sur LLM et AgentContext !
+        let llm = LlmClient::new(&manager).await.unwrap();
 
         let ctx = AgentContext::new(
             "zair",
@@ -416,7 +426,8 @@ mod tests {
             llm,
             domain_root.clone(),
             domain_root.clone(),
-        );
+        )
+        .await;
 
         let agent = HardwareAgent::new();
 

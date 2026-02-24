@@ -1,7 +1,7 @@
-// FICHIER : src-tauri/src/bin/raise-cli/commands/ai.rs
+// FICHIER : src-tauri/tools/raise-cli/src/commands/ai.rs
 
 use clap::{Args, Subcommand};
-use std::io::{self as std_io, Write}; // On garde std::io pour flush/read_line (interactivité CLI)
+use std::io::{self as std_io, Write};
 
 // --- IMPORTS MÉTIER RAISE ---
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
@@ -13,12 +13,12 @@ use raise::ai::agents::{
 use raise::ai::llm::client::LlmClient;
 use raise::ai::training::ai_train_domain_native;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
+// 🎯 NOUVEAU : Import du manager
+use raise::json_db::collections::manager::CollectionsManager;
 
 use raise::{
-    user_error,
-    user_info,
-    user_success,
-    utils::{config::AppConfig, io, prelude::*, Arc}, // Ajout explicite de AppConfig si nécessaire
+    user_error, user_info, user_success,
+    utils::{config::AppConfig, io, prelude::*, Arc},
 };
 
 #[derive(Args, Debug, Clone)]
@@ -78,18 +78,25 @@ pub async fn handle(args: AiArgs) -> Result<()> {
 
     io::ensure_dir(&domain_path).await?;
 
-    // 2. MOTEURS ET CONTEXTE
-    let client = LlmClient::new()?;
-    let storage = StorageEngine::new(JsonDbConfig::new(domain_path.clone()));
+    // 2. MOTEURS ET CONTEXTE (OPTIMISÉ)
+    let storage = Arc::new(StorageEngine::new(JsonDbConfig::new(domain_path.clone())));
 
+    // 🎯 Création du manager pour le CLI
+    let manager = CollectionsManager::new(&storage, space, db);
+
+    // 🎯 Instanciation asynchrone du LLM avec le manager
+    let client = LlmClient::new(&manager).await?;
+
+    // 🎯 Instanciation asynchrone du Contexte Agent
     let ctx = AgentContext::new(
-        space,
-        db,
-        Arc::new(storage),
+        "cli_user",
+        "cli_session",
+        storage.clone(),
         client.clone(),
         domain_path.clone(),
         dataset_path,
-    );
+    )
+    .await;
 
     // 3. EXÉCUTION
     match args.command.unwrap_or(AiCommands::Interactive) {
@@ -99,11 +106,11 @@ pub async fn handle(args: AiArgs) -> Result<()> {
         }
         AiCommands::Train {
             domain,
-            db,
+            db: target_db,
             epochs,
             lr,
         } => {
-            // 🎯 MAGIE SSOT : Résolution dynamique en Cascade !
+            // 🎯 Résolution dynamique simple (l'objet ScopeConfig a été allégé)
             let final_domain = domain
                 .or_else(|| config.user.as_ref().and_then(|u| u.default_domain.clone()))
                 .or_else(|| {
@@ -114,7 +121,7 @@ pub async fn handle(args: AiArgs) -> Result<()> {
                 })
                 .unwrap_or_else(|| config.system_domain.clone());
 
-            let final_db = db
+            let final_db = target_db
                 .or_else(|| config.user.as_ref().and_then(|u| u.default_db.clone()))
                 .or_else(|| {
                     config
@@ -124,39 +131,9 @@ pub async fn handle(args: AiArgs) -> Result<()> {
                 })
                 .unwrap_or_else(|| config.system_db.clone());
 
-            let final_epochs = epochs
-                .or_else(|| {
-                    config
-                        .user
-                        .as_ref()
-                        .and_then(|u| u.ai_training.as_ref())
-                        .and_then(|t| t.epochs)
-                })
-                .or_else(|| {
-                    config
-                        .workstation
-                        .as_ref()
-                        .and_then(|w| w.ai_training.as_ref())
-                        .and_then(|t| t.epochs)
-                })
-                .unwrap_or(3);
-
-            let final_lr = lr
-                .or_else(|| {
-                    config
-                        .user
-                        .as_ref()
-                        .and_then(|u| u.ai_training.as_ref())
-                        .and_then(|t| t.learning_rate)
-                })
-                .or_else(|| {
-                    config
-                        .workstation
-                        .as_ref()
-                        .and_then(|w| w.ai_training.as_ref())
-                        .and_then(|t| t.learning_rate)
-                })
-                .unwrap_or(config.deep_learning.learning_rate);
+            // 🎯 Les valeurs par défaut de l'IA sont gérées plus simplement
+            let final_epochs = epochs.unwrap_or(3);
+            let final_lr = lr.unwrap_or(config.deep_learning.learning_rate);
 
             user_info!(
                 "AI_TRAINING_START",
@@ -167,11 +144,9 @@ pub async fn handle(args: AiArgs) -> Result<()> {
                 final_lr
             );
 
-            // Création d'une instance de stockage pointant exactement sur la base ciblée
             let train_storage =
                 StorageEngine::new(JsonDbConfig::new(domain_path.join(space).join(&final_db)));
 
-            // Lancement du noyau pur d'entraînement
             match ai_train_domain_native(
                 &train_storage,
                 space,

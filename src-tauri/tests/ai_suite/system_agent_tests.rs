@@ -27,7 +27,8 @@ async fn test_system_agent_creates_function_end_to_end() {
             .expect("LlmClient must be enabled for BusinessAgent tests"),
         test_root.clone(),
         test_root.join("dataset"),
-    );
+    )
+    .await;
 
     let agent = SystemAgent::new();
 

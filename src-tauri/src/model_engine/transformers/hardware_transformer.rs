@@ -7,7 +7,7 @@ use crate::model_engine::arcadia; // <-- Accès au vocabulaire
 pub struct HardwareTransformer;
 
 impl ModelTransformer for HardwareTransformer {
-    fn transform(&self, element: &Value) -> Result<Value> {
+    fn transform(&self, element: &Value) -> RaiseResult<Value> {
         // Utilisation des constantes pour les champs standards
         let name = element
             .get(arcadia::PROP_NAME)

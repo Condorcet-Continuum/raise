@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/workflow_engine/tools/mod.rs
 
-use crate::utils::{fmt::Debug, prelude::*, Result};
+use crate::utils::{fmt::Debug, prelude::*};
 
 /// Définition d'un Outil que l'Agent (ou le Workflow) peut appeler.
 /// Inspiré par le standard MCP (Model Context Protocol).
@@ -17,7 +17,7 @@ pub trait AgentTool: Send + Sync + Debug {
     fn parameters_schema(&self) -> Value;
 
     /// Exécution de l'outil avec des arguments JSON
-    async fn execute(&self, args: &Value) -> Result<Value>;
+    async fn execute(&self, args: &Value) -> RaiseResult<Value>;
 }
 
 // Module pour les implémentations concrètes
@@ -47,7 +47,7 @@ mod tests {
             json!({})
         }
 
-        async fn execute(&self, args: &Value) -> Result<Value> {
+        async fn execute(&self, args: &Value) -> RaiseResult<Value> {
             let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
             Ok(json!({ "echo": input }))
         }

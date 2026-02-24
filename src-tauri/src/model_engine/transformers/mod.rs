@@ -17,7 +17,7 @@ pub enum TransformationDomain {
 /// Il prend un élément brut Arcadia (JSON hydraté) et retourne une structure JSON
 /// sémantique optimisée pour le moteur de template.
 pub trait ModelTransformer {
-    fn transform(&self, element: &Value) -> Result<Value>;
+    fn transform(&self, element: &Value) -> RaiseResult<Value>;
 }
 
 /// Factory pour instancier le bon transformateur

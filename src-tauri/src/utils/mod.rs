@@ -5,9 +5,6 @@
 // =========================================================================
 
 // --- 1. MODULES INTERNES ---
-// Nous gardons ces modules publics et non-deprecated pour l'instant
-// afin de ne pas casser le build (Clippy). La migration se fera progressivement.
-
 pub mod compression;
 pub mod config;
 pub mod error;
@@ -20,14 +17,15 @@ pub mod net;
 pub mod os;
 
 // --- 2. FAÇADES SÉMANTIQUES (L'Architecture Cible) ---
-// Ce sont les points d'entrée que le nouveau code (ex: Code Generator) DOIT utiliser.
 
 /// **Core Foundation** : Types de base et Erreurs.
 pub mod core {
-    pub use super::error::{AppError, Result};
+    // [AJOUT SILENCIEUX] On ajoute RaiseResult à côté de Result
+    pub use super::error::{AppError, RaiseResult, Result};
     pub use chrono::{DateTime, Utc};
     pub use uuid::Uuid;
 }
+
 /// **System Operations**
 pub mod sys {
     pub use super::os::{exec_command, pipe_through};
@@ -45,6 +43,7 @@ pub mod io {
         TempDir,
     };
 }
+
 /// **Data Abstraction** : Manipulation JSON et Contextes.
 pub mod data {
     pub use super::json::{
@@ -70,7 +69,8 @@ pub mod net_client {
 /// **Le Prélude** : À utiliser via `use crate::utils::prelude::*;`
 pub mod prelude {
     pub use super::context::AppConfig;
-    pub use super::core::{AppError, Result, Utc, Uuid};
+    // [AJOUT SILENCIEUX] On glisse RaiseResult ici aussi
+    pub use super::core::{AppError, RaiseResult, Result, Utc, Uuid};
     pub use super::data::{json, Deserialize, Serialize, Value};
     pub use super::io::Path;
     pub use crate::{user_error, user_info, user_success};
@@ -80,12 +80,11 @@ pub mod prelude {
 // =========================================================================
 // 3. EXPORTS LEGACY & UTILITAIRES (Compatibilité Totale)
 // =========================================================================
-// Ces exports sont requis par le code existant (json_db, commands, etc.)
-// Ne rien supprimer ici tant que tout le projet n'est pas migré.
 
 // --> Config & Erreurs
 pub use config::AppConfig;
-pub use error::{AppError, Result};
+// [AJOUT SILENCIEUX] Export legacy mis à jour pour inclure RaiseResult
+pub use error::{AppError, RaiseResult, Result};
 pub use logger::init_logging;
 
 // --> Domaine (Requis par migrator.rs et autres)
@@ -106,6 +105,7 @@ pub use tokio::sync::mpsc;
 pub use tokio::sync::Mutex as AsyncMutex;
 pub use tokio::sync::RwLock as AsyncRwLock;
 pub use tokio::time::sleep;
+
 // --> Macros externes
 pub use async_recursion::async_recursion;
 pub use async_trait::async_trait;

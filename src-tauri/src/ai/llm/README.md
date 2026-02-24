@@ -89,7 +89,7 @@ Utilisé pour les tâches complexes nécessitant un modèle puissant distant.
 ```rust
 use crate::ai::llm::{client, prompts, response_parser};
 
-async fn classify_user_request(user_input: &str) -> Result<serde_json::Value, String> {
+async fn classify_user_request(user_input: &str) -> RaiseResult<serde_json::Value, String> {
     // 1. Initialisation
     let llm_client = client::LlmClient::new( );
 
@@ -118,7 +118,7 @@ use tauri::State;
 pub async fn chat_with_local_model(
     state: State<'_, NativeLlmState>,
     prompt: String
-) -> Result<String, String> {
+) -> RaiseResult<String, String> {
     // 1. Récupération du verrou (Mutex)
     let mut guard = state.0.lock().map_err(|_| "Erreur Lock".to_string())?;
 

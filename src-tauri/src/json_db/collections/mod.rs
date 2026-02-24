@@ -36,7 +36,7 @@ pub async fn create_collection(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<()> {
+) -> RaiseResult<()> {
     collection::create_collection_if_missing(cfg, space, db, collection).await
 }
 
@@ -45,7 +45,7 @@ pub async fn drop_collection(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<()> {
+) -> RaiseResult<()> {
     collection::drop_collection(cfg, space, db, collection).await
 }
 
@@ -55,7 +55,7 @@ pub async fn insert_with_schema(
     db: &str,
     schema_rel: &str,
     mut doc: Value,
-) -> Result<Value> {
+) -> RaiseResult<Value> {
     let reg = SchemaRegistry::from_db(cfg, space, db).await?;
     let root_uri = reg.uri(schema_rel);
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)?;
@@ -87,7 +87,7 @@ pub async fn insert_raw(
     db: &str,
     collection: &str,
     doc: &Value,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let id = doc
         .get("id")
         .and_then(|v| v.as_str())
@@ -102,7 +102,7 @@ pub async fn update_with_schema(
     db: &str,
     schema_rel: &str,
     mut doc: Value,
-) -> Result<Value> {
+) -> RaiseResult<Value> {
     let reg = SchemaRegistry::from_db(cfg, space, db).await?;
     let root_uri = reg.uri(schema_rel);
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)?;
@@ -125,7 +125,7 @@ pub async fn update_raw(
     db: &str,
     collection: &str,
     doc: &Value,
-) -> Result<()> {
+) -> RaiseResult<()> {
     let id = doc
         .get("id")
         .and_then(|v| v.as_str())
@@ -140,7 +140,7 @@ pub async fn get(
     db: &str,
     collection: &str,
     id: &str,
-) -> Result<Value> {
+) -> RaiseResult<Value> {
     collection::read_document(cfg, space, db, collection, id).await
 }
 
@@ -150,7 +150,7 @@ pub async fn delete(
     db: &str,
     collection: &str,
     id: &str,
-) -> Result<()> {
+) -> RaiseResult<()> {
     collection::delete_document(cfg, space, db, collection, id).await
 }
 
@@ -159,7 +159,7 @@ pub async fn list_ids(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<Vec<String>> {
+) -> RaiseResult<Vec<String>> {
     collection::list_document_ids(cfg, space, db, collection).await
 }
 
@@ -168,7 +168,7 @@ pub async fn list_all(
     space: &str,
     db: &str,
     collection: &str,
-) -> Result<Vec<Value>> {
+) -> RaiseResult<Vec<Value>> {
     collection::list_documents(cfg, space, db, collection).await
 }
 

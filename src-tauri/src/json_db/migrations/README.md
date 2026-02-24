@@ -79,7 +79,7 @@ Voici comment déclarer et exécuter des migrations au démarrage de l'applicati
 use crate::json_db::migrations::{Migration, MigrationStep, Migrator};
 
 
-pub fn init_database_migrations(storage: &StorageEngine, space: &str, db: &str) -> Result<()> {
+pub fn init_database_migrations(storage: &StorageEngine, space: &str, db: &str) -> RaiseResult<()> {
     let migrator = Migrator::new(storage, space, db);
 
     let migrations = vec![

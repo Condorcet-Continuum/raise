@@ -1,4 +1,5 @@
 // src-tauri/src/blockchain/p2p/swarm.rs
+use crate::utils::prelude::*;
 
 use crate::blockchain::p2p::behavior::ArcadiaBehavior;
 use crate::utils::Duration;
@@ -6,7 +7,7 @@ use libp2p::{identity, noise, tcp, yamux, Swarm, SwarmBuilder};
 
 /// Crée et configure un Swarm libp2p pour le réseau Raise.
 /// Le Swarm combine le transport (TCP + Noise + Yamux) et le comportement (ArcadiaBehavior).
-pub async fn create_swarm(local_key: identity::Keypair) -> Result<Swarm<ArcadiaBehavior>, String> {
+pub async fn create_swarm(local_key: identity::Keypair) -> RaiseResult<Swarm<ArcadiaBehavior>> {
     // Initialisation du comportement Arcadia (Kademlia + Gossipsub + ReqResp)
     let behavior = ArcadiaBehavior::new(local_key.clone())?;
 

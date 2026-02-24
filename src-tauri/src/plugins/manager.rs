@@ -29,7 +29,7 @@ impl PluginManager {
         file_path: &str,
         space: &str,
         db: &str,
-    ) -> Result<()> {
+    ) -> RaiseResult<()> {
         println!("🔌 Chargement du plugin : {} ({})", plugin_id, file_path);
 
         let binary = io::read(file_path).await.map_err(|e| {
@@ -55,7 +55,7 @@ impl PluginManager {
         &self,
         plugin_id: &str,
         mandate: Option<Value>,
-    ) -> Result<(i32, Vec<Value>)> {
+    ) -> RaiseResult<(i32, Vec<Value>)> {
         let mut map = self.plugins.lock().await;
         if let Some(plugin) = map.get_mut(plugin_id) {
             if let Some(m) = mandate {

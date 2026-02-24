@@ -1,8 +1,9 @@
 // FICHIER : src-tauri/src/ai/deep_learning/trainer.rs
+use crate::utils::prelude::*;
 
 use crate::ai::deep_learning::models::sequence_net::SequenceNet;
 use crate::utils::config::DeepLearningConfig; // 🎯 Nouvel import
-use candle_core::{Result, Tensor};
+use candle_core::Tensor;
 use candle_nn::VarMap;
 
 /// Gère l'apprentissage du réseau.
@@ -29,7 +30,12 @@ impl<'a> Trainer<'a> {
     }
 
     /// Exécute un pas d'entraînement complet : Forward -> Loss -> Backward -> Update.
-    pub fn train_step(&self, model: &SequenceNet, input: &Tensor, targets: &Tensor) -> Result<f64> {
+    pub fn train_step(
+        &self,
+        model: &SequenceNet,
+        input: &Tensor,
+        targets: &Tensor,
+    ) -> RaiseResult<f64> {
         let logits = model.forward(input)?;
         let loss = self.cross_entropy_loss(&logits, targets)?;
         let grads = loss.backward()?;
@@ -43,10 +49,10 @@ impl<'a> Trainer<'a> {
             }
         }
 
-        loss.to_scalar::<f32>().map(|v| v as f64)
+        Ok(loss.to_scalar::<f32>().map(|v| v as f64)?)
     }
 
-    fn cross_entropy_loss(&self, logits: &Tensor, targets: &Tensor) -> Result<Tensor> {
+    fn cross_entropy_loss(&self, logits: &Tensor, targets: &Tensor) -> RaiseResult<Tensor> {
         let (b, s, v) = logits.dims3()?;
         let flat_logits = logits.reshape((b * s, v))?;
         let flat_targets = targets.reshape(b * s)?;
@@ -55,7 +61,7 @@ impl<'a> Trainer<'a> {
         let target_indexes = flat_targets.unsqueeze(1)?;
         let selected_log_probs = log_probs.gather(&target_indexes, 1)?;
 
-        selected_log_probs.mean_all()?.neg()
+        Ok(selected_log_probs.mean_all()?.neg()?)
     }
 }
 
@@ -67,7 +73,7 @@ mod tests {
     use candle_nn::VarBuilder;
 
     #[test]
-    fn test_training_convergence() -> Result<()> {
+    fn test_training_convergence() -> RaiseResult<()> {
         // 1. Initialisation via le Singleton (Moule de test : 10, 20, 5)
         test_mocks::inject_mock_config();
         let config = &AppConfig::get().deep_learning;

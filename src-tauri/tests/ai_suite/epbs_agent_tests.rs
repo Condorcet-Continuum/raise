@@ -27,7 +27,8 @@ async fn test_epbs_agent_creates_configuration_item() {
             .expect("LlmClient must be enabled for tests"),
         test_root.clone(),
         test_root.join("dataset"),
-    );
+    )
+    .await;
 
     let agent = EpbsAgent::new();
 
