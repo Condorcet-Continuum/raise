@@ -7,7 +7,7 @@ pub mod manager;
 pub mod paths;
 pub mod text;
 
-use crate::utils::json::{Deserialize, Serialize};
+use crate::utils::prelude::*;
 
 pub use manager::IndexManager;
 

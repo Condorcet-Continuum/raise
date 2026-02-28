@@ -145,7 +145,7 @@ pub enum JsondbCommands {
 
 // --- HANDLER PRINCIPAL ---
 
-pub async fn handle(args: JsondbArgs) -> Result<()> {
+pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
     if let JsondbCommands::Usage = args.command {
         print_examples();
         return Ok(());
@@ -173,8 +173,15 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
 
     // Feedback contextuel
     if app_config.core.log_level == "debug" || app_config.core.log_level == "trace" {
-        user_info!("JSONDB_CTX_ROOT", "{:?}", root_dir);
-        user_info!("JSONDB_CTX_SPACE", "{}/{}", args.space, args.db);
+        user_info!("JSONDB_CTX_ROOT", json!({ "path": root_dir }));
+        user_info!(
+            "JSONDB_CTX_SPACE",
+            json!({
+                "space": args.space,
+                "db": args.db,
+                "action": "load_context"
+            })
+        );
     }
 
     if !matches!(
@@ -190,24 +197,49 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
         JsondbCommands::Usage => { /* Géré plus haut */ }
         JsondbCommands::CreateDb => {
             if col_mgr.init_db().await? {
-                user_success!("JSONDB_INIT_SUCCESS", "{}/{}", args.space, args.db);
+                // Succès de l'initialisation : on sépare l'espace de la DB
+                user_success!(
+                    "JSONDB_INIT_SUCCESS",
+                    json!({ "space": args.space, "db": args.db })
+                );
             } else {
-                user_info!("JSONDB_EXISTS", "{}/{}", args.space, args.db);
+                // Info : la base existe déjà
+                user_info!(
+                    "JSONDB_EXISTS",
+                    json!({ "space": args.space, "db": args.db })
+                );
             }
         }
         JsondbCommands::DropDb { force } => {
             if !force {
+                // Cas 1 : Simple avertissement (Pas de données nécessaires, juste la clé i18n)
                 user_error!("JSONDB_DROP_WARN");
             } else if col_mgr.drop_db().await? {
-                user_success!("JSONDB_DROP_SUCCESS", "{}/{}", args.space, args.db);
+                // Cas 2 : Succès de la suppression avec contexte structuré
+                user_success!(
+                    "JSONDB_DROP_SUCCESS",
+                    json!({ "space": args.space, "db": args.db, "action": "permanent_deletion" })
+                );
             } else {
-                user_error!("JSONDB_DROP_NOT_FOUND", "{}/{}", args.space, args.db);
+                // Cas 3 : Erreur logique (non trouvé) avec contexte structuré
+                user_error!(
+                    "JSONDB_DROP_NOT_FOUND",
+                    json!({ "space": args.space, "db": args.db })
+                );
             }
         }
         JsondbCommands::CreateCollection { name, schema } => {
-            let raw_schema = schema.ok_or_else(|| {
-                AppError::from("⛔ ERREUR : Le paramètre --schema est OBLIGATOIRE.")
-            })?;
+            let Some(raw_schema) = schema else {
+                raise_error!(
+                    "ERR_CLI_MISSING_SCHEMA",
+                    error = "REQUIRED_ARG_NOT_FOUND",
+                    context = json!({
+                        "action": "validate_command_args",
+                        "param": "--schema",
+                        "hint": "L'argument --schema est nécessaire pour initialiser la structure. Exemple: --schema user.json"
+                    })
+                );
+            };
             let schema_uri = if raw_schema.starts_with("db://") {
                 raw_schema
             } else {
@@ -216,11 +248,17 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
             col_mgr
                 .create_collection(&name, Some(schema_uri.clone()))
                 .await?;
-            user_success!("JSONDB_COL_CREATED", "{}", name);
+            user_success!(
+                "JSONDB_COL_CREATED",
+                json!({ "collection": name, "status": "active" })
+            );
         }
         JsondbCommands::DropCollection { name } => {
             col_mgr.drop_collection(&name).await?;
-            user_success!("JSONDB_COL_DROPPED", "{}", name);
+            user_success!(
+                "JSONDB_COL_DROPPED",
+                json!({ "collection": name, "action": "cleanup" })
+            );
         }
         JsondbCommands::ListCollections => {
             let cols = col_mgr.list_collections().await?;
@@ -249,7 +287,10 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
             let res = col_mgr.insert_with_schema(&collection, json_val).await?;
 
             let id = res.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-            user_success!("JSONDB_INSERT_SUCCESS", "{}", id);
+            user_success!(
+                "JSONDB_INSERT_SUCCESS",
+                json!({ "id": id, "status": "persisted" })
+            );
         }
         JsondbCommands::Update {
             collection,
@@ -258,18 +299,30 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
         } => {
             let json_val = parse_data(&data).await?;
             col_mgr.update_document(&collection, &id, json_val).await?;
-            user_success!("JSONDB_UPDATE_SUCCESS", "{}", id);
+            user_success!(
+                "JSONDB_UPDATE_SUCCESS",
+                json!({ "id": id, "action": "update" })
+            );
         }
         JsondbCommands::Upsert { collection, data } => {
             let json_val = parse_data(&data).await?;
             let status = col_mgr.upsert_document(&collection, json_val).await?;
-            user_success!("JSONDB_UPSERT_SUCCESS", "{:?}", status);
+            user_success!(
+                "JSONDB_UPSERT_SUCCESS",
+                json!({ "status": format!("{:?}", status) })
+            );
         }
         JsondbCommands::Delete { collection, id } => {
             if col_mgr.delete_document(&collection, &id).await? {
-                user_success!("JSONDB_DELETE_SUCCESS", "{}", id);
+                user_success!(
+                    "JSONDB_DELETE_SUCCESS",
+                    json!({ "id": id, "action": "document_removed" })
+                );
             } else {
-                user_error!("JSONDB_DELETE_NOT_FOUND", "{}", id);
+                user_error!(
+                    "JSONDB_DELETE_NOT_FOUND",
+                    json!({ "id": id, "reason": "missing_resource" })
+                );
             }
         }
         JsondbCommands::Query {
@@ -300,14 +353,27 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
         }
         JsondbCommands::Sql { query } => {
             use raise::json_db::query::sql::{parse_sql, SqlRequest};
-            match parse_sql(&query)
-                .map_err(|e| AppError::from(format!("Erreur de parsing SQL : {}", e)))?
-            {
+            // 1. Parsing de la requête avec contexte riche
+            let sql_request = match parse_sql(&query) {
+                Ok(req) => req,
+                Err(e) => raise_error!(
+                    "ERR_SQL_PARSE_FAILURE",
+                    error = e,
+                    context = json!({
+                        "action": "parse_sql_query",
+                        "query_preview": query.chars().take(100).collect::<String>(),
+                        "hint": "Vérifiez la syntaxe SQL (mots-clés, virgules ou guillemets manquants)."
+                    })
+                ),
+            };
+
+            // 2. Exécution selon le type de requête
+            match sql_request {
                 SqlRequest::Read(query_struct) => {
                     let result = QueryEngine::new(&col_mgr)
                         .execute_query(query_struct)
                         .await?;
-                    // REFAC: Utilisation de data::stringify_pretty
+
                     println!("{}", data::stringify_pretty(&result.documents)?);
                 }
                 SqlRequest::Write(requests) => {
@@ -337,17 +403,31 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
                 operations: Vec<TransactionRequest>,
             }
 
-            // REFAC: Utilisation de data::from_value
-            let reqs: Vec<TransactionRequest> =
-                if let Ok(w) = data::from_value::<Wrapper>(json_val.clone()) {
-                    w.operations
-                } else {
-                    data::from_value::<Vec<TransactionRequest>>(json_val).map_err(|e| {
-                        AppError::from(format!("Format de transaction invalide : {}", e))
-                    })?
-                };
+            let reqs: Vec<TransactionRequest> = if let Ok(w) =
+                data::from_value::<Wrapper>(json_val.clone())
+            {
+                // Cas 1 : Format "Wrapper" (succès immédiat)
+                w.operations
+            } else {
+                // Cas 2 : Tentative de repli vers le format "Vec direct"
+                match data::from_value::<Vec<TransactionRequest>>(json_val) {
+                    Ok(ops) => ops,
+                    Err(e) => raise_error!(
+                        "ERR_JSONDB_INVALID_FORMAT",
+                        error = e,
+                        context = json!({
+                            "action": "parse_transaction_fallback",
+                            "attempted_types": ["Wrapper", "Vec<TransactionRequest>"],
+                            "hint": "Le JSON fourni ne correspond à aucun des schémas de transaction supportés."
+                        })
+                    ),
+                }
+            };
 
-            user_info!("JSONDB_TX_START", "{}", reqs.len());
+            user_info!(
+                "JSONDB_TX_START",
+                json!({ "batch_size": reqs.len(), "mode": "atomic" })
+            );
             tx_mgr.execute_smart(reqs).await?;
             user_success!("JSONDB_TX_SUCCESS");
         }
@@ -357,7 +437,7 @@ pub async fn handle(args: JsondbArgs) -> Result<()> {
 
 // --- HELPERS ---
 
-async fn parse_data(input: &str) -> Result<Value> {
+async fn parse_data(input: &str) -> RaiseResult<Value> {
     if let Some(path_str) = input.strip_prefix('@') {
         let path = Path::new(path_str);
         let data = io::read_json(path).await?;
@@ -500,7 +580,7 @@ mod tests {
     fn test_transaction_wrapper_deserialization() {
         let json = r#"{"operations": []}"#;
         // REFAC: test avec data::parse
-        let res: Result<data::Value> = data::parse(json);
+        let res: RaiseResult<data::Value> = data::parse(json);
         assert!(res.is_ok());
     }
 

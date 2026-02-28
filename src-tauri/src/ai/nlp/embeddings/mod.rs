@@ -53,23 +53,47 @@ impl EmbeddingEngine {
 
     pub fn embed_batch(&mut self, texts: Vec<String>) -> RaiseResult<Vec<Vec<f32>>> {
         match &mut self.inner {
-            EngineImplementation::Fast(e) => e
-                .embed_batch(texts)
-                // ✅ Conversion de anyhow::Error vers AppError
-                .map_err(|err| AppError::from(err.to_string())),
+            EngineImplementation::Fast(e) => {
+                let batch_size = texts.len();
+                // On transforme l'erreur Anyhow en erreur typée RAISE immédiatement
+                match e.embed_batch(texts) {
+                    Ok(res) => Ok(res),
+                    Err(e) => raise_error!(
+                        "ERR_AI_ENGINE_FAST_BATCH_FAILED",
+                        error = e,
+                        context = json!({
+                            "action": "batch_embedding_dispatch",
+                            "engine": "fast_cpu_implementation",
+                            "batch_size": batch_size
+                        })
+                    ),
+                }
+            }
 
-            EngineImplementation::Candle(e) => e.embed_batch(texts), // ✅ Déjà un AppError
+            EngineImplementation::Candle(e) => {
+                // On délègue car Candle suit déjà notre standard RAISE
+                e.embed_batch(texts)
+            }
         }
     }
 
     pub fn embed_query(&mut self, text: &str) -> RaiseResult<Vec<f32>> {
         match &mut self.inner {
-            EngineImplementation::Fast(e) => e
-                .embed_query(text)
-                // ✅ Conversion de anyhow::Error vers AppError
-                .map_err(|err| AppError::from(err.to_string())),
+            EngineImplementation::Fast(e) => match e.embed_query(text) {
+                Ok(vec) => Ok(vec),
+                Err(err) => raise_error!(
+                    "ERR_AI_ENGINE_FAST_QUERY_FAILED",
+                    error = err,
+                    context = json!({
+                        "action": "single_query_dispatch",
+                        "engine": "fast_cpu_implementation",
+                        "text_length": text.len()
+                    })
+                ),
+            },
 
-            EngineImplementation::Candle(e) => e.embed_query(text), // ✅ Déjà un AppError
+            // Candle renvoie déjà un RaiseResult (AppError)
+            EngineImplementation::Candle(e) => e.embed_query(text),
         }
     }
 }

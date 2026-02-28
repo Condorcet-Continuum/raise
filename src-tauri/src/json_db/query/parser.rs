@@ -9,7 +9,15 @@ use crate::utils::prelude::*;
 
 pub fn parse_projection(fields: &[String]) -> RaiseResult<Projection> {
     if fields.is_empty() {
-        return Err(AppError::NotFound("message".to_string()));
+        raise_error!(
+            "ERR_DATA_FIELDS_EMPTY",
+            error = "Opération impossible : la liste des champs est vide.",
+            context = json!({
+                "action": "validate_payload_integrity",
+                "hint": "L'objet fourni ne contient aucune propriété exploitable. Vérifiez la source de données.",
+                "severity": "medium"
+            })
+        );
     }
 
     let is_exclude = fields[0].starts_with('-');
@@ -139,10 +147,17 @@ fn parse_single_sort_spec(spec: &str) -> RaiseResult<SortField> {
 }
 
 pub fn parse_filter_from_json(value: &Value) -> RaiseResult<QueryFilter> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| AppError::Validation("Not an object".to_string()))?;
-
+    let Some(obj) = value.as_object() else {
+        raise_error!(
+            "ERR_JSON_TYPE_MISMATCH",
+            error = "Type de donnée invalide : un objet JSON était attendu.",
+            context = json!({
+                "expected_type": "Object",
+                "actual_value_sample": format!("{:?}", value),
+                "action": "ensure_object_structure"
+            })
+        );
+    };
     let op = match obj
         .get("operator")
         .and_then(|v| v.as_str())

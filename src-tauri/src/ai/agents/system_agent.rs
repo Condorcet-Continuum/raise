@@ -48,8 +48,7 @@ impl SystemAgent {
         let response = ctx
             .llm
             .ask(LlmBackend::LocalLlama, system_prompt, &user_prompt)
-            .await
-            .map_err(|e| AppError::Validation(format!("LLM Error: {}", e)))?;
+            .await?;
 
         let clean_json = extract_json_from_llm(&response);
         let mut data: Value = data::parse(&clean_json)

@@ -1,10 +1,6 @@
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use crate::utils::{
-    data::{ContextBuilder, Value},
-    io::PathBuf,
-    prelude::*,
-};
+use crate::utils::{data::Value, io::PathBuf, prelude::*};
 use heck::ToPascalCase;
 
 #[derive(Default)]
@@ -32,12 +28,24 @@ impl LanguageGenerator for CppGenerator {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        // ✅ ContextBuilder
-        let context = ContextBuilder::new()
-            .with_part("name", &name)
-            .with_part("id", &id)
-            .with_part("description", &desc)
-            .build();
+        // 🎯 MIGRATION V1.3 : Création native, propre et sans Builder !
+        // Si votre template_engine.render attend un serde_json::Value :
+        let context = crate::utils::prelude::json!({
+            "name": name,
+            "id": id,
+            "description": desc
+        });
+
+        /* 💡 NOTE IMPORTANTE :
+        Si votre méthode `render` exige spécifiquement un objet `tera::Context`
+        (et non un Value générique), remplacez le bloc ci-dessus par :
+
+        let context = tera::Context::from_serialize(crate::utils::prelude::json!({
+            "name": name,
+            "id": id,
+            "description": desc
+        })).unwrap_or_default();
+        */
 
         // 1. Génération du Header (.hpp)
         let header_content = template_engine.render("cpp/header", &context)?;
@@ -62,10 +70,22 @@ mod tests {
     use super::*;
     use crate::utils::data::json;
 
+    fn setup_engine() -> TemplateEngine {
+        let mut engine = TemplateEngine::new();
+        // On enregistre des templates simplifiés pour valider la logique du test
+        engine
+            .add_raw_template("cpp/header", "class {{ name }} {};")
+            .unwrap();
+        engine
+            .add_raw_template("cpp/source", "#include \"{{ name }}.hpp\"")
+            .unwrap();
+        engine
+    }
+
     #[test]
     fn test_cpp_generation_produces_two_files() {
         let gen = CppGenerator::new();
-        let engine = TemplateEngine::new();
+        let engine = setup_engine();
 
         let element = json!({
             "name": "NavigationSystem",

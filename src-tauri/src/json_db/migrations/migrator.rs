@@ -95,7 +95,7 @@ impl<'a> Migrator<'a> {
     async fn execute_step(&self, step: &MigrationStep) -> RaiseResult<()> {
         match step {
             MigrationStep::CreateCollection { name, schema } => {
-                let schema_str = schema.as_str().map(|s| s.to_string());
+                let schema_str = schema.as_str().map(ToString::to_string);
                 self.manager.create_collection(name, schema_str).await?;
                 println!("   -> Collection créée : {}", name);
             }

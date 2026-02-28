@@ -15,9 +15,20 @@ pub struct SchemaValidator {
 
 impl SchemaValidator {
     pub fn compile_with_registry(root_uri: &str, reg: &SchemaRegistry) -> RaiseResult<Self> {
-        let schema = reg.get_by_uri(root_uri).cloned().ok_or_else(|| {
-            AppError::NotFound(format!("Schema not found in registry: {}", root_uri))
-        })?;
+        // 1. Garde let-else avec diagnostic structuré
+        let Some(schema) = reg.get_by_uri(root_uri).cloned() else {
+            raise_error!(
+                "ERR_SCHEMA_NOT_IN_REGISTRY",
+                error = format!("Le schéma sémantique est introuvable : {}", root_uri),
+                context = json!({
+                    "root_uri": root_uri,
+                    "action": "resolve_schema_from_registry",
+                    "hint": "Vérifiez que l'ontologie a été correctement chargée."
+                })
+            ); // La macro fait un 'return', donc on ne sort jamais du 'else' ici.
+        }; // <--- L'accolade manquante était ici !
+
+        // 2. Chemin nominal (Happy Path)
         Ok(Self {
             root_uri: root_uri.to_string(),
             schema,
@@ -51,15 +62,36 @@ fn validate_node(
             (f.to_string(), frag.map(|s| s.to_string()))
         };
 
-        let target_root = reg
-            .get_by_uri(&file_uri)
-            .ok_or_else(|| AppError::NotFound(format!("Ref schema not found: {}", file_uri)))?;
-
+        let Some(target_root) = reg.get_by_uri(&file_uri) else {
+            raise_error!(
+                "ERR_SCHEMA_REF_NOT_FOUND",
+                error = format!("Référence de schéma introuvable : {}", file_uri),
+                context = json!({
+                    "requested_uri": file_uri,
+                    "action": "resolve_remote_ref",
+                    "hint": "Assurez-vous que l'ontologie contenant cette URI a été chargée via 'load_layer_from_file' avant la validation."
+                })
+            );
+        };
         let target_schema = if let Some(frag) = fragment {
             let pointer = frag.replace('#', "");
-            target_root.pointer(&pointer).ok_or_else(|| {
-                AppError::NotFound(format!("Pointer {} not found in {}", pointer, file_uri))
-            })?
+
+            match target_root.pointer(&pointer) {
+                Some(s) => s,
+                None => {
+                    raise_error!(
+                        "ERR_SCHEMA_POINTER_NOT_FOUND",
+                        error =
+                            format!("Pointeur JSON '{}' introuvable dans {}", pointer, file_uri),
+                        context = json!({
+                            "pointer": pointer,
+                            "target_file": file_uri,
+                            "action": "resolve_json_pointer",
+                            "hint": "Vérifiez que le chemin existe dans le document source. Les pointeurs sont sensibles à la casse."
+                        })
+                    );
+                }
+            }
         } else {
             target_root
         };
@@ -71,45 +103,56 @@ fn validate_node(
         match t {
             "object" => {
                 if !instance.is_object() {
-                    return Err(AppError::Database(format!(
-                        "Expected object, got {:?}",
-                        instance
-                    )));
+                    raise_type_error("object", instance)?;
                 }
                 validate_object(instance, schema, reg, current_uri)?;
             }
             "string" => {
                 if !instance.is_string() {
-                    return Err(AppError::Validation("Expected string".to_string()));
+                    raise_type_error("string", instance)?;
                 }
             }
             "number" => {
                 if !instance.is_number() {
-                    return Err(AppError::Validation("Expected number".to_string()));
+                    raise_type_error("number", instance)?;
                 }
             }
             "integer" => {
                 if !instance.is_i64() && !instance.is_u64() {
-                    return Err(AppError::Validation("Expected integer".to_string()));
+                    raise_type_error("integer", instance)?;
                 }
             }
             "boolean" => {
                 if !instance.is_boolean() {
-                    return Err(AppError::Validation("Expected boolean".to_string()));
+                    raise_type_error("boolean", instance)?;
                 }
             }
             "array" => {
                 if !instance.is_array() {
-                    return Err(AppError::Validation("Expected array".to_string()));
+                    raise_type_error("array", instance)?;
                 }
             }
             "null" => {
                 if !instance.is_null() {
-                    return Err(AppError::Validation("Expected null".to_string()));
+                    raise_type_error("null", instance)?;
                 }
             }
             _ => {}
         }
+    }
+
+    // Fonction utilitaire de diagnostic (Standard RAISE V1.3)
+    fn raise_type_error(expected: &str, actual: &Value) -> RaiseResult<()> {
+        raise_error!(
+            "ERR_VALIDATION_TYPE_MISMATCH",
+            error = format!("Échec de conformité : type '{}' attendu.", expected),
+            context = json!({
+                "expected_type": expected,
+                "actual_value_sample": format!("{:.50}", actual.to_string()),
+                "action": "validate_primitive_type",
+                "hint": format!("La donnée ne correspond pas à la définition du schéma (attendu: {}).", expected)
+            })
+        );
     }
     Ok(())
 }
@@ -127,10 +170,16 @@ fn validate_object(
         for r in req {
             if let Some(key) = r.as_str() {
                 if !obj.contains_key(key) {
-                    return Err(AppError::Validation(format!(
-                        "Missing required property: {}",
-                        key
-                    )));
+                    raise_error!(
+                        "ERR_VALIDATION_REQUIRED_FIELD_MISSING",
+                        error = format!("Propriété obligatoire manquante : '{}'", key),
+                        context = json!({
+                            "missing_key": key,
+                            "available_keys": obj.keys().collect::<Vec<_>>(),
+                            "action": "validate_required_properties",
+                            "hint": format!("L'objet doit contenir la clé '{}' pour être conforme au schéma.", key)
+                        })
+                    );
                 }
             }
         }
@@ -140,8 +189,18 @@ fn validate_object(
     if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
         for (key, sub_schema) in props {
             if let Some(val) = obj.get(key) {
-                validate_node(val, sub_schema, reg, current_uri)
-                    .map_err(|e| AppError::Validation(format!("Property '{}': {}", key, e)))?;
+                if let Err(e) = validate_node(val, sub_schema, reg, current_uri) {
+                    raise_error!(
+                        "ERR_VALIDATION_NESTED_PROPERTY_FAIL",
+                        error = format!("Échec de validation sur la propriété '{}'", key),
+                        context = json!({
+                            "property_name": key,
+                            "nested_error": e,
+                            "action": "validate_object_properties",
+                            "hint": "Une sous-propriété de cet objet ne respecte pas son schéma dédié."
+                        })
+                    );
+                }
             }
         }
     }
@@ -151,19 +210,38 @@ fn validate_object(
     if let Some(patterns) = schema.get("patternProperties").and_then(|v| v.as_object()) {
         for (pattern, sub_schema) in patterns {
             // On compile le regex
-            let re = Regex::new(pattern).map_err(|e| {
-                AppError::Validation(format!(
-                    "Invalid regex in patternProperties '{}': {}",
-                    pattern, e
-                ))
-            })?;
+            let re = match Regex::new(pattern) {
+                Ok(r) => r,
+                Err(e) => {
+                    raise_error!(
+                        "ERR_SCHEMA_INVALID_REGEX_PATTERN",
+                        error = format!("Regex invalide dans 'patternProperties' : {}", pattern),
+                        context = json!({
+                            "invalid_pattern": pattern,
+                            "regex_error": e.to_string(),
+                            "action": "compile_pattern_properties",
+                            "hint": "Vérifiez la syntaxe de votre expression régulière. Les Regex doivent respecter le standard Rust (crate regex)."
+                        })
+                    );
+                }
+            };
 
             // On valide toutes les clés qui matchent
             for (key, val) in obj {
                 if re.is_match(key) {
-                    validate_node(val, sub_schema, reg, current_uri).map_err(|e| {
-                        AppError::Validation(format!("Pattern property '{}': {}", key, e))
-                    })?;
+                    if let Err(e) = validate_node(val, sub_schema, reg, current_uri) {
+                        raise_error!(
+                            "ERR_VALIDATION_PATTERN_PROPERTY_FAIL",
+                            error = format!("Échec de validation pour la clé dynamique '{}'", key),
+                            context = json!({
+                                "matched_key": key,
+                                "applied_pattern": re.as_str(),
+                                "nested_error": e,
+                                "action": "validate_pattern_properties",
+                                "hint": "La donnée associée à cette clé ne respecte pas le schéma imposé par le motif Regex."
+                            })
+                        );
+                    }
                 }
             }
             compiled_patterns.push(re);
@@ -189,11 +267,17 @@ fn validate_object(
 
                 // Si ni l'un ni l'autre (et pas $schema/id qui sont souvent implicites ou injectés)
                 // Note: On tolère $schema et id s'ils sont injectés par le système, mais idéalement ils devraient être dans le schéma.
+                // MIGRATION V1.3 : Validation des propriétés additionnelles (Schéma clos)
                 if !is_defined && !matches_pattern && k != "$schema" {
-                    return Err(AppError::Validation(format!(
-                        "Additional property not allowed: {}",
-                        k
-                    )));
+                    raise_error!(
+                        "ERR_VALIDATION_ADDITIONAL_PROPERTY_FORBIDDEN",
+                        error = format!("Propriété non autorisée détectée : '{}'", k),
+                        context = json!({
+                            "forbidden_key": k,
+                            "action": "validate_additional_properties",
+                            "hint": "Ce schéma est clos (additionalProperties: false). Seules les propriétés définies explicitement ou correspondant à un motif (pattern) sont acceptées."
+                        })
+                    );
                 }
             }
         }

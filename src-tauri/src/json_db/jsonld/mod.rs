@@ -7,10 +7,10 @@
 //! - Compaction : convertir forme étendue en JSON-LD compact
 //! - Normalisation : produire des graphes RDF canoniques
 //! - Validation : vérifier la conformité avec les schémas
-
+use crate::utils::prelude::*;
 use crate::utils::{
-    json::{Deserialize, Serialize}, // Serde via la façade
-    HashMap,                        // Collection via la façade
+    // Serde via la façade
+    HashMap, // Collection via la façade
 };
 
 pub mod context;

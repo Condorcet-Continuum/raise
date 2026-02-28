@@ -31,15 +31,34 @@ impl ArcadiaBehavior {
         let kademlia = kad::Behaviour::new(peer_id, store);
 
         // 2. Configuration de Gossipsub : Authentification des messages requise.
-        let gossipsub_config = gossipsub::ConfigBuilder::default()
-            .build()
-            .map_err(|e| format!("Erreur config Gossipsub: {:?}", e))?;
+        let gossipsub_config = match gossipsub::ConfigBuilder::default().build() {
+            Ok(cfg) => cfg,
+            Err(e) => raise_error!(
+                "ERR_P2P_GOSSIPSUB_CONFIG",
+                error = e,
+                context = json!({
+                    "action": "build_gossipsub_config",
+                    "layer": "libp2p_network",
+                    "hint": "Vérifiez les paramètres de validation du protocole ou les limites de taille de message."
+                })
+            ),
+        };
 
-        let gossipsub = gossipsub::Behaviour::new(
+        let gossipsub = match gossipsub::Behaviour::new(
             gossipsub::MessageAuthenticity::Signed(local_key),
             gossipsub_config,
-        )
-        .map_err(|e| format!("Erreur init Gossipsub: {:?}", e))?;
+        ) {
+            Ok(behaviour) => behaviour,
+            Err(e) => raise_error!(
+                "ERR_P2P_BEHAVIOUR_INIT",
+                error = e,
+                context = json!({
+                    "action": "initialize_gossipsub_behaviour",
+                    "authenticity": "Signed",
+                    "hint": "Échec de l'initialisation du comportement réseau. Vérifiez la validité de la clé locale (PeerId)."
+                })
+            ),
+        };
 
         // 3. Configuration Request-Response : Utilisation du protocole CBOR pour Arcadia.
         let request_response = request_response::cbor::Behaviour::new(

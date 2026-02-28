@@ -10,9 +10,21 @@ use pest_derive::Parser;
 pub struct Sysml2Parser;
 
 pub fn parse_sysml_text(input: &str) -> RaiseResult<pest::iterators::Pairs<'_, Rule>> {
-    Sysml2Parser::parse(Rule::file, input)
-        // 🎯 CORRECTION : On convertit l'erreur de Pest en AppError
-        .map_err(|e| AppError::Validation(format!("Erreur de parsing SysML v2 : {}", e)))
+    match Sysml2Parser::parse(Rule::file, input) {
+        Ok(pairs) => Ok(pairs),
+        Err(e) => {
+            raise_error!(
+                "ERR_SYSML_PARSE_FAILURE",
+                error = "Échec de l'analyse syntaxique du fichier SysML v2.",
+                context = json!({
+                    "parsing_error": format!("{}", e),
+                    "location": format!("{:?}", e.location),
+                    "action": "parse_sysml_v2_input",
+                    "hint": "Vérifiez la syntaxe SysML v2. L'erreur indique généralement un caractère inattendu ou une structure de bloc mal fermée."
+                })
+            );
+        }
+    }
 }
 
 #[cfg(test)]

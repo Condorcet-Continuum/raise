@@ -19,8 +19,19 @@ fn build_register_request(
     schema_json: &str,
 ) -> RaiseResult<ChaincodeMessage, String> {
     // Validation du JSON d'entrée
-    let schema_def: Value =
-        serde_json::from_str(schema_json).map_err(|e| format!("JSON du schéma invalide: {}", e))?;
+    let schema_def: Value = match serde_json::from_str(schema_json) {
+        Ok(val) => val,
+        Err(e) => raise_error!(
+            "ERR_JSONDB_SCHEMA_SYNTAX",
+            error = e,
+            context = json!({
+                "action": "parse_schema_definition",
+                "line": e.line(),
+                "column": e.column(),
+                "hint": "Le JSON du schéma est mal formé. Vérifiez les accolades et les guillemets."
+            })
+        ),
+    };
 
     let args = serde_json::json!({
         "uri": uri,
@@ -29,11 +40,21 @@ fn build_register_request(
         "hash": "hash_simulé_tauri"
     });
 
-    let payload = serde_json::to_vec(&serde_json::json!({
+    let payload = match serde_json::to_vec(&serde_json::json!({
         "function": "register_schema",
         "args": args
-    }))
-    .map_err(|e| format!("Erreur de sérialisation interne: {}", e))?;
+    })) {
+        Ok(bytes) => bytes,
+        Err(e) => raise_error!(
+            "ERR_SERIALIZATION_PAYLOAD_FAILED",
+            error = e,
+            context = json!({
+                "action": "serialize_schema_payload",
+                "function": "register_schema",
+                "hint": "Vérifiez que les arguments ne contiennent pas de types non supportés ou de références circulaires."
+            })
+        ),
+    };
 
     let tx_id = uuid::Uuid::new_v4().to_string();
 
@@ -65,37 +86,71 @@ pub async fn cmd_register_schema(
         "🔌 [Tauri] Connexion au Chaincode Docker ({})...",
         CHAINCODE_URL
     );
-    let mut client = ChaincodeClient::connect(CHAINCODE_URL).await.map_err(|e| {
-        format!(
-            "Échec connexion gRPC: {}. Avez-vous lancé 'docker-compose up' ?",
-            e
-        )
-    })?;
+    let mut client = match ChaincodeClient::connect(CHAINCODE_URL).await {
+        Ok(c) => c,
+        Err(e) => {
+            raise_error!(
+                "ERR_BLOCKCHAIN_GRPC_CONNECTION_FAILED",
+                error = e,
+                context = json!({
+                    "url": CHAINCODE_URL,
+                    "protocol": "gRPC",
+                    "hint": "Échec de la connexion au Chaincode. Avez-vous lancé 'docker-compose up' ? Vérifiez que le service est accessible sur le port configuré."
+                })
+            )
+        }
+    };
 
     let request = tonic::Request::new(tokio_stream::iter(vec![message]));
 
     println!("📤 [Tauri] Envoi transaction TXID: {}", tx_id);
 
     // 3. Correction : on utilise .chat() au lieu de .connect()
-    let mut stream = client
-        .chat(request)
-        .await
-        .map_err(|e| format!("Erreur transport gRPC: {}", e))?
-        .into_inner();
+    let mut stream = match client.chat(request).await {
+        Ok(response) => response.into_inner(),
+        Err(e) => raise_error!(
+            "ERR_GRPC_TRANSPORT_FAILURE",
+            error = e,
+            context = json!({
+                "action": "establish_grpc_stream",
+                "service": "chat_service",
+                "hint": "Vérifiez la connexion réseau ou si le serveur distant est bien en ligne."
+            })
+        ),
+    };
 
     // Lecture de la réponse (nécessite d'importer StreamExt ou message() selon la version)
     // Ici on utilise .message() qui est standard sur le stream retourné par tonic
-    if let Some(response) = stream.message().await.map_err(|e| e.to_string())? {
-        if response.r#type == chaincode_message::Type::Completed as i32 {
-            println!("✅ [Tauri] Succès !");
-            Ok(format!("Transaction validée ! TXID: {}", response.txid))
-        } else {
-            let err_msg = String::from_utf8_lossy(&response.payload);
-            println!("❌ [Tauri] Erreur métier : {}", err_msg);
-            Err(format!("Rejet Blockchain: {}", err_msg))
-        }
+    // 1. Lecture sécurisée du message depuis le stream gRPC
+    let response = match stream.message().await {
+        Ok(Some(msg)) => msg,
+        Ok(None) => return raise_error!(
+            "ERR_BLOCKCHAIN_EMPTY_RESPONSE",
+            context = json!({ "hint": "Le conteneur a fermé la connexion sans envoyer de réponse." })
+        ),
+        Err(e) => return raise_error!(
+            "ERR_BLOCKCHAIN_STREAM_FAILED",
+            error = e,
+            context = json!({ "protocol": "gRPC_Stream" })
+        ),
+    };
+
+    // 2. Traitement de la réponse métier
+    if response.r#type == chaincode_message::Type::Completed as i32 {
+        println!("✅ [Tauri] Succès !");
+        Ok(format!("Transaction validée ! TXID: {}", response.txid))
     } else {
-        Err("Aucune réponse reçue du conteneur".to_string())
+        let err_msg = String::from_utf8_lossy(&response.payload).to_string();
+        
+        // On lève une erreur métier structurée
+        raise_error!(
+            "ERR_BLOCKCHAIN_TRANSACTION_REJECTED",
+            context = json!({
+                "txid": response.txid,
+                "payload_error": err_msg,
+                "type": response.r#type
+            })
+        )
     }
 }
 

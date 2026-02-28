@@ -63,8 +63,20 @@ pub async fn list_pending(
 
     if io::exists(&dir).await {
         let mut entries = io::read_dir(&dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
+        while let Some(entry) = match entries.next_entry().await {
+            Ok(e) => e,
+            Err(e) => raise_error!(
+                "ERR_FS_SCAN_ITERATION_FAIL",
+                error = e,
+                context = json!({
+                    "directory": dir,
+                    "action": "collect_pending_ids"
+                })
+            ),
+        } {
             let path = entry.path();
+
+            // Filtrage des fichiers JSON
             if path.extension().is_some_and(|ext| ext == "json") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     pending_ids.push(stem.to_string());

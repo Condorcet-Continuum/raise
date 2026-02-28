@@ -8,7 +8,7 @@ pub mod store;
 // Exports publics
 pub use analyzer::Analyzer;
 pub use ast::{Expr, Rule};
-pub use evaluator::{DataProvider, EvalError, Evaluator, NoOpDataProvider};
+pub use evaluator::{DataProvider, Evaluator, NoOpDataProvider};
 pub use store::RuleStore;
 
 #[cfg(test)]

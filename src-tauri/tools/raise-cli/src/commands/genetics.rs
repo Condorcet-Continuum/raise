@@ -38,7 +38,7 @@ pub enum GeneticsCommands {
     },
 }
 
-pub async fn handle(args: GeneticsArgs) -> Result<()> {
+pub async fn handle(args: GeneticsArgs) -> RaiseResult<()> {
     match args.command {
         GeneticsCommands::Evolve {
             population,
@@ -67,11 +67,13 @@ pub async fn handle(args: GeneticsArgs) -> Result<()> {
 
             user_info!(
                 "CONFIG_READY",
-                "Pop: {} | Gen: {} | Mut: {} | Cross: {}",
-                config.population_size,
-                config.max_generations,
-                config.mutation_rate,
-                config.crossover_rate
+                json!({
+                    "population": config.population_size,
+                    "generations": config.max_generations,
+                    "mutation": config.mutation_rate,
+                    "crossover": config.crossover_rate,
+                    "action": "initialize_genetic_engine"
+                })
             );
 
             // TODO: Ici nous instancierons le GeneticEngine avec SystemModelProvider
@@ -84,7 +86,10 @@ pub async fn handle(args: GeneticsArgs) -> Result<()> {
         }
         GeneticsCommands::Inspect { id } => {
             let target = id.as_deref().unwrap_or("Meilleur Pareto Front");
-            user_info!("INSPECT", "Analyse de : {}", target);
+            user_info!(
+                "INSPECT_TARGET",
+                json!({ "target": format!("{:?}", target) })
+            );
         }
     }
     Ok(())

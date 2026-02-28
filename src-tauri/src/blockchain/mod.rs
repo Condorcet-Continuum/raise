@@ -14,7 +14,6 @@ use tauri::{AppHandle, Manager, Runtime, State};
 pub mod bridge;
 pub mod consensus;
 pub mod crypto;
-pub mod error;
 pub mod fabric;
 pub mod p2p;
 pub mod storage;

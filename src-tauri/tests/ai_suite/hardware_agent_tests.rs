@@ -6,7 +6,8 @@ use raise::ai::agents::{hardware_agent::HardwareAgent, Agent, AgentContext};
 use raise::utils::Arc;
 
 #[tokio::test]
-#[ignore]
+#[serial_test::serial] // Protection RTX 5060 en local
+#[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_hardware_agent_handles_both_electronics_and_infra() {
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone suite à la migration
     // vers le moteur de stockage asynchrone. On doit l'attendre pour obtenir l'environnement.

@@ -16,15 +16,40 @@ impl MigrationVersion {
     pub fn parse(version_str: &str) -> RaiseResult<Self> {
         let parts: Vec<&str> = version_str.split('.').collect();
         if parts.len() != 3 {
-            return Err(AppError::Validation(format!(
-                "Format de version invalide (attendu x.y.z): {}",
-                version_str
-            )));
+            raise_error!(
+                "ERR_MIGRATION_VERSION_FORMAT_INVALID",
+                error = format!("Le format de version '{}' est invalide.", version_str),
+                context = json!({
+                    "version_input": version_str,
+                    "expected_format": "x.y.z",
+                    "segments_found": parts.len(),
+                    "action": "parse_migration_version"
+                })
+            );
         }
+        let major: u32 = match parts[0].parse() {
+            Ok(v) => v,
+            Err(_) => raise_error!(
+                "ERR_VERSION_PARSE_MAJOR",
+                context = json!({ "value": parts[0], "hint": "Le composant 'Major' de la version doit être un nombre entier." })
+            ),
+        };
 
-        let major = parts[0].parse().map_err(|_| "Majeur non numérique")?;
-        let minor = parts[1].parse().map_err(|_| "Mineur non numérique")?;
-        let patch = parts[2].parse().map_err(|_| "Patch non numérique")?;
+        let minor: u32 = match parts[1].parse() {
+            Ok(v) => v,
+            Err(_) => raise_error!(
+                "ERR_VERSION_PARSE_MINOR",
+                context = json!({ "value": parts[1], "hint": "Le composant 'Minor' de la version doit être un nombre entier." })
+            ),
+        };
+
+        let patch: u32 = match parts[2].parse() {
+            Ok(v) => v,
+            Err(_) => raise_error!(
+                "ERR_VERSION_PARSE_PATCH",
+                context = json!({ "value": parts[2], "hint": "Le composant 'Patch' de la version doit être un nombre entier." })
+            ),
+        };
 
         Ok(Self {
             major,

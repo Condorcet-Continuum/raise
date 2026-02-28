@@ -1,9 +1,8 @@
 // FICHIER : src-tauri/src/json_db/indexes/driver.rs
 
 use super::{IndexDefinition, IndexRecord};
-use crate::utils::data::{BTreeMap, HashMap};
+use crate::utils::data::{self, BTreeMap, HashMap};
 use crate::utils::io::{self, Path};
-use crate::utils::json::{self, DeserializeOwned};
 use crate::utils::prelude::*;
 
 /// Trait définissant le comportement d'une structure d'index en mémoire
@@ -103,10 +102,14 @@ pub async fn load<T: IndexMap>(path: &Path) -> RaiseResult<T> {
     if !io::exists(path).await {
         return Ok(T::default());
     }
-    let content = io::read(path)
-        .await
-        .map_err(|e| AppError::Database(format!("Lecture index {}: {}", path.display(), e)))?;
-
+    let content = match io::read(path).await {
+        Ok(c) => c,
+        Err(e) => raise_error!(
+            "ERR_DB_INDEX_READ",
+            error = e,
+            context = json!({ "path": path.to_string_lossy() })
+        ),
+    };
     if content.is_empty() {
         return Ok(T::default());
     }
@@ -130,8 +133,8 @@ pub async fn update<T: IndexMap>(
     path: &Path,
     def: &IndexDefinition,
     doc_id: &str,
-    old_doc: Option<&json::Value>,
-    new_doc: Option<&json::Value>,
+    old_doc: Option<&data::Value>,
+    new_doc: Option<&data::Value>,
 ) -> RaiseResult<()> {
     let mut index: T = load(path).await?;
     let mut changed = false;
@@ -153,10 +156,20 @@ pub async fn update<T: IndexMap>(
             if def.unique {
                 if let Some(ids) = index.get_doc_ids(&key_str) {
                     if !ids.is_empty() && (ids.len() > 1 || ids[0] != doc_id) {
-                        return Err(AppError::Database(format!(
-                            "Index unique constraint violation: {} = {}",
-                            def.name, key_str
-                        )));
+                        raise_error!(
+                            "ERR_DB_INDEX_UNIQUE_VIOLATION",
+                            error = format!(
+                                "Violation de contrainte unique sur l'index '{}'",
+                                def.name
+                            ),
+                            context = json!({
+                                "index_name": def.name,
+                                "conflicting_value": key_str,
+                                "existing_ids": ids,
+                                "target_doc_id": doc_id,
+                                "action": "enforce_unique_constraint"
+                            })
+                        );
                     }
                 }
             }
@@ -230,7 +243,7 @@ mod tests {
             unique: true,
         };
 
-        let doc = json::json!({"val": "A"});
+        let doc = data::json!({"val": "A"});
 
         // Initial update
         update::<HashMap<String, Vec<String>>>(&path, &def, "id1", None, Some(&doc))

@@ -12,11 +12,20 @@ pub async fn cognitive_load_plugin(
     path: String,
     space: String,
     db: String,
-) -> Result<String> {
-    manager
-        .load_plugin(&id, &path, &space, &db)
-        .await
-        .map_err(|e| AppError::from(e.to_string()))?;
+) -> RaiseResult<String> {
+    match manager.load_plugin(&id, &path, &space, &db).await {
+        Ok(_) => {}
+        Err(e) => raise_error!(
+            "ERR_PLUGIN_LOAD_FAIL",
+            error = e,
+            context = json!({
+                "plugin_id": id,
+                "path": path,
+                "action": "load_external_plugin",
+                "hint": "Impossible de charger le plugin. Vérifiez que le fichier existe, que les dépendances sont présentes et que le manifeste est valide."
+            })
+        ),
+    };
 
     Ok(format!("Plugin {} chargé avec succès", id))
 }
@@ -28,12 +37,20 @@ pub async fn cognitive_run_plugin(
     manager: State<'_, PluginManager>,
     id: String,
     mandate: Option<Value>,
-) -> Result<Value> {
+) -> RaiseResult<Value> {
     // Utilisation de la nouvelle méthode run_plugin_with_context pour supporter le Workflow
-    let (code, signals) = manager
-        .run_plugin_with_context(&id, mandate)
-        .await
-        .map_err(|e| AppError::from(e.to_string()))?;
+    let (code, signals) = match manager.run_plugin_with_context(&id, mandate).await {
+        Ok(result) => result,
+        Err(e) => raise_error!(
+            "ERR_PLUGIN_EXECUTION_FAIL",
+            error = e,
+            context = json!({
+                "plugin_id": id,
+                "action": "run_plugin_with_context",
+                "hint": "Le plugin a crashé durant l'exécution. Vérifiez les logs de sortie du plugin et la validité du mandat transmis."
+            })
+        ),
+    };
 
     Ok(json!({
         "exit_code": code,
@@ -43,7 +60,7 @@ pub async fn cognitive_run_plugin(
 
 /// Liste tous les plugins actuellement chargés.
 #[tauri::command]
-pub async fn cognitive_list_plugins(manager: State<'_, PluginManager>) -> Result<Vec<String>> {
+pub async fn cognitive_list_plugins(manager: State<'_, PluginManager>) -> RaiseResult<Vec<String>> {
     Ok(manager.list_active_plugins().await)
 }
 

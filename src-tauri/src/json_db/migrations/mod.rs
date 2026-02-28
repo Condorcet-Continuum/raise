@@ -5,8 +5,8 @@
 pub mod migrator;
 pub mod version;
 
-use crate::utils::json::{self, Deserialize, Serialize};
-
+use crate::utils::data;
+use crate::utils::data::{Deserialize, Serialize};
 pub use migrator::Migrator;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +24,7 @@ pub struct Migration {
 pub enum MigrationStep {
     CreateCollection {
         name: String,
-        schema: json::Value,
+        schema: data::Value,
     },
     DropCollection {
         name: String,
@@ -32,7 +32,7 @@ pub enum MigrationStep {
     AddField {
         collection: String,
         field: String,
-        default: Option<json::Value>,
+        default: Option<data::Value>,
     },
     RemoveField {
         collection: String,
@@ -70,7 +70,7 @@ mod tests {
             default: Some(json!(true)),
         };
 
-        let serialized = json::stringify(&step).unwrap();
+        let serialized = data::stringify(&step).unwrap();
         // Vérifie la présence du tag "type" ajouté par #[serde(tag = "type")]
         assert!(serialized.contains("\"type\":\"AddField\""));
         assert!(serialized.contains("\"field\":\"active\""));

@@ -29,24 +29,41 @@ pub enum UtilsCommands {
     Ping,
 }
 
-pub async fn handle(args: UtilsArgs) -> Result<()> {
+pub async fn handle(args: UtilsArgs) -> RaiseResult<()> {
     match args.command {
         UtilsCommands::Info => {
             let config = AppConfig::get();
 
             println!("--- 🛠️ RAISE SYSTEM INFO ---");
-            user_info!("VERSION", "{}", env!("CARGO_PKG_VERSION"));
+            user_info!(
+                "APP_VERSION",
+                json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "env": if cfg!(debug_assertions) { "development" } else { "production" }
+                })
+            );
 
             let env_mode = if cfg!(debug_assertions) {
                 "development"
             } else {
                 "production"
             };
-            user_info!("SYS_ENV", "Environnement : {}", env_mode);
-
+            user_info!(
+                "SYSTEM_ENVIRONMENT",
+                json!({
+                    "mode": env_mode,
+                    "is_production": env_mode == "production",
+                    "timestamp": Local::now().to_rfc3339()
+                })
+            );
             let db_root = config.get_path("PATH_RAISE_DOMAIN");
-            user_info!("DB_ROOT", "{:?}", db_root);
-
+            user_info!(
+                "DATABASE_ROOT_INITIALIZED",
+                json!({
+                    "path": db_root,
+                    "action": "filesystem_check"
+                })
+            );
             let mut provider = String::from("Non configuré");
             let mut model = String::from("Inconnu");
             let mut status = String::from("disabled");
@@ -73,11 +90,13 @@ pub async fn handle(args: UtilsArgs) -> Result<()> {
             }
 
             user_info!(
-                "LLM_ENGINE",
-                "Provider: {} | Modèle: {} | Statut: {}",
-                provider,
-                model,
-                status
+                "LLM_ENGINE_STATUS",
+                json!({
+                    "provider": provider,
+                    "model": model,
+                    "status": status,
+                    "is_ready": status == "connected" || status == "active"
+                })
             );
 
             // Vérification simple de l'existence de la racine DB

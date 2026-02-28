@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/utils/mod.rs
 
 // =========================================================================
-//  RAISE UTILS V1.0 - Foundation Layer (Stable)
+//  RAISE UTILS V1.3 - Foundation Layer (AI-Ready & Legacy Compatible)
 // =========================================================================
 
 // --- 1. MODULES INTERNES ---
@@ -16,13 +16,14 @@ pub mod macros;
 pub mod net;
 pub mod os;
 
-// --- 2. FAÇADES SÉMANTIQUES (L'Architecture Cible) ---
+// --- 2. FAÇADES SÉMANTIQUES (Contrat de Service) ---
 
-/// **Core Foundation** : Types de base et Erreurs.
+/// **Core Foundation** : Types de base et gestion d'erreurs.
 pub mod core {
-    // [AJOUT SILENCIEUX] On ajoute RaiseResult à côté de Result
-    pub use super::error::{AppError, RaiseResult, Result};
-    pub use chrono::{DateTime, Utc};
+    // Ré-intégration de Result (anyhow) pour la compatibilité
+    pub use super::error::{anyhow, AppError, Context, RaiseResult};
+    pub use anyhow::Result;
+    pub use chrono::{DateTime, Local, Utc};
     pub use uuid::Uuid;
 }
 
@@ -44,17 +45,17 @@ pub mod io {
     };
 }
 
-/// **Data Abstraction** : Manipulation JSON et Contextes.
+/// **Data Abstraction** : Manipulation JSON et Collections.
 pub mod data {
     pub use super::json::{
         from_binary, from_value, json, merge, parse, stringify, stringify_pretty, to_binary,
-        to_value, to_vec, ContextBuilder, Map, Value,
+        to_value, to_vec, Map, Value,
     };
     pub use serde::{Deserialize, Serialize};
     pub use std::collections::{BTreeMap, HashMap, HashSet};
 }
 
-/// **Application Context** : Accès global Config/Log/Env.
+/// **Application Context** : Accès global Config/Log/i18n.
 pub mod context {
     pub use super::config::AppConfig;
     pub use super::i18n::{init_i18n, t};
@@ -69,30 +70,31 @@ pub mod net_client {
 /// **Le Prélude** : À utiliser via `use crate::utils::prelude::*;`
 pub mod prelude {
     pub use super::context::AppConfig;
-    // [AJOUT SILENCIEUX] On glisse RaiseResult ici aussi
-    pub use super::core::{AppError, RaiseResult, Result, Utc, Uuid};
+    // Ré-intégration de Result ici pour éviter les erreurs de type dans les services
+    pub use super::core::{anyhow, AppError, Context, Local, RaiseResult, Result, Utc, Uuid};
     pub use super::data::{json, Deserialize, Serialize, Value};
     pub use super::io::Path;
-    pub use crate::{user_error, user_info, user_success};
+    pub use crate::{raise_error, user_info, user_success};
+    pub use serde::de::DeserializeOwned;
     pub use tracing::{debug, error, info, instrument, warn};
 }
 
 // =========================================================================
-// 3. EXPORTS LEGACY & UTILITAIRES (Compatibilité Totale)
+// 3. EXPORTS LEGACY & UTILITAIRES (Compatibilité Totale avec V1.0)
 // =========================================================================
 
-// --> Config & Erreurs
+// --> Config & Erreurs (Point d'entrée principal)
+pub use anyhow::Result; // L'alias critique qui causait la régression
 pub use config::AppConfig;
-// [AJOUT SILENCIEUX] Export legacy mis à jour pour inclure RaiseResult
-pub use error::{AppError, RaiseResult, Result};
+pub use error::{anyhow, AppError, Context, RaiseResult};
 pub use logger::init_logging;
 
-// --> Domaine (Requis par migrator.rs et autres)
+// --> Domaine & Types Temporels
 pub use chrono::{DateTime, Utc};
 pub use std::str::FromStr;
 pub use uuid::Uuid;
 
-// --> Logging (Requis par manager.rs)
+// --> Logging
 pub use tracing::{debug, error, info, instrument, warn};
 
 // --> Async Runtime & Sync
@@ -110,12 +112,12 @@ pub use tokio::time::sleep;
 pub use async_recursion::async_recursion;
 pub use async_trait::async_trait;
 
-// --> I/O
+// --> I/O & Process
 pub use std::io::{BufRead, Read, Seek, Write};
 pub use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 pub use tokio::process;
 
-// --> Collections & Types
+// --> Collections & Types Standard
 pub use lru::LruCache;
 pub use std::cmp::Ordering;
 pub use std::collections::{BTreeMap, HashMap, HashSet};
@@ -125,5 +127,6 @@ pub use std::num::NonZeroUsize;
 pub use std::thread;
 pub use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-// --> Regex
+// --> Divers
 pub use regex::Regex;
+pub use serde_json::Value as JsonValue;

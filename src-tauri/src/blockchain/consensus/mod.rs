@@ -53,10 +53,18 @@ impl ConsensusEngine {
     /// Vérifie l'autorité et mémorise le commit s'il est valide.
     pub fn register_proposal(&mut self, commit: ArcadiaCommit) -> RaiseResult<()> {
         if !self.config.authorized_validators.contains(&commit.author) {
-            return Err(AppError::Validation(format!(
-                "Commit rejeté : auteur {} non autorisé",
-                commit.author
-            )));
+            raise_error!(
+                "ERR_BLOCKCHAIN_UNAUTHORIZED_VALIDATOR",
+                error = format!(
+                    "Commit rejeté : l'auteur '{}' n'est pas autorisé à valider des transactions.",
+                    commit.author
+                ),
+                context = serde_json::json!({
+                    "unauthorized_author": commit.author,
+                    "action": "verify_commit_authorization",
+                    "hint": "Vérifiez que la clé ou l'identifiant de cet auteur est bien présent dans la liste 'authorized_validators' de la configuration du réseau."
+                })
+            );
         }
 
         // Stockage temporaire en attendant les votes
@@ -71,12 +79,16 @@ impl ConsensusEngine {
             .authorized_validators
             .contains(&vote.validator_key)
         {
-            return Err(AppError::Validation(format!(
-                "Vote rejeté : validateur {} non autorisé",
-                vote.validator_key
-            )));
+            crate::raise_error!(
+                "ERR_CONSENSUS_UNAUTHORIZED_VOTE",
+                error = format!("Vote rejeté : le validateur '{}' n'est pas autorisé à participer au consensus.", vote.validator_key),
+                context = serde_json::json!({
+                    "unauthorized_validator": vote.validator_key,
+                    "action": "verify_vote_authorization",
+                    "hint": "Vérifiez que la clé publique (ou l'ID) de ce validateur est bien enregistrée dans les paramètres du réseau (authorized_validators)."
+                })
+            );
         }
-
         if self.collector.add_vote(vote.clone()) {
             // Le quorum est atteint, on extrait le commit pour le Bridge
             Ok(self.pending.remove(&vote.commit_id))

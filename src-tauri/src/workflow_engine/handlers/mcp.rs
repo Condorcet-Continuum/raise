@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/workflow_engine/handlers/mcp.rs
 use super::{HandlerContext, NodeHandler};
-use crate::utils::{prelude::*, AppError, HashMap};
+use crate::utils::{prelude::*, HashMap};
 use crate::workflow_engine::{ExecutionStatus, NodeType, WorkflowNode};
 use async_trait::async_trait;
 
@@ -18,13 +18,31 @@ impl NodeHandler for McpHandler {
         context: &mut HashMap<String, Value>,
         shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
-        let tool_name = node
-            .params
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                AppError::from("Paramètre 'tool_name' manquant pour CallMcp".to_string())
-            })?;
+        // Extraction sécurisée du nom de l'outil MCP
+        let tool_name = match node.params.get("tool_name") {
+            Some(val) => match val.as_str() {
+                Some(s) => s,
+                None => raise_error!(
+                    "ERR_MCP_INVALID_PARAM",
+                    context = json!({
+                        "node_id": node.id,
+                        "param": "tool_name",
+                        "expected": "string",
+                        "received": val,
+                        "hint": "Le nom de l'outil MCP doit être une chaîne de caractères (ex: 'fetch_url')."
+                    })
+                ),
+            },
+            None => raise_error!(
+                "ERR_MCP_MISSING_PARAM",
+                context = json!({
+                    "node_id": node.id,
+                    "param": "tool_name",
+                    "action": "CallMcp",
+                    "hint": "Le paramètre 'tool_name' est obligatoire pour les nœuds de type CallMcp."
+                })
+            ),
+        };
 
         let default_args = json!({});
         let args = node.params.get("arguments").unwrap_or(&default_args);

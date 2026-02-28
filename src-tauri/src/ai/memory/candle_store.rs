@@ -42,8 +42,23 @@ impl CandleLocalStore {
         let d = valid_vectors[0].len();
         let flat_vecs: Vec<f32> = valid_vectors.into_iter().flatten().cloned().collect();
 
-        let matrix = Tensor::from_vec(flat_vecs, (n, d), device)
-            .map_err(|e| AppError::System(anyhow::anyhow!("Candle Matrix Error: {}", e)))?;
+        let matrix = match Tensor::from_vec(flat_vecs, (n, d), device) {
+            Ok(m) => m,
+            Err(e) => {
+                // La macro interrompt la fonction et renvoie une erreur typée RAISE
+                raise_error!(
+                    "ERR_VECTOR_MATRIX_CREATION_FAILED",
+                    error = e,
+                    context = json!({
+                        "action": "build_search_index",
+                        "vectors_count": n,
+                        "dimension": d,
+                        "device": format!("{:?}", device),
+                        "hint": "Échec de la création de la matrice de recherche. Vérifiez la cohérence des dimensions ou la mémoire GPU disponible."
+                    })
+                )
+            }
+        };
 
         Ok(Some(matrix))
     }
@@ -58,16 +73,42 @@ impl CandleLocalStore {
 
         if let Some(ref matrix) = state.vector_matrix {
             let tensor_path = self.storage_path.join("memory_vectors.safetensors");
+            // 1. On clone pour le thread, on garde l'original pour le diagnostic
+            let thread_path = tensor_path.clone();
             let matrix_clone = matrix.clone();
 
-            tokio::task::spawn_blocking(move || {
+            let join_handle = tokio::task::spawn_blocking(move || {
                 let mut map = std::collections::HashMap::new();
                 map.insert("vectors".to_string(), matrix_clone);
-                candle_core::safetensors::save(&map, tensor_path)
+                // On utilise le clone ici
+                candle_core::safetensors::save(&map, thread_path)
             })
-            .await
-            .map_err(|e| AppError::System(anyhow::anyhow!(e)))?
-            .map_err(|e| AppError::System(anyhow::anyhow!(e)))?;
+            .await;
+
+            // 2. Gestion de l'erreur du Thread (JoinError)
+            let save_result = match join_handle {
+                Ok(res) => res,
+                Err(e) => {
+                    raise_error!(
+                        "ERR_THREAD_PANIC_DURING_SAVE",
+                        error = e,
+                        context = json!({ "action": "spawn_blocking_safetensors" })
+                    )
+                }
+            };
+
+            // 3. Gestion de l'erreur Safetensors/IO
+            if let Err(e) = save_result {
+                raise_error!(
+                    "ERR_AI_SAFE_TENSORS_SAVE_FAILED",
+                    error = e,
+                    context = json!({
+                        "action": "persist_vector_memory",
+                        "path": tensor_path.to_string_lossy(), // L'original est encore là !
+                        "hint": "Vérifiez que le disque n'est pas plein."
+                    })
+                )
+            }
         }
         Ok(())
     }
@@ -117,16 +158,36 @@ impl VectorStore for CandleLocalStore {
         };
 
         // 1. Calcul des scores via Candle (Produit Matriciel)
-        let q = Tensor::from_slice(query_vec, (1, query_vec.len()), &self.device)
-            .map_err(|e| AppError::System(anyhow::anyhow!(e)))?;
+        // 1. Préparation du vecteur de requête
+        let q = match Tensor::from_slice(query_vec, (1, query_vec.len()), &self.device) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_VECTOR_QUERY_INIT_FAILED", error = e),
+        };
 
-        let scores = matrix
-            .matmul(&q.t().map_err(|e| AppError::System(anyhow::anyhow!(e)))?)
-            .map_err(|e| AppError::System(anyhow::anyhow!(e)))?
-            .flatten_all()
-            .map_err(|e| AppError::System(anyhow::anyhow!(e)))?
-            .to_vec1::<f32>()
-            .map_err(|e| AppError::System(anyhow::anyhow!(e)))?;
+        // 2. Transposition ISOLÉE pour garantir le type Tensor
+        let q_transposed = match q.t() {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_VECTOR_TRANSPOSE_FAILED", error = e),
+        };
+
+        // 3. Multiplication matricielle avec le Tensor extrait
+        let scores_tensor = match matrix.matmul(&q_transposed) {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_VECTOR_MATMUL_FAILED",
+                error = e,
+                context = json!({ "matrix_shape": format!("{:?}", matrix.shape()) })
+            ),
+        };
+
+        // 4. Extraction finale
+        let scores = match scores_tensor.flatten_all() {
+            Ok(s) => match s.to_vec1::<f32>() {
+                Ok(v) => v,
+                Err(e) => raise_error!("ERR_VECTOR_DTYPE_CONVERSION", error = e),
+            },
+            Err(e) => raise_error!("ERR_VECTOR_FLATTEN_FAILED", error = e),
+        };
 
         // 2. Application du filtre Métadonnées + Threshold
         // 2. Application du filtre Métadonnées + Threshold

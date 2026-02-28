@@ -13,12 +13,24 @@ pub enum DropMode {
 
 pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResult<()> {
     let db_path = config.db_root(space, db);
+
     if !io::exists(&db_path).await {
-        return Err(AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Database does not exist: {:?}", db_path),
-        )));
+        raise_error!(
+            "ERR_DB_FS_NOT_FOUND",
+            error = format!(
+                "Le répertoire de la base de données est introuvable : {}",
+                db
+            ),
+            context = json!({
+                "space": space,
+                "db_name": db,
+                "resolved_path": db_path,
+                "action": "open_database_storage",
+                "hint": "Si c'est un premier lancement, assurez-vous d'appeler 'create_db' avant 'open_db'."
+            })
+        );
     }
+
     Ok(())
 }
 

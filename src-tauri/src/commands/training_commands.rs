@@ -12,7 +12,7 @@ pub async fn tauri_train_domain(
     domain: String,
     epochs: usize,
     lr: f64,
-) -> Result<String> {
+) -> RaiseResult<String> {
     // On appelle simplement la fonction pure du noyau !
     ai_train_domain_native(storage.inner(), &space, &db_name, &domain, epochs, lr).await
 }

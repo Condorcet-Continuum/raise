@@ -45,9 +45,13 @@ impl CandleEngine {
             .unwrap_or("model.safetensors");
 
         // 3. CONSTRUCTION DES CHEMINS LOCAUX ABSOLUS
-        let home = dirs::home_dir().ok_or_else(|| {
-            AppError::Ai("Impossible de trouver le dossier utilisateur (home)".to_string())
-        })?;
+        let Some(home) = dirs::home_dir() else {
+            raise_error!(
+                "ERR_OS_HOME_NOT_FOUND",
+                error = "Impossible de localiser le répertoire personnel de l'utilisateur (home).",
+                context = json!({ "method": "dirs::home_dir" })
+            );
+        };
 
         // On cible dynamiquement le dossier du modèle (ex: embeddings/minilm)
         let base_path = home.join(format!(
@@ -61,32 +65,100 @@ impl CandleEngine {
 
         // 3. Vérification de sécurité stricte
         if !weights_path.exists() || !config_path.exists() || !tokenizer_path.exists() {
-            return Err(AppError::Ai(format!(
-                "Fichiers d'embeddings introuvables en local. Vérifiez le dossier : {:?}",
-                base_path
-            )));
+            raise_error!(
+                "ERR_AI_EMBEDDING_ASSETS_MISSING",
+                error = format!("Fichiers d'embeddings introuvables dans : {:?}", base_path),
+                context = json!({
+                    "base_path": base_path.to_string_lossy(),
+                    "missing_files": {
+                        "weights": !weights_path.exists(),
+                        "config": !config_path.exists(),
+                        "tokenizer": !tokenizer_path.exists()
+                    }
+                })
+            );
         }
 
         // 4. Chargement de la configuration
-        let config_str = std::fs::read_to_string(&config_path)
-            .map_err(|e| AppError::from(format!("Erreur lecture config: {}", e)))?;
+        let config_str = match std::fs::read_to_string(&config_path) {
+            Ok(content) => content,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_READ",
+                error = e,
+                context = json!({
+                    "action": "read_config_file",
+                    // Info CRITIQUE : on logue le chemin exact qui a causé l'échec !
+                    "path": config_path.to_string_lossy()
+                })
+            ),
+        };
 
         // Utilisation de serde_json (ou data::parse) pour lire la config Bert
-        let config: Config = serde_json::from_str(&config_str)
-            .map_err(|e| AppError::from(format!("Erreur parsing config: {}", e)))?;
+        let config: Config = match serde_json::from_str(&config_str) {
+            Ok(c) => c,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_PARSE",
+                error = e,
+                context = json!({
+                    "action": "parse_config_json",
+                    // Info Magique : On capture les 100 premiers caractères du fichier pour voir si
+                    // le contenu est complètement corrompu ou vide, sans inonder les logs !
+                    "config_preview": config_str.chars().take(100).collect::<String>()
+                })
+            ),
+        };
 
         // 5. Chargement du Tokenizer
-        let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| AppError::from(format!("Erreur tokenizer: {}", e)))?;
+        let tokenizer = match Tokenizer::from_file(&tokenizer_path) {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_TOKENIZER_LOAD",
+                error = e,
+                context = json!({
+                    "action": "load_tokenizer_file",
+                    // Info Vitale : On enregistre le chemin exact où le moteur IA cherchait le fichier
+                    "path": tokenizer_path.to_string_lossy()
+                })
+            ),
+        };
 
         // 6. Chargement des poids (Safetensors)
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device)
-                .map_err(|e| AppError::from(e.to_string()))?
+            match VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device) {
+                Ok(builder) => builder,
+                Err(e) => {
+                    // Pas de 'return' devant la macro, elle s'en charge.
+                    raise_error!(
+                        "ERR_AI_WEIGHTS_LOAD_FAILED",
+                        error = e,
+                        context = json!({
+                            "action": "mmap_safetensors",
+                            "path": weights_path.to_string_lossy(),
+                            "device": format!("{:?}", device),
+                            "hint": "Échec du chargement des poids du modèle. Vérifiez que le fichier n'est pas utilisé par un autre processus ou qu'il n'est pas corrompu."
+                        })
+                    )
+                }
+            }
         };
 
         // 7. Initialisation du modèle Bert
-        let model = BertModel::load(vb, &config).map_err(|e| AppError::from(e.to_string()))?;
+        let model = match BertModel::load(vb, &config) {
+            Ok(m) => m,
+            Err(e) => {
+                raise_error!(
+                    "ERR_AI_MODEL_INSTANTIATION_FAILED",
+                    error = e,
+                    context = json!({
+                        "action": "load_bert_model",
+                        "model_type": "BERT",
+                        // On utilise format! pour convertir la config en String
+                        "config_debug": format!("{:?}", config),
+                        "hint": "Incohérence entre la configuration et les poids du modèle."
+                    })
+                )
+            }
+        };
 
         Ok(Self {
             model,
@@ -96,42 +168,67 @@ impl CandleEngine {
     }
 
     fn forward_one(&self, text: &str) -> RaiseResult<Vec<f32>> {
-        let tokens = self
-            .tokenizer
-            .encode(text, true)
-            .map_err(anyhow::Error::msg)?;
+        // 1. Tokenisation
+        let tokens = match self.tokenizer.encode(text, true) {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_NLP_TOKENIZATION_FAILED",
+                error = e,
+                context = json!({ "text_preview": text.chars().take(30).collect::<String>() })
+            ),
+        };
 
-        let token_ids = Tensor::new(tokens.get_ids(), &self.device)
-            .map_err(|e| AppError::from(e.to_string()))?
-            .unsqueeze(0)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 2. Préparation des Tenseurs
+        let token_ids = match Tensor::new(tokens.get_ids(), &self.device) {
+            Ok(t) => match t.unsqueeze(0) {
+                Ok(u) => u,
+                Err(e) => raise_error!("ERR_NLP_TENSOR_SHAPE", error = e),
+            },
+            Err(e) => raise_error!("ERR_NLP_TENSOR_CREATION", error = e),
+        };
 
-        let token_type_ids = token_ids
-            .zeros_like()
-            .map_err(|e| AppError::from(e.to_string()))?;
+        let token_type_ids = match token_ids.zeros_like() {
+            Ok(z) => z,
+            Err(e) => raise_error!("ERR_NLP_TENSOR_ZEROS", error = e),
+        };
 
-        let embeddings = self
-            .model
-            .forward(&token_ids, &token_type_ids, None)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 3. Inférence BERT
+        let embeddings = match self.model.forward(&token_ids, &token_type_ids, None) {
+            Ok(emb) => emb,
+            Err(e) => raise_error!(
+                "ERR_NLP_FORWARD_PASS_FAILED",
+                error = e,
+                context = json!({ "token_count": tokens.get_ids().len() })
+            ),
+        };
 
-        let (_n_sentence, n_tokens, _hidden_size) = embeddings
-            .dims3()
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 4. Pooling et Calculs de dimensions
+        let (_n_sentence, n_tokens, _hidden_size) = match embeddings.dims3() {
+            Ok(d) => d,
+            Err(e) => raise_error!("ERR_NLP_DIM_MISMATCH", error = e),
+        };
 
-        let sum_embeddings = embeddings
-            .sum(1)
-            .map_err(|e| AppError::from(e.to_string()))?;
-        let embeddings =
-            (sum_embeddings / (n_tokens as f64)).map_err(|e| AppError::from(e.to_string()))?;
+        let sum_embeddings = match embeddings.sum(1) {
+            Ok(s) => s,
+            Err(e) => raise_error!("ERR_NLP_SUM_FAILED", error = e),
+        };
 
-        let embeddings = normalize_l2(&embeddings)?;
+        let pooled = match sum_embeddings / (n_tokens as f64) {
+            Ok(p) => p,
+            Err(e) => raise_error!("ERR_NLP_POOLING_DIV_FAILED", error = e),
+        };
 
-        let vec = embeddings
-            .squeeze(0)
-            .map_err(|e| AppError::from(e.to_string()))?
-            .to_vec1::<f32>()
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 5. Normalisation et Conversion finale
+        let normalized = normalize_l2(&pooled)?;
+
+        let vec = match normalized.squeeze(0) {
+            Ok(s) => match s.to_vec1::<f32>() {
+                Ok(v) => v,
+                Err(e) => raise_error!("ERR_NLP_VEC_CONVERSION", error = e),
+            },
+            Err(e) => raise_error!("ERR_NLP_SQUEEZE_FAILED", error = e),
+        };
+
         Ok(vec)
     }
 
@@ -152,19 +249,39 @@ impl CandleEngine {
 }
 
 fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
-    let sum_sq = v
-        .sqr()
-        .map_err(|e| AppError::from(e.to_string()))?
-        .sum_keepdim(1)
-        .map_err(|e| AppError::from(e.to_string()))?;
+    // 1. Calcul de la somme des carrés (Sum of Squares)
+    let sum_sq = match v.sqr() {
+        Ok(s) => match s.sum_keepdim(1) {
+            Ok(sum) => sum,
+            Err(e) => raise_error!("ERR_NLP_NORM_SUM_FAILED", error = e),
+        },
+        Err(e) => raise_error!("ERR_NLP_NORM_SQR_FAILED", error = e),
+    };
 
-    let norm = sum_sq.sqrt().map_err(|e| AppError::from(e.to_string()))?;
+    // 2. Calcul de la racine carrée (Norme)
+    let norm = match sum_sq.sqrt() {
+        Ok(n) => n,
+        Err(e) => raise_error!(
+            "ERR_NLP_NORM_SQRT_FAILED",
+            error = e,
+            context = json!({ "hint": "Vérifiez si le vecteur d'entrée contient des valeurs négatives invalides avant sqrt." })
+        ),
+    };
 
-    v.broadcast_div(&norm)
-        .map_err(|e| AppError::from(e.to_string()))
+    // 3. Division par diffusion (Broadcasting)
+    match v.broadcast_div(&norm) {
+        Ok(normalized) => Ok(normalized),
+        Err(e) => raise_error!(
+            "ERR_NLP_NORM_DIV_FAILED",
+            error = e,
+            context = json!({
+                "v_shape": format!("{:?}", v.shape()),
+                "norm_shape": format!("{:?}", norm.shape())
+            })
+        ),
+    }
 }
 
-// --- TESTS UNITAIRES ---
 // --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {

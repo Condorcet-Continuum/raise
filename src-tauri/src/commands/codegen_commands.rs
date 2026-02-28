@@ -18,7 +18,7 @@ pub async fn generate_source_code(
     domain: String, // "software", "hardware", "system"
     state: State<'_, RuleEngineState>,
     storage: State<'_, StorageEngine>,
-) -> Result<Value> {
+) -> RaiseResult<Value> {
     // 1. Parsing du domaine cible
     // On mappe la chaîne reçue du frontend vers l'enum TransformationDomain
     let target_domain = match domain.to_lowercase().as_str() {
@@ -26,10 +26,18 @@ pub async fn generate_source_code(
         "hardware" | "vhdl" | "fpga" | "verilog" => TransformationDomain::Hardware,
         "system" | "overview" | "doc" | "architecture" => TransformationDomain::System,
         _ => {
-            return Err(AppError::Validation(format!(
-                "Domaine de transformation inconnu ou non supporté : {}",
-                domain
-            )))
+            raise_error!(
+                "ERR_CODEGEN_DOMAIN_UNSUPPORTED",
+                error = format!(
+                    "Le domaine de transformation '{}' n'est pas supporté par le moteur actuel.",
+                    domain
+                ),
+                context = json!({
+                    "requested_domain": domain,
+                    "action": "resolve_transformation_domain",
+                    "hint": "Vérifiez que le plugin de génération pour ce domaine est bien chargé ou que le nom du domaine est correctement orthographié dans le modèle."
+                })
+            );
         }
     };
 
@@ -52,24 +60,53 @@ pub async fn generate_source_code(
     let loader = ModelLoader::new(&storage, &space, &db);
 
     // Indexation rapide pour localiser l'élément par son UUID (si pas déjà fait en cache)
-    loader.index_project().await.map_err(|e| e.to_string())?;
+    let _index = match loader.index_project().await {
+        Ok(idx) => idx,
+        Err(e) => raise_error!(
+            "ERR_PROJECT_INDEX_FAIL",
+            error = e,
+            context = json!({
+                "action": "index_project_files",
+                "source": "model_loader",
+                "hint": "Échec de l'indexation. Vérifiez que le dossier n'est pas verrouillé par un autre processus et que les fichiers .arcadia sont valides."
+            })
+        ),
+    };
 
     // 4. Récupération et Hydratation de l'élément source
     // fetch_hydrated_element est crucial ici : il remplace les ID par les objets complets
     // (ex: ownedLogicalComponents devient une liste d'objets, pas juste d'UUIDs)
-    let element_json = loader
-        .fetch_hydrated_element(&element_id)
-        .await
-        .map_err(|e| format!("Impossible de charger l'élément {} : {}", element_id, e))?;
+    let target_id = element_id.clone();
+    let element_json = match loader.fetch_hydrated_element(&element_id).await {
+        Ok(json) => json,
+        Err(e) => raise_error!(
+            "ERR_DATA_HYDRATION_FAILED",
+            error = e,
+            context = json!({
+                "action": "fetch_hydrated_element",
+                "element_id": target_id,
+                "hint": "L'élément est peut-être absent de la base ou sa structure JSON est invalide."
+            })
+        ),
+    };
 
     // 5. Exécution de la transformation
     // On récupère le bon transformateur (SoftwareTransformer, HardwareTransformer, etc.)
     let transformer = get_transformer(target_domain);
 
     // On applique la transformation qui renvoie un JSON prêt pour le moteur de template (Tera)
-    let result = transformer
-        .transform(&element_json)
-        .map_err(|e| format!("Erreur lors de la transformation : {}", e))?;
+    let result = match transformer.transform(&element_json) {
+        Ok(data) => data,
+        Err(e) => raise_error!(
+            "ERR_DATA_TRANSFORMATION_FAILED",
+            error = e,
+            context = json!({
+                "action": "transform_json_to_element",
+                "schema_version": "v1.0", // Optionnel: si votre transformer suit une version
+                "hint": "La structure JSON ne correspond pas au modèle ArcadiaElement attendu."
+            })
+        ),
+    };
 
     Ok(result)
 }

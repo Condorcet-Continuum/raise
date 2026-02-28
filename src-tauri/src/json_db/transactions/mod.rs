@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/json_db/transactions/mod.rs
 
-use crate::utils::json::{Deserialize, Serialize, Value};
+use crate::utils::data::{Deserialize, Serialize, Value};
 
 pub mod lock_manager;
 pub mod manager;

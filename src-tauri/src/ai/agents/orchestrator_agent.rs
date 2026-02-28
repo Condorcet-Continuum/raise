@@ -24,10 +24,21 @@ impl OrchestratorAgent {
         let sys = "Tu es l'Orchestrateur de RAISE. Ton rôle est de coordonner les agents MBSE (Business, System, Software, Hardware, Transverse).";
         let user = format!("L'utilisateur a dit : '{}'. C'est trop vague pour une action d'ingénierie. Demande poliment quelle étape (spécification, conception, code, test) il souhaite aborder.", user_input);
 
-        ctx.llm
-            .ask(LlmBackend::LocalLlama, sys, &user)
-            .await
-            .map_err(|e| AppError::Validation(e.to_string()))
+        let res = match ctx.llm.ask(LlmBackend::LocalLlama, sys, &user).await {
+            Ok(val) => val,
+            Err(e) => {
+                // La macro génère un log JSON et effectue un 'return Err'
+                raise_error!(
+                    "ERR_AI_CLARIFICATION_GENERATE",
+                    error = e,
+                    context = serde_json::json!({
+                        "backend": "LocalLlama",
+                        "user_input": user_input
+                    })
+                );
+            }
+        };
+        Ok(res)
     }
 }
 

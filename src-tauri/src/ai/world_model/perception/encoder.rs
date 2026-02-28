@@ -51,18 +51,30 @@ impl ArcadiaEncoder {
     /// Encode un élément complet (Concaténation Layer + Category)
     /// Dimension de sortie : [1, 16] (8 + 8)
     pub fn encode_element(element: &ArcadiaElement) -> RaiseResult<Tensor> {
-        // 1. Extraction sémantique via le Trait existant
+        // 1. Extraction sémantique
         let layer = element.get_layer();
         let category = element.get_category();
 
-        // 2. Encodage individuel
+        // 2. Encodage individuel (délégué aux sous-fonctions RAISE-safe)
         let t_layer = Self::encode_layer(layer)?;
         let t_cat = Self::encode_category(category)?;
 
         // 3. Concaténation (Feature Fusion)
-        // On fusionne sur la dimension 1 (les features)
-        let t_combined =
-            Tensor::cat(&[&t_layer, &t_cat], 1).map_err(|e| AppError::from(e.to_string()))?;
+        // On remplace le map_err par un match pour capturer les dimensions en cas d'échec
+        let t_combined = match Tensor::cat(&[&t_layer, &t_cat], 1) {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_AI_ENCODER_FUSION_FAILED",
+                error = e,
+                context = json!({
+                    "layer_shape": format!("{:?}", t_layer.shape()),
+                    "category_shape": format!("{:?}", t_cat.shape()),
+                    "action": "concatenate_features",
+                    "hint": "Les dimensions des tenseurs encodés ne sont pas compatibles pour la fusion. Vérifiez les dimensions de sortie de 'encode_layer' et 'encode_category'."
+                })
+            ),
+        };
+
         Ok(t_combined)
     }
 
@@ -72,8 +84,21 @@ impl ArcadiaEncoder {
         if index < size {
             data[index] = 1.0;
         }
-        // Création du tenseur sur CPU (Device::Cpu est par défaut safe)
-        Tensor::from_vec(data, (1, size), &Device::Cpu).map_err(|e| AppError::from(e.to_string()))
+
+        // Utilisation d'un match pour une extraction de type Tensor sans "oignon de Result"
+        match Tensor::from_vec(data, (1, size), &Device::Cpu) {
+            Ok(t) => Ok(t),
+            Err(e) => raise_error!(
+                "ERR_AI_ENCODER_ONE_HOT_FAILED",
+                error = e,
+                context = json!({
+                    "index": index,
+                    "size": size,
+                    "device": "cpu",
+                    "hint": "Échec de la création du vecteur One-Hot. Vérifiez si la taille demandée est compatible avec la mémoire disponible."
+                })
+            ),
+        }
     }
 }
 

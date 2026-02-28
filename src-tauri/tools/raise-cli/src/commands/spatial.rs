@@ -20,7 +20,7 @@ pub enum SpatialCommands {
     Health,
 }
 
-pub async fn handle(args: SpatialArgs) -> Result<()> {
+pub async fn handle(args: SpatialArgs) -> RaiseResult<()> {
     match args.command {
         SpatialCommands::Topology => {
             user_info!(
@@ -31,17 +31,24 @@ pub async fn handle(args: SpatialArgs) -> Result<()> {
             // Récupération du graphe spatial
             let graph = get_spatial_topology();
 
-            user_info!("STATS", "Total Nœuds : {}", graph.meta.node_count);
-
+            user_info!(
+                "GRAPH_STATS_NODES",
+                json!({
+                    "count": graph.meta.node_count,
+                    "complexity": if graph.meta.node_count > 1000 { "high" } else { "standard" }
+                })
+            );
             // Accès aux statistiques par couche (OA, SA, LA, PA, Chaos)
             user_info!(
-                "LAYERS",
-                "Distribution [OA: {}, SA: {}, LA: {}, PA: {}, Chaos: {}]",
-                graph.meta.layer_distribution[0],
-                graph.meta.layer_distribution[1],
-                graph.meta.layer_distribution[2],
-                graph.meta.layer_distribution[3],
-                graph.meta.layer_distribution[4]
+                "GRAPH_LAYERS_DISTRIBUTION",
+                json!({
+                    "oa": graph.meta.layer_distribution[0],
+                    "sa": graph.meta.layer_distribution[1],
+                    "la": graph.meta.layer_distribution[2],
+                    "pa": graph.meta.layer_distribution[3],
+                    "chaos": graph.meta.layer_distribution[4],
+                    "total": graph.meta.layer_distribution.iter().copied().sum::<usize>()
+                })
             );
 
             user_success!("GEN_OK", "Topologie 3D extraite avec succès.");
@@ -59,10 +66,13 @@ pub async fn handle(args: SpatialArgs) -> Result<()> {
             } else {
                 for node in unstable_nodes {
                     user_info!(
-                        "VIBRATION",
-                        "Alerte : {} (Stabilité: {:.2})",
-                        node.label,
-                        node.stability
+                        "GRAPH_VIBRATION_ALERT",
+                        json!({
+                            "node_id": node.label,
+                            "stability": node.stability,
+                            "is_critical": node.stability < 0.5,
+                            "action": "check_convergence"
+                        })
                     );
                 }
             }

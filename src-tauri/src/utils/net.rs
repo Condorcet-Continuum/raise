@@ -1,21 +1,21 @@
 // FICHIER : src-tauri/src/utils/net.rs
 
-use crate::utils::Result;
-use anyhow::Context;
+use crate::raise_error;
+use crate::utils::RaiseResult;
 use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, instrument, warn};
 
-// Singleton : On ne crée le client qu'une seule fois pour toute l'application.
+/// Singleton : Le client HTTP est réutilisé pour bénéficier du pool de connexions (Performance).
 static GLOBAL_CLIENT: OnceLock<Client> = OnceLock::new();
 
-/// Récupère l'instance unique du client HTTP.
+/// Récupère l'instance unique du client HTTP global.
 pub fn get_client() -> &'static Client {
     GLOBAL_CLIENT.get_or_init(|| {
         Client::builder()
-            .timeout(Duration::from_secs(60)) // Timeout long pour l'IA (génération lente)
+            .timeout(Duration::from_secs(60)) // Timeout généreux pour les réponses LLM
             .pool_idle_timeout(Duration::from_secs(90))
             .user_agent(concat!("Raise-Core/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -23,14 +23,14 @@ pub fn get_client() -> &'static Client {
     })
 }
 
-/// Envoie une requête POST JSON avec Authentification optionnelle et Retry.
+/// Envoie une requête POST JSON avec Authentification Bearer optionnelle et stratégie de Retry.
 #[instrument(skip(body, token), fields(url = %url))]
 pub async fn post_authenticated<T: Serialize, R: DeserializeOwned>(
     url: &str,
     body: &T,
     token: Option<&str>,
     max_retries: u32,
-) -> Result<R> {
+) -> RaiseResult<R> {
     let client = get_client();
     let mut attempt = 0;
     let mut delay = Duration::from_secs(1);
@@ -38,99 +38,142 @@ pub async fn post_authenticated<T: Serialize, R: DeserializeOwned>(
     loop {
         attempt += 1;
 
-        // Construction de la requête
+        // Construction de la requête à chaque tentative
         let mut request_builder = client.post(url).json(body);
 
-        // Injection du Token si présent (Bearer)
         if let Some(tk) = token {
             request_builder = request_builder.header("Authorization", format!("Bearer {}", tk));
         }
 
-        debug!("Tentative POST {}/{} vers {}", attempt, max_retries, url);
+        debug!("Requête POST {}/{} vers {}", attempt, max_retries, url);
 
         match request_builder.send().await {
             Ok(response) => {
                 let status = response.status();
+
                 if status.is_success() {
-                    let data = response
-                        .json::<R>()
-                        .await
-                        .context("Erreur de désérialisation de la réponse API")?;
-                    return Ok(data);
+                    // Désérialisation avec interception d'erreur structurée
+                    return match response.json::<R>().await {
+                        Ok(data) => Ok(data),
+                        Err(e) => raise_error!(
+                            "ERR_NET_JSON_DECODE",
+                            error = e,
+                            context = serde_json::json!({ "url": url, "attempt": attempt })
+                        ),
+                    };
                 }
 
-                warn!("Erreur HTTP {} sur {}", status, url);
+                warn!("Erreur HTTP {} sur {} (Tentative {})", status, url, attempt);
 
-                // Erreurs fatales (401 Unauthorized, 400 Bad Request) : Pas de Retry
-                if status == StatusCode::UNAUTHORIZED || status == StatusCode::BAD_REQUEST {
-                    let text = response.text().await.unwrap_or_default();
-                    return Err(anyhow::anyhow!("Erreur Fatale API ({}): {}", status, text).into());
+                // GESTION DES ERREURS FATALES (Pas de retry pour 401, 403, 400)
+                if status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS {
+                    let http_err = response.error_for_status().unwrap_err();
+                    raise_error!(
+                        "ERR_NET_HTTP_CLIENT_FATAL",
+                        error = http_err,
+                        context = serde_json::json!({
+                            "url": url,
+                            "status": status.as_u16(),
+                            "attempt": attempt
+                        })
+                    );
                 }
             }
-            Err(e) => warn!("Échec connexion : {}", e),
+            Err(e) => {
+                warn!(
+                    "Échec de connexion (Tentative {}/{}): {}",
+                    attempt, max_retries, e
+                );
+            }
         }
 
+        // Vérification de la limite de tentatives
         if attempt >= max_retries {
-            error!("Abandon après {} tentatives sur {}", max_retries, url);
-            return Err(anyhow::anyhow!("Service indisponible : {}", url).into());
+            raise_error!(
+                "ERR_NET_MAX_RETRIES",
+                error = "Le service ne répond pas ou renvoie des erreurs persistantes",
+                context = serde_json::json!({
+                    "url": url,
+                    "max_retries": max_retries
+                })
+            );
         }
 
+        // Backoff exponentiel avant la prochaine tentative
         tokio::time::sleep(delay).await;
-        delay = std::cmp::min(delay * 2, Duration::from_secs(10)); // Cap du backoff à 10s
+        delay = std::cmp::min(delay * 2, Duration::from_secs(10));
     }
 }
 
-/// Helper pour les appels simples sans auth (compatibilité existante)
+/// Helper pour les appels POST JSON sans authentification avec retry.
 pub async fn post_json_with_retry<T: Serialize, R: DeserializeOwned>(
     url: &str,
     body: &T,
     max_retries: u32,
-) -> Result<R> {
+) -> RaiseResult<R> {
     post_authenticated(url, body, None, max_retries).await
 }
 
-/// Effectue un GET simple.
+/// Effectue une requête GET simple et retourne le corps en String.
 #[instrument]
-pub async fn get_simple(url: &str) -> Result<String> {
+pub async fn get_simple(url: &str) -> RaiseResult<String> {
     let client = get_client();
-    let resp = client.get(url).send().await?;
 
-    if !resp.status().is_success() {
-        return Err(anyhow::anyhow!("Erreur GET {}: {}", url, resp.status()).into());
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => raise_error!(
+            "ERR_NET_GET_SEND",
+            error = e,
+            context = serde_json::json!({ "url": url })
+        ),
+    };
+
+    let resp = match resp.error_for_status() {
+        Ok(r) => r,
+        Err(e) => raise_error!(
+            "ERR_NET_GET_STATUS",
+            error = e,
+            context = serde_json::json!({ "url": url, "status": e.status().map(|s| s.as_u16()) })
+        ),
+    };
+
+    match resp.text().await {
+        Ok(t) => Ok(t),
+        Err(e) => raise_error!(
+            "ERR_NET_GET_TEXT",
+            error = e,
+            context = serde_json::json!({ "url": url })
+        ),
     }
-
-    Ok(resp.text().await?)
 }
 
-// --- TESTS UNITAIRES ---
+// --- TESTS UNITAIRES (RAISE standard) ---
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::prelude::*; // Utilisation du prélude pour AppError, etc.
 
     #[test]
-    fn test_client_singleton_initialization() {
-        // On vérifie que les appels successifs renvoient bien le même objet configuré
-        let client1 = get_client();
-        let client2 = get_client();
-
-        // Astuce : On compare la représentation Debug car Client n'implémente pas Eq
-        // Cela garantit au moins qu'ils ont la même config.
-        assert_eq!(format!("{:?}", client1), format!("{:?}", client2));
+    fn test_client_singleton_is_stable() {
+        let c1 = get_client();
+        let c2 = get_client();
+        // Vérification par pointeur
+        assert!(std::ptr::eq(c1, c2));
     }
 
     #[tokio::test]
-    async fn test_bad_url_handling() {
-        // Test "Smoke" : On vérifie que le client ne panique pas sur une URL invalide
-        // Il doit retourner une erreur propre (Result::Err)
-        let res = get_simple("http://localhost:54321/ghost").await;
+    async fn test_network_error_observability() {
+        // Test sur une URL invalide pour vérifier la levée d'erreur structurée
+        let res = get_simple("http://0.0.0.0:1").await;
 
-        assert!(
-            res.is_err(),
-            "Devrait échouer proprement sur une URL inexistante"
-        );
+        assert!(res.is_err());
 
-        // On peut vérifier que c'est bien une erreur réseau ou système
-        let err = res.unwrap_err();
-        println!("Erreur capturée (attendu) : {}", err);
+        if let Err(AppError::Structured(data)) = res {
+            assert_eq!(data.code, "ERR_NET_GET_SEND");
+            assert_eq!(data.component, "NET"); // Vérifie la déduction auto du composant
+        } else {
+            panic!("L'erreur devrait être de type AppError::Structured");
+        }
     }
 }

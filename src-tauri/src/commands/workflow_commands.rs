@@ -43,7 +43,7 @@ impl From<&WorkflowInstance> for WorkflowView {
 }
 
 // --- HELPER DB ---
-fn create_db_manager() -> Result<(StorageEngine, String, String)> {
+fn create_db_manager() -> RaiseResult<(StorageEngine, String, String)> {
     let config = AppConfig::get();
     let path = config
         .get_path("PATH_RAISE_DOMAIN")
@@ -61,7 +61,7 @@ fn create_db_manager() -> Result<(StorageEngine, String, String)> {
 
 /// Met à jour la valeur du capteur de vibration (Jumeau Numérique).
 #[command]
-pub async fn set_sensor_value(value: f64) -> Result<String> {
+pub async fn set_sensor_value(value: f64) -> RaiseResult<String> {
     // 🎯 FIX: La commande Tauri écrit maintenant proprement dans le JsonDB (IPC par la donnée) !
     let (storage, domain, db) = create_db_manager()?;
     let manager = CollectionsManager::new(&storage, &domain, &db);
@@ -72,11 +72,21 @@ pub async fn set_sensor_value(value: f64) -> Result<String> {
         "updatedAt": chrono::Utc::now().to_rfc3339()
     });
 
-    manager
-        .insert_raw("digital_twin", &sensor_doc)
-        .await
-        .map_err(|e| AppError::Database(format!("Erreur d'écriture capteur: {}", e)))?;
+    match manager.insert_raw("digital_twin", &sensor_doc).await {
+        Ok(_) => (),
+        Err(e) => raise_error!(
+            "ERR_DT_SENSOR_WRITE_FAIL",
+            error = e,
+            context = json!({
+                "collection": "digital_twin",
+                "sensor_id": sensor_doc.get("id").unwrap_or(&json!("unknown")),
+                "action": "sync_sensor_to_digital_twin",
+                "hint": "Échec de l'écriture. Vérifiez l'intégrité du JSON ou les permissions du dossier 'digital_twin'."
+            })
+        ),
+    };
 
+    // Si on arrive ici, c'est que l'insertion a réussi
     Ok(format!("Capteur mis à jour en base : {:.2}", value))
 }
 
@@ -84,7 +94,7 @@ pub async fn set_sensor_value(value: f64) -> Result<String> {
 pub async fn submit_mandate(
     state: State<'_, Mutex<WorkflowStore>>,
     mandate: Mandate,
-) -> Result<String> {
+) -> RaiseResult<String> {
     let mut store = state.lock().await;
 
     let definition = WorkflowCompiler::compile(&mandate);
@@ -92,14 +102,24 @@ pub async fn submit_mandate(
 
     if let Some(scheduler) = &mut store.scheduler {
         scheduler.definitions.insert(wf_id.clone(), definition);
+
+        // Succès : On renvoie le message formatté
         Ok(format!(
             "Mandat v{} compilé avec succès. Workflow '{}' prêt à l'exécution.",
             mandate.meta.version, wf_id
         ))
     } else {
-        Err(AppError::from(
-            "Le moteur d'IA n'est pas encore initialisé.".to_string(),
-        ))
+        // ⚠️ Erreur d'état du moteur
+        raise_error!(
+            "ERR_ENGINE_NOT_INITIALIZED",
+            context = json!({
+                "component": "scheduler",
+                "workflow_id": wf_id,
+                "mandate_version": mandate.meta.version,
+                "action": "register_workflow_definition",
+                "hint": "Le scheduler est manquant dans le store. Vérifiez que le moteur d'IA a bien été démarré avant de compiler des mandats."
+            })
+        )
     }
 }
 
@@ -107,16 +127,25 @@ pub async fn submit_mandate(
 pub async fn register_workflow(
     state: State<'_, Mutex<WorkflowStore>>,
     definition: WorkflowDefinition,
-) -> Result<String> {
+) -> RaiseResult<String> {
     let mut store = state.lock().await;
     if let Some(scheduler) = &mut store.scheduler {
         let id = definition.id.clone();
         scheduler.definitions.insert(id.clone(), definition);
+
+        // Succès : On renvoie une confirmation claire
         Ok(format!("Workflow '{}' enregistré avec succès.", id))
     } else {
-        Err(AppError::from(
-            "Le moteur de workflow n'est pas encore prêt.".to_string(),
-        ))
+        // ⚠️ Erreur de cycle de vie du système
+        raise_error!(
+            "ERR_WF_SCHEDULER_NOT_READY",
+            context = json!({
+                "action": "register_workflow_definition",
+                "workflow_id": definition.id,
+                "component": "scheduler_store",
+                "hint": "Le scheduler est manquant dans le store. L'initialisation du moteur a probablement échoué ou n'est pas encore terminée."
+            })
+        )
     }
 }
 
@@ -124,14 +153,22 @@ pub async fn register_workflow(
 pub async fn start_workflow(
     state: State<'_, Mutex<WorkflowStore>>,
     workflow_id: String,
-) -> Result<WorkflowView> {
+) -> RaiseResult<WorkflowView> {
     let (storage, domain, db) = create_db_manager()?;
     let manager = CollectionsManager::new(&storage, &domain, &db);
 
     let instance_id = {
         let mut store = state.lock().await;
         if store.scheduler.is_none() {
-            return Err(AppError::from("Le moteur de workflow n'est pas prêt."));
+            // 🚨 Alerte critique : Accès au moteur avant initialisation
+            raise_error!(
+                "ERR_WF_SCHEDULER_NOT_READY",
+                context = json!({
+                    "component": "scheduler_store",
+                    "action": "check_engine_readiness",
+                    "hint": "Le scheduler n'a pas été trouvé dans le store global. Assurez-vous que la méthode d'initialisation du moteur a été appelée avec succès avant d'interagir avec les workflows."
+                })
+            );
         }
 
         let scheduler = store.scheduler.as_mut().unwrap();
@@ -150,16 +187,24 @@ pub async fn resume_workflow(
     instance_id: String,
     node_id: String,
     approved: bool,
-) -> Result<WorkflowView> {
+) -> RaiseResult<WorkflowView> {
     let (storage, domain, db) = create_db_manager()?;
     let manager = CollectionsManager::new(&storage, &domain, &db);
 
     {
         let mut guard = state.lock().await;
-        let sched = guard
-            .scheduler
-            .as_mut()
-            .ok_or_else(|| AppError::from("Moteur non initialisé".to_string()))?;
+        let sched = match guard.scheduler.as_mut() {
+            Some(s) => s,
+            None => raise_error!(
+                "ERR_ENGINE_NOT_INITIALIZED",
+                context = json!({
+                    "component": "scheduler",
+                    "action": "execute_task",
+                    "state": "uninitialized",
+                    "hint": "Le moteur d'exécution (Scheduler) n'a pas été démarré. Vérifiez l'ordre d'initialisation de votre application."
+                })
+            ),
+        };
 
         sched
             .resume_node(&instance_id, &node_id, approved, &manager)
@@ -173,12 +218,20 @@ pub async fn resume_workflow(
 pub async fn get_workflow_state(
     state: State<'_, Mutex<WorkflowStore>>,
     instance_id: String,
-) -> Result<WorkflowView> {
+) -> RaiseResult<WorkflowView> {
     let store = state.lock().await;
-    let instance = store
-        .instances
-        .get(&instance_id)
-        .ok_or_else(|| AppError::from("Instance introuvable en cache".to_string()))?;
+    let instance = match store.instances.get(&instance_id) {
+        Some(inst) => inst,
+        None => raise_error!(
+            "ERR_CACHE_INSTANCE_NOT_FOUND",
+            context = json!({
+                "instance_id": instance_id,
+                "cache_type": "wasm_instance_store",
+                "action": "lookup_instance",
+                "hint": format!("L'instance '{}' n'existe pas ou a été purgée du cache. Vérifiez si le plugin a été correctement chargé.", instance_id)
+            })
+        ),
+    };
     Ok(WorkflowView::from(instance))
 }
 
@@ -188,26 +241,65 @@ async fn run_workflow_loop(
     state: State<'_, Mutex<WorkflowStore>>,
     instance_id: String,
     manager: &CollectionsManager<'_>,
-) -> Result<WorkflowView> {
+) -> RaiseResult<WorkflowView> {
     let final_status = {
         let guard = state.lock().await;
-        let sched = guard
-            .scheduler
-            .as_ref()
-            .ok_or_else(|| AppError::from("Moteur non initialisé".to_string()))?;
+        let sched = match guard.scheduler.as_ref() {
+            Some(s) => s,
+            None => raise_error!(
+                "ERR_ENGINE_NOT_INITIALIZED",
+                context = json!({
+                    "component": "scheduler",
+                    "access_mode": "read_only",
+                    "state": "uninitialized",
+                    "hint": "Tentative d'accès au Scheduler en lecture alors qu'il n'est pas initialisé. Vérifiez le flux de démarrage d'Arcadia."
+                })
+            ),
+        };
         sched.execute_instance_loop(&instance_id, manager).await?
     };
 
-    let doc = manager
+    // 1. On tente la lecture avec un match explicite pour le Result
+    let doc_opt = match manager
         .get_document("workflow_instances", &instance_id)
         .await
-        .map_err(|e| AppError::Database(e.to_string()))?
-        .ok_or_else(|| {
-            AppError::NotFound("Instance introuvable en base après exécution".to_string())
-        })?;
+    {
+        Ok(d) => d,
+        Err(e) => raise_error!(
+            "ERR_WF_POST_EXEC_READ_FAIL",
+            error = e,
+            context = json!({
+                "instance_id": instance_id,
+                "action": "post_execution_state_sync"
+            })
+        ),
+    };
 
-    let updated_instance: WorkflowInstance =
-        serde_json::from_value(doc).map_err(AppError::Serialization)?;
+    // 2. On gère le cas où le document n'existe pas (Option) avec un second match
+    let doc = match doc_opt {
+        Some(d) => d,
+        None => raise_error!(
+            "ERR_WF_STATE_DESYNC",
+            context = json!({
+                "instance_id": instance_id,
+                "action": "verify_final_state",
+                "hint": "L'instance a disparu après l'exécution. Vérifiez si une suppression concurrente ou un rollback a eu lieu."
+            })
+        ),
+    };
+
+    let updated_instance: WorkflowInstance = match serde_json::from_value(doc.clone()) {
+        Ok(instance) => instance,
+        Err(e) => raise_error!(
+            "ERR_WORKFLOW_DESERIALIZATION_FAIL",
+            error = e,
+            context = json!({
+                "action": "update_workflow_instance",
+                "document_snapshot": doc,
+                "hint": "Le document JSON ne correspond pas à la structure WorkflowInstance. Vérifiez les champs obligatoires et le typage des enums."
+            })
+        ),
+    };
 
     let mut store = state.lock().await;
     store

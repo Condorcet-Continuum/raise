@@ -73,13 +73,47 @@ pub struct Observability {
 impl Mandate {
     /// Charge un mandat depuis la base de données (Collection "mandates") - ASYNC
     pub async fn fetch_from_store(manager: &CollectionsManager<'_>, id: &str) -> RaiseResult<Self> {
-        let doc = manager
-            .get_document("mandates", id)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?
-            .ok_or_else(|| AppError::NotFound(format!("Mandat {} introuvable", id)))?;
+        // 1. Récupération avec diagnostic d'infrastructure
+        // 1. Exécution de la requête
+        let mandate_result = manager.get_document("mandates", id).await;
 
-        let mut mandate: Mandate = serde_json::from_value(doc).map_err(AppError::Serialization)?;
+        // 2. Résolution impérative
+        let doc = match mandate_result {
+            Ok(Some(document)) => document,
+            Ok(None) => raise_error!(
+                "ERR_WF_MANDATE_NOT_FOUND",
+                context = json!({
+                    "mandate_id": id,
+                    "action": "resolve_mandate",
+                    "hint": "L'identifiant est inconnu ou le mandat a été révoqué/supprimé."
+                })
+            ),
+            Err(e) => raise_error!(
+                "ERR_WF_MANDATE_DB_ACCESS",
+                context = json!({
+                    "mandate_id": id,
+                    "action": "fetch_mandate_document",
+                    "db_error": e.to_string(),
+                    "hint": "Problème de connexion ou de permissions lors de l'accès à la collection 'mandates'."
+                })
+            ),
+        };
+
+        // 2. Désérialisation avec diagnostic d'intégrité
+        let mut mandate: Mandate = match serde_json::from_value(doc) {
+            Ok(m) => m,
+            Err(e) => raise_error!(
+                "ERR_WF_MANDATE_CORRUPT",
+                context = json!({
+                    "mandate_id": id,
+                    "serialization_error": e.to_string(),
+                    "line": e.line(),
+                    "column": e.column(),
+                    "action": "parse_mandate_payload",
+                    "hint": "La structure du mandat en base ne correspond plus au modèle Rust. Une migration de schéma est peut-être nécessaire."
+                })
+            ),
+        };
 
         mandate.id = id.to_string();
         Ok(mandate)

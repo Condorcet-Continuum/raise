@@ -28,10 +28,7 @@ impl SoftwareAgent {
     }
 
     async fn ask_llm(&self, ctx: &AgentContext, system: &str, user: &str) -> RaiseResult<String> {
-        ctx.llm
-            .ask(LlmBackend::LocalLlama, system, user)
-            .await
-            .map_err(|e| AppError::Validation(format!("Erreur LLM : {}", e)))
+        ctx.llm.ask(LlmBackend::LocalLlama, system, user).await
     }
 
     async fn enrich_logical_component(
@@ -148,12 +145,13 @@ impl Agent for SoftwareAgent {
                 );
 
                 // 1. RECHERCHE (Optimisée via Tool)
-                let component_doc = find_element_by_name(ctx, context).await.ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "Composant '{}' introuvable dans le modèle.",
-                        context
-                    ))
-                })?;
+                let Some(component_doc) = find_element_by_name(ctx, context).await else {
+                    raise_error!(
+                        "ERR_MODEL_COMPONENT_NOT_FOUND",
+                        error = format!("Composant '{}' introuvable dans le modèle.", context),
+                        context = json!({ "requested_name": context })
+                    );
+                };
 
                 let component_id = component_doc["id"].as_str().unwrap_or_default().to_string();
 
@@ -178,12 +176,15 @@ impl Agent for SoftwareAgent {
                 );
 
                 let result = tool.execute(call).await;
-
                 if result.is_error {
-                    return Err(AppError::Validation(format!(
-                        "Erreur CodeGen: {}",
-                        result.content
-                    )));
+                    raise_error!(
+                        "ERR_CODEGEN_EXECUTION_FAILURE",
+                        error = format!("Erreur CodeGen: {}", result.content),
+                        context = json!({
+                            "result_content": result.content,
+                            "status": "execution_error"
+                        })
+                    );
                 }
 
                 let file_list = result.content["files"]

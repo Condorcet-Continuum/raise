@@ -6,7 +6,7 @@ use crate::json_db::storage::StorageEngine;
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
 use crate::rules_engine::evaluator::DataProvider;
 
-use crate::utils::{async_trait, prelude::*, Arc, AsyncRwLock, HashMap, Utc};
+use crate::utils::{async_trait, io, prelude::*, Arc, AsyncRwLock, HashMap, Utc};
 
 use tauri::State;
 
@@ -67,10 +67,22 @@ impl<'a> ModelLoader<'a> {
                 col,
             );
 
-            if col_path.exists() {
-                let mut entries = tokio::fs::read_dir(col_path).await?;
-                while let Some(entry) = entries.next_entry().await? {
+            if io::exists(&col_path).await {
+                let mut entries = io::read_dir(&col_path).await?;
+                while let Some(entry) = match entries.next_entry().await {
+                    Ok(e) => e,
+                    Err(e) => raise_error!(
+                        "ERR_FS_INDEX_ENTRY_FAIL",
+                        error = e,
+                        context = json!({
+                            "collection_path": col_path,
+                            "action": "build_global_index"
+                        })
+                    ),
+                } {
                     let path = entry.path();
+
+                    // Filtrage et extraction du nom sans panique
                     if path.extension().and_then(|s| s.to_str()) == Some("json") {
                         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                             if !stem.starts_with('_') {
@@ -95,18 +107,37 @@ impl<'a> ModelLoader<'a> {
 
         match collection {
             Some(col) => {
-                let doc = self.manager.get_document(&col, id).await?.ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "Document {} introuvable dans {} (Index périmé ?)",
-                        id, col
-                    ))
-                })?;
+                let doc_opt = self.manager.get_document(&col, id).await?;
+
+                let Some(doc) = doc_opt else {
+                    raise_error!(
+                        "ERR_DB_INDEX_OUT_OF_SYNC",
+                        error = format!(
+                            "Document '{}' introuvable dans la collection '{}'.",
+                            id, col
+                        ),
+                        context = json!({
+                            "document_id": id,
+                            "collection": col,
+                            "action": "fetch_document_from_index",
+                            "hint": "L'index semble périmé. Une reconstruction de l'index (rebuild) pourrait être nécessaire."
+                        })
+                    );
+                };
+
                 self.json_to_element(doc, Some(&col))
             }
-            None => Err(AppError::Validation(format!(
-                "ID inconnu ou non indexé : {}",
-                id
-            ))),
+            None => {
+                raise_error!(
+                    "ERR_DB_UNKNOWN_IDENTITY",
+                    error = format!("Identifiant inconnu ou non indexé : {}", id),
+                    context = json!({
+                        "document_id": id,
+                        "action": "resolve_collection_from_id",
+                        "hint": "Vérifiez que le document a été correctement inséré ou que l'ID est valide."
+                    })
+                );
+            }
         }
     }
 
@@ -116,13 +147,27 @@ impl<'a> ModelLoader<'a> {
             idx.get(id).cloned()
         };
 
-        if let Some(col) = collection {
-            self.manager
-                .get_document(&col, id)
-                .await?
-                .ok_or_else(|| AppError::from("Document introuvable"))
-        } else {
-            Err(AppError::from("ID non trouvé dans l'index"))
+        match collection {
+            Some(col) => match self.manager.get_document(&col, id).await? {
+                Some(doc) => Ok(doc),
+                None => raise_error!(
+                    "ERR_DOC_NOT_FOUND",
+                    context = json!({
+                        "document_id": id,
+                        "collection": col,
+                        "action": "fetch_document",
+                        "hint": "Le document existe dans l'index mais est introuvable sur le disque. Vérifiez l'intégrité de la base de données."
+                    })
+                ),
+            },
+            None => raise_error!(
+                "ERR_INDEX_MISSING_ID",
+                context = json!({
+                    "document_id": id,
+                    "action": "lookup_index",
+                    "hint": "Cet ID n'est rattaché à aucune collection connue dans l'index global."
+                })
+            ),
         }
     }
 
@@ -158,7 +203,19 @@ impl<'a> ModelLoader<'a> {
             short_type.to_string()
         };
 
-        let obj = doc.as_object().ok_or(AppError::from("Document invalide"))?;
+        // On s'assure que le document est bien un objet JSON éditable
+        let obj = match doc.as_object() {
+            Some(o) => o,
+            None => raise_error!(
+                "ERR_DB_INVALID_JSON_TYPE",
+                context = json!({
+                    "expected": "Object",
+                    "received": format!("{:?}", doc),
+                    "action": "access_document_object",
+                    "hint": "Le document n'est pas un objet JSON valide (peut-être un tableau ou une valeur primitive). Vérifiez l'intégrité de la collection."
+                })
+            ),
+        };
         let mut properties = HashMap::new();
         for (k, v) in obj {
             if !matches!(

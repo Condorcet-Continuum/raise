@@ -31,11 +31,7 @@ impl TransverseAgent {
             return Ok(json!({}));
         }
 
-        let response = ctx
-            .llm
-            .ask(LlmBackend::LocalLlama, sys, user)
-            .await
-            .map_err(|e| AppError::Validation(format!("LLM Transverse: {}", e)))?;
+        let response = ctx.llm.ask(LlmBackend::LocalLlama, sys, user).await?;
 
         let clean = extract_json_from_llm(&response);
         let mut doc: Value = data::parse(&clean).unwrap_or(json!({}));

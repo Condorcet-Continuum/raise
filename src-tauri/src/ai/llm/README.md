@@ -80,60 +80,8 @@ graph TD
 
 ---
 
-## 💻 Exemples d'Utilisation (Rust)
 
-### Cas 1 : Via le Client HTTP (Agents)
 
-Utilisé pour les tâches complexes nécessitant un modèle puissant distant.
-
-```rust
-use crate::ai::llm::{client, prompts, response_parser};
-
-async fn classify_user_request(user_input: &str) -> RaiseResult<serde_json::Value, String> {
-    // 1. Initialisation
-    let llm_client = client::LlmClient::new( );
-
-    // 2. Prompting
-    let full_prompt = format!("{}\nREQ: {}", prompts::INTENT_CLASSIFIER_PROMPT, user_input);
-
-    // 3. Appel Réseau
-    let raw_response = llm_client.ask_raw(&full_prompt).await.map_err(|e| e.to_string())?;
-
-    // 4. Parsing
-    let json_data = response_parser::extract_json(&raw_response).map_err(|e| e.to_string())?;
-    Ok(json_data)
-}
-
-```
-
-### Cas 2 : Via le Moteur Natif (Embedded)
-
-Utilisé pour interagir avec le modèle chargé en mémoire (State Tauri).
-
-```rust
-use crate::ai::llm::NativeLlmState;
-use tauri::State;
-
-#[tauri::command]
-pub async fn chat_with_local_model(
-    state: State<'_, NativeLlmState>,
-    prompt: String
-) -> RaiseResult<String, String> {
-    // 1. Récupération du verrou (Mutex)
-    let mut guard = state.0.lock().map_err(|_| "Erreur Lock".to_string())?;
-
-    // 2. Vérification si le modèle est chargé
-    if let Some(engine) = guard.as_mut() {
-        // 3. Génération directe (In-Process)
-        // Pas de réseau, pas de JSON, c'est du "Raw Text"
-        engine.generate("Tu es un assistant.", &prompt, 200)
-            .map_err(|e| e.to_string())
-    } else {
-        Err("Le modèle charge encore...".to_string())
-    }
-}
-
-```
 
 ---
 

@@ -3,9 +3,9 @@
 pub mod cache;
 pub mod file_storage;
 
+use crate::utils::data::{Deserialize, Serialize, Value};
 use crate::utils::error::RaiseResult;
 use crate::utils::io::PathBuf;
-use crate::utils::json::{Deserialize, Serialize, Value};
 
 // --- CONFIGURATION ---
 

@@ -17,9 +17,22 @@ impl VectorQuantizer {
     /// * `num_embeddings`: Taille du vocabulaire (K)
     /// * `embedding_dim`: Dimension des vecteurs (D)
     pub fn new(num_embeddings: usize, embedding_dim: usize, vb: VarBuilder) -> RaiseResult<Self> {
-        // On initialise l'embedding table via Candle
-        let embedding = candle_nn::embedding(num_embeddings, embedding_dim, vb)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // On remplace le map_err par un match pour extraire l'Embedding proprement
+        let embedding = match candle_nn::embedding(num_embeddings, embedding_dim, vb) {
+            Ok(emb) => emb,
+            Err(e) => {
+                raise_error!(
+                    "ERR_AI_QUANTIZER_INIT_FAILED",
+                    error = e,
+                    context = json!({
+                        "num_embeddings": num_embeddings,
+                        "embedding_dim": embedding_dim,
+                        "hint": "Échec de l'initialisation du dictionnaire d'embeddings. Vérifiez que la taille du vocabulaire et la dimension correspondent aux poids fournis."
+                    })
+                )
+            }
+        };
+
         Ok(Self { embedding })
     }
 
@@ -27,55 +40,74 @@ impl VectorQuantizer {
     /// Input: [Batch, Dim]
     /// Output: [Batch] (Indices des concepts les plus proches)
     pub fn tokenize(&self, z: &Tensor) -> RaiseResult<Tensor> {
-        // 1. Calcul de la distance euclidienne au carré avec tous les vecteurs du codebook
-        // ||z - e||^2 = ||z||^2 + ||e||^2 - 2 <z, e>
+        // 1. Norme de l'entrée ||z||^2
+        let z_sq = match z.sqr().and_then(|s| s.sum_keepdim(1)) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_AI_QUANT_Z_NORM_FAILED", error = e),
+        };
 
-        // a. Carré de l'entrée : ||z||^2
-        // ✅ Conversion des erreurs Candle pour sqr et sum
-        let z_sq = z
-            .sqr()
-            .map_err(|e| AppError::from(e.to_string()))?
-            .sum_keepdim(1)
-            .map_err(|e| AppError::from(e.to_string()))?;
-
-        // b. Carré du codebook : ||e||^2
+        // 2. Norme du codebook ||e||^2
         let w = self.embedding.embeddings();
-        let w_sq = w
-            .sqr()
-            .map_err(|e| AppError::from(e.to_string()))?
-            .sum_keepdim(1)
-            .map_err(|e| AppError::from(e.to_string()))?
-            .t()
-            .map_err(|e| AppError::from(e.to_string()))?;
+        let w_sq = match w.sqr().and_then(|s| s.sum_keepdim(1)).and_then(|s| s.t()) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_AI_QUANT_W_NORM_FAILED", error = e),
+        };
 
-        // c. Produit scalaire : <z, e>
-        let w_t = w.t().map_err(|e| AppError::from(e.to_string()))?;
-        let zw = z.matmul(&w_t).map_err(|e| AppError::from(e.to_string()))?;
+        // 3. Produit scalaire <z, e> et assemblage
+        let w_t = match w.t() {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_AI_QUANT_W_TRANSPOSE_FAILED", error = e),
+        };
 
-        // d. Assemblage de la distance
-        // distance[i, j] = z_sq[i] + w_sq[j] - 2 * zw[i, j]
-        let zw2 = (zw * 2.0).map_err(|e| AppError::from(e.to_string()))?;
-        let dist = z_sq
+        let zw = match z.matmul(&w_t) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_AI_QUANT_MATMUL_FAILED", error = e),
+        };
+
+        let zw2 = match &zw * 2.0 {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_AI_QUANT_SCALAR_MUL_FAILED", error = e),
+        };
+
+        let dist = match z_sq
             .broadcast_add(&w_sq)
-            .map_err(|e| AppError::from(e.to_string()))?
-            .broadcast_sub(&zw2)
-            .map_err(|e| AppError::from(e.to_string()))?;
+            .and_then(|res| res.broadcast_sub(&zw2))
+        {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_AI_QUANT_BROADCAST_FAILED",
+                error = e,
+                context = json!({
+                    "z_shape": format!("{:?}", z.shape()),
+                    "w_shape": format!("{:?}", w.shape())
+                })
+            ),
+        };
 
-        // 2. Recherche du plus proche voisin (Argmin)
-        let indices = dist.argmin(1).map_err(|e| AppError::from(e.to_string()))?;
-
-        Ok(indices)
+        // 4. Recherche du plus proche voisin (Argmin)
+        match dist.argmin(1) {
+            Ok(indices) => Ok(indices),
+            Err(e) => raise_error!("ERR_AI_QUANT_ARGMIN_FAILED", error = e),
+        }
     }
 
     /// Décode un Token pour retrouver son vecteur prototype
     /// Input: [Batch] (Indices)
     /// Output: [Batch, Dim]
     pub fn decode(&self, indices: &Tensor) -> RaiseResult<Tensor> {
-        let vectors = self
-            .embedding
-            .forward(indices)
-            .map_err(|e| AppError::from(e.to_string()))?;
-        Ok(vectors)
+        // La méthode .forward() sur une couche d'Embedding fait le lookup des index
+        match self.embedding.forward(indices) {
+            Ok(vectors) => Ok(vectors),
+            Err(e) => raise_error!(
+                "ERR_AI_QUANT_DECODE_FAILED",
+                error = e,
+                context = json!({
+                    "action": "codebook_lookup",
+                    "indices_shape": format!("{:?}", indices.shape()),
+                    "hint": "Échec de la récupération des vecteurs. Vérifiez que les indices ne dépassent pas la taille du vocabulaire (num_embeddings)."
+                })
+            ),
+        }
     }
 }
 

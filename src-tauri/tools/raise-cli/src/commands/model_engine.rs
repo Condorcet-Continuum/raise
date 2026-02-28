@@ -34,10 +34,13 @@ pub enum ModelCommands {
     },
 }
 
-pub async fn handle(args: ModelArgs) -> Result<()> {
+pub async fn handle(args: ModelArgs) -> RaiseResult<()> {
     match args.command {
         ModelCommands::Load { path } => {
-            user_info!("MODEL_LOAD", "Lecture du fichier source : {}", path);
+            user_info!(
+                "MODEL_LOAD_START",
+                json!({ "path": path, "type": "source_file" })
+            );
             let path_ref = io::Path::new(&path);
 
             if !io::exists(path_ref).await {
@@ -57,9 +60,11 @@ pub async fn handle(args: ModelArgs) -> Result<()> {
             let _checker = ConsistencyChecker;
 
             user_success!(
-                "VALID_OK",
-                "Validation terminée (Statut: {:?}).",
-                Severity::Info
+                "VALIDATION_COMPLETE",
+                json!({
+                    "severity": format!("{:?}", Severity::Info),
+                    "status": "success"
+                })
             );
         }
 
@@ -73,17 +78,22 @@ pub async fn handle(args: ModelArgs) -> Result<()> {
             };
 
             if let Some(d) = target_domain {
-                user_info!("TRANSFORM", "Exécution du transformer Arcadia pour {:?}", d);
+                // Info : On trace le début de la transformation
+                user_info!("TRANSFORM_START", json!({ "domain": format!("{:?}", d) }));
+
+                // Success : On confirme la projection réussie
                 user_success!(
-                    "TRANSFORM_OK",
-                    "Le modèle a été projeté dans le domaine {:?}.",
-                    d
+                    "TRANSFORM_SUCCESS",
+                    json!({ "domain": format!("{:?}", d), "status": "projected" })
                 );
             } else {
+                // Error : On remonte l'erreur de domaine avec les valeurs attendues
                 user_error!(
-                    "DOMAIN_ERROR",
-                    "Domaine '{}' invalide. (Attendu: software, hardware, system)",
-                    domain
+                    "DOMAIN_INVALID",
+                    json!({
+                        "received": domain,
+                        "expected": ["software", "hardware", "system"]
+                    })
                 );
             }
         }

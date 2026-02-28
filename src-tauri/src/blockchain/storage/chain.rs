@@ -22,15 +22,34 @@ impl Ledger {
     pub fn append_commit(&mut self, commit: ArcadiaCommit) -> RaiseResult<()> {
         // 1. Vérification de la signature et de l'intégrité
         if !commit.verify() {
-            return Err(AppError::from("Signature ou intégrité du commit invalide"));
+            // 🛡️ Alerte de sécurité : Intégrité compromise
+            raise_error!(
+                "ERR_COMMIT_INTEGRITY_FAILED",
+                context = json!({
+                    "commit_id": commit.id,
+                    "author": commit.author,
+                    "timestamp": commit.timestamp,
+                    "action": "verify_commit_signature",
+                    "hint": "La signature cryptographique ne correspond pas au contenu du commit. Le fichier a peut-être été modifié manuellement ou corrompu lors du transfert."
+                })
+            );
         }
 
         // 2. Vérification du chaînage (continuité)
         if commit.parent_hash != self.last_commit_hash {
-            return Err(AppError::Validation(format!(
-                "Erreur de continuité : le parent attendu est {:?}, reçu {:?}",
-                self.last_commit_hash, commit.parent_hash
-            )));
+            raise_error!(
+                "ERR_BLOCKCHAIN_PARENT_HASH_MISMATCH",
+                error = format!(
+                    "Rupture de continuité : le parent attendu est {:?}, mais le commit pointe vers {:?}",
+                    self.last_commit_hash, commit.parent_hash
+                ),
+                context = serde_json::json!({
+                    "expected_parent_hash": self.last_commit_hash,
+                    "received_parent_hash": commit.parent_hash,
+                    "action": "verify_commit_chain_continuity",
+                    "hint": "Le commit soumis est désynchronisé (fork ou commit orphelin). Le nœud doit resynchroniser son état avec le reste du réseau."
+                })
+            );
         }
 
         // 3. Insertion dans le registre

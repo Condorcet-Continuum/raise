@@ -47,11 +47,7 @@ impl DataAgent {
         doc_type: &str,
         original_name: &str,
     ) -> RaiseResult<Value> {
-        let response = ctx
-            .llm
-            .ask(LlmBackend::LocalLlama, sys, user)
-            .await
-            .map_err(|e| AppError::Validation(format!("LLM Err: {}", e)))?;
+        let response = ctx.llm.ask(LlmBackend::LocalLlama, sys, user).await?;
 
         let clean = extract_json_from_llm(&response);
         let mut doc: Value = data::parse(&clean).unwrap_or(json!({}));

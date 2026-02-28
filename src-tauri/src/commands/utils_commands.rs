@@ -14,7 +14,7 @@ pub struct SystemInfoResponse {
 /// Commande Tauri : Récupère les informations système
 /// Retourne un Result<SystemInfoResponse, AppError> qui sera sérialisé en JSON ou string d'erreur.
 #[command]
-pub async fn get_app_info() -> Result<SystemInfoResponse> {
+pub async fn get_app_info() -> RaiseResult<SystemInfoResponse> {
     // 1. Log structuré (visible si RUST_LOG=info ou debug)
     tracing::info!("📥 Commande reçue : get_app_info");
 

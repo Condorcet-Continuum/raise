@@ -31,19 +31,31 @@ impl<'a> ArcadiaBridge<'a> {
     /// Assure la persistance sur disque suivie de la mise à jour de l'état en mémoire.
     pub async fn process_new_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
         // 1. Persistance physique dans la JSON-DB
-        self.db_adapter.apply_commit(commit).await.map_err(|e| {
-            AppError::from(format!(
-                "Échec de l'application du commit dans la JSON-DB via le DbAdapter: {}",
-                e
-            ))
-        })?;
+        if let Err(e) = self.db_adapter.apply_commit(commit).await {
+            raise_error!(
+                "ERR_BRIDGE_DB_PERSISTENCE_FAILED",
+                error = e,
+                context = json!({
+                    "commit_id": commit.id,
+                    "adapter": "JsonDbAdapter",
+                    "hint": "Le commit n'a pas pu être écrit sur le disque. Vérifiez l'espace disque ou les permissions du dossier storage."
+                })
+            );
+        }
+
         // 2. Synchronisation logique dans le ProjectModel
-        self.model_sync.sync_commit(commit).map_err(|e| {
-            AppError::from(format!(
-                "Échec de la synchronisation du ProjectModel en mémoire via le ModelSync: {}",
-                e
-            ))
-        })?;
+        if let Err(e) = self.model_sync.sync_commit(commit) {
+            raise_error!(
+                "ERR_BRIDGE_MODEL_SYNC_FAILED",
+                error = e,
+                context = json!({
+                    "commit_id": commit.id,
+                    "sync_module": "ModelSync",
+                    "hint": "Incohérence détectée lors de la mise à jour du modèle en mémoire. Un rollback manuel de la DB pourrait être nécessaire."
+                })
+            );
+        }
+
         #[cfg(debug_assertions)]
         println!(
             "🚀 [ArcadiaBridge] Commit {} traité avec succès.",

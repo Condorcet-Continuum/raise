@@ -22,7 +22,7 @@ pub enum BlockchainCommands {
     },
 }
 
-pub async fn handle(args: BlockchainArgs) -> Result<()> {
+pub async fn handle(args: BlockchainArgs) -> RaiseResult<()> {
     match args.command {
         BlockchainCommands::Status => {
             user_info!("BLOCKCHAIN", "Interrogation des états globaux...");
@@ -40,7 +40,10 @@ pub async fn handle(args: BlockchainArgs) -> Result<()> {
         }
 
         BlockchainCommands::VpnCheck { profile } => {
-            user_info!("VPN_INIT", "Tentative de connexion au profil : {}", profile);
+            user_info!(
+                "VPN_INIT",
+                json!({ "profile": profile, "action": "establish_connection" })
+            );
 
             // Utilisation de VpnConfig pour valider la structure
             let _config = VpnConfig {
@@ -50,8 +53,11 @@ pub async fn handle(args: BlockchainArgs) -> Result<()> {
 
             user_success!(
                 "VPN_READY",
-                "Maillage réseau '{}' vérifié avec succès.",
-                profile
+                json!({
+                    "profile": profile,
+                    "status": "connected",
+                    "mesh_verified": true
+                })
             );
         }
     }

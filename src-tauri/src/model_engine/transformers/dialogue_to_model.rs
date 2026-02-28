@@ -12,14 +12,51 @@ impl DialogueToModelTransformer {
     /// Convertit un JSON d'intention (issu du LLM) en structure ArcadiaElement
     pub fn create_element_from_intent(intent: &Value) -> RaiseResult<ArcadiaElement> {
         // 1. Validation des champs requis
-        let name_str = intent
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::from("Le champ 'name' est requis dans l'intention."))?;
+        // 1. Extraction du nom de l'intention
+        let name_str = match intent.get("name") {
+            Some(val) => match val.as_str() {
+                Some(s) => s,
+                None => raise_error!(
+                    "ERR_INTENT_INVALID_FORMAT",
+                    context = json!({
+                        "field": "name",
+                        "expected": "string",
+                        "received": val,
+                        "hint": "Le nom de l'intention doit être une chaîne de caractères."
+                    })
+                ),
+            },
+            None => raise_error!(
+                "ERR_INTENT_MISSING_FIELD",
+                context = json!({
+                    "field": "name",
+                    "hint": "Le champ 'name' est obligatoire pour identifier l'intention."
+                })
+            ),
+        };
 
-        let type_str = intent.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
-            AppError::from("Le champ 'type' est requis (ex: Component, Function).")
-        })?;
+        // 2. Extraction du type de l'intention
+        let type_str = match intent.get("type") {
+            Some(val) => match val.as_str() {
+                Some(s) => s,
+                None => raise_error!(
+                    "ERR_INTENT_INVALID_FORMAT",
+                    context = json!({
+                        "field": "type",
+                        "expected": "string (ex: 'Component', 'Function')",
+                        "received": val,
+                        "hint": "Le type d'intention doit être une chaîne."
+                    })
+                ),
+            },
+            None => raise_error!(
+                "ERR_INTENT_MISSING_FIELD",
+                context = json!({
+                    "field": "type",
+                    "hint": "Le champ 'type' est requis pour déterminer la stratégie d'exécution."
+                })
+            ),
+        };
 
         // 2. Déduction de la couche (Layer) par défaut si manquante
         let layer_str = intent
@@ -50,10 +87,16 @@ impl DialogueToModelTransformer {
 
             // Fallback ou erreur
             (l, t) => {
-                return Err(AppError::Validation(format!(
-                    "Combinaison Layer/Type non supportée : {} / {}",
-                    l, t
-                )))
+                raise_error!(
+                    "ERR_SEMANTIC_LAYER_TYPE_MISMATCH",
+                    error = format!("Combinaison Layer/Type non reconnue : {} / {}", l, t),
+                    context = json!({
+                        "layer": l,
+                        "semantic_type": t,
+                        "action": "resolve_factory_handler",
+                        "hint": "Cette combinaison n'est pas enregistrée dans la fabrique sémantique. Vérifiez si le type est compatible avec la couche spécifiée."
+                    })
+                );
             }
         };
 

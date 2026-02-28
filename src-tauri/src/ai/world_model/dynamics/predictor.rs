@@ -24,11 +24,35 @@ impl WorldModelPredictor {
         // L'entrée de la couche 1 est la concaténation de State + Action
         let input_dim = config.embedding_dim + config.action_dim;
 
-        let l1 = linear(input_dim, config.hidden_dim, vb.pp("l1"))
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 1. Initialisation de la Couche Cachée (L1)
+        let l1 = match linear(input_dim, config.hidden_dim, vb.pp("l1")) {
+            Ok(layer) => layer,
+            Err(e) => raise_error!(
+                "ERR_AI_MODEL_LAYER_INIT_FAILED",
+                error = e,
+                context = json!({
+                    "layer": "l1",
+                    "input_dim": input_dim,
+                    "output_dim": config.hidden_dim,
+                    "hint": "Vérifiez que les poids 'l1' existent dans le VarBuilder et correspondent aux dimensions."
+                })
+            ),
+        };
 
-        let l2 = linear(config.hidden_dim, config.embedding_dim, vb.pp("l2"))
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 2. Initialisation de la Couche de Sortie (L2)
+        let l2 = match linear(config.hidden_dim, config.embedding_dim, vb.pp("l2")) {
+            Ok(layer) => layer,
+            Err(e) => raise_error!(
+                "ERR_AI_MODEL_LAYER_INIT_FAILED",
+                error = e,
+                context = json!({
+                    "layer": "l2",
+                    "input_dim": config.hidden_dim,
+                    "output_dim": config.embedding_dim,
+                    "hint": "Vérifiez que les poids 'l2' existent dans le VarBuilder."
+                })
+            ),
+        };
 
         Ok(Self { l1, l2 })
     }
@@ -37,22 +61,38 @@ impl WorldModelPredictor {
     /// * `state` : [Batch, State_Dim]
     /// * `action` : [Batch, Action_Dim]
     pub fn forward(&self, state: &Tensor, action: &Tensor) -> RaiseResult<Tensor> {
-        // ✅ Conversion des erreurs pour chaque opération de tenseur
-        let x = Tensor::cat(&[state, action], 1).map_err(|e| AppError::from(e.to_string()))?;
+        // 1. Concaténation de l'État et de l'Action
+        let x = match Tensor::cat(&[state, action], 1) {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_AI_MODEL_CAT_FAILED",
+                error = e,
+                context = json!({
+                    "state_shape": format!("{:?}", state.shape()),
+                    "action_shape": format!("{:?}", action.shape()),
+                    "dim": 1
+                })
+            ),
+        };
 
-        let h = self
-            .l1
-            .forward(&x)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 2. Passage dans la couche cachée L1
+        let h = match self.l1.forward(&x) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_AI_MODEL_L1_FORWARD_FAILED", error = e),
+        };
 
-        let h = Activation::Gelu
-            .forward(&h)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 3. Activation GELU
+        let h = match Activation::Gelu.forward(&h) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_AI_MODEL_ACTIVATION_FAILED", error = e),
+        };
 
-        let next_state = self
-            .l2
-            .forward(&h)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 4. Passage dans la couche de sortie L2
+        let next_state = match self.l2.forward(&h) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_AI_MODEL_L2_FORWARD_FAILED", error = e),
+        };
+
         Ok(next_state)
     }
 }

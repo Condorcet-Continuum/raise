@@ -175,10 +175,16 @@ impl JsonLdProcessor {
         for &field in required {
             let iri = self.context_manager.expand_term(field);
             if expanded.get(&iri).is_none() && doc.get(field).is_none() {
-                return Err(AppError::NotFound(format!(
-                    "Champ requis manquant : {}",
-                    field
-                )));
+                raise_error!(
+                    "ERR_SEMANTIC_FIELD_MISSING",
+                    error = format!("Champ requis '{}' introuvable (recherche infructueuse dans le document et l'IRI étendu).", field),
+                    context = json!({
+                        "field_name": field,
+                        "iri_target": iri,
+                        "sources_checked": ["document_root", "expanded_context"],
+                        "action": "validate_required_semantic_fields"
+                    })
+                );
             }
         }
         Ok(())
@@ -186,10 +192,18 @@ impl JsonLdProcessor {
 
     pub fn to_ntriples(&self, doc: &Value) -> RaiseResult<String> {
         let expanded = self.expand(doc);
-        let id = self
-            .get_id(&expanded)
-            .ok_or_else(|| AppError::Validation("Document sans @id".to_string()))?;
-
+        let Some(id) = self.get_id(&expanded) else {
+            raise_error!(
+                "ERR_SEMANTIC_ID_MISSING",
+                error = "Identifiant sémantique '@id' introuvable après expansion.",
+                context = json!({
+                    "action": "extract_semantic_id",
+                    // FIX : On passe par as_object() pour accéder aux clés en toute sécurité
+                    "available_keys": expanded.as_object().map(|m| m.keys().collect::<Vec<_>>()),
+                    "hint": "Le document JSON-LD étendu ne contient pas de champ '@id' valide."
+                })
+            );
+        };
         let mut lines = Vec::new();
 
         if let Some(obj) = expanded.as_object() {

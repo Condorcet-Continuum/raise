@@ -17,12 +17,35 @@ impl Sysml2ToArcadiaMapper {
     pub fn transform(&self, sysml_content: &str) -> RaiseResult<ProjectModel> {
         let mut model = ProjectModel::default();
 
-        let parsed_file = Sysml2Parser::parse(Rule::file, sysml_content)
-            .map_err(|e| format!("Erreur de syntaxe SysML v2: {}", e))?
-            .next()
-            .unwrap();
+        // 1. Parsing initial
+        let mut pairs = match Sysml2Parser::parse(Rule::file, sysml_content) {
+            Ok(p) => p,
+            Err(e) => {
+                // Pas de 'return' devant, la macro le fait déjà !
+                raise_error!(
+                    "ERR_SYSML_SYNTAX_INVALID",
+                    error = e,
+                    context = json!({ "action": "parse_sysml_v2" })
+                )
+            }
+        };
 
+        // 2. Extraction du premier élément
+        let parsed_file = match pairs.next() {
+            Some(pair) => pair,
+            None => {
+                // Pareil ici : on laisse la macro faire son job de sortie
+                raise_error!(
+                    "ERR_SYSML_EMPTY_FILE",
+                    error = "Le parseur n'a retourné aucun contenu.",
+                    context = json!({ "action": "extract_ast_root" })
+                )
+            }
+        };
+
+        // 3. Traversal
         self.traverse_ast(parsed_file, &mut model, "UnknownLayer");
+
         Ok(model)
     }
 

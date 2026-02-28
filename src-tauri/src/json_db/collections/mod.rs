@@ -66,17 +66,33 @@ pub async fn insert_with_schema(
     let manager = CollectionsManager::new(&storage, space, db);
 
     // Migration async : ajout de .await
-    manager::apply_business_rules(&manager, &collection_name, &mut doc, None, &reg, &root_uri)
-        .await
-        .map_err(|e| AppError::Database(format!("Rules Engine Execution: {}", e)))?;
-
+    if let Err(e) =
+        manager::apply_business_rules(&manager, &collection_name, &mut doc, None, &reg, &root_uri)
+            .await
+    {
+        raise_error!(
+            "ERR_DB_BUSINESS_RULES_EXEC",
+            error = e,
+            context = json!({
+                "collection": collection_name,
+                "root_uri": root_uri,
+                "action": "execute_business_rules_logic"
+            })
+        );
+    }
     validator.compute_then_validate(&mut doc)?;
 
-    let id = doc
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Validation("Document ID manquant".to_string()))?;
-
+    let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+        raise_error!(
+            "ERR_DB_DOCUMENT_ID_MISSING",
+            error = "Identifiant 'id' manquant ou n'est pas une chaîne de caractères",
+            context = json!({
+                "expected_field": "id",
+                "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
+                "action": "extract_document_id"
+            })
+        );
+    };
     collection::update_document(cfg, space, db, &collection_name, id, &doc).await?;
     Ok(doc)
 }
@@ -88,11 +104,17 @@ pub async fn insert_raw(
     collection: &str,
     doc: &Value,
 ) -> RaiseResult<()> {
-    let id = doc
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Validation("Document sans ID".to_string()))?;
-
+    let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+        raise_error!(
+            "ERR_DB_DOCUMENT_ID_MISSING",
+            error = "Document invalide : le champ 'id' est manquant ou n'est pas une chaîne de caractères.",
+            context = json!({
+                "expected_field": "id",
+                "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
+                "action": "document_identity_check"
+            })
+        );
+    };
     collection::create_document(cfg, space, db, collection, id, doc).await
 }
 
@@ -110,11 +132,17 @@ pub async fn update_with_schema(
     validator.compute_then_validate(&mut doc)?;
 
     let collection_name = collection_from_schema_rel(schema_rel);
-    let id = doc
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Validation("Document ID manquant".to_string()))?;
-
+    let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+        raise_error!(
+            "ERR_DB_DOCUMENT_ID_MISSING",
+            error = "Document invalide : le champ 'id' est manquant ou n'est pas une chaîne de caractères.",
+            context = json!({
+                "expected_field": "id",
+                "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
+                "action": "verify_document_identity"
+            })
+        );
+    };
     collection::update_document(cfg, space, db, &collection_name, id, &doc).await?;
     Ok(doc)
 }
@@ -126,11 +154,17 @@ pub async fn update_raw(
     collection: &str,
     doc: &Value,
 ) -> RaiseResult<()> {
-    let id = doc
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Validation("Document ID manquant".to_string()))?;
-
+    let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+        raise_error!(
+            "ERR_DB_DOCUMENT_ID_MISSING",
+            error = "Document invalide : le champ 'id' est manquant ou n'est pas une chaîne de caractères.",
+            context = json!({
+                "expected_field": "id",
+                "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
+                "action": "verify_document_identity"
+            })
+        );
+    };
     collection::update_document(cfg, space, db, collection, id, doc).await
 }
 

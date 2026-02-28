@@ -46,12 +46,18 @@ impl From<CliTargetLanguage> for TargetLanguage {
     }
 }
 
-pub async fn handle(args: CodeGenArgs) -> Result<()> {
+pub async fn handle(args: CodeGenArgs) -> RaiseResult<()> {
     match args.command {
         CodeGenCommands::Generate { element_id, lang } => {
             let target: TargetLanguage = lang.into();
-            user_info!("FORGE", "Démarrage de la génération pour : {}", element_id);
-            user_info!("TARGET", "Langage : {:?}", target);
+            user_info!(
+                "FORGE_START",
+                json!({ "element_id": element_id, "stage": "init" })
+            );
+            user_info!(
+                "TARGET_RESOLVED",
+                json!({ "language": format!("{:?}", target) })
+            );
 
             // Simulation du cycle de vie du CodeGeneratorService
             user_info!("SYNC", "Extraction des injections de code utilisateur...");
@@ -60,7 +66,10 @@ pub async fn handle(args: CodeGenArgs) -> Result<()> {
                 user_info!("LINT", "Exécution programmée de Clippy & Rustfmt.");
             }
 
-            user_success!("FORGE_OK", "Artefacts {:?} générés avec succès.", target);
+            user_success!(
+                "FORGE_SUCCESS",
+                json!({ "target": format!("{:?}", target), "status": "completed" })
+            );
         }
     }
     Ok(())

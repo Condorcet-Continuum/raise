@@ -22,7 +22,7 @@ pub fn debug_genetics_ping(name: String) -> String {
 pub async fn run_architecture_optimization(
     window: Window,
     params: OptimizationRequest,
-) -> Result<OptimizationResult> {
+) -> RaiseResult<OptimizationResult> {
     let start_time = Instant::now();
 
     // 1. Préparation des données (Mapping IDs -> Index)

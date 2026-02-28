@@ -158,10 +158,14 @@ pub mod tools {
         collection: &str,
         doc: &Value,
     ) -> RaiseResult<CreatedArtifact> {
-        let doc_id = doc["id"]
-            .as_str()
-            .ok_or_else(|| AppError::Validation("L'artefact n'a pas d'ID valide".into()))?
-            .to_string();
+        let Some(doc_id_ref) = doc["id"].as_str() else {
+            raise_error!(
+                "ERR_ARTIFACT_ID_INVALID",
+                error = "L'artefact n'a pas d'ID valide",
+                context = serde_json::json!({ "doc_snapshot": doc })
+            );
+        };
+        let doc_id = doc_id_ref.to_string();
 
         let name = doc["name"].as_str().unwrap_or("Unnamed").to_string();
         let element_type = doc

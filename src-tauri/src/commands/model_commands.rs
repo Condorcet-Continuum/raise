@@ -14,15 +14,26 @@ pub async fn load_project_model(
     storage: State<'_, StorageEngine>,
     space: String,
     db: String,
-) -> Result<ProjectModel> {
-    // On instancie le loader à partir de l'état géré par Tauri
+) -> RaiseResult<ProjectModel> {
+    // On instancie le loader
     let loader = ModelLoader::from_engine(storage.inner(), &space, &db);
 
-    // Exécution asynchrone du chargement complet
-    loader
-        .load_full_model()
-        .await
-        .map_err(|e| AppError::Validation(format!("Erreur de chargement du modèle : {}", e)))
+    // 1. On capture le résultat avec un match explicite
+    let full_model = match loader.load_full_model().await {
+        Ok(model) => model,
+        Err(e) => raise_error!(
+            "ERR_MODEL_LOAD_FAIL",
+            error = e,
+            context = json!({
+                "action": "load_full_project_model",
+                "source": "model_loader",
+                "hint": "Le chargement a échoué. Vérifiez l'intégrité des JSON et les permissions du dossier racine."
+            })
+        ),
+    };
+
+    // 2. On retourne le succès explicitement
+    Ok(full_model)
 }
 
 #[cfg(test)]

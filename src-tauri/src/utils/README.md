@@ -68,9 +68,7 @@ Les constantes sont définies dans `config.rs` et ne doivent jamais être écrit
 
 Chaque erreur doit être porteuse d'un contexte pour permettre à l'IA de s'auto-corriger.
 
-* **Interdit** : Retourner `AppError::Io(e)` brut.
-* **Obligatoire** : Utiliser les constructeurs comme `AppError::custom_io("Echec lecture config")` ou les nouvelles variantes `FileSystem { action, path, source }`.
-
+ 
 ### Directives pour les Agents IA
 
 1. **Usage du Prelude** : Tout module doit commencer par `use crate::utils::prelude::*;` pour accéder aux types `RaiseResult`, `AppError`, et aux fonctions `async_`.

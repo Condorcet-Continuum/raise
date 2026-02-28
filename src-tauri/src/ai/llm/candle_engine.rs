@@ -32,9 +32,13 @@ impl CandleLlmEngine {
             .unwrap_or("tokenizer.json");
 
         // 3. Construction des chemins LOCAUX absolus (100% Hors-ligne)
-        let home = dirs::home_dir().ok_or_else(|| {
-            AppError::Ai("Impossible de trouver le dossier utilisateur (home)".to_string())
-        })?;
+        let Some(home) = dirs::home_dir() else {
+            raise_error!(
+                "ERR_OS_HOME_NOT_FOUND",
+                error = "Impossible de localiser le répertoire personnel de l'utilisateur (HOME).",
+                context = json!({ "method": "dirs::home_dir" })
+            );
+        };
 
         let base_path = home.join("raise_domain/_system/ai-assets/models");
         let model_path = base_path.join(model_filename);
@@ -42,16 +46,18 @@ impl CandleLlmEngine {
 
         // 4. Vérification de sécurité stricte
         if !model_path.exists() {
-            return Err(AppError::Ai(format!(
-                "Modèle GGUF introuvable en local : {:?}",
-                model_path
-            )));
+            raise_error!(
+                "ERR_AI_MODEL_FILE_NOT_FOUND",
+                error = format!("Modèle GGUF introuvable en local : {:?}", model_path),
+                context = json!({ "path": model_path.to_string_lossy() })
+            );
         }
         if !tokenizer_path.exists() {
-            return Err(AppError::Ai(format!(
-                "Tokenizer introuvable en local : {:?}",
-                tokenizer_path
-            )));
+            raise_error!(
+                "ERR_AI_TOKENIZER_FILE_NOT_FOUND",
+                error = format!("Tokenizer introuvable en local : {:?}", tokenizer_path),
+                context = json!({ "path": tokenizer_path.to_string_lossy() })
+            );
         }
 
         // 5. Initialisation matérielle (CPU par défaut)
@@ -61,23 +67,57 @@ impl CandleLlmEngine {
         println!("🚀 [Candle LLM] Moteur Qwen chargé sur : {:?}", device);
 
         // 6. Chargement du Tokenizer depuis le fichier local
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| AppError::Ai(format!("Erreur Tokenizer: {}", e)))?;
+        let tokenizer = match tokenizers::Tokenizer::from_file(&tokenizer_path) {
+            Ok(t) => t,
+            Err(e) => {
+                // La macro gère déjà le retour divergent
+                raise_error!(
+                    "ERR_AI_TOKENIZER_LOAD_FAILED",
+                    error = e,
+                    context = json!({
+                        "action": "initialize_tokenizer",
+                        "path": tokenizer_path.to_string_lossy(),
+                        "hint": "Le fichier 'tokenizer.json' est introuvable ou malformé. Vérifiez que le modèle a été correctement téléchargé dans le dossier 'assets/models'."
+                    })
+                )
+            }
+        };
 
         // 7. Chargement du modèle GGUF depuis le fichier local
-        let mut file = std::fs::File::open(&model_path)
-            .map_err(|e| AppError::Ai(format!("Erreur ouverture GGUF: {}", e)))?;
+        let mut file = match std::fs::File::open(&model_path) {
+            Ok(f) => f,
+            Err(e) => raise_error!(
+                "ERR_AI_MODEL_OPEN",
+                error = e,
+                context = json!({ "path": model_path.to_string_lossy() })
+            ),
+        };
 
-        let model = gguf_file::Content::read(&mut file)
-            .map_err(|e| AppError::Ai(format!("Erreur lecture GGUF: {}", e)))?;
-
+        let model = match gguf_file::Content::read(&mut file) {
+            Ok(m) => m,
+            Err(e) => raise_error!(
+                "ERR_AI_MODEL_READ_CONTENT",
+                error = e,
+                context = json!({
+                    "action": "READ_GGUF_CONTENT",
+                    "path": model_path.to_string_lossy()
+                })
+            ),
+        };
         // 8. Initialisation de l'architecture Qwen2
-        let weights = candle_transformers::models::quantized_qwen2::ModelWeights::from_gguf(
+        let weights = match candle_transformers::models::quantized_qwen2::ModelWeights::from_gguf(
             model, &mut file, &device,
-        )
-        .map_err(|e| AppError::Ai(format!("Erreur poids Qwen2: {}", e)))?;
-
-        // 9. Initialisation du processeur de texte (Température 0.7 par défaut)
+        ) {
+            Ok(w) => w,
+            Err(e) => raise_error!(
+                "ERR_AI_QWEN2_WEIGHTS_LOAD",
+                error = e,
+                context = json!({
+                    "model_family": "Qwen2",
+                    "path": model_path.to_string_lossy()
+                })
+            ),
+        }; // 9. Initialisation du processeur de texte (Température 0.7 par défaut)
         let logits_processor = LogitsProcessor::new(299792458, Some(0.7), None);
 
         // Retour de l'instance
@@ -105,10 +145,19 @@ impl CandleLlmEngine {
     ) -> RaiseResult<String> {
         let formatted_prompt = Self::format_prompt(system_prompt, user_prompt);
 
-        let tokens = self
-            .tokenizer
-            .encode(formatted_prompt, true)
-            .map_err(|e| AppError::from(format!("Erreur encodage Tokenizer: {}", e)))?;
+        let tokens = match self.tokenizer.encode(formatted_prompt.as_str(), true) {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_TOKENIZER_ENCODE",
+                error = e,
+                context = json!({
+                    "action": "encode_prompt",
+                    // Un petit plus pour l'IA : on capture un aperçu du prompt qui a fait planter !
+                    "prompt_preview": formatted_prompt.chars().take(50).collect::<String>()
+                })
+            ),
+        };
+
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = Vec::new();
 
@@ -125,28 +174,52 @@ impl CandleLlmEngine {
             let context_size = if index_pos == 0 { tokens.len() } else { 1 };
             let start_pos = tokens.len().saturating_sub(context_size);
 
-            // ✅ Conversion explicite des erreurs CandleCore vers AppError
-            let input = Tensor::new(&tokens[start_pos..], &self.device)
-                .map_err(|e| AppError::from(e.to_string()))?
-                .unsqueeze(0)
-                .map_err(|e| AppError::from(e.to_string()))?;
+            // 1. Tenseur d'entrée
+            let input = match Tensor::new(&tokens[start_pos..], &self.device) {
+                Ok(t) => t,
+                Err(e) => raise_error!(
+                    "ERR_AI_TENSOR_CREATION_FAILED",
+                    error = e,
+                    context = json!({ "pos": index_pos })
+                ),
+            };
 
-            let logits = self
-                .model
-                .forward(&input, index_pos)
-                .map_err(|e| AppError::from(e.to_string()))?;
-            let logits = logits
-                .squeeze(0)
-                .map_err(|e| AppError::from(e.to_string()))?
-                .squeeze(0)
-                .map_err(|e| AppError::from(e.to_string()))?
-                .to_dtype(candle_core::DType::F32)
-                .map_err(|e| AppError::from(e.to_string()))?;
+            let input = match input.unsqueeze(0) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_AI_TENSOR_SHAPE_ERROR", error = e),
+            };
 
-            let next_token = self
-                .logits_processor
-                .sample(&logits)
-                .map_err(|e| AppError::from(e.to_string()))?;
+            // 2. Forward Pass
+            let logits = match self.model.forward(&input, index_pos) {
+                Ok(l) => l,
+                Err(e) => raise_error!(
+                    "ERR_AI_FORWARD_PASS_FAILED",
+                    error = e,
+                    context = json!({ "index_pos": index_pos })
+                ),
+            };
+
+            // 3. Post-traitement (Extraction manuelle pour éviter le mismatch)
+            let logits = match logits.squeeze(0) {
+                Ok(l) => l,
+                Err(e) => raise_error!("ERR_AI_TENSOR_SQUEEZE_FAILED", error = e),
+            };
+
+            let logits = match logits.squeeze(0) {
+                Ok(l) => l,
+                Err(e) => raise_error!("ERR_AI_TENSOR_SQUEEZE_FAILED", error = e),
+            };
+
+            let logits = match logits.to_dtype(candle_core::DType::F32) {
+                Ok(l) => l,
+                Err(e) => raise_error!("ERR_AI_DTYPE_CONVERSION_FAILED", error = e),
+            };
+
+            // 4. Sampling
+            let next_token = match self.logits_processor.sample(&logits) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_AI_SAMPLING_FAILED", error = e),
+            };
 
             if next_token == eos_token_id || next_token == stop_token_id {
                 break;
@@ -157,10 +230,18 @@ impl CandleLlmEngine {
             index_pos += context_size;
         }
 
-        let result = self
-            .tokenizer
-            .decode(&generated_tokens, true)
-            .map_err(|e| AppError::from(format!("Erreur décodage Tokenizer: {}", e)))?;
+        let result = match self.tokenizer.decode(&generated_tokens, true) {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_TOKENIZER_DECODE",
+                error = e,
+                context = json!({
+                    "action": "decode_tokens",
+                    // Info ultra-utile pour l'IA/Debug : combien de tokens ont fait planter le décodeur ?
+                    "token_count": generated_tokens.len()
+                })
+            ),
+        };
         Ok(result)
     }
 }

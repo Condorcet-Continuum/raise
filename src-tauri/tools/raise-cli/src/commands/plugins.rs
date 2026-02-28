@@ -27,7 +27,7 @@ pub enum PluginsCommands {
     Info { name: String },
 }
 
-pub async fn handle(args: PluginsArgs) -> Result<()> {
+pub async fn handle(args: PluginsArgs) -> RaiseResult<()> {
     match args.command {
         PluginsCommands::List => {
             user_info!("PLUGINS", "Interrogation du catalogue actif...");
@@ -38,17 +38,34 @@ pub async fn handle(args: PluginsArgs) -> Result<()> {
         }
 
         PluginsCommands::Load { id, path } => {
-            user_info!("LOAD", "Initialisation du bloc cognitif : {}...", id);
+            // Début du chargement : on identifie le bloc cognitif
+            user_info!("PLUGIN_LOAD_START", json!({ "id": id }));
 
-            // Simulation du processus de manager.load_plugin
-            user_info!("FS", "Lecture du binaire : {}", path);
-            user_success!("LOAD_OK", "Plugin '{}' injecté avec succès.", id);
+            // Étape Système de Fichiers (FS)
+            user_info!("PLUGIN_FS_READ", json!({ "path": path }));
+
+            // Succès final
+            user_success!(
+                "PLUGIN_LOAD_SUCCESS",
+                json!({ "id": id, "status": "injected" })
+            );
         }
 
         PluginsCommands::Info { name } => {
-            user_info!("INSPECT", "Détails du plugin : {}", name);
-            user_info!("TYPE", "Cognitive Runtime (WASM)");
-            user_success!("INFO_OK", "Signature validée pour {}.", name);
+            // Inspection détaillée
+            user_info!("PLUGIN_INSPECT", json!({ "plugin_name": name }));
+
+            // Métadonnées sur le runtime
+            user_info!(
+                "PLUGIN_RUNTIME",
+                json!({ "type": "Cognitive Runtime", "engine": "WASM" })
+            );
+
+            // Validation de signature
+            user_success!(
+                "PLUGIN_INFO_SUCCESS",
+                json!({ "plugin_name": name, "verified": true })
+            );
         }
     }
     Ok(())

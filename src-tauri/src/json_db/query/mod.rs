@@ -5,7 +5,7 @@ pub mod optimizer;
 pub mod parser;
 pub mod sql;
 
-use crate::utils::json::{Deserialize, Serialize, Value};
+use crate::utils::data::{Deserialize, Serialize, Value};
 
 pub use executor::QueryEngine;
 

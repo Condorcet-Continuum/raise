@@ -5,7 +5,7 @@ use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
 use crate::json_db::storage::{file_storage, StorageEngine};
-use crate::rules_engine::{EvalError, Evaluator, Rule, RuleStore};
+use crate::rules_engine::{Evaluator, Rule, RuleStore};
 use crate::utils::{Future, Pin};
 
 use super::collection;
@@ -190,18 +190,26 @@ impl<'a> CollectionsManager<'a> {
     pub async fn read_many(&self, collection: &str, ids: &[String]) -> RaiseResult<Vec<Value>> {
         let mut docs = Vec::with_capacity(ids.len());
         for id in ids {
-            let doc_opt = self
-                .get_document(collection, id)
-                .await
-                .map_err(|e| AppError::Database(format!("Erreur I/O lecture ID {}: {}", id, e)))?;
-
-            match doc_opt {
-                Some(doc) => docs.push(doc),
-                None =>  return Err(AppError::Database(format!(
-                    "DATABASE CORRUPTION: L'index pointe vers l'ID '{}' mais le fichier est introuvable dans '{}'", 
-                    id, collection
-                ))),
-            }
+            // MIGRATION V1.3 : Lecture de document avec diagnostic structuré
+            let doc_opt = match self.get_document(collection, id).await {
+                Ok(doc) => doc,
+                Err(e) => raise_error!(
+                    "ERR_DB_DOCUMENT_READ",
+                    error = e,
+                    context = json!({
+                        "collection": collection,
+                        "document_id": id
+                    })
+                ),
+            };
+            let Some(doc) = doc_opt else {
+                raise_error!(
+                    "ERR_DB_CORRUPTION_INDEX_MISMATCH",
+                    error = "Document indexé mais introuvable physiquement",
+                    context = json!({ "id": id, "coll": collection })
+                );
+            };
+            docs.push(doc);
         }
         Ok(docs)
     }
@@ -338,18 +346,28 @@ impl<'a> CollectionsManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
         if !sys_path.exists() {
-            return Err(AppError::Database(
-                "Index _system.json introuvable".to_string(),
-            ));
+            raise_error!(
+                "ERR_DB_SYSTEM_INDEX_NOT_FOUND",
+                error = "Fichier d'index système '_system.json' introuvable.",
+                context = json!({
+                    "path": sys_path.to_string_lossy(),
+                    "component": "DATABASE_CORE"
+                })
+            );
         }
         let sys_json: Value = io::read_json(&sys_path).await?;
         let ptr = format!("/collections/{}/schema", col_name);
 
-        let raw_path = sys_json
-            .pointer(&ptr)
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::Database(format!("Collection '{}' inconnue", col_name)))?;
-
+        let Some(raw_path) = sys_json.pointer(&ptr).and_then(|v| v.as_str()) else {
+            raise_error!(
+                "ERR_DB_COLLECTION_NOT_FOUND",
+                error = format!("Collection '{}' inconnue dans l'index système", col_name),
+                context = json!({
+                    "collection_name": col_name,
+                    "json_pointer": ptr
+                })
+            );
+        };
         if raw_path.is_empty() {
             return Ok(String::new());
         }
@@ -468,10 +486,16 @@ impl<'a> CollectionsManager<'a> {
     // --- ÉCRITURE ET MISE À JOUR ---
 
     pub async fn insert_raw(&self, collection: &str, doc: &Value) -> RaiseResult<()> {
-        let id = doc
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::Validation("ID manquant dans le document".to_string()))?;
+        let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+            raise_error!(
+                "ERR_DB_DOCUMENT_ID_MISSING",
+                error = "Attribut 'id' manquant ou format invalide dans le document",
+                context = json!({
+                    "expected_field": "id",
+                    "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>())
+                })
+            );
+        };
         let meta_path = self
             .storage
             .config
@@ -511,9 +535,13 @@ impl<'a> CollectionsManager<'a> {
     ) -> RaiseResult<Value> {
         let resolved_patch = self.resolve_document_references(patch_data).await?;
         let old_doc_opt = self.get_document(collection, id).await?;
-        let mut doc = old_doc_opt
-            .ok_or_else(|| AppError::Database("Document introuvable pour update".to_string()))?;
-
+        let Some(mut doc) = old_doc_opt else {
+            raise_error!(
+                "ERR_DB_UPDATE_TARGET_NOT_FOUND",
+                error = "Échec de la mise à jour : le document original est introuvable.",
+                context = json!({ "action": "update_document" })
+            );
+        };
         json_merge(&mut doc, resolved_patch);
 
         if let Some(obj) = doc.as_object_mut() {
@@ -547,9 +575,19 @@ impl<'a> CollectionsManager<'a> {
 
         // 3. Validation stricte : Il faut au moins un ID ou un Name
         if id_opt.is_none() && name_opt.is_none() {
-            return Err(AppError::Validation(
-                "Upsert nécessite un champ 'id' ou 'name' pour identifier le document.".to_string(),
-            ));
+            raise_error!(
+                "ERR_DB_UPSERT_MISSING_IDENTITY",
+                error =
+                    "Identifiant manquant : l'upsert requiert au moins un champ 'id' ou 'name'.",
+                context = json!({
+                    "action": "upsert_document",
+                    "validation_state": {
+                        "has_id": false,
+                        "has_name": false
+                    },
+                    "hint": "Vérifiez que le document JSON contient une clé 'id' ou 'name' à la racine."
+                })
+            );
         }
 
         let mut target_id = None;
@@ -675,8 +713,16 @@ impl<'a> CollectionsManager<'a> {
             );
         }
 
-        self.apply_semantic_logic(doc, resolved_uri.as_deref())
-            .map_err(|e| AppError::Validation(format!("Validation sémantique échouée: {}", e)))?;
+        if let Err(e) = self.apply_semantic_logic(doc, resolved_uri.as_deref()) {
+            raise_error!(
+                "ERR_AI_SEMANTIC_VALIDATION_FAIL",
+                error = e,
+                context = json!({
+                    "uri": resolved_uri,
+                    "action": "semantic_integrity_check"
+                })
+            );
+        }
         Ok(())
     }
 
@@ -828,12 +874,24 @@ pub async fn apply_business_rules(
                         next_changes.insert(rule.target.clone());
                     }
                 }
-                Err(EvalError::VarNotFound(_)) => continue,
+
+                // 1. Filtrage précis sur le variant Structured produit par raise_error!
+                Err(crate::utils::error::AppError::Structured(ref data))
+                    if data.code == "ERR_RULE_VAR_NOT_FOUND" =>
+                {
+                    continue;
+                }
+                // 2. Tout le reste est une erreur fatale -> Macro raise_error!
                 Err(e) => {
-                    return Err(AppError::Database(format!(
-                        "Erreur calcul règle '{}': {}",
-                        rule.id, e
-                    )))
+                    raise_error!(
+                        "ERR_DB_RULE_EVAL_FAIL",
+                        context = json!({
+                            "rule_id": rule.id,
+                            "target_path": rule.target,
+                            "evaluator_error": e.to_string(),
+                            "action": "apply_document_rules"
+                        })
+                    );
                 }
             }
         }
@@ -1057,10 +1115,9 @@ mod tests {
         let result = manager.read_many("items", &ids).await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("DATABASE CORRUPTION"));
+        let err_str = result.unwrap_err().to_string();
+        // ✅ On vérifie le code d'erreur de corruption structuré
+        assert!(err_str.contains("ERR_DB_CORRUPTION_INDEX_MISMATCH"));
     }
 
     #[tokio::test]

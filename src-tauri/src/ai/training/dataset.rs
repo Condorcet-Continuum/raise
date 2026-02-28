@@ -22,10 +22,20 @@ pub async fn extract_domain_data(
     let manager = CollectionsManager::new(storage, space, db_name);
     let mut dataset = Vec::new();
 
-    let collections = manager
-        .list_collections()
-        .await
-        .map_err(|e| e.to_string())?;
+    let collections = match manager.list_collections().await {
+        Ok(c) => c,
+        Err(e) => {
+            raise_error!(
+                "ERR_VECTOR_DB_LIST_FAILED",
+                error = e,
+                context = json!({
+                    "action": "list_collections",
+                    "storage": "qdrant_internal",
+                    "hint": "Impossible de récupérer la liste des collections. Vérifiez que le service de base de données vectorielle est bien démarré."
+                })
+            )
+        }
+    };
 
     for col in collections {
         // Logique de filtrage : on cherche le nom du domaine dans le nom de la collection
@@ -34,8 +44,20 @@ pub async fn extract_domain_data(
             continue;
         }
 
-        // CORRECTION E0599 : Ajout de .await car list_all est asynchrone
-        let docs = manager.list_all(&col).await.map_err(|e| e.to_string())?;
+        let docs = match manager.list_all(&col).await {
+            Ok(d) => d,
+            Err(e) => {
+                raise_error!(
+                    "ERR_VECTOR_DB_FETCH_DOCS_FAILED",
+                    error = e,
+                    context = json!({
+                        "collection": col,
+                        "action": "list_all_documents",
+                        "hint": "Échec de la récupération des documents. Vérifiez si la collection n'a pas été supprimée ou renommée."
+                    })
+                )
+            }
+        };
 
         for doc in docs {
             // Construction de l'exemple d'entraînement structuré

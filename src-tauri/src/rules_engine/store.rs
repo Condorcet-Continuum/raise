@@ -55,13 +55,31 @@ impl<'a> RuleStore<'a> {
         }
 
         // 1. Sauvegarde persistante via le manager de JSON-DB
-        let mut doc = serde_json::to_value(&rule)?;
+        // ❌ Fini le `serde_json::to_value(&rule)?` qui faisait une conversion implicite.
+        // ✅ Capture explicite de l'erreur de sérialisation.
+        let mut doc = match serde_json::to_value(&rule) {
+            Ok(v) => v,
+            Err(e) => raise_error!(
+                "ERR_RULE_SERIALIZATION_FAILED",
+                error = e.to_string(),
+                context = serde_json::json!({
+                    "action": "serialize_rule_for_storage",
+                    "rule_id": rule.id,
+                    "target_collection": collection
+                })
+            ),
+        };
 
         if let Some(obj) = doc.as_object_mut() {
-            obj.insert("_target_collection".to_string(), json!(collection));
-            obj.insert("id".to_string(), json!(rule.id));
+            obj.insert(
+                "_target_collection".to_string(),
+                serde_json::json!(collection),
+            );
+            obj.insert("id".to_string(), serde_json::json!(rule.id));
         }
 
+        // Ici le `?` est CONSERVÉ car insert_raw renvoie DÉJÀ un RaiseResult.
+        // Aucune conversion (From) n'est nécessaire pour le compilateur.
         self.db_manager.insert_raw("_system_rules", &doc).await?;
 
         // 2. Mise à jour du cache mémoire
@@ -140,7 +158,7 @@ mod tests {
         let rule1 = Rule {
             id: "r1".into(),
             target: "user_age".into(), // Cible spécifique
-            expr: Expr::Val(json!(1)),
+            expr: Expr::Val(serde_json::json!(1)),
             description: None,
             severity: None,
         };
@@ -148,7 +166,7 @@ mod tests {
         let rule2 = Rule {
             id: "r2".into(),
             target: "system_status".into(),
-            expr: Expr::Val(json!(2)),
+            expr: Expr::Val(serde_json::json!(2)),
             description: None,
             severity: None,
         };

@@ -12,15 +12,17 @@ pub fn extract_json(raw_text: &str) -> RaiseResult<Value> {
             Ok(val)
         }
         Err(e) => {
-            // Si le parsing échoue, on loggue l'erreur et le texte qui a posé problème
-            warn!(
-                "Échec du parsing JSON. Erreur: {}. Texte reçu: {}",
-                e, clean_text
-            );
-            Err(AppError::from(format!(
-                "JSON invalide : {}. Vérifiez la sortie du modèle.",
-                e
-            )))
+            // Diagnostic chirurgical pour les sorties de modèles IA
+            raise_error!(
+                "ERR_JSON_PARSE_FAILED",
+                context = json!({
+                    "action": "parse_extracted_json",
+                    "parsing_error": e.to_string(),
+                    "raw_text_length": clean_text.len(),
+                    "raw_text_preview": clean_text.chars().take(200).collect::<String>(),
+                    "hint": "Le modèle a généré un JSON syntaxiquement incorrect. Vérifiez si des balises Markdown (```json) n'ont pas été oubliées ou si le texte est tronqué."
+                })
+            )
         }
     }
 }

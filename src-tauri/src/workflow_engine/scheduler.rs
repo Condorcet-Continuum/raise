@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/workflow_engine/scheduler.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::{prelude::*, HashMap, Utc};
 use crate::workflow_engine::{
     executor::WorkflowExecutor, state_machine::WorkflowStateMachine, ExecutionStatus,
     WorkflowDefinition, WorkflowInstance,
@@ -41,9 +41,18 @@ impl WorkflowScheduler {
         workflow_id: &str,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<WorkflowInstance> {
-        let def = self.definitions.get(workflow_id).ok_or_else(|| {
-            crate::utils::AppError::NotFound(format!("Définition '{}' introuvable", workflow_id))
-        })?;
+        // Recherche directe dans le registre des définitions
+        let def = match self.definitions.get(workflow_id) {
+            Some(definition) => definition,
+            None => raise_error!(
+                "ERR_WF_DEFINITION_NOT_FOUND",
+                context = json!({
+                    "workflow_id": workflow_id,
+                    "action": "resolve_workflow_definition",
+                    "hint": "La définition est absente du registre. Vérifiez le chargement des fichiers YAML/JSON au démarrage."
+                })
+            ),
+        };
 
         let mut instance = WorkflowInstance {
             id: format!(
@@ -76,13 +85,19 @@ impl WorkflowScheduler {
         instance: &mut WorkflowInstance,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<bool> {
-        let def = self.definitions.get(&instance.workflow_id).ok_or_else(|| {
-            crate::utils::AppError::NotFound(format!(
-                "Définition '{}' non chargée",
-                instance.workflow_id
-            ))
-        })?;
-
+        // Recherche de la définition liée à l'instance active
+        let def = match self.definitions.get(&instance.workflow_id) {
+            Some(d) => d,
+            None => raise_error!(
+                "ERR_WF_INSTANCE_ORPHAN",
+                context = json!({
+                    "instance_id": instance.id,
+                    "workflow_id": instance.workflow_id,
+                    "action": "lookup_active_definition",
+                    "hint": "Désynchronisation détectée : l'instance existe mais sa définition est absente du registre local."
+                })
+            ),
+        };
         let sm = WorkflowStateMachine::new(def);
         let runnable_nodes = sm.next_runnable_nodes(instance).await;
 
@@ -109,8 +124,20 @@ impl WorkflowScheduler {
                     .await?;
 
                 // 2. Transition d'état en mémoire
-                sm.transition(instance, &node_id, status)
-                    .map_err(|e| crate::utils::AppError::from(e.to_string()))?;
+                // Tentative de transition d'état dans le workflow
+                if let Err(e) = sm.transition(instance, &node_id, status) {
+                    raise_error!(
+                        "ERR_WF_STATE_TRANSITION_FAILED",
+                        context = json!({
+                            "instance_id": instance.id,
+                            "node_id": node_id,
+                            "target_status": status,
+                            "current_status": instance.status, // Changé de .state à .status
+                            "error_details": e.to_string(),
+                            "hint": "La transition a échoué. Vérifiez si l'état actuel permet d'atteindre le statut cible via ce nœud."
+                        })
+                    );
+                }
 
                 instance
                     .logs
@@ -150,16 +177,48 @@ impl WorkflowScheduler {
         instance_id: &str,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<ExecutionStatus> {
-        let doc = manager
+        // 1. Appel asynchrone à la base
+        let load_result = manager
             .get_document("workflow_instances", instance_id)
-            .await
-            .map_err(|e| crate::utils::AppError::Database(e.to_string()))?
-            .ok_or_else(|| {
-                crate::utils::AppError::NotFound(format!("Instance {} introuvable", instance_id))
-            })?;
+            .await;
 
-        let mut instance: WorkflowInstance =
-            serde_json::from_value(doc).map_err(crate::utils::AppError::Serialization)?;
+        // 2. Résolution impérative et typée
+        let doc = match load_result {
+            Ok(Some(document)) => document,
+            Ok(None) => raise_error!(
+                "ERR_WF_INSTANCE_NOT_FOUND",
+                context = json!({
+                    "instance_id": instance_id,
+                    "action": "resolve_instance_id",
+                    "hint": "L'ID ne correspond à aucune instance active dans la collection 'workflow_instances'."
+                })
+            ),
+            Err(e) => raise_error!(
+                "ERR_WF_INSTANCE_DB_ACCESS",
+                context = json!({
+                    "instance_id": instance_id,
+                    "db_error": e.to_string(),
+                    "action": "load_instance_from_db",
+                    "hint": "Échec technique lors de la lecture du document d'instance."
+                })
+            ),
+        };
+
+        // Désérialisation précise de l'instance de workflow
+        let mut instance: WorkflowInstance = match serde_json::from_value(doc) {
+            Ok(inst) => inst,
+            Err(e) => raise_error!(
+                "ERR_WF_INSTANCE_DESERIALIZATION",
+                context = json!({
+                    "instance_id": instance_id, // L'ID utilisé pour le fetch juste avant
+                    "error_details": e.to_string(),
+                    "line": e.line(),
+                    "column": e.column(),
+                    "action": "hydrate_instance_from_db",
+                    "hint": "Le JSON stocké en base ne correspond plus à la structure WorkflowInstance. Vérifiez si une mise à jour du code a modifié les champs requis (status, node_states, etc.)."
+                })
+            ),
+        };
 
         tracing::info!("🚀 Démarrage/Reprise boucle pour {}", instance.id);
 
@@ -181,16 +240,48 @@ impl WorkflowScheduler {
         approved: bool,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<ExecutionStatus> {
-        let doc = manager
+        // 1. Appel asynchrone à la base
+        let load_result = manager
             .get_document("workflow_instances", instance_id)
-            .await
-            .map_err(|e| crate::utils::AppError::Database(e.to_string()))?
-            .ok_or_else(|| {
-                crate::utils::AppError::NotFound(format!("Instance {} introuvable", instance_id))
-            })?;
+            .await;
 
-        let mut instance: WorkflowInstance =
-            serde_json::from_value(doc).map_err(crate::utils::AppError::Serialization)?;
+        // 2. Résolution impérative et typée
+        let doc = match load_result {
+            Ok(Some(document)) => document,
+            Ok(None) => raise_error!(
+                "ERR_WF_INSTANCE_NOT_FOUND",
+                context = json!({
+                    "instance_id": instance_id,
+                    "action": "resolve_instance_id",
+                    "hint": "L'ID ne correspond à aucune instance active dans la collection 'workflow_instances'."
+                })
+            ),
+            Err(e) => raise_error!(
+                "ERR_WF_INSTANCE_DB_ACCESS",
+                context = json!({
+                    "instance_id": instance_id,
+                    "db_error": e.to_string(),
+                    "action": "load_instance_from_db",
+                    "hint": "Échec technique lors de la lecture du document d'instance."
+                })
+            ),
+        };
+
+        // Désérialisation précise de l'instance de workflow
+        let mut instance: WorkflowInstance = match serde_json::from_value(doc) {
+            Ok(inst) => inst,
+            Err(e) => raise_error!(
+                "ERR_WF_INSTANCE_DESERIALIZATION",
+                context = json!({
+                    "instance_id": instance_id,
+                    "error_details": e.to_string(),
+                    "line": e.line(),
+                    "column": e.column(),
+                    "action": "hydrate_instance_from_db",
+                    "hint": "Le JSON stocké en base ne correspond plus à la structure WorkflowInstance. Vérifiez les champs requis (status, node_states, context)."
+                })
+            ),
+        };
 
         let new_status = if approved {
             ExecutionStatus::Completed
@@ -217,16 +308,34 @@ impl WorkflowScheduler {
         instance: &mut WorkflowInstance,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<()> {
-        instance.updated_at = chrono::Utc::now().timestamp();
-        let json_val =
-            serde_json::to_value(&instance).map_err(crate::utils::AppError::Serialization)?;
-
-        manager
-            .insert_raw("workflow_instances", &json_val)
-            .await
-            .map_err(|e| {
-                crate::utils::AppError::Database(format!("Échec persistance instance: {}", e))
-            })?;
+        instance.updated_at = Utc::now().timestamp();
+        // Transformation de l'instance en valeur JSON pour le stockage
+        let json_val = match serde_json::to_value(&instance) {
+            Ok(v) => v,
+            Err(e) => raise_error!(
+                "ERR_WF_INSTANCE_SERIALIZATION",
+                context = json!({
+                    "instance_id": instance.id,
+                    "error_details": e.to_string(),
+                    "action": "serialize_instance_for_db",
+                    "hint": "L'objet instance contient des données incompatibles avec le format JSON (vérifiez les types dans le 'context')."
+                })
+            ),
+        };
+        // Tentative d'insertion en base de données
+        if let Err(e) = manager.insert_raw("workflow_instances", &json_val).await {
+            raise_error!(
+                "ERR_WF_INSTANCE_PERSIST_FAIL",
+                context = json!({
+                    "collection": "workflow_instances",
+                    "action": "insert_workflow_instance",
+                    "db_error": e.to_string(),
+                    // On extrait l'ID de manière sécurisée pour le contexte
+                    "instance_id": json_val.get("id").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "hint": "L'écriture sur le disque a échoué. Vérifiez l'espace disque disponible, les permissions du dossier 'workflow_instances' ou l'intégrité de l'index."
+                })
+            );
+        }
 
         Ok(())
     }
@@ -355,11 +464,21 @@ mod tests {
             result.is_err(),
             "La création doit échouer si le workflow n'est pas chargé"
         );
-        let err_msg = result.unwrap_err().to_string();
+
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+
+        // 🎯 FIX : On valide le code d'erreur structuré RAISE
         assert!(
-            err_msg.contains("introuvable"),
-            "Le message d'erreur doit être explicite"
+            err_msg.contains("ERR_WF_DEFINITION_NOT_FOUND"),
+            "Le code d'erreur devrait être ERR_WF_DEFINITION_NOT_FOUND. Reçu : {}",
+            err_msg
         );
+
+        // Optionnel : Validation de la déstructuration irréfutable
+        let crate::utils::error::AppError::Structured(data) = err;
+        assert_eq!(data.code, "ERR_WF_DEFINITION_NOT_FOUND");
+        assert_eq!(data.context["workflow_id"], "wf_ghost");
     }
 
     #[tokio::test]

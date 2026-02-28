@@ -55,22 +55,31 @@ impl SchemaRegistry {
         // Utilisation de read_dir de la façade
         let mut entries = io::read_dir(current_dir).await?;
 
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(crate::utils::error::AppError::Io)?
-        {
+        while let Some(entry) = match entries.next_entry().await {
+            Ok(e) => e,
+            Err(e) => raise_error!(
+                "ERR_FS_SCAN_NEXT_ENTRY",
+                error = e,
+                context = json!({ "dir": current_dir, "action": "scan_directory_recursion" })
+            ),
+        } {
             let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .await
-                .map_err(crate::utils::error::AppError::Io)?;
+
+            // Récupération du type de fichier sans closure
+            let file_type = match entry.file_type().await {
+                Ok(ft) => ft,
+                Err(e) => raise_error!(
+                    "ERR_FS_GET_FILE_TYPE",
+                    error = e,
+                    context = json!({ "path": path })
+                ),
+            };
 
             if file_type.is_dir() {
-                // Récursion asynchrone via la macro de la façade
+                // La récursion utilise déjà le ? (RaiseResult)
                 self.scan_directory(root, &path).await?;
             } else if file_type.is_file() && path.extension().is_some_and(|e| e == "json") {
-                // Lecture asynchrone via la façade
+                // On traite la lecture et le parsing comme des étapes atomiques
                 if let Ok(content) = io::read_to_string(&path).await {
                     if let Ok(schema) = json::parse(&content) {
                         if let Ok(rel_path) = path.strip_prefix(root) {

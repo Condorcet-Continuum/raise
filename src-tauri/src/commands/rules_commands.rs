@@ -21,14 +21,25 @@ pub struct RuleEngineState {
 /// Le frontend envoie une règle JSON et un contexte JSON (l'élément à tester).
 /// Le backend renvoie le résultat (True/False ou valeur calculée).
 #[tauri::command]
-pub async fn dry_run_rule(rule: Rule, context: Value) -> Result<Value> {
+pub async fn dry_run_rule(rule: Rule, context: Value) -> RaiseResult<Value> {
     let provider = NoOpDataProvider;
 
-    // On évalue la règle sans persistance
-    match Evaluator::evaluate(&rule.expr, &context, &provider).await {
-        Ok(cow_res) => Ok(cow_res.into_owned()),
-        Err(e) => Err(AppError::Validation(format!("Erreur d'évaluation : {}", e))),
-    }
+    // 1. On évalue la règle sans persistance
+    let result = match Evaluator::evaluate(&rule.expr, &context, &provider).await {
+        Ok(cow_res) => cow_res.into_owned(),
+        Err(e) => raise_error!(
+            "ERR_RULE_EVAL_EXECUTION",
+            error = e,
+            context = json!({
+                "expression": format!("{:?}", rule.expr),
+                "action": "evaluate_rule_expression",
+                "hint": "Erreur de syntaxe ou variable manquante dans le contexte. Vérifiez les types de données comparés."
+            })
+        ),
+    };
+
+    // 2. On retourne le résultat brut
+    Ok(result)
 }
 
 /// Commande 2 : Valider le modèle complet - ASYNC
@@ -39,7 +50,7 @@ pub async fn validate_model(
     rules: Vec<Rule>,
     state: State<'_, RuleEngineState>,
     storage: State<'_, StorageEngine>, // Injection du moteur de stockage
-) -> Result<Vec<ValidationIssue>> {
+) -> RaiseResult<Vec<ValidationIssue>> {
     // 1. Récupération du contexte (Space/DB) depuis le modèle en mémoire
     // On a besoin de savoir "où" nous sommes pour initialiser le Loader
     let (space, db) = {
@@ -57,7 +68,19 @@ pub async fn validate_model(
     let loader = ModelLoader::new(&storage, &space, &db);
 
     // On indexe rapidement les fichiers pour permettre les lookups
-    loader.index_project().await.map_err(|e| e.to_string())?;
+    // On décompose pour un contrôle total sur l'indexation
+    let _project_index = match loader.index_project().await {
+        Ok(index) => index,
+        Err(e) => raise_error!(
+            "ERR_PROJECT_INDEX_FAIL",
+            error = e,
+            context = json!({
+                "action": "index_project_structure",
+                "loader_state": "active",
+                "hint": "L'indexeur n'a pas pu scanner le projet. Vérifiez les permissions de lecture ou la présence d'un fichier de configuration corrompu à la racine."
+            })
+        ),
+    };
 
     // 3. Instanciation du validateur dynamique
     let validator = DynamicValidator::new(rules);
@@ -105,11 +128,26 @@ mod tests {
 
         let result = dry_run_rule(rule, json!({})).await;
         assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
+
+        let err = result.unwrap_err();
+
+        // On déstructure l'erreur de la commande (le wrapper)
+        let crate::utils::error::AppError::Structured(data) = err;
+
+        // 1. La commande signale un échec global d'exécution
+        assert_eq!(data.code, "ERR_RULE_EVAL_EXECUTION");
+
+        // 2. 🎯 FIX : On vérifie que la CAUSE technique est bien un mismatch de type
+        let tech_err = data
+            .context
+            .get("technical_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
         assert!(
-            err_msg.contains("Type incompatible"),
-            "Message d'erreur inattendu : {}",
-            err_msg
+            tech_err.contains("ERR_RULE_TYPE_MISMATCH"),
+            "L'erreur devrait propager le code technique de mismatch. Reçu : {}",
+            tech_err
         );
     }
 

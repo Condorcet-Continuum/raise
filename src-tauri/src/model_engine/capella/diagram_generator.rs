@@ -20,8 +20,18 @@ impl AirdParser {
     /// Extrait les positions (layout) des éléments graphiques depuis un fichier .aird
     /// Retourne une Map : Target_UUID -> Layout
     pub fn extract_layout(path: &Path) -> RaiseResult<HashMap<String, DiagramLayout>> {
-        let mut reader = Reader::from_file(path)
-            .map_err(|e| AppError::from(format!("Erreur de lecture du fichier Aird: {}", e)))?;
+        let mut reader = match Reader::from_file(path) {
+            Ok(r) => r,
+            Err(e) => raise_error!(
+                "ERR_AIRD_READER_INIT",
+                error = e,
+                context = json!({
+                    "action": "initialize_aird_reader",
+                    "path": path.to_string_lossy(),
+                    "hint": "Vérifiez que le fichier existe et que le format .aird est valide."
+                })
+            ),
+        };
         // CORRECTION API Quick-XML
         reader.config_mut().trim_text(true);
 

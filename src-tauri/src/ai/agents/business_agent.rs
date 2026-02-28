@@ -47,8 +47,7 @@ impl BusinessAgent {
         let response = ctx
             .llm
             .ask(LlmBackend::LocalLlama, system_prompt, &user_prompt)
-            .await
-            .map_err(|e| AppError::Validation(format!("Erreur LLM Business: {}", e)))?;
+            .await?;
 
         let clean = extract_json_from_llm(&response);
         Ok(data::parse(&clean).unwrap_or(json!({})))

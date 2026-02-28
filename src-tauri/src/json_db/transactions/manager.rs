@@ -208,10 +208,21 @@ impl<'a> TransactionManager<'a> {
         // 3. Interpolation propre
         let resolved_path = path.replace("$PATH_RAISE_DATASET", &dataset_root);
 
-        let content = io::read_to_string(Path::new(&resolved_path))
-            .await
-            .map_err(|_| AppError::NotFound(format!("Fichier introuvable : {}", resolved_path)))?;
-
+        let content = match io::read_to_string(Path::new(&resolved_path)).await {
+            Ok(c) => c,
+            Err(e) => {
+                raise_error!(
+                    "ERR_FS_READ_FAIL",
+                    error = format!("Échec de lecture du fichier : {}", e),
+                    context = json!({
+                        "resolved_path": resolved_path,
+                        "os_error": e.to_string(),
+                        "action": "load_collection_file",
+                        "hint": "Vérifiez que le fichier existe et que l'application possède les droits de lecture sur ce répertoire."
+                    })
+                );
+            }
+        };
         json::parse(&content)
     }
 
@@ -247,10 +258,18 @@ impl<'a> TransactionManager<'a> {
             }
         }
 
-        Err(AppError::NotFound(format!(
-            "Impossible de résoudre l'identité (ni ID ni Handle) dans '{}'",
-            collection
-        )))
+        raise_error!(
+            "ERR_DB_IDENTITY_NOT_FOUND",
+            error = format!(
+                "Aucune entité trouvée pour l'identité fournie dans '{}'",
+                collection
+            ),
+            context = json!({
+                "collection": collection,
+                "action": "resolve_entity_identity",
+                "hint": "L'identifiant ou le handle spécifié n'existe pas dans cette collection. Vérifiez la casse et l'existence de l'entrée."
+            })
+        );
     }
 
     pub async fn execute<F>(&self, op_block: F) -> RaiseResult<()>
@@ -332,9 +351,9 @@ impl<'a> TransactionManager<'a> {
             .join("_system.json");
         let mut system_index = if sys_path.exists() {
             let c = io::read_to_string(&sys_path).await?;
-            json::parse::<Value>(&c).unwrap_or(json!({ "collections": {} }))
+            json::parse::<Value>(&c).unwrap_or(json!({"collections": {} }))
         } else {
-            json!({ "collections": {} })
+            json!({"collections": {} })
         };
 
         // Stack pour annuler les opérations réussies si l'une échoue plus tard
@@ -422,11 +441,20 @@ impl<'a> TransactionManager<'a> {
                     let mut final_doc = match existing_opt {
                         Some(d) => d,
                         None => {
+                            // Sécurisation de l'état avant sortie
                             self.rollback_runtime(&mut idx, undo_stack).await?;
-                            return Err(AppError::NotFound(format!(
-                                "Update échoué : doc {}/{} introuvable",
-                                collection, id
-                            )));
+
+                            raise_error!(
+                                "ERR_DB_UPDATE_TARGET_MISSING",
+                                error = format!("Impossible de mettre à jour le document {}/{} : cible introuvable.", collection, id),
+                                context = json!({
+                                    "collection": collection,
+                                    "document_id": id,
+                                    "action": "execute_update_op",
+                                    "transaction_state": "rolled_back",
+                                    "hint": "Le document a peut-être été supprimé par un autre processus durant l'opération."
+                                })
+                            );
                         }
                     };
 
@@ -646,8 +674,24 @@ impl<'a> TransactionManager<'a> {
                 obj.insert("$schema".to_string(), Value::String(uri.clone()));
             }
             let reg = SchemaRegistry::from_db(self.config, &self.space, &self.db).await?;
-            let validator = SchemaValidator::compile_with_registry(&uri, &reg)
-                .map_err(|_| AppError::Database(format!("Schema error: {}", uri)))?;
+            let validator = match SchemaValidator::compile_with_registry(&uri, &reg) {
+                Ok(v) => v,
+                Err(e) => {
+                    raise_error!(
+                        "ERR_SCHEMA_VALIDATOR_COMPILATION_FAIL",
+                        error = format!(
+                            "Impossible de préparer le validateur pour le schéma : {}",
+                            uri
+                        ),
+                        context = json!({
+                            "schema_uri": uri,
+                            "nested_error": e, // On conserve l'erreur structurée originale
+                            "action": "initialize_validator",
+                            "hint": "Le schéma est peut-être mal formé ou une de ses dépendances ($ref) est manquante."
+                        })
+                    );
+                }
+            };
             validator.compute_then_validate(doc)?;
         }
         Ok(())
@@ -797,11 +841,21 @@ mod tests {
 
         let tm = TransactionManager::new(&config, space, db);
         let res = tm
-            .execute(|tx| {
-                tx.add_insert("users", "user2", json!({"name": "Bob"}));
-                Err(AppError::Database("Oups".to_string()))
-            })
-            .await;
+        .execute(|tx| {
+            tx.add_insert("users", "user2", json!({"name": "Bob"}));
+            // Simulation d'une erreur métier interrompant la transaction
+            raise_error!(
+                "ERR_TX_SIMULATED_FAILURE",
+                error = "Échec intentionnel pour test de rollback",
+                context = json!({
+                    "transaction_id": "test_sync_001",
+                    "pending_ops": 1,
+                    "action": "validate_rollback_mechanism",
+                    "hint": "Ceci est une erreur contrôlée. La donnée 'user2' ne doit pas être présente en base."
+                })
+            );
+        })
+        .await;
         assert!(res.is_err());
         let doc_path = config
             .db_collection_path(space, db, "users")

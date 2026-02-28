@@ -6,7 +6,8 @@ use raise::ai::agents::{epbs_agent::EpbsAgent, Agent, AgentContext};
 use raise::utils::Arc;
 
 #[tokio::test]
-#[ignore]
+#[serial_test::serial] // Protection RTX 5060 en local
+#[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_epbs_agent_creates_configuration_item() {
     // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
     // On doit utiliser .await pour récupérer l'objet AiTestEnv.

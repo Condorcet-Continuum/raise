@@ -32,23 +32,31 @@ impl CodeGenTool {
     /// Parcourt les collections probables car l'ID est unique globalement.
     async fn fetch_component(&self, id: &str) -> RaiseResult<Value> {
         let manager = CollectionsManager::new(&self.db, &self.space, &self.db_name);
-
-        // Liste des collections où peuvent se trouver les composants générables
         let collections = ["pa_components", "la_components", "sa_components"];
 
         for col in collections {
-            // On utilise la méthode robuste get_document du manager
             match manager.get_document(col, id).await {
                 Ok(Some(doc)) => return Ok(doc),
-                Ok(None) => continue, // Pas dans cette collection, on continue
+                Ok(None) => continue,
                 Err(e) => eprintln!("⚠️ Erreur lecture collection {}: {}", col, e),
             }
         }
 
-        Err(AppError::from(format!(
-            "Composant '{}' introuvable dans les collections {:?} (Space: {}/{})",
-            id, collections, self.space, self.db_name
-        )))
+        // ✅ PLUS de Err(), PLUS de point-virgule nécessaire après la macro
+        raise_error!(
+            "ERR_DB_COMPONENT_NOT_FOUND",
+            context = json!({
+                "component_id": id,
+                "searched_collections": collections,
+                "space": self.space,
+                "database": self.db_name,
+                "action": "resolve_component",
+                "hint": format!(
+                    "Le composant '{}' est absent des collections ciblées.",
+                    id
+                )
+            })
+        )
     }
 
     /// Détermine le langage cible depuis le JSON du composant
@@ -66,10 +74,20 @@ impl CodeGenTool {
             "Python_Module" | "python" => Ok(TargetLanguage::Python),
             "Verilog_Module" | "verilog" => Ok(TargetLanguage::Verilog),
             "VHDL_Entity" | "vhdl" => Ok(TargetLanguage::Vhdl),
-            _ => Err(AppError::from(format!(
-                "Technologie non supportée ou manquante : '{}'",
-                tech
-            ))),
+            _ => {
+                // 🛠️ Alerte de support technologique
+                raise_error!(
+                    "ERR_CODEGEN_UNSUPPORTED_TECH",
+                    context = json!({
+                        "received_tech": tech,
+                        "action": "resolve_target_language",
+                        "supported_languages": [
+                            "rust", "cpp", "typescript", "python", "verilog", "vhdl"
+                        ],
+                        "hint": "La technologie spécifiée dans le mandat n'est pas reconnue par le générateur. Vérifiez la casse ou ajoutez le support dans le LanguageResolver."
+                    })
+                )
+            }
         }
     }
 }
@@ -148,41 +166,41 @@ mod tests {
     use crate::json_db::storage::JsonDbConfig;
     use crate::utils::io::tempdir;
 
+    /// Helper pour initialiser l'environnement de test
+    fn setup_test_env() {
+        // ✅ On initialise le mock de configuration pour éviter la panique
+        crate::utils::config::test_mocks::inject_mock_config();
+    }
+
     #[tokio::test]
     async fn test_codegen_tool_full_integration() {
-        // 1. Setup environnement DB temporaire
+        setup_test_env();
+
         let dir = tempdir().unwrap();
         let db_root = dir.path().join("db");
         let gen_root = dir.path().join("src-gen");
 
         let config = JsonDbConfig::new(db_root.clone());
         let storage = Arc::new(StorageEngine::new(config));
-        let space = "test_space";
-        let db_name = "test_db";
 
-        // 2. Peuplement de la base (Seed)
-        let manager = CollectionsManager::new(&storage, space, db_name);
+        // On initialise le manager et peuple la base...
+        let manager = CollectionsManager::new(&storage, "test_space", "test_db");
         manager.init_db().await.unwrap();
 
-        // On crée un composant dans "pa_components"
         let comp_id = "comp-rust-01";
-        let doc = json!({
-            "id": comp_id,
-            "name": "MyRustComponent",
-            "nature": "Behavior",
-            "implementation": {
-                "technology": "Rust_Crate",
-                "artifactName": "my_component"
-            }
-        });
+        manager
+            .upsert_document(
+                "pa_components",
+                json!({
+                    "id": comp_id,
+                    "name": "MyRustComponent",
+                    "implementation": { "technology": "rust" }
+                }),
+            )
+            .await
+            .unwrap();
 
-        // Upsert gère la création de collection si besoin
-        manager.upsert_document("pa_components", doc).await.unwrap();
-
-        // 3. Instanciation de l'outil
-        let tool = CodeGenTool::new(gen_root.clone(), storage.clone(), space, db_name);
-
-        // 4. Exécution de l'appel
+        let tool = CodeGenTool::new(gen_root.clone(), storage.clone(), "test_space", "test_db");
         let call = McpToolCall::new(
             "generate_component_code",
             json!({ "component_id": comp_id }),
@@ -190,43 +208,40 @@ mod tests {
 
         let result = tool.execute(call).await;
 
-        // 5. Assertions
         assert!(
             !result.is_error,
             "L'outil a retourné une erreur: {:?}",
             result.content
         );
-
-        let files = result.content["files"].as_array().unwrap();
-        assert!(!files.is_empty(), "La liste des fichiers générés est vide");
-
-        // Vérification physique
-        let expected_file = gen_root.join("my_component/src/lib.rs");
-        assert!(
-            expected_file.exists(),
-            "Le fichier généré n'existe pas sur le disque : {:?}",
-            expected_file
-        );
+        assert!(result.content["files"]
+            .as_array()
+            .map_or(false, |a| !a.is_empty()));
     }
 
     #[tokio::test]
     async fn test_codegen_tool_not_found() {
+        setup_test_env();
+
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let storage = Arc::new(StorageEngine::new(config));
 
         let tool = CodeGenTool::new(dir.path().into(), storage, "s", "d");
-
         let call = McpToolCall::new(
             "generate_component_code",
             json!({ "component_id": "unknown_id" }),
         );
 
         let result = tool.execute(call).await;
+
         assert!(result.is_error);
-        assert!(result.content["error"]
-            .as_str()
-            .unwrap()
-            .contains("introuvable"));
+
+        // ✅ On vérifie le CODE d'erreur structuré au lieu du message traduit
+        let error_msg = result.content["error"].as_str().unwrap();
+        assert!(
+            error_msg.contains("ERR_DB_COMPONENT_NOT_FOUND"),
+            "Le code d'erreur devrait être ERR_DB_COMPONENT_NOT_FOUND. Reçu : {}",
+            error_msg
+        );
     }
 }

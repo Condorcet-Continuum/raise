@@ -77,10 +77,18 @@ impl<'a> DbAdapter<'a> {
             return Ok("physical_elements".to_string());
         }
 
-        Err(AppError::Validation(format!(
-            "Impossible de résoudre la collection pour l'ID: {}",
-            element_id
-        )))
+        raise_error!(
+            "ERR_DB_COLLECTION_RESOLUTION_FAIL",
+            error = format!(
+                "Impossible de résoudre la collection pour l'ID : {}",
+                element_id
+            ),
+            context = serde_json::json!({
+                "element_id": element_id,
+                "action": "resolve_collection_by_id",
+                "hint": "Vérifiez que l'ID respecte le format attendu et que son préfixe est bien enregistré dans le routeur."
+            })
+        );
     }
 
     /// Mappe les types Arcadia sémantiques vers les noms de collections physiques.

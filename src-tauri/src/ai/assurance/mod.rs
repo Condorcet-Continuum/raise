@@ -13,7 +13,6 @@ use crate::json_db::{
 use crate::utils::{
     config::AppConfig, // 🎯 Import de la configuration
     prelude::*,
-    AppError,
 };
 use std::path::Path;
 
@@ -38,14 +37,10 @@ pub mod persistence {
         // S'assure que la collection existe avant d'écrire
         let _ = manager.create_collection("quality_reports", None).await;
 
-        let doc = crate::utils::data::to_value(report)
-            .map_err(|e| AppError::Database(format!("Erreur de sérialisation: {}", e)))?;
+        let doc = crate::utils::data::to_value(report)?;
 
         // 🎯 L'Upsert gère automatiquement l'indexation et la validation du schéma
-        manager
-            .upsert_document("quality_reports", doc)
-            .await
-            .map_err(|e| AppError::Database(format!("Erreur sauvegarde JSON DB: {}", e)))?;
+        manager.upsert_document("quality_reports", doc).await?;
 
         Ok(report.id.clone())
     }
@@ -62,13 +57,9 @@ pub mod persistence {
 
         let _ = manager.create_collection("xai_frames", None).await;
 
-        let doc = crate::utils::data::to_value(frame)
-            .map_err(|e| AppError::Database(format!("Erreur de sérialisation: {}", e)))?;
+        let doc = crate::utils::data::to_value(frame)?;
 
-        manager
-            .upsert_document("xai_frames", doc)
-            .await
-            .map_err(|e| AppError::Database(format!("Erreur sauvegarde JSON DB: {}", e)))?;
+        manager.upsert_document("xai_frames", doc).await?;
 
         Ok(frame.id.clone())
     }

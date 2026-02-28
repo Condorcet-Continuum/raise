@@ -45,8 +45,18 @@ pub fn analyze_impact(
     state: State<AppState>,
     element_id: String,
     depth: usize,
-) -> Result<ImpactReport> {
-    let model = state.model.lock().map_err(|e| e.to_string())?;
+) -> RaiseResult<ImpactReport> {
+    let model = match state.model.lock() {
+        Ok(guard) => guard,
+        Err(_) => raise_error!(
+            "ERR_SYS_MUTEX_POISONED",
+            context = json!({
+                "component": "DlState.model",
+                "action": "access_neural_network_instance",
+                "hint": "Le Mutex du modèle est corrompu. Un thread de calcul a probablement paniqué. Redémarrez le moteur IA."
+            })
+        ),
+    };
 
     // 🎯 FIX : Utilisation du constructeur de rétro-compatibilité
     let tracer = Tracer::from_legacy_model(&model);
@@ -58,8 +68,18 @@ pub fn analyze_impact(
 }
 
 #[tauri::command]
-pub fn run_compliance_audit(state: State<AppState>) -> Result<AuditReport> {
-    let model = state.model.lock().map_err(|e| e.to_string())?;
+pub fn run_compliance_audit(state: State<AppState>) -> RaiseResult<AuditReport> {
+    let model = match state.model.lock() {
+        Ok(guard) => guard,
+        Err(_) => raise_error!(
+            "ERR_SYS_MUTEX_POISONED",
+            context = json!({
+                "component": "DlState.model",
+                "action": "access_neural_network_instance",
+                "hint": "Le Mutex du modèle est corrompu. Un thread de calcul a probablement paniqué. Redémarrez le moteur IA."
+            })
+        ),
+    };
 
     // 🎯 FIX : Préparation des données pour le générateur universel
     let docs = get_model_docs(&model);
@@ -72,8 +92,18 @@ pub fn run_compliance_audit(state: State<AppState>) -> Result<AuditReport> {
 }
 
 #[tauri::command]
-pub fn get_traceability_matrix(state: State<AppState>) -> Result<TraceabilityMatrix> {
-    let model = state.model.lock().map_err(|e| e.to_string())?;
+pub fn get_traceability_matrix(state: State<AppState>) -> RaiseResult<TraceabilityMatrix> {
+    let model = match state.model.lock() {
+        Ok(guard) => guard,
+        Err(_) => raise_error!(
+            "ERR_SYS_MUTEX_POISONED",
+            context = json!({
+                "component": "DlState.model",
+                "action": "access_neural_network_instance",
+                "hint": "Le Mutex du modèle est corrompu. Un thread de calcul a probablement paniqué. Redémarrez le moteur IA."
+            })
+        ),
+    };
 
     let docs = get_model_docs(&model);
     let tracer = Tracer::from_json_list(docs.values().cloned().collect());
@@ -85,8 +115,22 @@ pub fn get_traceability_matrix(state: State<AppState>) -> Result<TraceabilityMat
 }
 
 #[tauri::command]
-pub fn get_element_neighbors(state: State<AppState>, element_id: String) -> Result<data::Value> {
-    let model = state.model.lock().map_err(|e| e.to_string())?;
+pub fn get_element_neighbors(
+    state: State<AppState>,
+    element_id: String,
+) -> RaiseResult<data::Value> {
+    // On utilise un match explicite pour intercepter l'empoisonnement du Mutex
+    let model = match state.model.lock() {
+        Ok(guard) => guard,
+        Err(_) => raise_error!(
+            "ERR_SYS_MUTEX_POISONED",
+            context = json!({
+                "component": "DlState.model",
+                "action": "access_neural_network_instance",
+                "hint": "Le Mutex du modèle est corrompu. Un thread de calcul a probablement paniqué. Redémarrez le moteur IA."
+            })
+        ),
+    };
     let docs = get_model_docs(&model);
 
     // 🎯 FIX : Utilisation du nouveau Tracer

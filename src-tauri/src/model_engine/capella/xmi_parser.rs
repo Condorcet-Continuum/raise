@@ -13,12 +13,20 @@ pub struct CapellaXmiParser;
 impl CapellaXmiParser {
     /// Parse un fichier .capella et remplit le ProjectModel donné
     pub fn parse_file(path: &Path, model: &mut ProjectModel) -> RaiseResult<()> {
-        let mut reader = Reader::from_file(path).map_err(|e| {
-            crate::utils::AppError::from(format!("Impossible de lire le fichier XMI : {}", e))
-        })?;
-
+        let mut reader = match Reader::from_file(path) {
+            Ok(r) => r,
+            Err(e) => raise_error!(
+                "ERR_XMI_READ_FAIL",
+                error = e,
+                context = json!({
+                    "path": path.display().to_string(), // .display() est plus sûr pour les chemins
+                    "format": "XMI/XML",
+                    "action": "initialize_reader",
+                    "hint": "Le fichier XMI est inaccessible ou le chemin est invalide."
+                })
+            ),
+        };
         reader.config_mut().trim_text(true);
-
         Self::parse_xml(&mut reader, model)
     }
 
@@ -71,11 +79,17 @@ impl CapellaXmiParser {
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => {
-                    return Err(AppError::Validation(format!(
-                        "Erreur XML à la position {}: {:?}",
-                        reader.buffer_position(),
-                        e
-                    )))
+                    let pos = reader.buffer_position();
+                    raise_error!(
+                        "ERR_XML_PARSE_FAILURE",
+                        error = format!("Erreur de syntaxe XML à la position {} : {}", pos, e),
+                        context = json!({
+                            "buffer_position": pos,
+                            "xml_error": format!("{:?}", e),
+                            "action": "parse_xml_stream",
+                            "hint": "Le fichier XML est corrompu ou mal formé. Vérifiez la clôture des balises près de la position indiquée."
+                        })
+                    );
                 }
                 _ => (),
             }

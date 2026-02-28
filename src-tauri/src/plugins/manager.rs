@@ -32,9 +32,21 @@ impl PluginManager {
     ) -> RaiseResult<()> {
         println!("🔌 Chargement du plugin : {} ({})", plugin_id, file_path);
 
-        let binary = io::read(file_path).await.map_err(|e| {
-            AppError::Validation(format!("Impossible de lire le fichier wasm : {}", e))
-        })?;
+        let binary = match io::read(file_path).await {
+            Ok(b) => b,
+            Err(e) => {
+                raise_error!(
+                    "ERR_PLUGIN_WASM_READ_FAIL",
+                    error = format!("Impossible de lire le fichier binaire WebAssembly : {}", e),
+                    context = json!({
+                        "file_path": file_path,
+                        "os_error": e.to_string(),
+                        "action": "load_wasm_binary",
+                        "hint": "Vérifiez que le fichier .wasm existe au chemin indiqué et que l'application dispose des droits de lecture."
+                    })
+                );
+            }
+        };
 
         let plugin = CognitivePlugin::new(
             &binary,
@@ -67,10 +79,15 @@ impl PluginManager {
 
             Ok((result, signals))
         } else {
-            Err(AppError::Validation(format!(
-                "Plugin introuvable : {}",
-                plugin_id
-            )))
+            raise_error!(
+                "ERR_PLUGIN_REGISTRY_NOT_FOUND",
+                error = format!("Instance de plugin introuvable : {}", plugin_id),
+                context = json!({
+                    "requested_plugin_id": plugin_id,
+                    "action": "resolve_plugin_instance",
+                    "hint": "Vérifiez que le plugin est bien activé dans votre fichier de configuration et qu'il a été compilé sans erreur."
+                })
+            );
         }
     }
 

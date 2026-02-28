@@ -15,9 +15,7 @@ impl MemoryStore {
     /// Initialise le store dans un dossier donné (ex: .raise/chats/)
     pub async fn new(base_path: &Path) -> RaiseResult<Self> {
         if !base_path.exists() {
-            io::create_dir_all(base_path).await.map_err(|e| {
-                AppError::custom_io(format!("Impossible de créer le dossier des chats : {}", e))
-            })?;
+            io::create_dir_all(base_path).await?;
         }
         Ok(Self {
             storage_path: base_path.to_path_buf(),
@@ -28,9 +26,7 @@ impl MemoryStore {
     pub async fn save_session(&self, session: &ConversationSession) -> RaiseResult<()> {
         let file_path = self.get_path(&session.id);
         let json = data::stringify_pretty(session)?;
-        io::write(file_path, json)
-            .await
-            .map_err(|e| AppError::custom_io(format!("Échec écriture session : {}", e)))?;
+        io::write(file_path, json).await?;
         Ok(())
     }
 
@@ -51,9 +47,7 @@ impl MemoryStore {
     pub async fn list_sessions(&self) -> RaiseResult<Vec<String>> {
         let mut sessions = Vec::new();
         if self.storage_path.exists() {
-            let mut dir = io::read_dir(&self.storage_path).await.map_err(|e| {
-                AppError::custom_io(format!("Impossible de lire le dossier : {}", e))
-            })?;
+            let mut dir = io::read_dir(&self.storage_path).await?;
             while let Ok(Some(entry)) = dir.next_entry().await {
                 let path = entry.path();
                 if path.extension().and_then(|s| s.to_str()) == Some("json") {

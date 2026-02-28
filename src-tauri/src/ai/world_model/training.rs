@@ -16,15 +16,29 @@ pub struct WorldTrainer<'a> {
 impl<'a> WorldTrainer<'a> {
     pub fn new(engine: &'a NeuroSymbolicEngine, lr: f64) -> RaiseResult<Self> {
         let vars = engine.varmap.all_vars();
-        // ✅ Conversion de l'erreur Candle lors de la création de l'optimiseur
-        let opt = AdamW::new(
+
+        // On remplace le map_err par un match pour un diagnostic précis
+        let opt = match AdamW::new(
             vars,
             ParamsAdamW {
                 lr,
                 ..Default::default()
             },
-        )
-        .map_err(|e| AppError::from(e.to_string()))?;
+        ) {
+            Ok(optimizer) => optimizer,
+            Err(e) => {
+                raise_error!(
+                    "ERR_AI_OPTIMIZER_INIT_FAILED",
+                    error = e,
+                    context = json!({
+                        "learning_rate": lr,
+                        "variable_count": engine.varmap.all_vars().len(),
+                        "hint": "Échec de l'initialisation d'AdamW. Vérifiez que le Varmap contient des variables entraînables valides."
+                    })
+                )
+            }
+        };
+
         Ok(Self { engine, opt })
     }
 
@@ -34,33 +48,50 @@ impl<'a> WorldTrainer<'a> {
         action: WorldAction,
         state_t1_actual: &ArcadiaElement,
     ) -> RaiseResult<f64> {
+        // 1. Inférence et Préparation des Cibles
         let predicted_tensor = self.engine.simulate(state_t, action)?;
-
         let raw_t1 = ArcadiaEncoder::encode_element(state_t1_actual)?;
         let token_t1 = self.engine.quantizer.tokenize(&raw_t1)?;
-        let target_tensor = self.engine.quantizer.decode(&token_t1)?;
-        let target_tensor = target_tensor.detach();
+        let target_tensor = self.engine.quantizer.decode(&token_t1)?.detach();
 
-        // ✅ Conversion systématique des erreurs d'opérations sur les tenseurs (sub, sqr, mean)
-        let diff = predicted_tensor
-            .sub(&target_tensor)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 2. Calcul de la Perte (MSE Loss)
+        // On sépare pour identifier si c'est la soustraction ou le carré qui échoue
+        let diff = match predicted_tensor.sub(&target_tensor) {
+            Ok(d) => d,
+            Err(e) => raise_error!(
+                "ERR_AI_LOSS_SUB_FAILED",
+                error = e,
+                context = json!({
+                    "pred_shape": format!("{:?}", predicted_tensor.shape()),
+                    "target_shape": format!("{:?}", target_tensor.shape())
+                })
+            ),
+        };
 
-        let loss = diff
-            .sqr()
-            .map_err(|e| AppError::from(e.to_string()))?
-            .mean_all()
-            .map_err(|e| AppError::from(e.to_string()))?;
+        let loss = match diff.sqr() {
+            Ok(s) => match s.mean_all() {
+                Ok(m) => m,
+                Err(e) => raise_error!("ERR_AI_LOSS_MEAN_FAILED", error = e),
+            },
+            Err(e) => raise_error!("ERR_AI_LOSS_SQR_FAILED", error = e),
+        };
 
-        // ✅ Conversion de l'erreur de l'étape d'optimisation
-        self.opt
-            .backward_step(&loss)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 3. Rétropropagation (Backprop)
+        // C'est l'étape la plus critique où les gradients sont calculés
+        match self.opt.backward_step(&loss) {
+            Ok(_) => (),
+            Err(e) => raise_error!(
+                "ERR_AI_BACKPROP_FAILED",
+                error = e,
+                context = json!({ "hint": "Vérifiez si certains gradients sont devenus NaN ou si le graphe de calcul a été rompu." })
+            ),
+        };
 
-        // ✅ Conversion de l'erreur de conversion en scalaire
-        let scalar_loss = loss
-            .to_scalar::<f32>()
-            .map_err(|e| AppError::from(e.to_string()))? as f64;
+        // 4. Extraction de la valeur scalaire
+        let scalar_loss = match loss.to_scalar::<f32>() {
+            Ok(val) => val as f64,
+            Err(e) => raise_error!("ERR_AI_LOSS_SCALAR_CONVERSION_FAILED", error = e),
+        };
 
         Ok(scalar_loss)
     }

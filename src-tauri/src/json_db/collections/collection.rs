@@ -107,8 +107,21 @@ pub async fn list_document_ids(
         return Ok(out);
     }
     let mut entries = io::read_dir(&root).await?;
-    while let Some(e) = entries.next_entry().await.map_err(AppError::Io)? {
+    while let Some(e) = match entries.next_entry().await {
+        Ok(entry) => entry,
+        Err(err) => raise_error!(
+            "ERR_FS_READ_DIR_ENTRY",
+            error = err,
+            context = json!({
+                "root_path": root,
+                "action": "scan_directory_for_json",
+                "hint": "Erreur lors de la lecture d'une entrée dans le répertoire. Vérifiez les permissions de lecture."
+            })
+        ),
+    } {
         let p = e.path();
+
+        // Logique de filtrage (inchangée mais plus lisible car isolée)
         if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
                 if !stem.starts_with('_') {
@@ -148,8 +161,24 @@ pub async fn list_collection_names_fs(
         return Ok(out);
     }
     let mut entries = io::read_dir(&root).await?;
-    while let Some(e) = entries.next_entry().await.map_err(AppError::Io)? {
-        let ty = e.file_type().await?;
+    while let Some(e) = match entries.next_entry().await {
+        Ok(entry) => entry,
+        Err(err) => raise_error!(
+            "ERR_FS_ITERATION_FAIL",
+            error = err,
+            context = json!({ "root": root, "action": "list_next_entry" })
+        ),
+    } {
+        // Récupération du type de fichier sans map_err
+        let ty = match e.file_type().await {
+            Ok(t) => t,
+            Err(err) => raise_error!(
+                "ERR_FS_METADATA_FAIL",
+                error = err,
+                context = json!({ "path": e.path(), "action": "get_file_type" })
+            ),
+        };
+
         if ty.is_dir() {
             if let Ok(name) = e.file_name().into_string() {
                 out.push(name);

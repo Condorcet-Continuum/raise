@@ -4,7 +4,7 @@ use candle_core::{DType, Device, Tensor, Var};
 use candle_nn::{VarBuilder, VarMap};
 
 use crate::utils::config::WorldModelConfig;
-use crate::utils::{io::Path, prelude::*, HashMap};
+use crate::utils::{io, prelude::*, HashMap};
 
 use crate::ai::nlp::parser::CommandType;
 use crate::ai::world_model::dynamics::WorldModelPredictor;
@@ -30,8 +30,20 @@ impl WorldAction {
         if idx < dim {
             data[idx] = 1.0;
         }
-
-        Tensor::from_vec(data, (1, dim), &Device::Cpu).map_err(|e| AppError::from(e.to_string()))
+        let data_len = data.len();
+        Ok(match Tensor::from_vec(data, (1, dim), &Device::Cpu) {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_TENSOR_FROM_VEC",
+                error = e,
+                context = json!({
+                    "action": "create_tensor_from_vec",
+                    "expected_shape": [1, dim],
+                    "data_len": data_len,
+                    "device": "Cpu"
+                })
+            ),
+        })
     }
 }
 
@@ -84,10 +96,42 @@ impl NeuroSymbolicEngine {
         let path = path.as_ref().to_owned();
         let tensors = self.extract_tensors_sync();
 
-        tokio::task::spawn_blocking(move || candle_core::safetensors::save(&tensors, path))
-            .await
-            .map_err(|e| AppError::from(format!("Spawn error: {}", e)))?
-            .map_err(|e| AppError::from(format!("Save error: {}", e)))?;
+        // 1. On extrait les infos pour les logs AVANT le move
+        let path_display = path.to_string_lossy().to_string();
+        let tensor_count = tensors.len();
+
+        // 2. On attend la fin de la tâche (les originaux sont déplacés ici)
+        let spawn_result =
+            tokio::task::spawn_blocking(move || candle_core::safetensors::save(&tensors, path))
+                .await;
+
+        // 3. Gestion de l'erreur de Spawn
+        let save_result = match spawn_result {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_ASYNC_SPAWN_FAILURE",
+                error = e,
+                context = json!({
+                    "action": "spawn_blocking_save",
+                    "path": path_display, // On utilise la copie légère
+                    "hint": "La tâche a paniqué ou a été annulée."
+                })
+            ),
+        };
+
+        // 4. Gestion de l'erreur de sauvegarde
+        match save_result {
+            Ok(_) => (),
+            Err(e) => raise_error!(
+                "ERR_MODEL_SAVE_SAFETENSORS",
+                error = e,
+                context = json!({
+                    "action": "write_safetensors_to_disk",
+                    "path": path_display, // On utilise la copie légère
+                    "tensor_count": tensor_count
+                })
+            ),
+        };
         Ok(())
     }
 
@@ -95,19 +139,40 @@ impl NeuroSymbolicEngine {
         path: P,
         config: WorldModelConfig,
     ) -> RaiseResult<Self> {
-        let buffer = tokio::fs::read(path).await?;
+        let buffer = io::read(path).await?;
 
-        let tensors = candle_core::safetensors::load_buffer(&buffer, &Device::Cpu)
-            .map_err(|e| AppError::from(e.to_string()))?;
+        let tensors = match candle_core::safetensors::load_buffer(&buffer, &Device::Cpu) {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_MODEL_LOAD_BUFFER",
+                error = e,
+                context = json!({
+                    "action": "load_safetensors_buffer",
+                    "buffer_size": buffer.len(),
+                    "device": "Cpu",
+                    "hint": "Le buffer est peut-être corrompu ou n'est pas au format Safetensors valide."
+                })
+            ),
+        };
 
         let varmap = VarMap::new();
         {
             let mut data = varmap.data().lock().unwrap();
             for (name, tensor) in tensors {
-                data.insert(
-                    name,
-                    Var::from_tensor(&tensor).map_err(|e| AppError::from(e.to_string()))?,
-                );
+                let var = match Var::from_tensor(&tensor) {
+                    Ok(v) => v,
+                    Err(e) => raise_error!(
+                        "ERR_MODEL_VAR_CONVERSION",
+                        error = e,
+                        context = json!({
+                            "action": "convert_tensor_to_var",
+                            "tensor_name": name,
+                            "shape": format!("{:?}", tensor.shape()),
+                            "device": format!("{:?}", tensor.device())
+                        })
+                    ),
+                };
+                data.insert(name, var);
             }
         }
 

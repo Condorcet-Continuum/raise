@@ -13,7 +13,8 @@ use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 
 #[tokio::test]
-#[ignore]
+#[serial_test::serial] // Protection RTX 5060 en local
+#[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_genetics_integration_with_json_db() {
     // 1. Initialisation robuste
     let env = setup_test_env(LlmMode::Disabled).await;

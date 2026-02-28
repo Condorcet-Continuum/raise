@@ -113,7 +113,7 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     }
 }
 
-async fn generate_mock_schemas(base_path: &Path) -> Result<PathBuf> {
+async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
     io::create_dir_all(base_path).await?;
 
     // 1. ARCADIA DATA
@@ -256,24 +256,62 @@ async fn generate_mock_schemas(base_path: &Path) -> Result<PathBuf> {
 
 #[allow(dead_code)]
 #[async_recursion]
-async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+async fn copy_dir_recursive(src: &Path, dst: &Path) -> RaiseResult<()> {
     if !dst.exists() {
         io::create_dir_all(dst).await?;
     }
     let mut entries = io::read_dir(src).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let ty = entry.file_type().await?;
+
+    while let Some(entry) = match entries.next_entry().await {
+        Ok(e) => e,
+        Err(e) => raise_error!(
+            "ERR_FS_READ_DIR_ITERATION",
+            context = json!({
+                "source": src.to_string_lossy(),
+                "io_error": e.to_string(),
+                "action": "next_entry",
+                "hint": "Échec lors de l'itération sur le répertoire. Le dossier a peut-être été déplacé ou supprimé pendant la lecture."
+            })
+        ),
+    } {
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let dest_path = dst.join(&file_name);
+
+        // 1. Détermination du type de fichier
+        let ty = match entry.file_type().await {
+            Ok(t) => t,
+            Err(e) => raise_error!(
+                "ERR_FS_METADATA_FETCH",
+                context = json!({
+                    "path": path.to_string_lossy(),
+                    "io_error": e.to_string(),
+                    "action": "get_file_type",
+                    "hint": "Impossible de lire les métadonnées du fichier pour déterminer s'il s'agit d'un dossier."
+                })
+            ),
+        };
+
+        // 2. Dispatching récursif ou copie directe
         if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst.join(entry.file_name())).await?;
-        } else {
-            io::copy(entry.path(), dst.join(entry.file_name())).await?;
+            Box::pin(copy_dir_recursive(&path, &dest_path)).await?;
+        } else if let Err(e) = io::copy(&path, &dest_path).await {
+            raise_error!(
+                "ERR_FS_COPY_FAILED",
+                context = json!({
+                    "from": path.to_string_lossy(),
+                    "to": dest_path.to_string_lossy(),
+                    "io_error": e.to_string(),
+                    "hint": "La copie du fichier a échoué. Vérifiez l'espace disque ou les permissions d'écriture sur la destination."
+                })
+            );
         }
     }
     Ok(())
 }
 
 #[allow(dead_code)]
-pub async fn seed_mock_datasets(domain_path: &Path) -> Result<PathBuf> {
+pub async fn seed_mock_datasets(domain_path: &Path) -> RaiseResult<PathBuf> {
     let dataset_dir = domain_path.join("dataset/arcadia/v1/data/exchange-items");
     io::create_dir_all(&dataset_dir)
         .await

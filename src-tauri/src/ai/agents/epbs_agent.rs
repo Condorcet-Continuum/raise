@@ -38,11 +38,21 @@ impl EpbsAgent {
             history_context, name, raw_type, nlp_hint
         );
 
-        let res = ctx
-            .llm
-            .ask(LlmBackend::LocalLlama, sys, &user)
-            .await
-            .map_err(|e| AppError::Validation(e.to_string()))?;
+        let res = match ctx.llm.ask(LlmBackend::LocalLlama, sys, &user).await {
+            Ok(val) => val,
+            Err(e) => {
+                // Cette macro exécute un 'return Err(...)'
+                // Elle interrompt donc proprement la fonction de l'agent.
+                raise_error!(
+                    "ERR_AI_LLM_GENERATE",
+                    error = e,
+                    context = serde_json::json!({
+                        "backend": "LocalLlama",
+                        "user_prompt_len": user.len()
+                    })
+                );
+            }
+        };
 
         let clean = extract_json_from_llm(&res);
         let mut data: Value =

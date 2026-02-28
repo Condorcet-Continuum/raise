@@ -6,9 +6,7 @@ use crate::json_db::jsonld::JsonLdProcessor;
 
 // 🎯 Imports mis à jour
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::{
-    config::AppConfig, error::AppError, io, io::PathBuf, prelude::*, Arc, AsyncMutex,
-};
+use crate::utils::{config::AppConfig, io, io::PathBuf, prelude::*, Arc, AsyncMutex};
 use candle_core::Device;
 
 #[derive(Clone)]
@@ -118,19 +116,47 @@ impl GraphStore {
         // 2. Sauvegarde dans le Système de Fichiers (JSON pur)
         let col_dir = self.storage_path.join("collections").join(collection);
         if !col_dir.exists() {
-            io::create_dir_all(&col_dir)
-                .await
-                .map_err(|e| AppError::from(e.to_string()))?;
+            if let Err(e) = io::create_dir_all(&col_dir).await {
+                raise_error!(
+                    "ERR_GRAPH_STORAGE_INIT_FAILED",
+                    error = e,
+                    context = json!({
+                        "action": "create_graph_directory",
+                        "path": col_dir.to_string_lossy(),
+                        "hint": "Impossible d'initialiser le dossier du Graph Store."
+                    })
+                )
+            }
         }
 
         data["id"] = json!(id); // Force l'ID standardisé
         let file_path = col_dir.join(format!("{}.json", id));
 
-        let json_str =
-            serde_json::to_string_pretty(&data).map_err(|e| AppError::from(e.to_string()))?;
-        io::write(&file_path, json_str)
-            .await
-            .map_err(|e| AppError::from(e.to_string()))?;
+        // 1. Sérialisation avec capture de contexte
+        let json_str = match serde_json::to_string_pretty(&data) {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_DB_SERIALIZATION_FAILED",
+                error = e,
+                context = json!({
+                    "action": "serialize_document_to_json",
+                    "hint": "Les données contiennent probablement une structure incompatible avec JSON (références circulaires ou types non supportés)."
+                })
+            ),
+        };
+
+        // 2. Écriture atomique sur le disque
+        if let Err(e) = io::write(&file_path, json_str).await {
+            raise_error!(
+                "ERR_DB_WRITE_IO_FAILED",
+                error = e,
+                context = json!({
+                    "action": "write_file_to_disk",
+                    "path": file_path.to_string_lossy(),
+                    "hint": "Vérifiez l'espace disque disponible et les permissions d'écriture sur le répertoire data_root."
+                })
+            );
+        }
 
         Ok(())
     }
@@ -208,11 +234,33 @@ impl GraphStore {
                     }
                 }
 
-                let json_str = serde_json::to_string_pretty(&doc)
-                    .map_err(|e| AppError::from(e.to_string()))?;
-                io::write(&file_path, json_str)
-                    .await
-                    .map_err(|e| AppError::from(e.to_string()))?;
+                // 1. Sérialisation sécurisée
+                let json_str = match serde_json::to_string_pretty(&doc) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        raise_error!(
+                            "ERR_DOC_SERIALIZATION_FAILED",
+                            error = e,
+                            context = json!({
+                                "action": "serialize_document",
+                                "hint": "Le document contient probablement des types incompatibles avec JSON ou des cycles."
+                            })
+                        )
+                    }
+                };
+
+                // 2. Écriture atomique
+                if let Err(e) = io::write(&file_path, json_str).await {
+                    raise_error!(
+                        "ERR_DOC_WRITE_FAILED",
+                        error = e,
+                        context = json!({
+                            "action": "persist_document_to_disk",
+                            "path": file_path.to_string_lossy(),
+                            "hint": "Vérifiez les permissions d'écriture et l'espace disque disponible."
+                        })
+                    )
+                }
             }
         }
         Ok(())

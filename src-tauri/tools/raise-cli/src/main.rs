@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 
 use raise::{
-    user_error, user_info,
+    build_error, user_error, user_info,
     utils::{context, prelude::*},
 };
 
@@ -18,7 +18,7 @@ struct Cli {
     command: Option<Commands>,
 }
 
-#[derive(Subcommand, Clone)]
+#[derive(Subcommand, Clone, Debug)]
 enum Commands {
     Workflow(commands::workflow::WorkflowArgs),
     ModelEngine(commands::model_engine::ModelArgs),
@@ -35,7 +35,7 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> RaiseResult<()> {
     // 1. Initialisation de la Configuration (CRITIQUE)
     if let Err(e) = AppConfig::init() {
         eprintln!("❌ CRITICAL ERROR: Impossible d'initialiser la configuration.");
@@ -48,10 +48,17 @@ async fn main() -> Result<()> {
 
     // 3. Initialisation de la Langue (Lecture directe depuis JSON-DB)
     let config = AppConfig::get();
-    context::init_i18n(&config.core.language).await;
+    context::init_i18n(&config.core.language).await?;
 
     // Message d'accueil système traduit
-    user_info!("CLI_START", "v{}", env!("CARGO_PKG_VERSION"));
+    user_info!(
+        "CLI_START_INITIALIZED",
+        json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "mode": if cfg!(debug_assertions) { "debug" } else { "release" },
+            "component": "cli_engine"
+        })
+    );
 
     // 4. Parsing & Dispatch
     let cli = Cli::parse();
@@ -59,8 +66,23 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(cmd) => {
             // Mode "One-Shot"
-            if let Err(e) = execute_command(cmd).await {
-                user_error!("CMD_FAIL", "{}", e);
+            if let Err(e) = execute_command(cmd.clone()).await {
+                // 🛠️ build_error! crée l'objet AppError et logue via tracing,
+                // mais il ne contient PAS de 'return', ce qui nous permet de continuer.
+                let err = build_error!(
+                    "CLI_COMMAND_EXECUTION_FAILED",
+                    error = e,
+                    context = json!({
+                        // On utilise format! car Commands n'implémente pas Serialize
+                        "command": format!("{:?}", cmd),
+                        "exit_code": 1,
+                        "trace": "critical_failure"
+                    })
+                );
+
+                // 🚩 On affiche l'erreur structurée (avec sa clé, son message et son contexte)
+                // puis on coupe proprement le processus.
+                eprintln!("{}", err);
                 std::process::exit(1);
             }
         }
@@ -75,7 +97,7 @@ async fn main() -> Result<()> {
 }
 
 /// Boucle principale du Shell Global (REPL)
-async fn run_global_shell() -> Result<()> {
+async fn run_global_shell() -> RaiseResult<()> {
     use rustyline::error::ReadlineError;
     use rustyline::DefaultEditor;
 
@@ -85,7 +107,19 @@ async fn run_global_shell() -> Result<()> {
     println!("   Tapez 'exit' ou 'quit' pour quitter.");
     println!("--------------------------------------------------");
 
-    let mut rl = DefaultEditor::new().map_err(|e| AppError::Config(e.to_string()))?;
+    let mut rl = match DefaultEditor::new() {
+        Ok(editor) => editor,
+        Err(e) => {
+            raise_error!(
+                "CLI_EDITOR_INIT_FAILED",
+                error = e,
+                context = json!({
+                    "component": "Rustyline",
+                    "terminal_check": "failed"
+                })
+            );
+        }
+    };
     let config = AppConfig::get();
     let history_path = config
         .get_path("PATH_RAISE_DOMAIN")
@@ -127,8 +161,18 @@ async fn run_global_shell() -> Result<()> {
                         match Cli::try_parse_from(full_args) {
                             Ok(cli) => {
                                 if let Some(cmd) = cli.command {
-                                    if let Err(e) = execute_command(cmd).await {
-                                        user_error!("CMD_FAIL", "{}", e);
+                                    // 1. On clone pour garder la propriété de 'cmd' en cas d'erreur
+                                    if let Err(e) = execute_command(cmd.clone()).await {
+                                        // 🚀 Utilisation du Cas 2 : Métadonnées structurées
+                                        user_error!(
+                                            "CLI_COMMAND_EXECUTION_FAILED",
+                                            json!({
+                                                // 2. On utilise le format Debug pour contourner l'absence de Serialize
+                                                "command": format!("{:?}", cmd),
+                                                "error_detail": format!("{:?}", e),
+                                                "context": "interactive_repl_execution"
+                                            })
+                                        );
                                     }
                                 }
                             }
@@ -142,7 +186,15 @@ async fn run_global_shell() -> Result<()> {
             }
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
             Err(err) => {
-                user_error!("SHELL_ERROR", "{}", err);
+                // 🚀 Capture structurée avant la rupture de la boucle
+                user_error!(
+                    "CLI_SHELL_FATAL_ERROR",
+                    json!({
+                        "error": format!("{:?}", err),
+                        "termination": "loop_break",
+                        "context": "interactive_shell_session"
+                    })
+                );
                 break;
             }
         }
@@ -155,7 +207,7 @@ async fn run_global_shell() -> Result<()> {
     Ok(())
 }
 
-async fn execute_command(cmd: Commands) -> Result<()> {
+async fn execute_command(cmd: Commands) -> RaiseResult<()> {
     match cmd {
         Commands::Workflow(args) => commands::workflow::handle(args).await,
         Commands::ModelEngine(args) => commands::model_engine::handle(args).await,

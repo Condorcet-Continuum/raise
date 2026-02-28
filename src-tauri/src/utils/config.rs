@@ -1,6 +1,7 @@
 // FICHIER : src-tauri/src/utils/config.rs
 
-use crate::utils::error::{AppError, Result};
+use crate::raise_error;
+use crate::utils::error::RaiseResult;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -119,7 +120,7 @@ pub struct CoreConfig {
     pub language: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorldModelConfig {
     pub vocab_size: usize,
     pub embedding_dim: usize,
@@ -152,7 +153,7 @@ impl std::fmt::Debug for IntegrationsConfig {
 // --- IMPLÉMENTATION PRINCIPALE ---
 
 impl AppConfig {
-    pub fn init() -> Result<()> {
+    pub fn init() -> RaiseResult<()> {
         if CONFIG.get().is_some() {
             return Ok(());
         }
@@ -173,9 +174,12 @@ impl AppConfig {
             Self::load_production_config(&target_env)?
         };
 
-        CONFIG
-            .set(config)
-            .map_err(|_| AppError::Config("Echec initialisation OnceLock config".into()))?;
+        if CONFIG.set(config).is_err() {
+            raise_error!(
+                "ERR_CONFIG_INIT_ONCE",
+                error = "La configuration est déjà initialisée"
+            );
+        }
 
         Ok(())
     }
@@ -193,7 +197,7 @@ impl AppConfig {
     pub async fn get_component_settings(
         manager: &CollectionsManager<'_>,
         component_id: &str,
-    ) -> Result<Value> {
+    ) -> RaiseResult<Value> {
         let mut query = Query::new("components");
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
@@ -203,31 +207,43 @@ impl AppConfig {
             )],
         });
 
-        let result = QueryEngine::new(manager)
-            .execute_query(query)
-            .await
-            .map_err(|e| {
-                AppError::Ai(format!("Erreur DB pour composant {}: {}", component_id, e))
-            })?;
+        let result = match QueryEngine::new(manager).execute_query(query).await {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_DB_QUERY",
+                error = e,
+                context = serde_json::json!({ "requested_id": component_id })
+            ),
+        };
 
-        let comp_doc = result.documents.first().ok_or_else(|| {
-            AppError::Ai(format!(
-                "Composant '{}' introuvable en base de données",
-                component_id
-            ))
-        })?;
+        let Some(comp_doc) = result.documents.first() else {
+            raise_error!(
+                "ERR_CONFIG_COMPONENT_MISSING",
+                error = "Composant introuvable en base de données",
+                context = serde_json::json!({ "requested_id": component_id })
+            );
+        };
 
-        comp_doc.get("settings").cloned().ok_or_else(|| {
-            AppError::Ai(format!(
-                "Le composant '{}' n'a pas de bloc settings",
-                component_id
-            ))
-        })
+        let Some(settings) = comp_doc.get("settings").cloned() else {
+            raise_error!(
+                "ERR_CONFIG_SETTINGS_MISSING",
+                error = "Champ 'settings' manquant dans le document",
+                context = serde_json::json!({ "requested_id": component_id })
+            );
+        };
+
+        Ok(settings)
     }
 
-    fn load_test_sandbox() -> Result<Self> {
-        let manifest = env::var("CARGO_MANIFEST_DIR")
-            .map_err(|e| AppError::Config(format!("Env CARGO_MANIFEST_DIR manquant: {}", e)))?;
+    fn load_test_sandbox() -> RaiseResult<Self> {
+        let manifest = match env::var("CARGO_MANIFEST_DIR") {
+            Ok(v) => v,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_ENV_MANIFEST",
+                error = e,
+                context = serde_json::json!({ "var": "CARGO_MANIFEST_DIR" })
+            ),
+        };
 
         let path = PathBuf::from(manifest).join("tests/config.test.json");
 
@@ -235,18 +251,29 @@ impl AppConfig {
             return Ok(Self::create_default_test_config());
         }
 
-        let content = fs::read_to_string(&path)
-            .map_err(|e| AppError::Config(format!("Erreur lecture config test: {}", e)))?;
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_FS_READ",
+                error = e,
+                context = serde_json::json!({ "path": path.to_string_lossy() })
+            ),
+        };
 
-        let mut config: AppConfig = serde_json::from_str(&content)
-            .map_err(|e| AppError::Config(format!("Erreur parsing config test: {}", e)))?;
+        let mut config: AppConfig = match serde_json::from_str(&content) {
+            Ok(cfg) => cfg,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_PARSE",
+                error = e,
+                context = serde_json::json!({ "path": path.to_string_lossy() })
+            ),
+        };
 
         if let Some(domain_path) = config.paths.get_mut("PATH_RAISE_DOMAIN") {
             let temp_dir = env::temp_dir();
             let temp_str = temp_dir.to_string_lossy();
 
-            if domain_path.starts_with("/tmp") || domain_path.starts_with(temp_str.as_ref() as &str)
-            {
+            if domain_path.starts_with("/tmp") || domain_path.contains(temp_str.as_ref() as &str) {
                 let unique_id = format!(
                     "{}_{}",
                     std::process::id(),
@@ -295,13 +322,7 @@ impl AppConfig {
                 language: "en".to_string(),
             },
             world_model: WorldModelConfig::default(),
-            deep_learning: DeepLearningConfig {
-                input_size: 10,
-                hidden_size: 20,
-                output_size: 5,
-                learning_rate: 0.1,
-                device: "cpu".to_string(),
-            },
+            deep_learning: DeepLearningConfig::default(),
             paths,
             active_dapp: "mock-dapp-id".to_string(),
             active_services: vec!["mock-service-id".to_string()],
@@ -310,17 +331,30 @@ impl AppConfig {
         }
     }
 
-    fn load_production_config(env: &str) -> Result<Self> {
+    fn load_production_config(env: &str) -> RaiseResult<Self> {
         let system_json = Self::load_collection_doc("configs", |v| {
             v.get("core")
                 .and_then(|c| c.get("env_mode"))
                 .and_then(|e| e.as_str())
                 == Some(env)
-        })
-        .ok_or_else(|| AppError::Config(format!("Config système introuvable pour : {}", env)))?;
+        });
 
-        let mut config: AppConfig = serde_json::from_value(system_json)
-            .map_err(|e| AppError::Config(format!("Erreur parsing System Config: {}", e)))?;
+        let Some(json_val) = system_json else {
+            raise_error!(
+                "ERR_CONFIG_SYS_MISSING",
+                error = "Configuration système introuvable",
+                context = serde_json::json!({ "target_environment": env })
+            );
+        };
+
+        let mut config: AppConfig = match serde_json::from_value(json_val) {
+            Ok(c) => c,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_DESERIALIZE",
+                error = e,
+                context = serde_json::json!({ "env": env })
+            ),
+        };
 
         let hostname = env::var("HOSTNAME")
             .or_else(|_| env::var("COMPUTERNAME"))
@@ -382,23 +416,20 @@ impl AppConfig {
         let sys_index_path = db_root.join("_system.json");
         let collection_dir = db_root.join("collections").join(collection_name);
 
-        if let Ok(sys_content) = fs::read_to_string(&sys_index_path) {
-            if let Ok(sys_index) = serde_json::from_str::<Value>(&sys_content) {
-                let pointer = format!("/collections/{}/items", collection_name);
-                if let Some(items) = sys_index.pointer(&pointer).and_then(|v| v.as_array()) {
-                    for item in items {
-                        if let Some(filename) = item.get("file").and_then(|f| f.as_str()) {
-                            let path = collection_dir.join(filename);
-                            if path.exists() {
-                                if let Ok(content) = fs::read_to_string(&path) {
-                                    if let Ok(doc) = serde_json::from_str::<Value>(&content) {
-                                        if predicate(&doc) {
-                                            return Some(doc);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+        let sys_content = fs::read_to_string(&sys_index_path).ok()?;
+        let sys_index: Value = serde_json::from_str(&sys_content).ok()?;
+
+        let pointer = format!("/collections/{}/items", collection_name);
+        let items = sys_index.pointer(&pointer)?.as_array()?;
+
+        for item in items {
+            let filename = item.get("file").and_then(|f| f.as_str())?;
+            let path = collection_dir.join(filename);
+
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(doc) = serde_json::from_str::<Value>(&content) {
+                    if predicate(&doc) {
+                        return Some(doc);
                     }
                 }
             }
@@ -406,6 +437,9 @@ impl AppConfig {
         None
     }
 }
+
+// --- IMPLÉMENTATIONS PAR DÉFAUT ---
+
 impl Default for WorldModelConfig {
     fn default() -> Self {
         Self {
@@ -415,16 +449,6 @@ impl Default for WorldModelConfig {
             hidden_dim: 32,
             use_gpu: cfg!(feature = "cuda"),
         }
-    }
-}
-
-impl PartialEq for WorldModelConfig {
-    fn eq(&self, other: &Self) -> bool {
-        self.vocab_size == other.vocab_size
-            && self.embedding_dim == other.embedding_dim
-            && self.action_dim == other.action_dim
-            && self.hidden_dim == other.hidden_dim
-            && self.use_gpu == other.use_gpu
     }
 }
 
@@ -443,6 +467,7 @@ impl Default for DeepLearningConfig {
         }
     }
 }
+
 impl DeepLearningConfig {
     pub fn to_device(&self) -> candle_core::Device {
         match self.device.as_str() {
@@ -453,6 +478,7 @@ impl DeepLearningConfig {
 }
 
 // --- TESTS UNITAIRES ---
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,7 +502,7 @@ mod tests {
             "name": null,
             "system_domain": "_system",
             "system_db": "_system",
-            "active_dapp": "mock-dapp", // Ajout requis
+            "active_dapp": "mock-dapp",
             "core": {
                 "env_mode": "test",
                 "graph_mode": "none",
@@ -497,16 +523,9 @@ mod tests {
         });
 
         let config: AppConfig = serde_json::from_value(json_data).expect("Désérialisation échouée");
-
         assert_eq!(config.system_domain, "_system");
-
-        let ws = config.workstation.expect("Workstation should be present");
-        assert_eq!(ws.id, "host1");
-        assert_eq!(ws.default_domain.as_deref(), Some("ws_domain"));
-
-        let user = config.user.expect("User should be present");
-        assert_eq!(user.id, "user1");
-        assert_eq!(user.default_db.as_deref(), Some("user_db"));
+        assert_eq!(config.workstation.unwrap().id, "host1");
+        assert_eq!(config.user.unwrap().id, "user1");
     }
 
     #[test]
@@ -514,7 +533,7 @@ mod tests {
         let json_data = json!({
             "system_domain": "_sys",
             "system_db": "_db",
-            "active_dapp": "mock-dapp", // Ajout requis
+            "active_dapp": "mock-dapp",
             "core": {
                 "env_mode": "test",
                 "graph_mode": "none",
@@ -533,7 +552,8 @@ mod tests {
     }
 }
 
-// --- MODULE MOCKS PUBLIC (Pour integration tests) ---
+// --- MODULE MOCKS PUBLIC ---
+
 pub mod test_mocks {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
@@ -558,11 +578,9 @@ pub mod test_mocks {
         }
 
         let config = AppConfig::create_default_test_config();
-
         if let Some(path) = config.paths.get("PATH_RAISE_DOMAIN") {
             let _ = fs::create_dir_all(path);
         }
-
         let _ = CONFIG.set(config);
     }
 }

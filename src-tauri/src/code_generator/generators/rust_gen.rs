@@ -4,9 +4,9 @@ use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
 
 use crate::utils::{
-    data::{ContextBuilder, Deserialize, Value},
+    data::{Deserialize, Value},
     io::PathBuf,
-    prelude::*,
+    prelude::*, // Importe déjà json!
     sys,
 };
 
@@ -28,7 +28,7 @@ impl RustGenerator {
             Ok(formatted) => formatted,
             Err(e) => {
                 // Si rustfmt n'est pas installé ou plante, on log et on renvoie le code brut.
-                warn!("⚠️ Impossible de lancer rustfmt : {}", e);
+                tracing::warn!("⚠️ Impossible de lancer rustfmt : {}", e); // Utilisation de tracing::warn!
                 raw_code.to_string()
             }
         }
@@ -108,16 +108,13 @@ impl LanguageGenerator for RustGenerator {
             })
             .collect();
 
-        // ✅ CONSTRUCTION DU CONTEXTE VIA ContextBuilder
-        let context = ContextBuilder::new()
-            .with_part("name", &component.name)
-            .with_part("id", &component.id)
-            .with_part(
-                "description",
-                &component.description.clone().unwrap_or_default(),
-            )
-            .with_part("functions", &functions)
-            .build(); // Retourne un Value
+        // 🎯 MIGRATION V1.3 : CONSTRUCTION DU CONTEXTE VIA json! (Sans Builder)
+        let context = json!({
+            "name": component.name,
+            "id": component.id,
+            "description": component.description.clone().unwrap_or_default(),
+            "functions": functions
+        });
 
         let mut files = Vec::new();
 
@@ -128,7 +125,7 @@ impl LanguageGenerator for RustGenerator {
                     &component,
                     impl_specs,
                     &functions,
-                    &context, // On passe le Value ici
+                    &context, // On passe le Value de json!
                     template_engine,
                 );
             }
@@ -154,7 +151,7 @@ impl RustGenerator {
         comp: &ArcadiaComponent,
         impl_specs: &ComponentImpl,
         functions: &[String],
-        context: &Value, // ✅ CHANGÉ : &Context -> &Value
+        context: &Value,
         template_engine: &TemplateEngine,
     ) -> RaiseResult<Vec<GeneratedFile>> {
         let crate_name = impl_specs
@@ -212,7 +209,7 @@ impl RustGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::data::json;
+    // 🗑️ Suppression de `use crate::utils::data::json;` car `json!` est déjà dans `prelude::*`
 
     fn setup_engine() -> TemplateEngine {
         let mut engine = TemplateEngine::new();

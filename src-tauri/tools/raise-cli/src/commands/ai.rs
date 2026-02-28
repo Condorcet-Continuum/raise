@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/ai.rs
 
 use clap::{Args, Subcommand};
-use std::io::{self as std_io, Write};
+//use std::io::{self as std_io};
 
 // --- IMPORTS MÉTIER RAISE ---
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
@@ -18,7 +18,7 @@ use raise::json_db::collections::manager::CollectionsManager;
 
 use raise::{
     user_error, user_info, user_success,
-    utils::{config::AppConfig, io, prelude::*, Arc},
+    utils::{config::AppConfig, io, os, prelude::*, Arc},
 };
 
 #[derive(Args, Debug, Clone)]
@@ -62,7 +62,7 @@ pub enum AiCommands {
     },
 }
 
-pub async fn handle(args: AiArgs) -> Result<()> {
+pub async fn handle(args: AiArgs) -> RaiseResult<()> {
     let config = AppConfig::get();
 
     let space = &config.system_domain;
@@ -134,14 +134,9 @@ pub async fn handle(args: AiArgs) -> Result<()> {
             // 🎯 Les valeurs par défaut de l'IA sont gérées plus simplement
             let final_epochs = epochs.unwrap_or(3);
             let final_lr = lr.unwrap_or(config.deep_learning.learning_rate);
-
             user_info!(
                 "AI_TRAINING_START",
-                "Domaine: {} | DB: {} | Epochs: {} | LR: {}",
-                final_domain,
-                final_db,
-                final_epochs,
-                final_lr
+                json!({ "domain": final_domain, "db": final_db, "lr": final_lr, "epochs": final_epochs })
             );
 
             let train_storage =
@@ -157,8 +152,11 @@ pub async fn handle(args: AiArgs) -> Result<()> {
             )
             .await
             {
-                Ok(msg) => user_success!("AI_TRAIN_SUCCESS", "{}", msg),
-                Err(e) => user_error!("AI_TRAIN_FAIL", "{}", e),
+                Ok(msg) => user_success!("AI_TRAIN_SUCCESS", json!({ "result": msg })),
+                Err(e) => user_error!(
+                    "AI_TRAIN_FAIL",
+                    json!({ "error": e.to_string(), "action": "neural_network_training" })
+                ),
             }
         }
     }
@@ -166,20 +164,17 @@ pub async fn handle(args: AiArgs) -> Result<()> {
     Ok(())
 }
 
-async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> Result<()> {
+async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseResult<()> {
     user_info!("AI_INTERACTIVE_WELCOME");
     user_info!("AI_INTERACTIVE_SEPARATOR");
     user_info!("AI_LLM_CONNECTED", "local");
-    user_info!("AI_STORAGE_PATH", "{:?}", ctx.paths.domain_root);
+    user_info!("AI_STORAGE_PATH", json!({ "path": ctx.paths.domain_root }));
     user_info!("AI_EXIT_HINT");
 
     loop {
         print!("RAISE-AI> ");
-        std_io::stdout().flush()?;
-
-        let mut input = String::new();
-        std_io::stdin().read_line(&mut input)?;
-        let input = input.trim();
+        os::flush_stdout()?;
+        let input = os::read_stdin_line()?;
 
         if input.eq_ignore_ascii_case("exit") {
             user_info!("AI_GOODBYE");
@@ -189,7 +184,7 @@ async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> Result<(
             continue;
         }
 
-        process_input(ctx, input, client.clone(), true).await;
+        process_input(ctx, &input, client.clone(), true).await;
     }
     Ok(())
 }
@@ -204,7 +199,10 @@ async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execu
         EngineeringIntent::DefineBusinessUseCase {
             ref process_name, ..
         } => {
-            user_info!("AI_AGENT_START", "Business Agent ({})", process_name);
+            user_info!(
+                "AI_AGENT_START",
+                json!({ "agent": "Business Agent", "process": process_name })
+            );
             run_agent(BusinessAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "SA" => {
@@ -240,7 +238,7 @@ async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execu
             run_agent(TransverseAgent::new(), ctx, &intent, execute).await;
         }
         _ => {
-            user_error!("AI_INTENT_UNKNOWN", "{:?}", intent);
+            user_error!("AI_INTENT_UNKNOWN", json!({ "intent_raw": intent }));
         }
     }
 }
@@ -254,16 +252,19 @@ async fn run_agent<A: Agent>(
     if execute {
         match agent.process(ctx, intent).await {
             Ok(Some(res)) => {
-                user_success!("AI_RESULT", "{}", res.message);
+                user_success!("AI_RESULT", json!({ "message": res.message }));
                 for a in res.artifacts {
-                    user_info!("AI_ARTIFACT_GENERATED", "{}", a.path);
+                    user_info!("AI_ARTIFACT_GENERATED", json!({ "path": a.path }));
                 }
             }
             Ok(None) => {
                 user_info!("AI_NO_ACTION");
             }
             Err(e) => {
-                user_error!("AI_AGENT_ERROR", "{}", e);
+                user_error!(
+                    "AI_AGENT_ERROR",
+                    json!({ "error": e.to_string(), "source": "agent_executor" })
+                );
             }
         }
     } else {

@@ -50,7 +50,7 @@ fn get_docs(model: &ProjectModel) -> HashMap<String, Value> {
     docs
 }
 
-pub async fn handle(args: TraceabilityArgs) -> Result<()> {
+pub async fn handle(args: TraceabilityArgs) -> RaiseResult<()> {
     match args.command {
         TraceabilityCommands::Audit => {
             user_info!("TRACE_START", "Initialisation du moteur de traçage...");
@@ -67,15 +67,24 @@ pub async fn handle(args: TraceabilityArgs) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
 
             user_success!(
-                "AUDIT_DONE",
-                "Analyse de traçabilité effectuée avec {} règles vérifiées.",
-                report.compliance_results.len()
+                "AUDIT_TRACEABILITY_COMPLETE",
+                json!({
+                    "rules_checked": report.compliance_results.len(),
+                    "status": "verified",
+                    "module": "traceability_engine"
+                })
             );
         }
 
         TraceabilityCommands::Impact { component_id } => {
-            user_info!("ANALYSIS", "Analyse d'impact pour : {}", component_id);
-
+            user_info!(
+                "IMPACT_ANALYSIS_START",
+                json!({
+                    "component": component_id,
+                    "scope": "dependency_graph",
+                    "action": "evaluating_side_effects"
+                })
+            );
             let model = ProjectModel::default();
 
             // 🎯 FIX : Plus de lifetime 'a dans Tracer
@@ -86,7 +95,14 @@ pub async fn handle(args: TraceabilityArgs) -> Result<()> {
             let report = analyzer.analyze(&component_id, 3);
 
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
-            user_success!("IMPACT_OK", "Rapport d'impact généré pour {}", component_id);
+            user_success!(
+                "IMPACT_ANALYSIS_SUCCESS",
+                json!({
+                    "component": component_id,
+                    "status": "report_generated",
+                    "timestamp": Utc::now().to_rfc3339()
+                })
+            );
         }
 
         TraceabilityCommands::History => {

@@ -68,8 +68,7 @@ impl HardwareAgent {
         let response = ctx
             .llm
             .ask(LlmBackend::LocalLlama, system_prompt, &user_prompt)
-            .await
-            .map_err(|e| AppError::Validation(format!("Erreur LLM Hardware: {}", e)))?;
+            .await?;
 
         let clean_json = extract_json_from_llm(&response);
         let mut data: Value = data::parse(&clean_json).unwrap_or(json!({ "name": name }));
@@ -165,12 +164,13 @@ impl Agent for HardwareAgent {
                 );
 
                 // ✅ OPTIMISATION : Recherche via l'outil centralisé (Supporte PA, LA, SA)
-                let component_doc = find_element_by_name(ctx, context).await.ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "Composant matériel '{}' introuvable dans le modèle.",
-                        context
-                    ))
-                })?;
+                let Some(component_doc) = find_element_by_name(ctx, context).await else {
+                    raise_error!(
+                        "ERR_HW_COMPONENT_NOT_FOUND",
+                        error = "Composant matériel introuvable dans le modèle monde",
+                        context = serde_json::json!({ "requested_name": context })
+                    );
+                };
 
                 let component_id = component_doc["id"].as_str().unwrap_or_default().to_string();
 
@@ -197,10 +197,11 @@ impl Agent for HardwareAgent {
                 let result = tool.execute(call).await;
 
                 if result.is_error {
-                    return Err(AppError::Validation(format!(
-                        "Erreur CodeGen Hardware: {}",
-                        result.content
-                    )));
+                    raise_error!(
+                        "ERR_HW_CODEGEN",
+                        error = "Erreur CodeGen Hardware",
+                        context = serde_json::json!({ "details": result.content })
+                    );
                 }
 
                 let file_list = result.content["files"]

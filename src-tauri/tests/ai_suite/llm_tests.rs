@@ -4,7 +4,8 @@ use crate::common::{setup_test_env, LlmMode};
 use raise::ai::llm::client::LlmBackend;
 
 #[tokio::test]
-#[ignore] // Ignoré par défaut (nécessite Docker)
+#[serial_test::serial] // Protection RTX 5060 en local
+#[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_local_llm_connectivity() {
     // CORRECTION : init_ai_test_env() est désormais asynchrone.
     // On doit l'attendre pour accéder au membre 'client'.

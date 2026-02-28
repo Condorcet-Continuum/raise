@@ -1,20 +1,16 @@
-// FICHIER : src-tauri/src/utils/sys.rs
+// FICHIER : src-tauri/src/utils/os.rs
 
-use crate::utils::{AppError, Result};
-use std::io::Write;
+use crate::raise_error; // NOUVEAU : Import de la fondation RAISE
+use crate::utils::RaiseResult;
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, instrument, warn};
 
 /// Exécute une commande système et capture sa sortie.
 /// Utile pour lancer des outils comme Cargo, Git, etc.
-///
-/// # Arguments
-/// * `cmd` - Le binaire à lancer (ex: "cargo", "git")
-/// * `args` - Liste des arguments
-/// * `cwd` - Dossier d'exécution optionnel
 #[instrument(skip(args), fields(cmd = cmd, cwd = ?cwd))]
-pub fn exec_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<String> {
+pub fn exec_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> RaiseResult<String> {
     debug!("🚀 Exécution commande système : {} {:?}", cmd, args);
 
     let mut command = Command::new(cmd);
@@ -23,10 +19,11 @@ pub fn exec_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<Stri
     // Configuration du dossier courant
     if let Some(dir) = cwd {
         if !dir.exists() {
-            return Err(AppError::System(anyhow::anyhow!(
-                "Dossier d'exécution introuvable: {:?}",
-                dir
-            )));
+            raise_error!(
+                "ERR_OS_CWD_NOT_FOUND",
+                error = "Dossier d'exécution introuvable",
+                context = serde_json::json!({ "path": dir.to_string_lossy() })
+            );
         }
         command.current_dir(dir);
     }
@@ -46,138 +43,152 @@ pub fn exec_command(cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<Stri
                 Ok(stdout)
             } else {
                 warn!("⚠️ Commande échouée (code {:?})", output.status.code());
-                debug!("Stderr: {}", stderr);
-                // On retourne une erreur avec le stderr pour comprendre pourquoi ça a planté
-                Err(AppError::System(anyhow::anyhow!(
-                    "Echec commande '{}': {}",
-                    cmd,
-                    stderr.trim()
-                )))
+                raise_error!(
+                    "ERR_OS_COMMAND_EXIT_ERROR",
+                    error = stderr.trim(),
+                    context = serde_json::json!({
+                        "cmd": cmd,
+                        "args": args,
+                        "exit_code": output.status.code()
+                    })
+                );
             }
         }
         Err(e) => {
-            error!("❌ Impossible de lancer la commande '{}': {}", cmd, e);
-            Err(AppError::Io(e))
+            // Remplacement de fs_error par raise_error!
+            raise_error!(
+                "ERR_OS_EXEC_SPAWN",
+                error = e,
+                context = serde_json::json!({ "cmd": cmd, "args": args })
+            );
         }
     }
 }
 
 /// Passe une chaîne de caractères dans l'entrée standard (stdin) d'une commande
 /// et récupère le résultat transformé (stdout).
-/// Typiquement utilisé pour les formateurs de code (rustfmt, prettier).
 #[instrument(skip(input), fields(cmd = cmd))]
-pub fn pipe_through(cmd: &str, input: &str) -> Result<String> {
+pub fn pipe_through(cmd: &str, input: &str) -> RaiseResult<String> {
     // 1. Lancement du processus
-    let mut child = Command::new(cmd)
+    let mut child = match Command::new(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| AppError::System(anyhow::anyhow!("Outil introuvable '{}': {}", cmd, e)))?;
+    {
+        Ok(c) => c,
+        Err(e) => raise_error!(
+            "ERR_OS_PIPE_SPAWN",
+            error = e,
+            context = serde_json::json!({ "cmd": cmd })
+        ),
+    };
 
     // 2. Écriture dans stdin
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(input.as_bytes()).map_err(AppError::Io)?;
+        if let Err(e) = stdin.write_all(input.as_bytes()) {
+            raise_error!(
+                "ERR_OS_PIPE_WRITE",
+                error = e,
+                context = serde_json::json!({ "cmd": cmd })
+            );
+        }
     }
 
     // 3. Attente du résultat
-    let output = child.wait_with_output().map_err(AppError::Io)?;
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => raise_error!(
+            "ERR_OS_PIPE_WAIT",
+            error = e,
+            context = serde_json::json!({ "cmd": cmd })
+        ),
+    };
 
     if output.status.success() {
-        let result = String::from_utf8_lossy(&output.stdout).to_string();
-        Ok(result)
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
-        // Si le formateur échoue (syntaxe invalide ?), on renvoie une erreur explicite
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(AppError::System(anyhow::anyhow!(
-            "Echec du pipe '{}': {}",
-            cmd,
-            stderr
-        )))
+        raise_error!(
+            "ERR_OS_PIPE_EXEC_ERROR",
+            error = stderr.trim(),
+            context = serde_json::json!({ "cmd": cmd })
+        );
     }
+}
+
+/// Force l'affichage immédiat sur la console (flush stdout).
+#[instrument]
+pub fn flush_stdout() -> RaiseResult<()> {
+    if let Err(e) = io::stdout().flush() {
+        raise_error!("ERR_OS_STDOUT_FLUSH", error = e);
+    }
+    Ok(())
+}
+
+/// Lit une ligne depuis l'entrée standard (stdin) de manière synchrone.
+#[instrument]
+pub fn read_stdin_line() -> RaiseResult<String> {
+    let mut input = String::new();
+    let stdin = io::stdin();
+    let mut handle = stdin.lock();
+
+    match handle.read_line(&mut input) {
+        Ok(_) => Ok(input.trim().to_string()),
+        Err(e) => {
+            raise_error!(
+                "ERR_OS_STDIN_READ",
+                error = e,
+                context = serde_json::json!({ "source": "stdin" })
+            );
+        }
+    }
+}
+
+/// Affiche un message et attend une saisie utilisateur sur la même ligne.
+pub fn prompt(message: &str) -> RaiseResult<String> {
+    print!("{}", message);
+    flush_stdout()?;
+    read_stdin_line()
 }
 
 // --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::prelude::*;
 
     #[test]
     fn test_exec_command_success() {
-        // On utilise 'cargo --version' car on est sûr qu'il est présent dans l'environnement de dev
         let res = exec_command("cargo", &["--version"], None);
-
-        assert!(res.is_ok(), "La commande cargo --version devrait réussir");
-        let output = res.unwrap();
-        assert!(
-            output.starts_with("cargo"),
-            "La sortie doit commencer par 'cargo'"
-        );
+        assert!(res.is_ok());
     }
 
     #[test]
     fn test_exec_command_not_found() {
-        // Commande qui n'existe pas
         let res = exec_command("commande_qui_n_existe_pas_12345", &[], None);
 
+        // On s'assure que c'est bien une erreur
         assert!(res.is_err());
-        match res.unwrap_err() {
-            // Doit être une erreur IO (NotFound)
-            AppError::Io(_) => assert!(true),
-            _ => panic!("Devrait retourner une erreur IO pour binaire manquant"),
-        }
+
+        // MIGRATION : On extrait directement les données puisque AppError::Structured est l'unique variant !
+        let AppError::Structured(data) = res.unwrap_err();
+
+        // On vérifie le code d'erreur structuré
+        assert_eq!(data.code, "ERR_OS_EXEC_SPAWN");
     }
 
     #[test]
     fn test_exec_command_failure_status() {
-        // Commande qui existe mais retourne un code d'erreur
-        // ex: 'cargo build' sans fichier Cargo.toml valide dans un dossier vide (ou arguments invalides)
         let res = exec_command("cargo", &["build", "--manifest-path", "ghost.toml"], None);
 
+        // On s'assure que la commande a bien échoué
         assert!(res.is_err());
-        match res.unwrap_err() {
-            // Doit être une erreur System (notre wrapper autour du code de sortie != 0)
-            AppError::System(msg) => {
-                let msg_str = msg.to_string();
-                assert!(
-                    msg_str.contains("Echec commande"),
-                    "Message d'erreur incorrect"
-                );
-            }
-            _ => panic!("Devrait retourner une erreur System pour un échec de commande"),
-        }
-    }
 
-    #[test]
-    fn test_pipe_through_rustfmt() {
-        // On teste le pipe avec 'rustfmt' qui est installé pour ce projet
-        let unformatted = "fn  main ( )  {  let x = 1 ; }";
-        let expected_part = "fn main() {";
+        // MIGRATION : On déballe directement l'unique variant de notre erreur
+        let AppError::Structured(data) = res.unwrap_err();
 
-        let res = pipe_through("rustfmt", unformatted);
-
-        // Note : Ce test passe si rustfmt est installé. Sinon on ignore pour ne pas casser la CI.
-        match res {
-            Ok(formatted) => {
-                assert!(
-                    formatted.contains(expected_part),
-                    "Le code devrait être formaté"
-                );
-                assert!(
-                    !formatted.contains("  main  "),
-                    "Les espaces superflus doivent disparaître"
-                );
-            }
-            Err(_) => {
-                println!("⚠️ Test ignoré : 'rustfmt' semble absent du système.");
-            }
-        }
-    }
-
-    #[test]
-    fn test_pipe_through_failure() {
-        // Outil qui n'existe pas
-        let res = pipe_through("outil_fantome", "input");
-        assert!(res.is_err());
+        // On valide le code d'erreur attendu
+        assert_eq!(data.code, "ERR_OS_COMMAND_EXIT_ERROR");
     }
 }

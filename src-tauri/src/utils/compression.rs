@@ -1,83 +1,119 @@
+// FICHIER : src-tauri/src/utils/compression.rs
+
+use crate::raise_error; // Import explicite de la macro de fondation
 use crate::utils::prelude::*;
 use std::io::{Read, Write};
 
-pub fn compress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = zstd::Encoder::new(Vec::new(), 3).map_err(AppError::Io)?;
-    encoder.write_all(data).map_err(AppError::Io)?;
-    let res = encoder.finish().map_err(AppError::Io)?;
-    Ok(res)
+/// Compresse un buffer d'octets en utilisant l'algorithme Zstd (niveau 3).
+/// Idéal pour les documents JSON et les snapshots de base de données.
+pub fn compress(data: &[u8]) -> RaiseResult<Vec<u8>> {
+    let data_len = data.len();
+
+    // 1. Initialisation de l'encodeur
+    // On utilise le niveau 3 (équilibre parfait performance/ratio)
+    let mut encoder = match zstd::Encoder::new(Vec::new(), 3) {
+        Ok(enc) => enc,
+        Err(e) => raise_error!(
+            "ERR_COMPRESS_INIT",
+            error = e,
+            context = json!({ "input_size": data_len })
+        ),
+    };
+
+    // 2. Écriture des données dans le flux de compression
+    if let Err(e) = encoder.write_all(data) {
+        raise_error!(
+            "ERR_COMPRESS_WRITE",
+            error = e,
+            context = json!({ "input_size": data_len })
+        );
+    }
+
+    // 3. Finalisation du flux et récupération du Vec final
+    match encoder.finish() {
+        Ok(res) => {
+            tracing::trace!("Compression Zstd : {} -> {} octets", data_len, res.len());
+            Ok(res)
+        }
+        Err(e) => raise_error!(
+            "ERR_COMPRESS_FINISH",
+            error = e,
+            context = json!({ "input_size": data_len })
+        ),
+    }
 }
 
-pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut decoder = zstd::Decoder::new(data).map_err(AppError::Io)?;
+/// Décompresse un buffer compressé avec Zstd.
+pub fn decompress(data: &[u8]) -> RaiseResult<Vec<u8>> {
+    let compressed_len = data.len();
+
+    // 1. Initialisation du décodeur
+    let mut decoder = match zstd::Decoder::new(data) {
+        Ok(dec) => dec,
+        Err(e) => raise_error!(
+            "ERR_DECOMPRESS_INIT",
+            error = e,
+            context = json!({ "compressed_size": compressed_len })
+        ),
+    };
+
+    // 2. Lecture intégrale et décompression
     let mut decompressed = Vec::new();
-    decoder
-        .read_to_end(&mut decompressed)
-        .map_err(AppError::Io)?;
+    if let Err(e) = decoder.read_to_end(&mut decompressed) {
+        raise_error!(
+            "ERR_DECOMPRESS_READ",
+            error = e,
+            context = json!({ "compressed_size": compressed_len })
+        );
+    }
+
     Ok(decompressed)
 }
 
+// --- TESTS UNITAIRES (Standard RAISE) ---
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_compression_roundtrip() {
-        // Données de test représentatives d'un petit document JSON
-        let original =
-            b"{\"id\": \"test-123\", \"status\": \"active\", \"msg\": \"RAISE foundation layer\"}";
+        let original = b"Donnees de test RAISE pour verifier l'integrite de la compression.";
 
-        // 1. Test de compression
-        let compressed = compress(original).expect("La compression a échoué");
-        assert!(
-            !compressed.is_empty(),
-            "Le buffer compressé ne doit pas être vide"
-        );
+        let compressed = compress(original).expect("Compression HS");
+        let restored = decompress(&compressed).expect("Decompression HS");
 
-        // 2. Test de décompression
-        let restored = decompress(&compressed).expect("La décompression a échoué");
-
-        // 3. Vérification de l'intégrité totale
         assert_eq!(
             original.to_vec(),
             restored,
-            "Les données restaurées doivent être identiques à l'original"
+            "Donnees corrompues apres roundtrip"
         );
     }
 
     #[test]
     fn test_compression_efficiency() {
-        // Un texte avec beaucoup de répétitions pour maximiser l'efficacité de Zstd
-        let original_text = "RAISE ".repeat(200);
-        let original_bytes = original_text.as_bytes();
+        // Un texte hautement répétitif doit être massivement réduit
+        let original = "RAISE".repeat(100);
+        let compressed = compress(original.as_bytes()).unwrap();
 
-        let compressed = compress(original_bytes).expect("Compression failed");
-
-        // Logging via la fondation
-        debug!(
-            "Efficacité Zstd : Original = {} octets, Compressé = {} octets (Ratio: {:.2}x)",
-            original_bytes.len(),
-            compressed.len(),
-            original_bytes.len() as f32 / compressed.len() as f32
-        );
-
-        // Pour des données répétitives, Zstd doit être extrêmement performant
         assert!(
-            compressed.len() < original_bytes.len(),
-            "Le fichier compressé doit être plus petit"
+            compressed.len() < original.len(),
+            "Zstd n'a pas reduit la taille"
         );
     }
 
     #[test]
     fn test_decompress_invalid_data() {
-        let invalid_data = b"not a zstd stream";
+        let result = decompress(b"pas du zstd");
 
-        // Vérifie que notre gestion d'erreur AppError::Io fonctionne
-        let result = decompress(invalid_data);
+        assert!(result.is_err());
 
-        assert!(
-            result.is_err(),
-            "La décompression de données invalides doit échouer"
-        );
+        if let Err(crate::utils::error::AppError::Structured(data)) = result {
+            // Changement ici : Zstd échoue lors de la lecture effective
+            assert_eq!(data.code, "ERR_DECOMPRESS_READ");
+            assert_eq!(data.component, "COMPRESSION");
+            assert!(!data.message.is_empty());
+        } else {
+            panic!("L'erreur devrait être de type AppError::Structured");
+        }
     }
 }

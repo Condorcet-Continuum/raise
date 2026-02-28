@@ -28,9 +28,7 @@ impl RagRetriever {
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
         // 🎯 L'injection de dépendance avec .await est ici !
-        let embedder = EmbeddingEngine::new(manager)
-            .await
-            .map_err(|e| AppError::Ai(format!("Échec init Embedder: {}", e)))?;
+        let embedder = EmbeddingEngine::new(manager).await?;
 
         let collection_name = "raise_knowledge_base".to_string();
 

@@ -1,14 +1,11 @@
 // src-tauri/src/blockchain/fabric/client.rs
 //! Client Hyperledger Fabric (Implémentation pour Tonic 0.14.3).
 
-use crate::utils::{io::Path, Duration};
-// Ces imports sont maintenant disponibles grâce à la feature "tls-ring"
+use crate::utils::{io::Path, prelude::*, Duration}; // 🎯 Ajout du prelude RAISE (RaiseResult, json!)
+                                                    // Ces imports sont maintenant disponibles grâce à la feature "tls-ring"
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use super::config::ConnectionProfile;
-use crate::blockchain::error::FabricError;
-
-type Result<T> = std::result::Result<T, FabricError>;
 
 #[derive(Debug, Clone)]
 pub struct FabricClient {
@@ -26,13 +23,38 @@ impl FabricClient {
         }
     }
 
-    pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .map_err(|e| FabricError::ProfileParse(format!("File read error: {}", e)))?;
+    pub async fn load_from_file<P: AsRef<std::path::Path>>(path: P) -> RaiseResult<Self> {
+        let path_str = path.as_ref().display().to_string();
 
-        let config: ConnectionProfile = serde_yaml::from_str(&content)
-            .map_err(|e| FabricError::ProfileParse(format!("YAML error: {}", e)))?;
+        let content = match tokio::fs::read_to_string(&path).await {
+            Ok(c) => c,
+            Err(e) => {
+                raise_error!(
+                    "ERR_FABRIC_PROFILE_READ",
+                    error = e, // On passe l'erreur brute, la macro s'occupe de la conversion
+                    context = json!({
+                        "file_path": path_str,
+                        "action": "load_fabric_connection_profile",
+                        "hint": "Vérifiez que le fichier existe et que les droits de lecture sont accordés."
+                    })
+                )
+            }
+        };
+
+        let config: ConnectionProfile = match serde_yaml::from_str(&content) {
+            Ok(profile) => profile,
+            Err(e) => {
+                raise_error!(
+                    "ERR_FABRIC_PROFILE_PARSE",
+                    error = e, // On injecte l'erreur Serde directement
+                    context = json!({
+                        "file_path": path_str,
+                        "action": "parse_fabric_yaml_profile",
+                        "hint": "Le fichier YAML est mal formé ou des champs obligatoires sont manquants (ex: 'organizations', 'peers', 'certificateAuthorities')."
+                    })
+                )
+            }
+        };
 
         Ok(Self::from_config(config))
     }
@@ -41,27 +63,71 @@ impl FabricClient {
         mut self,
         cert_path: P,
         key_path: P,
-    ) -> Result<Self> {
-        let cert = tokio::fs::read(cert_path)
-            .await
-            .map_err(|e| FabricError::Crypto(format!("Cert read failed: {}", e)))?;
+    ) -> RaiseResult<Self> {
+        let cert_str = cert_path.as_ref().display().to_string();
+        let key_str = key_path.as_ref().display().to_string();
 
-        let key = tokio::fs::read(key_path)
-            .await
-            .map_err(|e| FabricError::Crypto(format!("Key read failed: {}", e)))?;
+        let cert = match tokio::fs::read(&cert_path).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                raise_error!(
+                    "ERR_FABRIC_CRYPTO_CERT_READ",
+                    error = e, // On passe l'erreur I/O brute
+                    context = json!({
+                        "cert_path": cert_str,
+                        "action": "load_fabric_certificate",
+                        "hint": "Le fichier de certificat (.pem) est introuvable ou illisible. Vérifiez le dossier crypto-config."
+                    })
+                )
+            }
+        };
+
+        let key = match tokio::fs::read(&key_path).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                raise_error!(
+                    "ERR_FABRIC_CRYPTO_KEY_READ",
+                    error = e, // On préserve l'erreur IO originale
+                    context = json!({
+                        "key_path": key_str,
+                        "action": "load_fabric_private_key",
+                        "hint": "La clé privée est introuvable. Sous Fabric, le nom du fichier finit souvent par '_sk'. Vérifiez le dossier keystore."
+                    })
+                )
+            }
+        };
 
         self.identity = Some(Identity::from_pem(cert, key));
         Ok(self)
     }
 
-    pub async fn connect(&mut self, peer_name: &str) -> Result<()> {
-        let peer_config = self.config.peers.get(peer_name).ok_or_else(|| {
-            FabricError::Config(format!("Peer '{}' not found in profile", peer_name))
-        })?;
+    pub async fn connect(&mut self, peer_name: &str) -> RaiseResult<()> {
+        let peer_config = match self.config.peers.get(peer_name) {
+            Some(config) => config,
+            None => raise_error!(
+                "ERR_FABRIC_CONFIG_PEER_NOT_FOUND",
+                context = json!({
+                    "peer_name": peer_name,
+                    "action": "connect_to_fabric_peer",
+                    "hint": "Le nœud demandé n'existe pas dans la configuration YAML. Vérifiez l'orthographe dans la section 'peers'."
+                })
+            ),
+        };
 
         // 1. Création de l'endpoint
-        let mut endpoint = Channel::from_shared(peer_config.url.clone())
-            .map_err(|e| FabricError::Config(format!("Invalid Peer URL: {}", e)))?;
+        let mut endpoint = match Channel::from_shared(peer_config.url.clone()) {
+            Ok(ch) => ch,
+            Err(e) => raise_error!(
+                "ERR_FABRIC_GRPC_ENDPOINT_INVALID",
+                error = e,
+                context = json!({
+                    "peer_name": peer_name,
+                    "url": peer_config.url,
+                    "action": "create_grpc_channel",
+                    "hint": "L'URL fournie n'est pas un endpoint gRPC valide. Vérifiez le format (ex: http://127.0.0.1:7051)."
+                })
+            ),
+        };
 
         // 2. Configuration TLS si présente
         if let Some(ref tls_conf) = peer_config.tls_ca_certs.pem {
@@ -76,9 +142,18 @@ impl FabricClient {
             }
 
             // Cette méthode est disponible car tls-ring active le support TLS
-            endpoint = endpoint
-                .tls_config(tls)
-                .map_err(|e| FabricError::GrpcConnection(format!("TLS config failed: {}", e)))?;
+            endpoint = match endpoint.tls_config(tls) {
+                Ok(ep) => ep,
+                Err(e) => raise_error!(
+                    "ERR_FABRIC_TLS_CONFIG_FAIL",
+                    error = e,
+                    context = json!({
+                        "peer_name": peer_name,
+                        "action": "configure_tls_connection",
+                        "hint": "Échec de l'application de la configuration TLS. Vérifiez que le certificat CA est valide et que le 'ssl-target-name-override' correspond au domaine du Peer."
+                    })
+                ),
+            };
         }
 
         // 3. Connexion (Lazy)
@@ -95,11 +170,18 @@ impl FabricClient {
         chaincode: &str,
         func: &str,
         args: Vec<String>,
-    ) -> Result<String> {
+    ) -> RaiseResult<String> {
         if self.channel.is_none() {
-            return Err(FabricError::GrpcConnection(
-                "Channel not initialized. Call connect() first.".into(),
-            ));
+            crate::raise_error!(
+                "ERR_FABRIC_GRPC_NOT_CONNECTED",
+                error = "Le canal gRPC n'est pas initialisé.",
+                context = json!({
+                    "chaincode": chaincode,
+                    "function": func,
+                    "action": "submit_transaction",
+                    "hint": "Vous devez appeler 'connect()' avant de soumettre une transaction au réseau."
+                })
+            );
         }
 
         let log_msg = format!(
@@ -114,9 +196,17 @@ impl FabricClient {
         Ok(format!("TX_ID_MOCK_12345 ({})", log_msg))
     }
 
-    pub async fn query_transaction(&self, func: &str, args: Vec<Vec<u8>>) -> Result<Vec<u8>> {
+    pub async fn query_transaction(&self, func: &str, args: Vec<Vec<u8>>) -> RaiseResult<Vec<u8>> {
         if self.channel.is_none() {
-            return Err(FabricError::GrpcConnection("No channel".into()));
+            crate::raise_error!(
+                "ERR_FABRIC_GRPC_NOT_CONNECTED",
+                error = "Le canal gRPC n'est pas initialisé.",
+                context = json!({
+                    "function": func,
+                    "action": "query_transaction",
+                    "hint": "Vous devez appeler 'connect()' avant d'effectuer une requête."
+                })
+            );
         }
         tracing::debug!("Querying '{}' with {} args", func, args.len());
         Ok(b"Query Result Mock".to_vec())

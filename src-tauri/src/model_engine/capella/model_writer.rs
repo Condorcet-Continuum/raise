@@ -1,16 +1,17 @@
 use crate::model_engine::types::ProjectModel;
-use crate::utils::{data, prelude::*};
-use std::fs::File;
-use std::io::Write;
+use crate::utils::{data, io, prelude::*};
+
 pub struct CapellaWriter;
 
 impl CapellaWriter {
-    /// Sauvegarde le modèle au format JSON (RAISE native format)
-    /// Nous n'écrivons pas en .capella (XMI) pour l'instant car c'est trop risqué sans EMF.
-    pub fn save_as_json(model: &ProjectModel, path: &Path) -> RaiseResult<()> {
+    /// Sauvegarde le modèle au format JSON (RAISE native format) de manière asynchrone et atomique.
+    pub async fn save_as_json(model: &ProjectModel, path: &Path) -> RaiseResult<()> {
+        // 1. Sérialisation JSON (déjà asynchrone/RaiseResult via nos utils)
         let json_data = data::stringify_pretty(model)?;
-        let mut file = File::create(path)?;
-        file.write_all(json_data.as_bytes())?;
+
+        // 2. Écriture atomique (via utils::io::write_atomic)
+        io::write_atomic(path, json_data.as_bytes()).await?;
+
         Ok(())
     }
 }
@@ -20,14 +21,17 @@ mod tests {
     use super::*;
     use crate::utils::io::tempdir;
 
-    #[test]
-    fn test_save_json() {
-        let dir = tempdir().unwrap();
+    #[tokio::test] // On passe le test en tokio::test pour l'async
+    async fn test_save_json() {
+        let dir = tempdir().unwrap(); // tempdir() est aussi async
         let file_path = dir.path().join("model.json");
 
         let model = ProjectModel::default();
-        // Le test passe si aucune erreur n'est levée
-        CapellaWriter::save_as_json(&model, &file_path).expect("Save failed");
+
+        // Appel async avec .await
+        CapellaWriter::save_as_json(&model, &file_path)
+            .await
+            .expect("Save failed");
 
         assert!(file_path.exists());
     }

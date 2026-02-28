@@ -490,27 +490,61 @@ impl VocabularyRegistry {
     }
 
     pub async fn load_layer_from_file(&self, layer: &str, path: &Path) -> RaiseResult<()> {
-        let content = io::read_to_string(path)
-            .await
-            .map_err(|e| format!("Impossible de lire le fichier {}: {}", path.display(), e))?;
+        // 1. Lecture du fichier avec diagnostic I/O
+        let content = match io::read_to_string(path).await {
+            Ok(c) => c,
+            Err(e) => raise_error!(
+                "ERR_IO_READ_FAIL",
+                error = e,
+                context = json!({
+                    "path": path.to_string_lossy(),
+                    "action": "load_layer_content"
+                })
+            ),
+        };
 
-        let json: Value = json::parse(&content)
-            .map_err(|e| format!("JSON-LD invalide dans {}: {}", path.display(), e))?;
+        // 2. Parsing JSON avec diagnostic syntaxique
+        let json: Value = match json::parse(&content) {
+            Ok(j) => j,
+            Err(e) => raise_error!(
+                "ERR_JSON_PARSE_FAIL",
+                error = e,
+                context = json!({
+                    "path": path.to_string_lossy(),
+                    "layer": layer
+                })
+            ),
+        };
 
-        if let Some(ctx) = json.get("@context") {
-            let mut cache = self.layer_contexts.write().map_err(|e| e.to_string())?;
-            cache.insert(layer.to_string(), ctx.clone());
-            #[cfg(debug_assertions)]
-            println!("✅ Ontologie chargée : {} -> {:?}", layer, path);
-        } else {
-            return Err(AppError::Validation(format!(
-                "Pas de champ @context dans {}",
-                path.display()
-            )));
-        }
+        // 3. Gestion sécurisée du verrou (Lock Poisoning)
+        let mut cache = match self.layer_contexts.write() {
+            Ok(guard) => guard,
+            Err(_) => raise_error!(
+                "ERR_INTERNAL_LOCK_POISONED",
+                error = "Incapacité d'accéder au cache des contextes : verrou corrompu.",
+                context = json!({ "component": "jsonld_processor", "resource": "layer_contexts" })
+            ),
+        };
+
+        // 4. Validation du schéma JSON-LD (Standard Let-Else)
+        let Some(ctx) = json.get("@context") else {
+            raise_error!(
+                "ERR_JSONLD_CONTEXT_MISSING",
+                error = "Le document chargé n'est pas une ontologie valide (champ '@context' manquant).",
+                context = json!({
+                    "path": path.to_string_lossy(), 
+                    "layer": layer 
+                })
+            );
+        };
+
+        cache.insert(layer.to_string(), ctx.clone());
+
+        #[cfg(debug_assertions)]
+        println!("✅ Ontologie chargée : {} -> {:?}", layer, path);
+
         Ok(())
     }
-
     pub fn get_context_for_layer(&self, layer: &str) -> Option<Value> {
         let cache = self.layer_contexts.read().ok()?;
         cache.get(layer).cloned()
@@ -637,9 +671,12 @@ mod tests {
     #[tokio::test]
     async fn test_load_errors() {
         let reg = VocabularyRegistry::new();
-        let path = Path::new("inconnu.jsonld");
+        let path = std::path::Path::new("inconnu.jsonld");
         let res = reg.load_layer_from_file("test", path).await;
+
         assert!(res.is_err());
-        assert!(res.unwrap_err().to_string().contains("Impossible de lire"));
+        let err_str = res.unwrap_err().to_string();
+        // ✅ On vérifie le code structuré plutôt que le message texte variable
+        assert!(err_str.contains("ERR_IO_READ_FAIL"));
     }
 }

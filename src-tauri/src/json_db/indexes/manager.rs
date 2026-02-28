@@ -40,12 +40,15 @@ impl<'a> IndexManager<'a> {
             "hash" => IndexType::Hash,
             "btree" => IndexType::BTree,
             "text" => IndexType::Text,
-            _ => {
-                return Err(AppError::Validation(format!(
-                    "Type d'index inconnu: {}",
-                    kind_str
-                )))
-            }
+            _ => raise_error!(
+                "ERR_DB_INDEX_TYPE_UNKNOWN",
+                error = format!("Le type d'index '{}' n'est pas supporté.", kind_str),
+                context = json!({
+                    "attempted_type": kind_str,
+                    "supported_types": ["hash", "btree", "text"],
+                    "action": "parse_index_definition"
+                })
+            ),
         };
 
         let field_path = if field.starts_with('/') {
@@ -69,7 +72,15 @@ impl<'a> IndexManager<'a> {
     pub async fn drop_index(&mut self, collection: &str, field: &str) -> RaiseResult<()> {
         let meta_path = self.get_meta_path(collection);
         if !meta_path.exists() {
-            return Err(AppError::NotFound("Collection introuvable".to_string()));
+            raise_error!(
+                "ERR_DB_COLLECTION_NOT_FOUND",
+                error = "La collection spécifiée est introuvable sur le disque.",
+                context = json!({
+                    "meta_path": meta_path.to_string_lossy(),
+                    "action": "load_collection_metadata",
+                    "hint": "Vérifiez que le dossier de la collection n'a pas été déplacé ou supprimé."
+                })
+            );
         }
 
         let mut meta = self.load_meta(&meta_path).await?;
@@ -94,7 +105,15 @@ impl<'a> IndexManager<'a> {
                 io::remove_file(&index_path).await?;
             }
         } else {
-            return Err(AppError::NotFound(format!("Index introuvable: {}", field)));
+            raise_error!(
+                "ERR_DB_INDEX_NOT_FOUND",
+                error = format!("L'index associé au champ '{}' est introuvable.", field),
+                context = json!({
+                    "target_field": field,
+                    "action": "index_resolution",
+                    "hint": "Vérifiez que l'index a été correctement créé pour cette collection."
+                })
+            );
         }
         Ok(())
     }
@@ -116,9 +135,17 @@ impl<'a> IndexManager<'a> {
         // Chargement async des définitions d'index
         let indexes = self.load_indexes(collection).await?;
 
-        let def = indexes.iter().find(|i| i.name == field).ok_or_else(|| {
-            AppError::NotFound(format!("Index introuvable sur le champ '{}'", field))
-        })?;
+        let Some(def) = indexes.iter().find(|i| i.name == field) else {
+            raise_error!(
+                "ERR_DB_INDEX_DEFINITION_NOT_FOUND",
+                error = format!("Définition d'index introuvable pour le champ '{}'", field),
+                context = json!({
+                    "requested_field": field,
+                    "available_indexes": indexes.iter().map(|i| &i.name).collect::<Vec<_>>(),
+                    "action": "lookup_index_metadata"
+                })
+            );
+        };
 
         let cfg = &self.storage.config;
         let s = &self.space;
@@ -143,18 +170,40 @@ impl<'a> IndexManager<'a> {
         io::create_dir_all(&indexes_dir).await?;
 
         let mut entries = io::read_dir(&col_path).await?;
-        while let Some(entry) = entries.next_entry().await? {
+        while let Some(entry) = match entries.next_entry().await {
+            Ok(e) => e,
+            Err(e) => raise_error!(
+                "ERR_FS_ITERATION_FAIL",
+                error = e,
+                context = json!({ "path": col_path, "action": "sync_collection_files" })
+            ),
+        } {
             let path = entry.path();
+
+            // Vérification de l'extension sans panique
             if path.extension().is_some_and(|e| e == "json") {
-                let filename = path.file_name().unwrap().to_str().unwrap();
-                if filename.starts_with('_') {
+                // Sécurisation du nom de fichier (on évite le unwrap().to_str().unwrap())
+                let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+                if filename.is_empty() || filename.starts_with('_') {
                     continue;
                 }
 
-                let content = io::read_to_string(&path).await?;
+                // Lecture du fichier (Propagera l'erreur si le fichier est verrouillé)
+                let content = match io::read_to_string(&path).await {
+                    Ok(c) => c,
+                    Err(e) => raise_error!(
+                        "ERR_FS_READ_FAIL",
+                        error = e,
+                        context = json!({ "file_path": path })
+                    ),
+                };
+
+                // Parsing et Dispatch
                 if let Ok(doc) = json::parse::<Value>(&content) {
                     let doc_id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     if !doc_id.is_empty() {
+                        // Ici on laisse le ? car dispatch_update renvoie probablement déjà un RaiseResult
                         self.dispatch_update(collection, def, doc_id, None, Some(&doc))
                             .await?;
                     }
@@ -165,10 +214,17 @@ impl<'a> IndexManager<'a> {
     }
 
     pub async fn index_document(&mut self, collection: &str, new_doc: &Value) -> RaiseResult<()> {
-        let doc_id = new_doc
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::Validation("ID manquant".to_string()))?;
+        let Some(doc_id) = new_doc.get("id").and_then(|v| v.as_str()) else {
+            raise_error!(
+                "ERR_DB_DOCUMENT_ID_MISSING",
+                error = "Document invalide : le champ 'id' est manquant ou n'est pas une chaîne de caractères.",
+                context = json!({
+                    "expected_field": "id",
+                    "available_keys": new_doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
+                    "action": "insert_document_validation"
+                })
+            );
+        };
         let indexes = self.load_indexes(collection).await?;
 
         if !indexes.is_empty() {
@@ -231,14 +287,24 @@ impl<'a> IndexManager<'a> {
         let cfg = &self.storage.config;
         let s = &self.space;
         let d = &self.db;
-        match def.index_type {
+        let result = match def.index_type {
             IndexType::Hash => hash::update_hash_index(cfg, s, d, col, def, id, old, new).await,
             IndexType::BTree => btree::update_btree_index(cfg, s, d, col, def, id, old, new).await,
             IndexType::Text => text::update_text_index(cfg, s, d, col, def, id, old, new).await,
+        };
+
+        if let Err(e) = result {
+            raise_error!(
+                "ERR_DB_INDEX_UPDATE_FAIL",
+                error = e,
+                context = json!({
+                    "index_name": def.name,
+                    "index_type": format!("{:?}", def.index_type),
+                    "document_id": id,
+                    "action": "sync_index_state"
+                })
+            );
         }
-        .map_err(|e| {
-            AppError::Database(format!("Erreur mise à jour index '{}': {}", def.name, e))
-        })?;
         Ok(())
     }
 }

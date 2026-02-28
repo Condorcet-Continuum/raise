@@ -48,6 +48,8 @@ impl CognitivePlugin {
         let mut linker = Linker::new(&engine);
 
         // --- 1. Enregistrement des capacités cognitives ---
+        // Ici on peut garder le `?` UNIQUEMENT parce que la fonction renvoie DÉJÀ
+        // notre type RaiseResult. Il n'y a donc aucune conversion implicite (pas de trait From appelé).
         cognitive::register_host_functions(&mut linker)?;
 
         // --- 2. Initialisation du Context ---
@@ -62,8 +64,31 @@ impl CognitivePlugin {
         };
 
         let mut store = Store::new(&engine, ctx);
-        let module = Module::new(&engine, binary)?;
-        let instance = linker.instantiate(&mut store, &module)?;
+
+        // --- 3. Compilation et Instanciation (Capture Explicite) ---
+        let module = match Module::new(&engine, binary) {
+            Ok(m) => m,
+            Err(e) => raise_error!(
+                "ERR_WASM_COMPILE_FAILED",
+                error = e.to_string(),
+                context = serde_json::json!({
+                    "action": "compile_wasm_binary",
+                    "hint": "Le binaire fourni n'est pas un module WebAssembly valide."
+                })
+            ),
+        };
+
+        let instance = match linker.instantiate(&mut store, &module) {
+            Ok(inst) => inst,
+            Err(e) => raise_error!(
+                "ERR_WASM_INSTANTIATION_FAILED",
+                error = e.to_string(),
+                context = serde_json::json!({
+                    "action": "instantiate_plugin",
+                    "hint": "Échec de l'édition des liens (imports/exports manquants)."
+                })
+            ),
+        };
 
         Ok(Self { store, instance })
     }
@@ -80,12 +105,37 @@ impl CognitivePlugin {
 
     /// Exécute le point d'entrée "run" du plugin.
     pub fn run(&mut self) -> RaiseResult<i32> {
-        let run_func = self
+        // 1. Récupération sécurisée de la fonction exportée
+        let run_func = match self
             .instance
             .get_typed_func::<(), i32>(&mut self.store, "run")
-            .map_err(|_| AppError::from("Fonction 'run' introuvable dans le plugin"))?;
+        {
+            Ok(f) => f,
+            Err(e) => raise_error!(
+                "ERR_WASM_SYMBOL_NOT_FOUND",
+                error = e.to_string(),
+                context = serde_json::json!({
+                    "symbol": "run",
+                    "expected_signature": "() -> i32",
+                    "action": "plugin_lookup",
+                    "hint": "La fonction 'run' est absente ou possède une signature incompatible (vérifiez les types I32/F64)."
+                })
+            ),
+        };
 
-        let result = run_func.call(&mut self.store, ())?;
+        // 2. Appel de la fonction (Capture explicite au lieu de l'ancien `?`)
+        let result = match run_func.call(&mut self.store, ()) {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_WASM_EXECUTION_CRASH",
+                error = e.to_string(),
+                context = serde_json::json!({
+                    "action": "execute_run",
+                    "hint": "Le plugin a déclenché un WASM Trap (panic interne ou accès mémoire illégal)."
+                })
+            ),
+        };
+
         Ok(result)
     }
 }
@@ -118,7 +168,7 @@ mod tests {
         let mut plugin = CognitivePlugin::new(&wasm, &storage, "space", "db", None).unwrap();
 
         // 1. Test Mandat
-        let test_mandate = json!({ "permissions": { "readonly": true } });
+        let test_mandate = serde_json::json!({ "permissions": { "readonly": true } });
         plugin.set_mandate(test_mandate.clone());
         assert_eq!(plugin.store.data().mandate, Some(test_mandate));
 

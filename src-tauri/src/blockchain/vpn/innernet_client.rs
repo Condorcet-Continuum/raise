@@ -7,8 +7,6 @@
 use crate::utils::{prelude::*, Arc, AsyncRwLock};
 use std::process::{Command as StdCommand, Output};
 use tokio::process::Command;
-// Import de l'erreur centralisée
-use crate::blockchain::error::VpnError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
@@ -49,9 +47,6 @@ pub struct NetworkStatus {
     pub uptime_seconds: Option<u64>,
 }
 
-// 🎯 Le type Result exclusif à ce module
-type Result<T> = std::result::Result<T, VpnError>;
-
 #[derive(Clone)]
 pub struct InnernetClient {
     config: NetworkConfig,
@@ -76,16 +71,31 @@ impl InnernetClient {
     }
 
     /// Vérifie si Innernet est installé (Appel bloquant acceptable au démarrage)
-    pub fn check_installation() -> Result<String> {
-        let output = StdCommand::new("innernet")
-            .arg("--version")
-            .output()
-            .map_err(|e| VpnError::CommandExecution(format!("Innernet not found: {}", e)))?;
+    // 🎯 MIGRATION : Utilisation de RaiseResult
+    pub fn check_installation() -> RaiseResult<String> {
+        let output = match StdCommand::new("innernet").arg("--version").output() {
+            Ok(out) => out,
+            Err(e) => raise_error!(
+                "ERR_VPN_INNERNET_MISSING",
+                error = e,
+                context = json!({
+                    "action": "check_innernet_installation",
+                    "command": "innernet --version",
+                    "hint": "Le binaire 'innernet' est introuvable. Assurez-vous qu'il est installé (sudo apt install innernet) et que l'utilisateur courant a les droits d'exécution."
+                })
+            ),
+        };
 
         if !output.status.success() {
-            return Err(VpnError::CommandExecution(
-                "Innernet command failed".to_string(),
-            ));
+            crate::raise_error!(
+                "ERR_VPN_INNERNET_EXEC_FAIL",
+                error = "L'exécution de la commande Innernet a échoué.",
+                context = json!({
+                    "action": "check_innernet_installation",
+                    "status_code": output.status.code(),
+                    "stderr": String::from_utf8_lossy(&output.stderr).to_string()
+                })
+            );
         }
 
         let version = String::from_utf8_lossy(&output.stdout);
@@ -93,17 +103,23 @@ impl InnernetClient {
     }
 
     /// Se connecte au réseau mesh (Async)
-    pub async fn connect(&self) -> Result<()> {
+    pub async fn connect(&self) -> RaiseResult<()> {
         tracing::info!("Connecting to Innernet network: {}", self.config.name);
 
         let output = self.run_command(["up", &self.config.name]).await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(VpnError::Connection(format!(
-                "Failed to connect: {}",
-                stderr
-            )));
+            crate::raise_error!(
+                "ERR_VPN_CONNECTION_FAIL",
+                context = json!({
+                    "network_name": self.config.name,
+                    "action": "connect_vpn",
+                    "status_code": output.status.code(),
+                    "stderr": stderr.trim(),
+                    "hint": "La commande a été trouvée mais a échoué. Vérifiez vos privilèges sudo, l'existence de l'interface ou si le serveur Innernet est joignable."
+                })
+            );
         }
 
         // Mettre à jour le statut
@@ -124,17 +140,23 @@ impl InnernetClient {
     }
 
     /// Se déconnecte du réseau mesh (Async)
-    pub async fn disconnect(&self) -> Result<()> {
+    pub async fn disconnect(&self) -> RaiseResult<()> {
         tracing::info!("Disconnecting from Innernet network: {}", self.config.name);
 
         let output = self.run_command(["down", &self.config.name]).await?;
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(VpnError::Connection(format!(
-                "Failed to disconnect: {}",
-                stderr
-            )));
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            raise_error!(
+                "ERR_VPN_DISCONNECTION_FAIL",
+                context = json!({
+                    "network_name": self.config.name,
+                    "action": "disconnect_vpn",
+                    "status_code": output.status.code(),
+                    "stderr": stderr.trim(),
+                    "hint": "Impossible de fermer l'interface VPN. Vérifiez si le processus innernet est verrouillé ou si l'interface a déjà été supprimée manuellement."
+                })
+            );
         }
 
         // Mettre à jour le statut
@@ -149,8 +171,7 @@ impl InnernetClient {
     }
 
     /// Récupère le statut actuel du réseau
-    // 🎯 CORRECTION : On utilise Result au lieu de RaiseResult
-    pub async fn get_status(&self) -> Result<NetworkStatus> {
+    pub async fn get_status(&self) -> RaiseResult<NetworkStatus> {
         // Tentative de mise à jour des peers si possible
         if let Ok(peers) = self.fetch_peers().await {
             let mut status = self.status.write().await;
@@ -164,41 +185,68 @@ impl InnernetClient {
     }
 
     /// Liste tous les peers du réseau
-    // 🎯 CORRECTION : On utilise Result au lieu de RaiseResult
-    pub async fn list_peers(&self) -> Result<Vec<Peer>> {
+    pub async fn list_peers(&self) -> RaiseResult<Vec<Peer>> {
         self.fetch_peers().await
     }
 
     /// Ajoute un nouveau peer via un code d'invitation
-    // 🎯 CORRECTION : On utilise Result au lieu de RaiseResult
-    pub async fn add_peer(&self, _invitation_code: &str) -> Result<String> {
+    pub async fn add_peer(&self, _invitation_code: &str) -> RaiseResult<String> {
         tracing::info!("Adding peer with invitation code");
         // TODO: Implémentation réelle avec fichier temporaire pour l'invitation
         Ok("Peer added successfully (Simulation)".to_string())
     }
 
     /// Exécute une commande Innernet (Async)
-    async fn run_command<I, S>(&self, args: I) -> Result<Output>
+    async fn run_command<I, S>(&self, args: I) -> RaiseResult<Output>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
-        Command::new("innernet")
-            .args(args)
-            .output()
-            .await
-            .map_err(|e| VpnError::CommandExecution(e.to_string()))
+        // 1. Exécution et capture de l'erreur système
+        let output = match Command::new("innernet").args(args).output().await {
+            Ok(out) => out,
+            Err(e) => {
+                raise_error!(
+                    "ERR_VPN_COMMAND_EXEC",
+                    error = e,
+                    context = json!({
+                        "action": "execute_innernet_cli",
+                        "hint": "Le binaire innernet n'a pas pu être lancé. Vérifiez qu'il est dans le PATH."
+                    })
+                )
+            }
+        };
+
+        // 2. Vérification du succès de la commande (Exit Code)
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            raise_error!(
+                "ERR_VPN_COMMAND_FAILED",
+                context = json!({
+                    "exit_code": output.status.code(),
+                    "stderr": stderr,
+                    "action": "validate_innernet_execution",
+                    "hint": "Innernet a renvoyé une erreur. Vérifiez les logs stderr ci-dessus."
+                })
+            )
+        }
+
+        Ok(output)
     }
 
     /// Récupère l'IP de l'interface
-    async fn get_interface_ip(&self) -> Result<String> {
+    async fn get_interface_ip(&self) -> RaiseResult<String> {
         let output = self.run_command(["show", &self.config.name]).await?;
 
         if !output.status.success() {
-            // Pas critique si l'interface est down
-            return Err(VpnError::Parse(
-                "Interface information unavailable".to_string(),
-            ));
+            crate::raise_error!(
+                "ERR_VPN_INTERFACE_DOWN",
+                error = "Impossible de récupérer les informations de l'interface (Interface probablement inactive).",
+                context = json!({
+                    "network_name": self.config.name,
+                    "action": "get_interface_ip"
+                })
+            );
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -215,16 +263,35 @@ impl InnernetClient {
             }
         }
 
-        Err(VpnError::Parse("Could not parse IP address".to_string()))
+        crate::raise_error!(
+            "ERR_VPN_IP_PARSE_FAIL",
+            error = "Impossible d'extraire l'adresse IP de la sortie Innernet.",
+            context = json!({
+                "network_name": self.config.name,
+                "action": "parse_interface_ip",
+                "raw_output": stdout.to_string()
+            })
+        );
     }
 
     /// Récupère la liste des peers via WireGuard
-    async fn fetch_peers(&self) -> Result<Vec<Peer>> {
-        let output = Command::new("wg")
+    async fn fetch_peers(&self) -> RaiseResult<Vec<Peer>> {
+        let output = match Command::new("wg")
             .args(["show", &self.config.interface])
             .output()
             .await
-            .map_err(|e| VpnError::CommandExecution(e.to_string()))?;
+        {
+            Ok(out) => out,
+            Err(e) => raise_error!(
+                "ERR_VPN_WG_COMMAND_FAIL",
+                error = e,
+                context = json!({
+                    "interface": self.config.interface,
+                    "action": "fetch_wireguard_peers",
+                    "hint": "La commande 'wg' a échoué. Vérifiez que WireGuard est installé et que l'utilisateur a les droits 'sudo' ou les capacités CAP_NET_ADMIN."
+                })
+            ),
+        };
 
         if !output.status.success() {
             return Ok(Vec::new());
@@ -235,8 +302,7 @@ impl InnernetClient {
     }
 
     /// Parse la sortie de `wg show`
-    // 🎯 CORRECTION : On utilise Result au lieu de RaiseResult
-    fn parse_wg_output(&self, output: &str) -> Result<Vec<Peer>> {
+    fn parse_wg_output(&self, output: &str) -> RaiseResult<Vec<Peer>> {
         let mut peers = Vec::new();
         let mut current_peer: Option<Peer> = None;
 
@@ -287,12 +353,23 @@ impl InnernetClient {
     }
 
     /// Ping un peer spécifique
-    pub async fn ping_peer(&self, peer_ip: &str) -> Result<bool> {
-        let output = Command::new("ping")
+    pub async fn ping_peer(&self, peer_ip: &str) -> RaiseResult<bool> {
+        let output = match Command::new("ping")
             .args(["-c", "1", "-W", "2", peer_ip])
             .output()
             .await
-            .map_err(|e| VpnError::CommandExecution(e.to_string()))?;
+        {
+            Ok(out) => out,
+            Err(e) => raise_error!(
+                "ERR_VPN_PING_EXEC_FAIL",
+                error = e,
+                context = json!({
+                    "target_ip": peer_ip,
+                    "action": "ping_vpn_peer",
+                    "hint": "Le binaire 'ping' n'a pas pu être exécuté. Vérifiez les permissions d'exécution ou la présence du binaire sur le système hôte."
+                })
+            ),
+        };
 
         Ok(output.status.success())
     }

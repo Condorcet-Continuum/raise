@@ -12,18 +12,46 @@ pub async fn create_swarm(local_key: identity::Keypair) -> RaiseResult<Swarm<Arc
     let behavior = ArcadiaBehavior::new(local_key.clone())?;
 
     // Construction du Swarm avec la pile technologique Arcadia
-    let swarm = SwarmBuilder::with_existing_identity(local_key)
-        .with_tokio() // Utilisation du runtime Tokio comme configuré dans le Cargo.toml
+    // 1. Configuration du Transport (TCP + Noise + Yamux)
+    let swarm_with_transport = SwarmBuilder::with_existing_identity(local_key)
+        .with_tokio()
         .with_tcp(
             tcp::Config::default(),
             noise::Config::new,
             yamux::Config::default,
-        )
-        .map_err(|e| format!("Erreur lors de la configuration du transport: {:?}", e))?
-        .with_behaviour(|_| behavior)
-        .map_err(|e| format!("Erreur lors de l'ajout du behavior: {:?}", e))?
-        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
-        .build();
+        );
+
+    let transport_builder = match swarm_with_transport {
+        Ok(builder) => builder,
+        Err(e) => raise_error!(
+            "ERR_P2P_TRANSPORT_CONFIG",
+            error = e,
+            context = json!({
+                "action": "build_p2p_transport",
+                "stack": "TCP/Noise/Yamux",
+                "hint": "Échec de la configuration de la pile de transport. Vérifiez les dépendances Noise/Yamux."
+            })
+        ),
+    };
+
+    // 2. Injection du Behaviour et Build final
+    let swarm = match transport_builder.with_behaviour(|_| behavior) {
+        Ok(builder) => {
+            // On configure et on build ici
+            builder
+                .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
+                .build()
+        }
+        Err(e) => raise_error!(
+            "ERR_P2P_SWARM_BEHAVIOUR_INJECTION",
+            error = e,
+            context = json!({
+                "action": "inject_behaviour_into_swarm",
+                "component": "NetworkBehavior",
+                "hint": "L'injection du comportement réseau a échoué. Vérifiez la compatibilité des protocoles sélectionnés."
+            })
+        ),
+    };
 
     Ok(swarm)
 }

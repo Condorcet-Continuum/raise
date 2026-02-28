@@ -125,10 +125,19 @@ impl Analyzer {
 
     fn check_depth(expr: &Expr, current: usize, max: usize) -> RaiseResult<()> {
         if current > max {
-            return Err(AppError::Validation(format!(
-                "Profondeur maximale dépassée ({})",
-                max
-            )));
+            raise_error!(
+                "ERR_VALIDATION_MAX_DEPTH_EXCEEDED",
+                error = format!(
+                    "Limite de récursion atteinte : profondeur {} (max: {})",
+                    current, max
+                ),
+                context = json!({
+                    "current_depth": current,
+                    "max_allowed": max,
+                    "action": "enforce_recursion_limit",
+                    "hint": "Une référence circulaire est probablement présente dans votre schéma ou vos données. Vérifiez les définitions récursives ($ref)."
+                })
+            );
         }
 
         match expr {

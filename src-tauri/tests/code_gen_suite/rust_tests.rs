@@ -6,50 +6,51 @@ use raise::utils::data::json;
 use raise::utils::io;
 
 #[tokio::test]
-#[ignore]
+#[serial_test::serial]
+#[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_rust_skeleton_generation() {
     let env = setup_test_env(LlmMode::Enabled).await;
 
-    // On utilise le dossier temporaire de l'environnement comme sortie
+    // 1. Initialisation du service
     let service = CodeGeneratorService::new(env.domain_path.clone());
 
-    // 1. Donnée Mock (Acteur)
-    // Note : On utilise "type" pour matcher la sérialisation interne
+    // 2. Donnée Mock (Forcer la logique Rust_Crate)
     let actor = json!({
         "id": "uuid-test-pure",
         "name": "Moteur Physique",
         "description": "Simule la gravité.",
-        // 🎯 Utilise 'kind' avec l'URI complète pour l'alignement Arcadia
-        "kind": "https://raise.io/ontology/arcadia/oa#OperationalActor"
+        "implementation": {
+            "technology": "Rust_Crate",
+            "artifactName": "moteur_physique"
+        },
+        "allocatedFunctions": ["ref:sa:name:Calculer Gravite"]
     });
-    // 2. Génération
+
+    // 3. Génération
     let paths = service
         .generate_for_element(&actor, TargetLanguage::Rust)
         .await
         .expect("La génération doit réussir");
 
-    // 3. Vérifications
-    assert_eq!(paths.len(), 1);
-    let file_path = &paths[0];
+    // 4. Vérification Clippy-friendly
+    assert!(!paths.is_empty(), "Au moins un fichier doit être généré");
 
-    assert!(file_path.exists(), "Le fichier généré doit exister");
+    // On cherche src/lib.rs
+    let lib_path = paths
+        .iter()
+        .find(|p| p.to_string_lossy().contains("src/lib.rs"))
+        .expect("Le fichier src/lib.rs est manquant");
 
-    // Validation du nom de fichier (PascalCase actuel)
-    let filename = file_path.file_name().unwrap().to_str().unwrap();
-    assert_eq!(
-        filename, "MoteurPhysique.rs",
-        "Le nom du fichier généré doit correspondre (PascalCase actuel)"
-    );
+    let content = io::read_to_string(lib_path).await.expect("Lecture lib.rs");
 
-    let content = io::read_to_string(file_path)
-        .await // ✅ AJOUT DE .await
-        .expect("Lecture du fichier généré");
-
-    // Validation du contenu (PascalCase)
+    // 5. Assertions sur le fallback de rust_gen.rs
+    // Le générateur transforme "Calculer Gravite" en snake_case
     assert!(
-        content.contains("pub struct MoteurPhysique"),
-        "La structure Rust doit être en PascalCase"
+        content.contains("pub fn calculer_gravite()"),
+        "La fonction Rust est manquante ou mal formatée"
     );
-
-    // Note : L'assertion sur AI_INJECTION_POINT reste commentée car non implémentée
+    assert!(
+        content.contains("// AI_INJECTION_POINT: calculer_gravite"),
+        "Le point d'injection est manquant"
+    );
 }

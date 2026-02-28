@@ -47,10 +47,16 @@ impl AiOrchestrator {
         let app_config = AppConfig::get();
 
         // Sécurité : On récupère le chemin du domaine via la config globale
-        let domain_path = app_config
-            .get_path("PATH_RAISE_DOMAIN")
-            .ok_or_else(|| AppError::Config("PATH_RAISE_DOMAIN manquant dans AppConfig".into()))?;
-
+        let Some(domain_path) = app_config.get_path("PATH_RAISE_DOMAIN") else {
+            raise_error!(
+                "ERR_CONFIG_DOMAIN_PATH_MISSING",
+                error = "PATH_RAISE_DOMAIN est manquant dans la configuration AppConfig",
+                context = json!({
+                    "required_key": "PATH_RAISE_DOMAIN",
+                    "action": "initialize_domain_context"
+                })
+            );
+        };
         let chats_path = domain_path.join("chats");
         let brain_path = domain_path.join("world_model.safetensors");
 
@@ -91,12 +97,17 @@ impl AiOrchestrator {
         };
 
         // Gestion de la mémoire de conversation
-        let memory_store = MemoryStore::new(&chats_path).await.map_err(|e| {
-            AppError::Config(format!(
-                "Impossible d'initialiser le stockage des chats: {}",
-                e
-            ))
-        })?;
+        let memory_store = match MemoryStore::new(&chats_path).await {
+            Ok(ms) => ms,
+            Err(e) => raise_error!(
+                "ERR_CHAT_MEMORY_STORE_INIT",
+                error = e,
+                context = json!({
+                    "chats_path": chats_path.to_string_lossy(),
+                    "component": "CHAT_SYSTEM"
+                })
+            ),
+        };
 
         let session_id = "main_session";
         let session = memory_store.load_or_create(session_id).await?;
@@ -146,17 +157,30 @@ impl AiOrchestrator {
             AgentContext::generate_default_session_id("orchestrator", session_scope);
 
         let app_config = AppConfig::get();
-        let domain_path = app_config
-            .get_path("PATH_RAISE_DOMAIN")
-            .ok_or_else(|| AppError::Config("PATH_RAISE_DOMAIN manquant".into()))?;
-
+        let Some(domain_path) = app_config.get_path("PATH_RAISE_DOMAIN") else {
+            raise_error!(
+                "ERR_CONFIG_DOMAIN_PATH_MISSING",
+                error = "PATH_RAISE_DOMAIN est manquant dans la configuration AppConfig",
+                context = json!({
+                    "required_key": "PATH_RAISE_DOMAIN",
+                    "action": "initialize_app_domain"
+                })
+            );
+        };
         let dataset_path = app_config
             .get_path("PATH_RAISE_DATASET")
             .unwrap_or_else(|| domain_path.join("dataset"));
 
-        let storage_arc = self.storage.clone().ok_or_else(|| {
-            AppError::Validation("StorageEngine requis pour l'exécution des agents".into())
-        })?;
+        let Some(storage_arc) = self.storage.clone() else {
+            raise_error!(
+                "ERR_AGENT_STORAGE_MISSING",
+                error = "StorageEngine requis pour l'exécution des agents",
+                context = json!({
+                    "component": "AGENT_RUNNER",
+                    "action": "execute_agent"
+                })
+            );
+        };
 
         let mut hop_count = 0;
         const MAX_HOPS: i32 = 5;
@@ -256,12 +280,9 @@ impl AiOrchestrator {
         intent: CommandType,
         state_after: &ArcadiaElement,
     ) -> RaiseResult<f64> {
-        let mut trainer = WorldTrainer::new(&self.world_engine, 0.01)
-            .map_err(|e| AppError::Config(format!("Erreur Trainer: {}", e)))?;
+        let mut trainer = WorldTrainer::new(&self.world_engine, 0.01)?;
 
-        let loss = trainer
-            .train_step(state_before, WorldAction { intent }, state_after)
-            .map_err(|e| AppError::Validation(format!("Erreur TrainStep: {}", e)))?;
+        let loss = trainer.train_step(state_before, WorldAction { intent }, state_after)?;
 
         let _ = self
             .world_engine
@@ -272,10 +293,7 @@ impl AiOrchestrator {
     }
 
     pub async fn learn_document(&mut self, content: &str, source: &str) -> RaiseResult<usize> {
-        self.rag
-            .index_document(content, source)
-            .await
-            .map_err(|e| AppError::Validation(format!("Erreur d'indexation RAG : {}", e)))
+        self.rag.index_document(content, source).await
     }
 
     pub async fn clear_history(&mut self) -> RaiseResult<()> {
