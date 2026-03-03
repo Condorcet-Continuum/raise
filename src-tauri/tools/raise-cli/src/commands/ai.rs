@@ -285,9 +285,9 @@ mod tests {
         args: AiArgs,
     }
 
-    #[test]
-    fn test_ai_parsing_robustness() {
-        test_mocks::inject_mock_config();
+    #[tokio::test]
+    async fn test_ai_parsing_robustness() {
+        test_mocks::inject_mock_config().await;
 
         let cli = TestCli::parse_from(vec!["test"]);
         assert!(cli.args.command.is_none());
@@ -306,9 +306,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_intent_dispatch_layers() {
-        test_mocks::inject_mock_config();
+    #[tokio::test]
+    async fn test_intent_dispatch_layers() {
+        test_mocks::inject_mock_config().await;
 
         let test_cases = vec![
             ("SA", "System Agent"),
@@ -348,9 +348,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_intent_dispatch_software_logic() {
-        test_mocks::inject_mock_config();
+    #[tokio::test]
+    async fn test_intent_dispatch_software_logic() {
+        test_mocks::inject_mock_config().await;
 
         let intent_la = EngineeringIntent::CreateElement {
             layer: "LA".into(),
@@ -366,9 +366,9 @@ mod tests {
         assert!(is_software);
     }
 
-    #[test]
-    fn test_business_dispatch() {
-        test_mocks::inject_mock_config();
+    #[tokio::test]
+    async fn test_business_dispatch() {
+        test_mocks::inject_mock_config().await;
 
         let intent = EngineeringIntent::DefineBusinessUseCase {
             domain: "Aéronautique".into(),
@@ -384,9 +384,9 @@ mod tests {
         assert!(is_business);
     }
 
-    #[test]
-    fn test_ai_train_parsing() {
-        test_mocks::inject_mock_config();
+    #[tokio::test]
+    async fn test_ai_train_parsing() {
+        test_mocks::inject_mock_config().await;
 
         let cli = TestCli::parse_from(vec![
             "test", "train", "--domain", "safety", "--epochs", "10",

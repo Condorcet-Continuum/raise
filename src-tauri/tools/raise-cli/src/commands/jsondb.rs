@@ -2,10 +2,10 @@ use clap::{Args, Subcommand};
 
 // --- IMPORTS RAISE ---
 use raise::json_db::{
-    collections::manager::CollectionsManager,
+    collections::manager::{CollectionsManager, EntityIdentity},
     indexes::manager::IndexManager,
     jsonld::VocabularyRegistry,
-    query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter},
+    query::{Condition, FilterOperator, Projection, Query, QueryEngine, QueryFilter},
     storage::{JsonDbConfig, StorageEngine},
     transactions::{manager::TransactionManager, TransactionRequest},
 };
@@ -41,6 +41,41 @@ pub enum JsondbCommands {
     /// Affiche le guide de survie avec exemples
     Usage,
 
+    // --- GESTION DES SCHÉMAS (DDL) ---
+    ListSchemas,
+    CreateSchema {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        schema: String,
+    },
+    DropSchema {
+        #[arg(long)]
+        name: String,
+    },
+    AddSchemaProperty {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        property: String,
+        #[arg(long)]
+        definition: String,
+    },
+    AlterSchemaProperty {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        property: String,
+        #[arg(long)]
+        definition: String,
+    },
+    DropSchemaProperty {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        property: String,
+    },
+
     // --- DB & COLLECTIONS ---
     CreateDb,
     DropDb {
@@ -74,15 +109,24 @@ pub enum JsondbCommands {
         #[arg(long)]
         field: String,
     },
-
+    ListIndexes {
+        #[arg(long)]
+        collection: String,
+        #[arg(long)]
+        field: Option<String>,
+    },
     // --- DATA READ ---
     List {
         #[arg(long)]
         collection: String,
+        #[arg(long, short = 'f', value_delimiter = ' ', num_args = 1..)]
+        fields: Option<Vec<String>>,
     },
     ListAll {
         #[arg(long)]
         collection: String,
+        #[arg(long, short = 'f', value_delimiter = ' ', num_args = 1..)]
+        fields: Option<Vec<String>>,
     },
 
     // --- DATA WRITE (CRUD COMPLET) ---
@@ -108,12 +152,14 @@ pub enum JsondbCommands {
         #[arg(long)]
         data: String,
     },
-    /// Suppression par ID
+    /// Suppression par ID ou Name
     Delete {
         #[arg(long)]
         collection: String,
         #[arg(long)]
-        id: String,
+        id: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
     },
 
     // --- QUERIES & TOOLS ---
@@ -122,6 +168,8 @@ pub enum JsondbCommands {
         collection: String,
         #[arg(long)]
         filter: Option<String>,
+        #[arg(long, short = 'f', value_delimiter = ' ', num_args = 1..)]
+        fields: Option<Vec<String>>,
         #[arg(long)]
         limit: Option<usize>,
         #[arg(long)]
@@ -169,7 +217,7 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
     let storage = StorageEngine::new((*config).clone());
     let col_mgr = CollectionsManager::new(&storage, &args.space, &args.db);
     let mut idx_mgr = IndexManager::new(&storage, &args.space, &args.db);
-    let tx_mgr = TransactionManager::new(&config, &args.space, &args.db);
+    let tx_mgr = TransactionManager::new(&storage, &args.space, &args.db);
 
     // Feedback contextuel
     if app_config.core.log_level == "debug" || app_config.core.log_level == "trace" {
@@ -195,6 +243,68 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
 
     match args.command {
         JsondbCommands::Usage => { /* Géré plus haut */ }
+
+        // --- GESTION DES SCHÉMAS (DDL) ---
+        JsondbCommands::ListSchemas => {
+            let schemas = col_mgr.list_schemas().await?;
+            user_success!(
+                "JSONDB_SCHEMAS_LISTED",
+                json!({ "space": args.space, "db": args.db, "count": schemas.len() })
+            );
+            // On affiche le joli tableau JSON
+            println!("{}", data::stringify_pretty(&schemas)?);
+        }
+        JsondbCommands::CreateSchema { name, schema } => {
+            let schema_val = parse_data(&schema).await?;
+            col_mgr.create_schema_def(&name, schema_val).await?;
+            user_success!(
+                "JSONDB_SCHEMA_CREATED",
+                json!({ "schema": name, "status": "created" })
+            );
+        }
+        JsondbCommands::DropSchema { name } => {
+            col_mgr.drop_schema_def(&name).await?;
+            user_success!(
+                "JSONDB_SCHEMA_DROPPED",
+                json!({ "schema": name, "status": "dropped" })
+            );
+        }
+        JsondbCommands::AddSchemaProperty {
+            name,
+            property,
+            definition,
+        } => {
+            let def_val = parse_data(&definition).await?;
+            col_mgr
+                .add_schema_property(&name, &property, def_val)
+                .await?;
+            user_success!(
+                "JSONDB_SCHEMA_PROP_ADDED",
+                json!({ "schema": name, "property": property, "status": "added" })
+            );
+        }
+        JsondbCommands::AlterSchemaProperty {
+            name,
+            property,
+            definition,
+        } => {
+            let def_val = parse_data(&definition).await?;
+            col_mgr
+                .alter_schema_property(&name, &property, def_val)
+                .await?;
+            user_success!(
+                "JSONDB_SCHEMA_PROP_ALTERED",
+                json!({ "schema": name, "property": property, "status": "altered" })
+            );
+        }
+        JsondbCommands::DropSchemaProperty { name, property } => {
+            col_mgr.drop_schema_property(&name, &property).await?;
+            user_success!(
+                "JSONDB_SCHEMA_PROP_DROPPED",
+                json!({ "schema": name, "property": property, "status": "dropped" })
+            );
+        }
+
         JsondbCommands::CreateDb => {
             if col_mgr.init_db().await? {
                 // Succès de l'initialisation : on sépare l'espace de la DB
@@ -271,16 +381,35 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
             kind,
         } => {
             idx_mgr.create_index(&collection, &field, &kind).await?;
-            user_success!("JSONDB_INDEX_CREATED");
+            user_success!(
+                "JSONDB_INDEX_CREATED",
+                json!({ "collection": collection, "field": field, "type": kind })
+            );
         }
         JsondbCommands::DropIndex { collection, field } => {
             idx_mgr.drop_index(&collection, &field).await?;
             user_success!("JSONDB_INDEX_DROPPED");
         }
-        JsondbCommands::List { collection } | JsondbCommands::ListAll { collection } => {
-            let docs = col_mgr.list_all(&collection).await?;
-            // REFAC: Utilisation de data::stringify_pretty
-            println!("{}", data::stringify_pretty(&docs)?);
+        JsondbCommands::ListIndexes { collection, field } => {
+            let indexes = idx_mgr.list_indexes(&collection, field.as_deref()).await?;
+            println!("{}", data::stringify_pretty(&indexes)?);
+        }
+        JsondbCommands::List { collection, fields }
+        | JsondbCommands::ListAll { collection, fields } => {
+            let mut query = Query::new(&collection);
+            if let Some(f) = fields {
+                query.projection = Some(Projection::Include(f));
+            }
+            let result = QueryEngine::new(&col_mgr).execute_query(query).await?;
+            user_success!(
+                "JSONDB_LIST_SUCCESS",
+                json!({
+                    "collection": collection,
+                    "count": result.total_count,
+                    "data": result.documents
+                })
+            );
+            println!("{}", data::stringify_pretty(&result)?);
         }
         JsondbCommands::Insert { collection, data } => {
             let json_val = parse_data(&data).await?;
@@ -312,22 +441,31 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
                 json!({ "status": format!("{:?}", status) })
             );
         }
-        JsondbCommands::Delete { collection, id } => {
-            if col_mgr.delete_document(&collection, &id).await? {
-                user_success!(
-                    "JSONDB_DELETE_SUCCESS",
-                    json!({ "id": id, "action": "document_removed" })
-                );
+        JsondbCommands::Delete {
+            collection,
+            id,
+            name,
+        } => {
+            let identity = if let Some(id_val) = id {
+                EntityIdentity::Id(id_val.clone())
+            } else if let Some(name_val) = name {
+                EntityIdentity::Name(name_val.clone())
             } else {
-                user_error!(
-                    "JSONDB_DELETE_NOT_FOUND",
-                    json!({ "id": id, "reason": "missing_resource" })
-                );
-            }
+                raise_error!("ERR_CLI_MISSING_ARG", error = "Fournir --id ou --name");
+            };
+
+            // On passe la patate chaude au manager
+            col_mgr.delete_identity(&collection, identity).await?;
+
+            user_success!(
+                "JSONDB_DELETE_SUCCESS",
+                json!({ "collection": collection, "status": "deleted" })
+            );
         }
         JsondbCommands::Query {
             collection,
             filter,
+            fields,
             limit,
             offset,
         } => {
@@ -347,6 +485,9 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
             }
             query.limit = limit;
             query.offset = offset;
+            if let Some(f) = fields {
+                query.projection = Some(Projection::Include(f));
+            }
             let result = QueryEngine::new(&col_mgr).execute_query(query).await?;
             // REFAC: Utilisation de data::stringify_pretty
             println!("{}", data::stringify_pretty(&result.documents)?);
@@ -509,6 +650,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_list_indexes_command() {
+        let args = vec![
+            "test",
+            "list-indexes",
+            "--collection",
+            "users",
+            "--field",
+            "email",
+        ];
+        let cli = TestCli::parse_from(args);
+        match cli.args.command {
+            JsondbCommands::ListIndexes { collection, field } => {
+                assert_eq!(collection, "users");
+                assert_eq!(field, Some("email".to_string())); // 👈 On vérifie que le champ est bien parsé
+            }
+            _ => panic!("Parsing list-indexes failed"),
+        }
+    }
+
+    #[test]
     fn test_parse_drop_db_flag() {
         let args = vec!["test", "drop-db", "-f"];
         let cli = TestCli::parse_from(args);
@@ -568,9 +729,13 @@ mod tests {
         let args = vec!["test", "delete", "--collection", "items", "--id", "abc"];
         let cli = TestCli::parse_from(args);
         match cli.args.command {
-            JsondbCommands::Delete { collection, id } => {
+            JsondbCommands::Delete {
+                collection,
+                id,
+                name: _,
+            } => {
                 assert_eq!(collection, "items");
-                assert_eq!(id, "abc");
+                assert_eq!(id, Some("abc".to_string()));
             }
             _ => panic!("Parsing delete failed"),
         }
@@ -588,5 +753,25 @@ mod tests {
     async fn test_parse_data_helper_robustness() {
         assert!(parse_data(r#"{"test":true}"#).await.is_ok());
         assert!(parse_data("invalid").await.is_err());
+    }
+
+    #[test]
+    fn test_parse_create_schema_command() {
+        let args = vec![
+            "test",
+            "create-schema",
+            "--name", // 🎯 FIX: Changement de --uri à --name
+            "db://test/schema",
+            "--schema",
+            "{}",
+        ];
+        let cli = TestCli::parse_from(args);
+        match cli.args.command {
+            JsondbCommands::CreateSchema { name, .. } => {
+                // 🎯 FIX: Changement de uri à name
+                assert_eq!(name, "db://test/schema");
+            }
+            _ => panic!("Parsing create-schema failed"),
+        }
     }
 }

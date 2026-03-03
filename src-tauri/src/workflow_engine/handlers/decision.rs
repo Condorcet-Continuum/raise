@@ -89,24 +89,42 @@ impl NodeHandler for DecisionHandler {
 mod tests {
     use super::*;
     use crate::ai::orchestrator::AiOrchestrator;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::{config::test_mocks, io::tempdir, Arc, AsyncMutex};
+    use crate::utils::{Arc, AsyncMutex};
     use crate::workflow_engine::critic::WorkflowCritic;
 
-    async fn setup_dummy_context() -> (
+    // 🎯 IMPORTS AJOUTÉS : On récupère l'injecteur de mocks et le manager
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::data::json;
+
+    // 🎯 FIX : On passe la config en plus pour utiliser le CollectionsManager
+    async fn setup_dummy_context(
+        storage: Arc<crate::json_db::storage::StorageEngine>,
+        config: &crate::utils::config::AppConfig,
+    ) -> (
         Arc<AsyncMutex<AiOrchestrator>>,
         Arc<PluginManager>,
         WorkflowCritic,
         HashMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
     ) {
-        test_mocks::inject_mock_config();
-        let orch = AiOrchestrator::new(ProjectModel::default(), None)
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+
+        // 1. 🎯 INJECTION DES MOCKS : L'orchestrateur ne paniquera plus !
+        inject_mock_component(
+            &manager,
+            "llm",
+            json!({ "provider": "mock", "model": "test" }),
+        )
+        .await;
+        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
+
+        // 2. 🎯 ATTENTION : On passe Some(storage.clone()) au lieu de None
+        let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage.clone()))
             .await
             .unwrap();
-        let dir = tempdir().unwrap();
-        let storage = StorageEngine::new(JsonDbConfig::new(dir.path().to_path_buf()));
+
         let plugin_manager = Arc::new(PluginManager::new(&storage, None));
         let critic = WorkflowCritic::default();
         let tools = HashMap::new();
@@ -123,7 +141,13 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_decision_handler_condorcet_evaluation() {
-        let (orch, pm, critic, tools) = setup_dummy_context().await;
+        // 1. Initialisation de la sandbox
+        let sandbox = AgentDbSandbox::new().await;
+
+        // 2. On passe la base et la config à notre setup
+        let (orch, pm, critic, tools) =
+            setup_dummy_context(sandbox.db.clone(), &sandbox.config).await;
+
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
@@ -144,6 +168,7 @@ mod tests {
             json!(["Option A (Courte)", "Option B (Très très longue)"]),
         )]);
 
+        // 3. Exécution du Handler
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
         assert_eq!(result, ExecutionStatus::Completed);

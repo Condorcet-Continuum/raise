@@ -115,23 +115,19 @@ pub async fn generate_source_code(
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::storage::JsonDbConfig;
     use crate::model_engine::arcadia;
-    use crate::utils::io::tempdir;
+    use crate::utils::config::test_mocks::AgentDbSandbox;
 
     /// Test d'intégration complet : DB -> Loader -> Transformer -> Sortie
     /// Vérifie que la logique interne de la commande fonctionne correctement.
     #[tokio::test]
     async fn test_generate_code_logic() {
-        // 1. Setup de l'environnement (Stockage temporaire)
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-
-        // On crée un projet fictif "MySpace/MyDB"
-        let manager = CollectionsManager::new(&storage, "MySpace", "MyDB");
-        manager.init_db().await.unwrap();
-
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         // 2. Injection de données (Un composant logiciel avec une fonction)
         let component_id = "UUID-COMP-1";
         let component = json!({
@@ -149,7 +145,13 @@ mod tests {
 
         // 3. Simulation de la logique de la commande
         // CORRECTION : Utilisation de from_engine pour passer un StorageEngine brut (pas State<...>)
-        let loader = ModelLoader::from_engine(&storage, "MySpace", "MyDB");
+
+        let loader = ModelLoader::from_engine(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
         loader.index_project().await.unwrap(); // Indexation obligatoire
 
         // 4. Test cas nominal : Génération Software
@@ -169,13 +171,12 @@ mod tests {
     /// Test de gestion d'erreur : Élément inexistant
     #[tokio::test]
     async fn test_generate_code_not_found() {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-
-        // CORRECTION : Utilisation de from_engine
-        let loader = ModelLoader::from_engine(&storage, "EmptySpace", "EmptyDB");
-        // Pas d'insert -> Index vide
+        let sandbox = AgentDbSandbox::new().await;
+        let loader = ModelLoader::from_engine(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let result = loader.fetch_hydrated_element("UNKNOWN-ID").await;
         assert!(result.is_err(), "Devrait échouer pour un ID inconnu");

@@ -16,14 +16,7 @@ pub use self::context::AgentContext;
 use self::intent_classifier::EngineeringIntent;
 use crate::ai::protocols::acl::AclMessage;
 
-// ✅ Imports standardisés via prelude ou crates explicites
-use crate::utils::{
-    data,       // Pour la sérialisation JSON
-    io,         // Pour les opérations fichiers
-    prelude::*, // Contient Result, AppError, serde::*, etc.
-    DateTime,
-    Utc, // Pour les timestamps
-};
+use crate::utils::{data, io, prelude::*, DateTime, Utc};
 use async_trait::async_trait;
 use std::fmt;
 

@@ -238,13 +238,8 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::config::AppConfig;
-    use crate::utils::{
-        io::{self, tempdir},
-        Arc,
-    };
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::io::{self};
 
     #[test]
     fn test_transverse_id() {
@@ -255,21 +250,14 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_verify_quality_logic() {
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let domain_root = dir.path().to_path_buf();
-        let dataset_root = dir.path().join("dataset");
-
-        let config = JsonDbConfig::new(domain_root.clone());
-        let db = Arc::new(StorageEngine::new(config));
-
-        let app_cfg = AppConfig::get();
-        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
-        let _ = manager.init_db().await;
-
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         // 🎯 Injection du LLM Mocké
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm", 
             crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
@@ -291,16 +279,16 @@ mod tests {
         let ctx = AgentContext::new(
             "tester",
             "sess_qual_01",
-            db,
+            sandbox.db,
             llm,
-            domain_root.clone(),
-            dataset_root,
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
         )
         .await;
 
         let agent = TransverseAgent::new();
 
-        let src_gen = domain_root.join("src-gen").join("mon_composant");
+        let src_gen = sandbox.domain_root.join("src-gen").join("mon_composant");
         let full_path = src_gen.join("Cargo.toml");
         io::create_dir_all(&src_gen).await.unwrap();
         io::write(&full_path, "[package]\nname = \"mon_composant\"")
@@ -329,24 +317,28 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_verify_quality_missing_in_db() {
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().into());
-        let db = Arc::new(StorageEngine::new(config));
-
-        let app_cfg = AppConfig::get();
-        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
-        let _ = manager.init_db().await;
-
-        crate::utils::config::test_mocks::inject_mock_component(
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        inject_mock_component(
             &manager,
             "llm", 
             crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();
-        let ctx = AgentContext::new("t", "s", db, llm, dir.path().into(), dir.path().into()).await;
+        let ctx = AgentContext::new(
+            "t",
+            "s",
+            sandbox.db,
+            llm,
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
+        )
+        .await;
         let agent = TransverseAgent::new();
 
         let intent = EngineeringIntent::VerifyQuality {

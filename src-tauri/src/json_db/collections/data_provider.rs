@@ -1,38 +1,40 @@
 // FICHIER : src-tauri/src/json_db/collections/data_provider.rs
 
 use crate::json_db::collections::collection;
-use crate::json_db::storage::JsonDbConfig;
+use crate::json_db::storage::StorageEngine;
 use crate::rules_engine::DataProvider;
 
 // FAÇADE UNIQUE
 use crate::utils::{async_trait, json::Value, AsyncRwLock, HashMap};
 
 /// Un DataProvider qui met en cache les documents lus pour la durée de son existence.
-/// Indispensable pour garantir la cohérence des lookups lors de l'exécution des règles métier.
+/// Agit comme un "Cache de Niveau 1" (L1) isolé par requête pour garantir la cohérence
+/// des lookups lors de l'exécution des règles métier, tout en s'appuyant sur le
+/// StorageEngine (Cache L2 Global) pour les accès disques.
 pub struct CachedDataProvider<'a> {
-    config: &'a JsonDbConfig,
+    storage: &'a StorageEngine,
     space: &'a str,
     db: &'a str,
-    /// Cache interne : (Collection, ID) -> Document.
-    /// RwLock permet des lectures asynchrones concurrentes.
+    /// Cache interne L1 : (Collection, ID) -> Document.
+    /// RwLock permet des lectures asynchrones concurrentes au sein d'une même évaluation.
     doc_cache: AsyncRwLock<HashMap<(String, String), Option<Value>>>,
 }
 
 impl<'a> CachedDataProvider<'a> {
-    pub fn new(config: &'a JsonDbConfig, space: &'a str, db: &'a str) -> Self {
+    pub fn new(storage: &'a StorageEngine, space: &'a str, db: &'a str) -> Self {
         Self {
-            config,
+            storage,
             space,
             db,
             doc_cache: AsyncRwLock::new(HashMap::new()),
         }
     }
 
-    /// Charge un document depuis le cache ou effectue une lecture disque asynchrone.
+    /// Charge un document depuis le cache L1, ou délègue au StorageEngine (Cache L2 / Disque).
     async fn get_document(&self, collection: &str, id: &str) -> Option<Value> {
         let key = (collection.to_string(), id.to_string());
 
-        // 1. Tentative de lecture rapide depuis le cache
+        // 1. Tentative de lecture ultra-rapide et isolée depuis le cache L1
         {
             let cache = self.doc_cache.read().await;
             if let Some(cached_doc) = cache.get(&key) {
@@ -40,12 +42,12 @@ impl<'a> CachedDataProvider<'a> {
             }
         }
 
-        // 2. Lecture I/O asynchrone (point d'arrêt .await)
-        let doc = collection::read_document(self.config, self.space, self.db, collection, id)
+        // 2. Cache Miss L1 -> On interroge le StorageEngine (qui a son propre Cache LRU)
+        let doc = collection::read_document(self.storage, self.space, self.db, collection, id)
             .await
             .ok();
 
-        // 3. Mise à jour du cache pour les prochains accès
+        // 3. Mise à jour du cache L1 pour garantir la cohérence des prochains accès
         let mut cache = self.doc_cache.write().await;
         cache.insert(key, doc.clone());
         doc
@@ -72,46 +74,47 @@ impl<'a> DataProvider for CachedDataProvider<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{
-        io::{self, tempdir},
-        json::{self, json},
-    };
+    use crate::json_db::storage::JsonDbConfig;
+    use crate::utils::{io::tempdir, json::json};
 
     #[tokio::test]
     async fn test_cached_provider_memoization() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
+
+        // Initialisation du StorageEngine pour le test
+        let storage = StorageEngine::new(config);
         let space = "test_space";
         let db = "test_db";
 
-        let col_path = config.db_collection_path(space, db, "users");
-        io::create_dir_all(&col_path).await.unwrap();
+        // Création de la collection via l'API pour être propre
+        collection::create_collection_if_missing(&storage.config, space, db, "users")
+            .await
+            .unwrap();
 
-        // Préparation du document disque
+        // Préparation du document initial via le StorageEngine
         let id = "u1";
         let initial_json = json!({ "id": id, "score": 100 });
-        io::write(
-            col_path.join(format!("{}.json", id)),
-            json::stringify(&initial_json).expect("Erreur de sérialisation"),
-        )
-        .await
-        .expect("Erreur d'écriture");
+        storage
+            .write_document(space, db, "users", id, &initial_json)
+            .await
+            .unwrap();
 
-        let provider = CachedDataProvider::new(&config, space, db);
+        let provider = CachedDataProvider::new(&storage, space, db);
 
-        // Première lecture : doit charger depuis le disque
+        // Première lecture : doit charger depuis le StorageEngine (et peupler le L1)
         let val = provider.get_value("users", id, "score").await;
         assert_eq!(val, Some(json!(100)));
 
-        // Altération physique du fichier
-        io::write(
-            col_path.join(format!("{}.json", id)),
-            json::stringify(&json!({ "id": id, "score": 999 })).expect("Erreur de sérialisation"),
-        )
-        .await
-        .expect("Erreur d'écriture");
+        // Altération du document via le StorageEngine (met à jour le L2 et le disque)
+        let altered_json = json!({ "id": id, "score": 999 });
+        storage
+            .write_document(space, db, "users", id, &altered_json)
+            .await
+            .unwrap();
 
-        // Deuxième lecture : doit renvoyer la valeur du cache (100) et non 999
+        // Deuxième lecture via le Provider : doit renvoyer la valeur du cache L1 (100)
+        // et NON 999, prouvant ainsi la "snapshot isolation" durant la vie du Provider !
         let cached_val = provider.get_value("users", id, "score").await;
         assert_eq!(cached_val, Some(json!(100)));
     }
@@ -120,7 +123,9 @@ mod tests {
     async fn test_cached_provider_missing_doc() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let provider = CachedDataProvider::new(&config, "s", "d");
+        let storage = StorageEngine::new(config);
+
+        let provider = CachedDataProvider::new(&storage, "s", "d");
 
         // Test d'un document inexistant
         let val = provider.get_value("ghost", "none", "any").await;

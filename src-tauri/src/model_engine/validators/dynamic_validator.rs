@@ -189,25 +189,20 @@ impl ModelValidator for DynamicValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::NameType;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::{data::HashMap, io::tempdir};
-
-    fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        (dir, config)
-    }
+    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::data::HashMap;
 
     #[tokio::test]
     async fn test_dynamic_rule_application() {
-        let (_dir, config) = setup_env();
-        let storage = StorageEngine::new(config);
-        let loader = ModelLoader::new_with_manager(
-            crate::json_db::collections::manager::CollectionsManager::new(&storage, "t", "d"),
-        );
+        let sandbox = AgentDbSandbox::new().await;
+        let loader = ModelLoader::new_with_manager(CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        ));
 
         // Règle : name == "ValidElement"
         let rule_expr = Expr::Eq(vec![
@@ -253,16 +248,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_dynamic_rule_on_transverse_requirement() {
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage, "tr_space", "tr_db",
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
 
         // Règle dynamique : properties/priority == "High"
         let rule_expr = Expr::Eq(vec![

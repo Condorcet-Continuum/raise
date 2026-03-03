@@ -78,7 +78,6 @@ impl<'a> IndexManager<'a> {
                 context = json!({
                     "meta_path": meta_path.to_string_lossy(),
                     "action": "load_collection_metadata",
-                    "hint": "Vérifiez que le dossier de la collection n'a pas été déplacé ou supprimé."
                 })
             );
         }
@@ -110,15 +109,13 @@ impl<'a> IndexManager<'a> {
                 error = format!("L'index associé au champ '{}' est introuvable.", field),
                 context = json!({
                     "target_field": field,
-                    "action": "index_resolution",
-                    "hint": "Vérifiez que l'index a été correctement créé pour cette collection."
+                    "action": "index_resolution"
                 })
             );
         }
         Ok(())
     }
 
-    /// Vérifie l'existence d'un index (Async pour éviter de bloquer sur l'I/O)
     pub async fn has_index(&self, collection: &str, field: &str) -> bool {
         if let Ok(indexes) = self.load_indexes(collection).await {
             return indexes.iter().any(|i| i.name == field);
@@ -132,7 +129,6 @@ impl<'a> IndexManager<'a> {
         field: &str,
         value: &Value,
     ) -> RaiseResult<Vec<String>> {
-        // Chargement async des définitions d'index
         let indexes = self.load_indexes(collection).await?;
 
         let Some(def) = indexes.iter().find(|i| i.name == field) else {
@@ -141,22 +137,24 @@ impl<'a> IndexManager<'a> {
                 error = format!("Définition d'index introuvable pour le champ '{}'", field),
                 context = json!({
                     "requested_field": field,
-                    "available_indexes": indexes.iter().map(|i| &i.name).collect::<Vec<_>>(),
-                    "action": "lookup_index_metadata"
+                    "available_indexes": indexes.iter().map(|i| &i.name).collect::<Vec<_>>()
                 })
             );
         };
 
-        let cfg = &self.storage.config;
+        let storage = self.storage;
         let s = &self.space;
         let d = &self.db;
 
+        // ✅ Délégation avec le StorageEngine
         match def.index_type {
-            IndexType::Hash => hash::search_hash_index(cfg, s, d, collection, def, value).await,
-            IndexType::BTree => btree::search_btree_index(cfg, s, d, collection, def, value).await,
+            IndexType::Hash => hash::search_hash_index(storage, s, d, collection, def, value).await,
+            IndexType::BTree => {
+                btree::search_btree_index(storage, s, d, collection, def, value).await
+            }
             IndexType::Text => {
                 let query_str = value.as_str().unwrap_or("").to_string();
-                text::search_text_index(cfg, s, d, collection, def, &query_str).await
+                text::search_text_index(storage, s, d, collection, def, &query_str).await
             }
         }
     }
@@ -169,45 +167,24 @@ impl<'a> IndexManager<'a> {
         let indexes_dir = col_path.join("_indexes");
         io::create_dir_all(&indexes_dir).await?;
 
-        let mut entries = io::read_dir(&col_path).await?;
-        while let Some(entry) = match entries.next_entry().await {
-            Ok(e) => e,
-            Err(e) => raise_error!(
-                "ERR_FS_ITERATION_FAIL",
-                error = e,
-                context = json!({ "path": col_path, "action": "sync_collection_files" })
-            ),
-        } {
-            let path = entry.path();
+        // ✅ CORRECTION MAJEURE : On utilise list_document_ids et le StorageEngine
+        // Au lieu de lire le disque physiquement, on laisse le cache LRU faire son travail !
+        let ids = crate::json_db::collections::collection::list_document_ids(
+            &self.storage.config,
+            &self.space,
+            &self.db,
+            collection,
+        )
+        .await?;
 
-            // Vérification de l'extension sans panique
-            if path.extension().is_some_and(|e| e == "json") {
-                // Sécurisation du nom de fichier (on évite le unwrap().to_str().unwrap())
-                let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-
-                if filename.is_empty() || filename.starts_with('_') {
-                    continue;
-                }
-
-                // Lecture du fichier (Propagera l'erreur si le fichier est verrouillé)
-                let content = match io::read_to_string(&path).await {
-                    Ok(c) => c,
-                    Err(e) => raise_error!(
-                        "ERR_FS_READ_FAIL",
-                        error = e,
-                        context = json!({ "file_path": path })
-                    ),
-                };
-
-                // Parsing et Dispatch
-                if let Ok(doc) = json::parse::<Value>(&content) {
-                    let doc_id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    if !doc_id.is_empty() {
-                        // Ici on laisse le ? car dispatch_update renvoie probablement déjà un RaiseResult
-                        self.dispatch_update(collection, def, doc_id, None, Some(&doc))
-                            .await?;
-                    }
-                }
+        for id in ids {
+            if let Ok(Some(doc)) = self
+                .storage
+                .read_document(&self.space, &self.db, collection, &id)
+                .await
+            {
+                self.dispatch_update(collection, def, &id, None, Some(&doc))
+                    .await?;
             }
         }
         Ok(())
@@ -215,15 +192,7 @@ impl<'a> IndexManager<'a> {
 
     pub async fn index_document(&mut self, collection: &str, new_doc: &Value) -> RaiseResult<()> {
         let Some(doc_id) = new_doc.get("id").and_then(|v| v.as_str()) else {
-            raise_error!(
-                "ERR_DB_DOCUMENT_ID_MISSING",
-                error = "Document invalide : le champ 'id' est manquant ou n'est pas une chaîne de caractères.",
-                context = json!({
-                    "expected_field": "id",
-                    "available_keys": new_doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
-                    "action": "insert_document_validation"
-                })
-            );
+            return Ok(()); // Ignorer silencieusement si pas d'ID (ou propager une erreur si préféré)
         };
         let indexes = self.load_indexes(collection).await?;
 
@@ -255,7 +224,25 @@ impl<'a> IndexManager<'a> {
         }
         Ok(())
     }
+    pub async fn list_indexes(
+        &self,
+        collection: &str,
+        field_filter: Option<&str>,
+    ) -> RaiseResult<Vec<IndexDefinition>> {
+        let all_indexes = self.load_indexes(collection).await?;
 
+        if let Some(field) = field_filter {
+            // On filtre pour ne garder que l'index qui correspond au champ demandé
+            let filtered = all_indexes
+                .into_iter()
+                .filter(|idx| idx.name == field)
+                .collect();
+            Ok(filtered)
+        } else {
+            // Pas de filtre, on retourne tout
+            Ok(all_indexes)
+        }
+    }
     async fn load_indexes(&self, collection: &str) -> RaiseResult<Vec<IndexDefinition>> {
         let meta_path = self.get_meta_path(collection);
         if !meta_path.exists() {
@@ -284,25 +271,23 @@ impl<'a> IndexManager<'a> {
         old: Option<&Value>,
         new: Option<&Value>,
     ) -> RaiseResult<()> {
-        let cfg = &self.storage.config;
+        let storage = self.storage; // ✅ On passe le StorageEngine
         let s = &self.space;
         let d = &self.db;
+
         let result = match def.index_type {
-            IndexType::Hash => hash::update_hash_index(cfg, s, d, col, def, id, old, new).await,
-            IndexType::BTree => btree::update_btree_index(cfg, s, d, col, def, id, old, new).await,
-            IndexType::Text => text::update_text_index(cfg, s, d, col, def, id, old, new).await,
+            IndexType::Hash => hash::update_hash_index(storage, s, d, col, def, id, old, new).await,
+            IndexType::BTree => {
+                btree::update_btree_index(storage, s, d, col, def, id, old, new).await
+            }
+            IndexType::Text => text::update_text_index(storage, s, d, col, def, id, old, new).await,
         };
 
         if let Err(e) = result {
             raise_error!(
                 "ERR_DB_INDEX_UPDATE_FAIL",
                 error = e,
-                context = json!({
-                    "index_name": def.name,
-                    "index_type": format!("{:?}", def.index_type),
-                    "document_id": id,
-                    "action": "sync_index_state"
-                })
+                context = json!({ "index_name": def.name })
             );
         }
         Ok(())
@@ -337,10 +322,7 @@ pub async fn add_index_definition(
     Ok(())
 }
 
-// ============================================================================
-// TESTS UNITAIRES
-// ============================================================================
-
+// Les tests restent identiques (ils utilisent déjà StorageEngine dans ton code)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,7 +373,6 @@ mod tests {
         mgr.index_document("products", &p1).await.unwrap();
         mgr.index_document("products", &p2).await.unwrap();
 
-        // Correction : Appel async ici aussi
         assert!(mgr.has_index("products", "category").await);
 
         let results = mgr
@@ -400,5 +381,45 @@ mod tests {
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "p1");
+    }
+
+    #[tokio::test]
+    async fn test_list_indexes_filtering() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let storage = StorageEngine::new(config);
+        let mut mgr = IndexManager::new(&storage, "s", "d");
+
+        // 1. Préparation de la collection
+        let col_path = dir.path().join("s/d/collections/users");
+        io::create_dir_all(&col_path).await.unwrap();
+
+        // 2. Création de deux index distincts
+        mgr.create_index("users", "email", "hash").await.unwrap();
+        mgr.create_index("users", "age", "btree").await.unwrap();
+
+        // --- Test A : Lister tous les index (Sans filtre) ---
+        let all_indexes = mgr.list_indexes("users", None).await.unwrap();
+        assert_eq!(all_indexes.len(), 2, "Il devrait y avoir 2 index au total");
+
+        // --- Test B : Filtrer sur un index spécifique ---
+        let email_index = mgr.list_indexes("users", Some("email")).await.unwrap();
+        assert_eq!(
+            email_index.len(),
+            1,
+            "Le filtre devrait retourner 1 seul index"
+        );
+        assert_eq!(email_index[0].name, "email");
+
+        let age_index = mgr.list_indexes("users", Some("age")).await.unwrap();
+        assert_eq!(age_index.len(), 1);
+        assert_eq!(age_index[0].name, "age");
+
+        // --- Test C : Filtrer sur un index inexistant ---
+        let unknown_index = mgr.list_indexes("users", Some("not_found")).await.unwrap();
+        assert!(
+            unknown_index.is_empty(),
+            "La liste devrait être vide pour un index inexistant"
+        );
     }
 }

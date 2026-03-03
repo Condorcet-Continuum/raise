@@ -1,21 +1,30 @@
-// FICHIER : src-tauri/tests/ai_suite/hardware_agent_tests.rs
-
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{hardware_agent::HardwareAgent, Agent, AgentContext};
 use raise::utils::Arc;
+// 👇 N'oublie pas l'import du manager
+use raise::json_db::collections::manager::CollectionsManager;
 
 #[tokio::test]
-#[serial_test::serial] // Protection RTX 5060 en local
+#[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_hardware_agent_handles_both_electronics_and_infra() {
-    // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone suite à la migration
-    // vers le moteur de stockage asynchrone. On doit l'attendre pour obtenir l'environnement.
     let env = setup_test_env(LlmMode::Enabled).await;
-
     let test_root = env.storage.config.data_root.clone();
 
-    // CORRECTION E0061 : Injection agent_id + session_id
+    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
+    // On prépare la base métier locale au test pour guider le LLM
+    let pa_mgr = CollectionsManager::new(&env.storage, "un2", "pa");
+    pa_mgr
+        .create_collection(
+            "physical_nodes",
+            // On utilise un schéma mocké existant issu de ton mod.rs
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection métier impossible");
+    // -----------------------------------
+
     let agent_id = "hardware_agent_test";
     let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_pa");
 

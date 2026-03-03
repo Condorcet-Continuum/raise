@@ -159,27 +159,20 @@ impl ModelValidator for ComplianceValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::{data::HashMap, io::tempdir};
-
-    fn setup_loader() -> (tempfile::TempDir, JsonDbConfig) {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        (dir, config)
-    }
+    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::data::HashMap;
 
     #[tokio::test]
     async fn test_naming_validation_unit() {
-        let (_dir, config) = setup_loader();
-        let storage = StorageEngine::new(config);
-        let loader = ModelLoader::new_with_manager(
-            crate::json_db::collections::manager::CollectionsManager::new(&storage, "t", "d"),
-        );
-
+        let sandbox = AgentDbSandbox::new().await;
+        let loader = ModelLoader::new_with_manager(CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        ));
         let validator = ComplianceValidator::new();
-
         let bad_el = ArcadiaElement {
             id: "1".into(),
             name: NameType::String("Unnamed".into()),
@@ -196,14 +189,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_compliance_transverse_naming() {
-        inject_mock_config();
-
-        // Vérifie que les règles s'appliquent aussi aux éléments transverses
-        let (_dir, config) = setup_loader();
-        let storage = StorageEngine::new(config);
-        let manager =
-            crate::json_db::collections::manager::CollectionsManager::new(&storage, "space", "db");
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         // Insertion d'un Requirement mal nommé
         let req = serde_json::json!({

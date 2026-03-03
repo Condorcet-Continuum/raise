@@ -286,33 +286,23 @@ fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    async fn setup_test_db() -> crate::json_db::storage::StorageEngine {
-        crate::utils::config::test_mocks::inject_mock_config();
-        let config = crate::utils::config::AppConfig::get();
-        let storage_cfg = crate::json_db::storage::JsonDbConfig::new(
-            config.get_path("PATH_RAISE_DOMAIN").unwrap(),
-        );
-        crate::json_db::storage::StorageEngine::new(storage_cfg)
-    }
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
 
     #[tokio::test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_mini_lm_loading() {
-        let storage = setup_test_db().await;
-        let config = crate::utils::config::AppConfig::get();
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage,
-            &config.system_domain,
-            &config.system_db,
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
-
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "nlp",
-            crate::utils::json::json!({
+            json!({
                 "model_name": "minilm",
                 "rust_config_file": "config.json",
                 "rust_tokenizer_file": "tokenizer.json",
@@ -332,16 +322,14 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_dimensions() {
-        let storage = setup_test_db().await;
-        let config = crate::utils::config::AppConfig::get();
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage,
-            &config.system_domain,
-            &config.system_db,
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
 
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "nlp",
             crate::utils::json::json!({
@@ -363,16 +351,14 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_normalization() {
-        let storage = setup_test_db().await;
-        let config = crate::utils::config::AppConfig::get();
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage,
-            &config.system_domain,
-            &config.system_db,
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
 
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "nlp",
             crate::utils::json::json!({

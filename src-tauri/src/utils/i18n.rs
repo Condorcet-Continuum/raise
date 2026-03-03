@@ -1,7 +1,8 @@
 // FICHIER : src-tauri/src/utils/i18n.rs
 
 use crate::json_db::collections;
-use crate::json_db::storage::JsonDbConfig;
+// ✅ AJOUT : Import du StorageEngine en plus du JsonDbConfig
+use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 use crate::raise_error; // Fondamental pour l'observabilité
 use crate::utils::config::AppConfig;
 use crate::utils::RaiseResult;
@@ -42,9 +43,10 @@ impl Translator {
     }
 
     /// Charge une langue spécifique depuis la collection 'locales' en base de données.
-    pub async fn load_from_db(&mut self, db_config: &JsonDbConfig, lang: &str) -> RaiseResult<()> {
-        // 1. Récupération de tous les documents de la collection locales
-        let docs = match collections::list_all(db_config, "_system", "_system", "locales").await {
+    // ✅ MODIFICATION : Remplacement de db_config par storage
+    pub async fn load_from_db(&mut self, storage: &StorageEngine, lang: &str) -> RaiseResult<()> {
+        // 1. Récupération de tous les documents de la collection locales via le StorageEngine
+        let docs = match collections::list_all(storage, "_system", "_system", "locales").await {
             Ok(d) => d,
             Err(e) => raise_error!(
                 "ERR_I18N_DB_READ",
@@ -119,10 +121,13 @@ pub async fn init_i18n(lang: &str) -> RaiseResult<()> {
     };
 
     let db_config = JsonDbConfig::new(db_root);
+    // ✅ AJOUT : Instanciation du StorageEngine
+    let storage = StorageEngine::new(db_config);
+
     let mut temp_translator = Translator::new();
 
-    // Chargement effectif
-    temp_translator.load_from_db(&db_config, lang).await?;
+    // ✅ MODIFICATION : Passage du StorageEngine
+    temp_translator.load_from_db(&storage, lang).await?;
 
     // Mise à jour atomique du singleton
     let translator_handle = TRANSLATOR.get_or_init(|| Arc::new(RwLock::new(Translator::new())));
@@ -157,24 +162,23 @@ pub fn t(key: &str) -> String {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::prelude::*; // Utilisation du prélude pour Uuid, AppError, etc.
+    // 🎯 IMPORT UNIQUE : La Sandbox remplace tout le setup manuel !
+    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::prelude::*;
     use serde_json::json;
-
-    fn setup_test_db() -> (tempfile::TempDir, JsonDbConfig) {
-        crate::utils::config::test_mocks::inject_mock_config();
-        let dir = tempfile::tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        (dir, config)
-    }
 
     #[tokio::test]
     async fn test_translator_full_flow() {
-        let (_dir, db_config) = setup_test_db();
-        let storage = StorageEngine::new(db_config.clone());
-        let manager = CollectionsManager::new(&storage, "_system", "_system");
+        // 1. 🎯 MAGIE : La Sandbox crée le dossier, initialise la DB et injecte les schémas
+        let sandbox = AgentDbSandbox::new().await;
 
-        manager.init_db().await.unwrap();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
+        // On a juste besoin de créer la collection "locales" pour ce test
         manager.create_collection("locales", None).await.unwrap();
 
         // Insertion d'un document de langue valide
@@ -189,8 +193,10 @@ mod tests {
         manager.insert_raw("locales", &doc).await.unwrap();
 
         let mut translator = Translator::new();
+
+        // 2. 🎯 Utilisation directe de `&sandbox.db` (qui est un Arc<StorageEngine>)
         translator
-            .load_from_db(&db_config, "fr")
+            .load_from_db(&sandbox.db, "fr")
             .await
             .expect("Echec load FR");
 
@@ -201,15 +207,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_translator_missing_language_error() {
-        let (_dir, db_config) = setup_test_db();
-        let storage = StorageEngine::new(db_config.clone());
-        let manager = CollectionsManager::new(&storage, "_system", "_system");
+        let sandbox = AgentDbSandbox::new().await;
 
-        manager.init_db().await.unwrap();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
         manager.create_collection("locales", None).await.unwrap();
 
         let mut translator = Translator::new();
-        let result = translator.load_from_db(&db_config, "jp").await;
+
+        // On teste le cas d'erreur avec une langue inexistante
+        let result = translator.load_from_db(&sandbox.db, "jp").await;
 
         assert!(result.is_err());
         if let Err(AppError::Structured(data)) = result {

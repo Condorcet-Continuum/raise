@@ -55,27 +55,21 @@ impl AgentContext {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::storage::JsonDbConfig;
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::config::AppConfig;
-
-    async fn setup_test_env() -> (Arc<StorageEngine>, AppConfig) {
-        inject_mock_config();
-        let config = AppConfig::get();
-        let storage_cfg = JsonDbConfig::new(PathBuf::from("/tmp/test_db_agent_v2"));
-        (Arc::new(StorageEngine::new(storage_cfg)), config.clone())
-    }
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
 
     #[tokio::test] // 🎯 Les tests deviennent asynchrones
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_context_initialization_with_session() {
-        let (db, config) = setup_test_env().await;
-        let manager = CollectionsManager::new(&db, &config.system_domain, &config.system_db);
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         // Injection du composant LLM pour le test
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm", 
             crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
@@ -88,12 +82,12 @@ mod tests {
         let ctx = AgentContext::new(
             "agent_001",
             "session_abc",
-            db.clone(),
+            sandbox.db.clone(),
             llm,
             domain_path.clone(),
             dataset_path.clone(),
         )
-        .await; // 🎯 Le fameux .await manquant !
+        .await;
 
         assert_eq!(ctx.agent_id, "agent_001");
         assert_eq!(ctx.session_id, "session_abc");
@@ -103,9 +97,12 @@ mod tests {
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_empty_identifiers_validation() {
-        let (db, config) = setup_test_env().await;
-        let manager = CollectionsManager::new(&db, &config.system_domain, &config.system_db);
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         crate::utils::config::test_mocks::inject_mock_component(
             &manager,
@@ -114,7 +111,15 @@ mod tests {
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();
-        let ctx = AgentContext::new("", "", db.clone(), llm, PathBuf::new(), PathBuf::new()).await;
+        let ctx = AgentContext::new(
+            "",
+            "",
+            sandbox.db.clone(),
+            llm,
+            PathBuf::new(),
+            PathBuf::new(),
+        )
+        .await;
 
         assert!(ctx.agent_id.is_empty());
         assert!(ctx.session_id.is_empty());

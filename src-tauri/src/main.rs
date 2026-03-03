@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use tauri::Manager;
-use tokio::sync::Mutex as AsyncMutex;
 
 use libp2p::gossipsub;
 use libp2p::swarm::SwarmEvent;
@@ -28,6 +27,7 @@ use raise::commands::{
     json_db_commands, model_commands, rules_commands, traceability_commands, training_commands,
     utils_commands, workflow_commands,
 };
+use raise::utils::{prelude::*, AsyncMutex};
 
 // --- BRIDGE, CONSENSUS & P2P ---
 use raise::blockchain::bridge::ArcadiaBridge;
@@ -43,7 +43,7 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::jsonld::VocabularyRegistry;
 use raise::json_db::migrations::migrator::Migrator;
 use raise::json_db::migrations::{Migration, MigrationStep};
-use raise::json_db::storage::{JsonDbConfig, StorageEngine}; // 🎯 IMPORT REQUIS
+use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 
 use raise::plugins::manager::PluginManager;
 
@@ -66,21 +66,21 @@ use raise::spatial_engine;
 
 #[allow(clippy::await_holding_lock)]
 fn main() {
-    if let Err(e) = raise::utils::config::AppConfig::init() {
+    if let Err(e) = AppConfig::init() {
         eprintln!("❌ Erreur fatale de configuration : {}", e);
         std::process::exit(1);
     }
     println!("🚀 Démarrage de RAISE...");
     raise::utils::init_logging();
-    let _config = raise::utils::config::AppConfig::get();
+    let _config = AppConfig::get();
 
     tauri::Builder::default()
-        .manage(NativeLlmState(std::sync::Mutex::new(None)))
+        .manage(NativeLlmState(Mutex::new(None)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             // 2. CONFIG DOMAINE & STOCKAGE
-            let app_config = raise::utils::config::AppConfig::get();
+            let app_config = AppConfig::get();
             let db_root = app_config.get_path("PATH_RAISE_DOMAIN")
                 .expect("❌ ERREUR FATALE: PATH_RAISE_DOMAIN introuvable dans la configuration !");
             if !db_root.exists() {
@@ -138,7 +138,7 @@ fn main() {
             app.manage(plugin_mgr.clone());
 
             let app_state = Arc::new(AppState {
-                model: std::sync::Mutex::new(ProjectModel::default()),
+                model: Mutex::new(ProjectModel::default()),
             });
             app.manage(app_state.clone());
 
@@ -217,7 +217,7 @@ fn main() {
             let plugin_mgr_for_wf = plugin_mgr.clone();
 
             tauri::async_runtime::spawn(async move {
-                let global_cfg = raise::utils::config::AppConfig::get();
+                let global_cfg = AppConfig::get();
                 let storage_state = app_handle_clone.state::<StorageEngine>();
 
                 let _ = ModelLoader::from_engine(
@@ -452,6 +452,7 @@ async fn load_arcadia_ontologies(ontology_root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use raise::utils::config::test_mocks::DbSandbox;
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
@@ -484,13 +485,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_migrations_list_integrity() {
-        raise::utils::config::test_mocks::inject_mock_config();
+        // 1. 🎯 La Sandbox remplace tout le setup manuel en une seule ligne !
+        let sandbox = DbSandbox::new().await;
 
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
+        let space = &sandbox.config.system_domain;
+        let db = &sandbox.config.system_db;
 
-        let res = run_app_migrations(&storage, "test_space", "test_db").await;
+        // 2. 🎯 LE CORRECTIF : On force l'initialisation de l'index système
+        // Le dossier existe (créé par la Sandbox), mais on doit générer _system.json !
+        let manager = CollectionsManager::new(&sandbox.storage, space, db);
+        manager
+            .init_db()
+            .await
+            .expect("L'initialisation de l'index système a échoué");
+
+        // 3. Exécution des migrations sur le moteur encapsulé
+        let res = run_app_migrations(&sandbox.storage, space, db).await;
 
         assert!(
             res.is_ok(),

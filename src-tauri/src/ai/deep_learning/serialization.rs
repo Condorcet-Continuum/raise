@@ -43,15 +43,15 @@ pub fn load_checkpoint(varmap: &mut VarMap, path: impl AsRef<Path>) -> RaiseResu
 mod tests {
     use super::*;
     use crate::ai::deep_learning::trainer::Trainer;
-    use crate::utils::config::{test_mocks, AppConfig}; // 🎯 Import des mocks
+    use crate::utils::config::test_mocks::DbSandbox;
     use crate::utils::io::{self, Path};
     use candle_core::{DType, Tensor};
 
     #[tokio::test]
     async fn test_save_and_load_consistency() -> RaiseResult<()> {
         // 1. Initialisation du Singleton avec le "moule de test" (10, 20, 5, LR=0.1)
-        test_mocks::inject_mock_config();
-        let config = &AppConfig::get().deep_learning;
+        let sandbox = DbSandbox::new().await;
+        let config = &sandbox.config.deep_learning;
         let device = config.to_device();
         let path = "/tmp/test_raise_model.safetensors";
 

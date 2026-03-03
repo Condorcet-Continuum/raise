@@ -4,6 +4,8 @@ use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
 use raise::utils::Arc;
+// 👇 Import du manager
+use raise::json_db::collections::manager::CollectionsManager;
 
 #[tokio::test]
 #[serial_test::serial] // Protection RTX 5060 en local
@@ -12,6 +14,20 @@ async fn test_system_agent_creates_function_end_to_end() {
     let env = setup_test_env(LlmMode::Enabled).await;
 
     let test_root = env.storage.config.data_root.clone();
+
+    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
+    let sa_mgr = CollectionsManager::new(&env.storage, "un2", "sa");
+
+    // Initialisation de la collection 'functions'
+    sa_mgr
+        .create_collection(
+            "functions",
+            // On utilise le schéma générique tolérant
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection functions impossible");
+    // -----------------------------------
 
     let agent_id = "system_agent_test";
     let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_sa");

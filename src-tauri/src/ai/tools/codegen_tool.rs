@@ -163,29 +163,16 @@ impl McpTool for CodeGenTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::JsonDbConfig;
-    use crate::utils::io::tempdir;
-
-    /// Helper pour initialiser l'environnement de test
-    fn setup_test_env() {
-        // ✅ On initialise le mock de configuration pour éviter la panique
-        crate::utils::config::test_mocks::inject_mock_config();
-    }
+    use crate::utils::config::test_mocks::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_codegen_tool_full_integration() {
-        setup_test_env();
-
-        let dir = tempdir().unwrap();
-        let db_root = dir.path().join("db");
-        let gen_root = dir.path().join("src-gen");
-
-        let config = JsonDbConfig::new(db_root.clone());
-        let storage = Arc::new(StorageEngine::new(config));
-
-        // On initialise le manager et peuple la base...
-        let manager = CollectionsManager::new(&storage, "test_space", "test_db");
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let comp_id = "comp-rust-01";
         manager
@@ -199,8 +186,13 @@ mod tests {
             )
             .await
             .unwrap();
-
-        let tool = CodeGenTool::new(gen_root.clone(), storage.clone(), "test_space", "test_db");
+        let gen_root = sandbox.domain_root.join("src-gen");
+        let tool = CodeGenTool::new(
+            gen_root,
+            sandbox.db.clone(),
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         let call = McpToolCall::new(
             "generate_component_code",
             json!({ "component_id": comp_id }),
@@ -220,13 +212,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_codegen_tool_not_found() {
-        setup_test_env();
-
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = Arc::new(StorageEngine::new(config));
-
-        let tool = CodeGenTool::new(dir.path().into(), storage, "s", "d");
+        let sandbox = AgentDbSandbox::new().await;
+        let tool = CodeGenTool::new(
+            sandbox.domain_root.clone(),
+            sandbox.db.clone(),
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         let call = McpToolCall::new(
             "generate_component_code",
             json!({ "component_id": "unknown_id" }),

@@ -10,7 +10,7 @@ pub struct RuleStore<'a> {
     /// Référence au gestionnaire de collections pour la persistance
     db_manager: &'a CollectionsManager<'a>,
     /// Cache en mémoire pour l'exécution rapide (index inversé)
-    /// "champ_modifié" -> Vec<"rule_id">
+    /// "collection::champ_modifié" -> Vec<"rule_id">
     dependency_cache: HashMap<String, Vec<String>>,
     /// Cache des règles chargées : "rule_id" -> Rule
     pub rules_cache: HashMap<String, Rule>,
@@ -38,8 +38,13 @@ impl<'a> RuleStore<'a> {
         self.rules_cache.clear();
 
         for rule_val in stored_rules {
-            if let Ok(rule) = serde_json::from_value::<Rule>(rule_val) {
-                self.index_rule_in_cache(rule);
+            if let Ok(rule) = serde_json::from_value::<Rule>(rule_val.clone()) {
+                // Extraction de la collection cible pour cloisonner le cache
+                let col = rule_val
+                    .get("_target_collection")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("*");
+                self.index_rule_in_cache(col, rule);
             }
         }
         Ok(())
@@ -55,8 +60,6 @@ impl<'a> RuleStore<'a> {
         }
 
         // 1. Sauvegarde persistante via le manager de JSON-DB
-        // ❌ Fini le `serde_json::to_value(&rule)?` qui faisait une conversion implicite.
-        // ✅ Capture explicite de l'erreur de sérialisation.
         let mut doc = match serde_json::to_value(&rule) {
             Ok(v) => v,
             Err(e) => raise_error!(
@@ -78,20 +81,21 @@ impl<'a> RuleStore<'a> {
             obj.insert("id".to_string(), serde_json::json!(rule.id));
         }
 
-        // Ici le `?` est CONSERVÉ car insert_raw renvoie DÉJÀ un RaiseResult.
-        // Aucune conversion (From) n'est nécessaire pour le compilateur.
         self.db_manager.insert_raw("_system_rules", &doc).await?;
 
-        // 2. Mise à jour du cache mémoire
-        self.index_rule_in_cache(rule);
+        // 2. Mise à jour du cache mémoire (avec isolement par collection)
+        self.index_rule_in_cache(collection, rule);
         Ok(())
     }
 
-    fn index_rule_in_cache(&mut self, rule: Rule) {
+    /// Indexation interne dans le cache mémoire
+    fn index_rule_in_cache(&mut self, collection: &str, rule: Rule) {
         let deps = Analyzer::get_dependencies(&rule.expr);
         for dep in deps {
+            // Création d'une clé isolée (ex: "drones::status")
+            let key = format!("{}::{}", collection, dep);
             self.dependency_cache
-                .entry(dep)
+                .entry(key)
                 .or_default()
                 .push(rule.id.clone());
         }
@@ -101,13 +105,15 @@ impl<'a> RuleStore<'a> {
     /// Récupère les règles impactées par des changements (Mode Réactif)
     pub fn get_impacted_rules(
         &self,
-        _collection: &str,
+        collection: &str,
         changed_fields: &HashSet<String>,
     ) -> Vec<Rule> {
         let mut impacted_ids = HashSet::new();
 
         for field in changed_fields {
-            if let Some(ids) = self.dependency_cache.get(field) {
+            // Recherche de la clé isolée correspondante
+            let key = format!("{}::{}", collection, field);
+            if let Some(ids) = self.dependency_cache.get(&key) {
                 for id in ids {
                     impacted_ids.insert(id);
                 }
@@ -121,8 +127,7 @@ impl<'a> RuleStore<'a> {
             .collect()
     }
 
-    /// [NOUVEAU] Récupère toutes les règles ciblant une entité spécifique (Mode Validatif)
-    /// Utilisé par le Bloc Cognitif pour valider un objet complet.
+    /// Récupère toutes les règles ciblant une entité spécifique (Mode Validatif)
     pub fn get_rules_for_target(&self, target: &str) -> Vec<Rule> {
         self.rules_cache
             .values()
@@ -131,7 +136,7 @@ impl<'a> RuleStore<'a> {
             .collect()
     }
 
-    /// [NOUVEAU] Récupère l'ensemble des règles connues (Dump)
+    /// Récupère l'ensemble des règles connues (Dump)
     pub fn get_all_rules(&self) -> Vec<Rule> {
         self.rules_cache.values().cloned().collect()
     }
@@ -140,18 +145,18 @@ impl<'a> RuleStore<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
-    use tempfile::tempdir;
+    use crate::utils::config::test_mocks::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_store_idempotency_and_retrieval() {
-        crate::utils::config::test_mocks::inject_mock_config();
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test_space", "test_db");
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let mut store = RuleStore::new(&manager);
 

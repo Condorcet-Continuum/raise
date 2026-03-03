@@ -35,26 +35,56 @@ pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResul
 }
 
 /// Crée l'arborescence physique de la base de données.
-/// Note : Architecture "Zéro Copie", les schémas ne sont plus copiés ici.
-pub async fn create_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResult<bool> {
+pub async fn create_db(
+    config: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    system_doc: &Value,
+) -> RaiseResult<bool> {
     let db_root = config.db_root(space, db);
 
+    // 1. 🎯 OPTIMISATION ABSOLUE : Return Early
+    // Si le dossier de la base existe, on ne fait STRICTEMENT rien.
     if io::exists(&db_root).await {
         return Ok(false);
     }
 
-    // Création simple du dossier racine
+    // 2. Création du dossier racine de la base
     io::create_dir_all(&db_root).await?;
 
-    // Vérification : Est-ce qu'on crée la base système ?
     let app_config = AppConfig::get();
-    // ✅ CORRECTION : Utilisation des nouveaux champs 'system_domain' / 'system_db'
-    let sys_domain = &app_config.system_domain;
-    let sys_db = &app_config.system_db;
-
-    if space == sys_domain && db == sys_db {
+    if space == app_config.system_domain && db == app_config.system_db {
         #[cfg(debug_assertions)]
         println!("🚀 Initialisation de la base SYSTEME détectée.");
+    }
+
+    // 3. INTROSPECTION DYNAMIQUE (Exécutée une seule fois à la naissance de la DB)
+    if let Some(root_obj) = system_doc.as_object() {
+        for (category, category_data) in root_obj {
+            if let Some(sub_nodes) = category_data.as_object() {
+                for (name, node_data) in sub_nodes {
+                    if let Some(node_obj) = node_data.as_object() {
+                        // Heuristique : Un nœud avec un tableau "items" = un dossier physique
+                        if node_obj.get("items").is_some_and(|i| i.is_array()) {
+                            let path = db_root.join(category).join(name);
+
+                            // On crée l'arborescence (ex: /collections/actors)
+                            if let Err(e) = io::create_dir_all(&path).await {
+                                raise_error!(
+                                    "ERR_FS_DYNAMIC_DIR_FAILED",
+                                    error = e,
+                                    context = json!({
+                                        "category": category,
+                                        "name": name,
+                                        "path": path.to_string_lossy().to_string()
+                                    })
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Ok(true)
@@ -151,10 +181,36 @@ pub async fn save_database_index(path: &io::Path, data: &Value) -> RaiseResult<(
     io::write_json_compressed_atomic(path, data).await
 }
 
+pub async fn read_system_index(
+    config: &JsonDbConfig,
+    space: &str,
+    db: &str,
+) -> RaiseResult<Option<Value>> {
+    let sys_path = config.db_root(space, db).join("_system.json");
+    if io::exists(&sys_path).await {
+        let doc: Value = io::read_json(&sys_path).await?;
+        Ok(Some(doc))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn write_system_index(
+    config: &JsonDbConfig,
+    space: &str,
+    db: &str,
+    doc: &Value,
+) -> RaiseResult<()> {
+    let sys_path = config.db_root(space, db).join("_system.json");
+    io::write_json_atomic(&sys_path, doc).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::utils::{io::tempdir, json::json};
+
     #[tokio::test]
     async fn test_atomic_write() {
         let dir = tempdir().unwrap();
@@ -194,5 +250,102 @@ mod tests {
             .expect("Delete failed");
 
         assert!(!io::exists(&path).await);
+    }
+
+    // 🎯 NOUVEAU TEST 1 : Introspection dynamique & Idempotence
+    #[tokio::test]
+    async fn test_create_db_dynamic_introspection() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let (space, db) = ("dyn_space", "dyn_db");
+
+        // Un mock d'index hydraté avec des pièges (des objets sans "items")
+        let system_doc = json!({
+            "collections": {
+                "users": { "items": [] },
+                "posts": { "items": [] }
+            },
+            "rules": {
+                "_system_rules": { "items": [] }
+            },
+            "schemas": {
+                "v1": { "items": [] }
+            },
+            "fake_category": {
+                "should_not_exist": { "foo": "bar" } // Ne devrait pas générer de dossier
+            }
+        });
+
+        // 1. Première exécution : le dossier n'existe pas, il doit être créé
+        let created = create_db(&config, space, db, &system_doc).await.unwrap();
+        assert!(created, "La base aurait dû être créée");
+
+        let db_root = config.db_root(space, db);
+
+        // 2. Vérification de la création dynamique des chemins
+        assert!(db_root.join("collections/users").exists());
+        assert!(db_root.join("collections/posts").exists());
+        assert!(db_root.join("rules/_system_rules").exists());
+        assert!(db_root.join("schemas/v1").exists());
+
+        // Ce dossier ne contient pas de tableau "items", il doit être ignoré
+        assert!(!db_root.join("fake_category/should_not_exist").exists());
+
+        // 3. Test de l'idempotence (Return Early)
+        let created_again = create_db(&config, space, db, &system_doc).await.unwrap();
+        assert!(
+            !created_again,
+            "Le Return Early a échoué, la base ne devrait pas être recréée"
+        );
+    }
+
+    // 🎯 NOUVEAU TEST 2 : Lecture et Écriture de l'Index Système
+    #[tokio::test]
+    async fn test_system_index_io() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let (space, db) = ("sys_space", "sys_db");
+
+        // Lecture d'un index inexistant
+        let none_index = read_system_index(&config, space, db).await.unwrap();
+        assert!(none_index.is_none());
+
+        // Création de la racine de la base pour pouvoir écrire dedans
+        create_db(&config, space, db, &json!({})).await.unwrap();
+
+        // Écriture d'un index
+        let mock_doc = json!({ "name": "test_db", "version": 1 });
+        write_system_index(&config, space, db, &mock_doc)
+            .await
+            .unwrap();
+
+        // Lecture et validation
+        let read_index = read_system_index(&config, space, db)
+            .await
+            .unwrap()
+            .expect("L'index devrait exister");
+        assert_eq!(read_index["name"], "test_db");
+    }
+
+    // 🎯 NOUVEAU TEST 3 : Comportement de open_db
+    #[tokio::test]
+    async fn test_open_db_validation() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let (space, db) = ("open_space", "open_db");
+
+        // 1. Échec attendu car la base n'existe pas physiquement
+        let res = open_db(&config, space, db).await;
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("ERR_DB_FS_NOT_FOUND"));
+
+        // 2. Succès après création
+        create_db(&config, space, db, &json!({})).await.unwrap();
+        let res_ok = open_db(&config, space, db).await;
+        assert!(
+            res_ok.is_ok(),
+            "open_db devrait réussir sur une base existante"
+        );
     }
 }

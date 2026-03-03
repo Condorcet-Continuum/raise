@@ -102,22 +102,18 @@ impl EmbeddingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-
-    async fn setup_test_manager() -> (StorageEngine, crate::utils::config::AppConfig) {
-        crate::utils::config::test_mocks::inject_mock_config();
-        let config = crate::utils::config::AppConfig::get();
-        let storage_cfg = JsonDbConfig::new(config.get_path("PATH_RAISE_DOMAIN").unwrap());
-        (StorageEngine::new(storage_cfg), config.clone())
-    }
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
 
     #[tokio::test]
     async fn test_default_engine_init() {
-        let (storage, config) = setup_test_manager().await;
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "nlp",
             crate::utils::json::json!({
@@ -138,11 +134,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_engine_switching() {
-        let (storage, config) = setup_test_manager().await;
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "nlp",
             crate::utils::json::json!({

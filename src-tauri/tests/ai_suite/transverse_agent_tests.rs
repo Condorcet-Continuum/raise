@@ -4,6 +4,8 @@ use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{transverse_agent::TransverseAgent, Agent, AgentContext};
 use raise::utils::Arc;
+// 👇 Ajout de l'import du manager
+use raise::json_db::collections::manager::CollectionsManager;
 
 #[tokio::test]
 #[serial_test::serial] // Protection RTX 5060 en local
@@ -12,6 +14,37 @@ async fn test_transverse_agent_ivvq_cycle() {
     let env = setup_test_env(LlmMode::Enabled).await;
 
     let test_root = env.storage.config.data_root.clone();
+
+    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
+    let transverse_mgr = CollectionsManager::new(&env.storage, "un2", "transverse");
+
+    // 1. Initialisation de la collection 'requirements'
+    transverse_mgr
+        .create_collection(
+            "requirements",
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection requirements impossible");
+
+    // 2. Initialisation de la collection 'test_procedures'
+    transverse_mgr
+        .create_collection(
+            "test_procedures",
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection test_procedures impossible");
+
+    // 3. Initialisation de la collection 'test_campaigns'
+    transverse_mgr
+        .create_collection(
+            "test_campaigns",
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection test_campaigns impossible");
+    // -----------------------------------
 
     let agent_id = "transverse_agent_test";
     let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_transverse");

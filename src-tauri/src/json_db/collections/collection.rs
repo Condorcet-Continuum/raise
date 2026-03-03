@@ -1,21 +1,16 @@
 // FICHIER : src-tauri/src/json_db/collections/collection.rs
 
 //! Primitives collections : gestion des dossiers et fichiers JSON d’une collection.
-//! Pas de logique x_compute/validate ici — uniquement persistance et I/O.
+//! 🚀 V2 : Refactorisé pour s'interfacer avec le StorageEngine (et bénéficier du Cache LRU).
 
 use crate::utils::io::{self, PathBuf};
 use crate::utils::prelude::*;
 
-use crate::json_db::storage::JsonDbConfig;
+use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
 /// Racine des collections : {db_root}/collections/{collection}
 pub fn collection_root(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str) -> PathBuf {
     cfg.db_collection_path(space, db, collection)
-}
-
-/// Fichier d’un document : {collection_root}/{id}.json
-fn doc_path(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str, id: &str) -> PathBuf {
-    collection_root(cfg, space, db, collection).join(format!("{id}.json"))
 }
 
 /// S’assure que la collection existe (création récursive) - Async.
@@ -30,58 +25,78 @@ pub async fn create_collection_if_missing(
     Ok(())
 }
 
-/// Lit un document par son ID - Async.
+// --- FONCTIONS CRUD (Déléguées au StorageEngine pour utiliser le cache) ---
+
+/// Lit un document par son ID via le StorageEngine.
 pub async fn read_document(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine,
     space: &str,
     db: &str,
     collection: &str,
     id: &str,
 ) -> RaiseResult<Value> {
-    let path = doc_path(cfg, space, db, collection, id);
-    let doc = io::read_json(&path).await?;
-    Ok(doc)
+    // On tape dans le cache/disque via le StorageEngine
+    let doc_opt = storage.read_document(space, db, collection, id).await?;
+
+    match doc_opt {
+        Some(doc) => Ok(doc),
+        None => raise_error!(
+            "ERR_DB_DOCUMENT_NOT_FOUND",
+            error = format!(
+                "Document '{}' introuvable dans la collection '{}'",
+                id, collection
+            ),
+            context = json!({
+                "space": space,
+                "db": db,
+                "collection": collection,
+                "id": id,
+                "action": "read_document_with_cache"
+            })
+        ),
+    }
 }
 
-// --- FONCTIONS CRUD ---
 pub async fn create_document(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine,
     space: &str,
     db: &str,
     collection: &str,
     id: &str,
     document: &Value,
 ) -> RaiseResult<()> {
-    create_collection_if_missing(cfg, space, db, collection).await?;
-    let path = doc_path(cfg, space, db, collection, id);
-    io::write_json_atomic(&path, document).await?;
+    create_collection_if_missing(&storage.config, space, db, collection).await?;
+    storage
+        .write_document(space, db, collection, id, document)
+        .await?;
     Ok(())
 }
 
 pub async fn update_document(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine,
     space: &str,
     db: &str,
     collection: &str,
     id: &str,
     document: &Value,
 ) -> RaiseResult<()> {
-    create_document(cfg, space, db, collection, id, document).await
+    // La logique d'écriture est identique pour une création ou une mise à jour au niveau I/O
+    create_document(storage, space, db, collection, id, document).await
 }
 
 pub async fn delete_document(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine,
     space: &str,
     db: &str,
     collection: &str,
     id: &str,
 ) -> RaiseResult<()> {
-    let path = doc_path(cfg, space, db, collection, id);
-    io::remove_file(&path).await?;
+    storage.delete_document(space, db, collection, id).await?;
     Ok(())
 }
 
-// --- AJOUT : Suppression de collection ---
+// --- GESTION DES DOSSIERS (I/O pur, pas de cache) ---
+
 pub async fn drop_collection(
     cfg: &JsonDbConfig,
     space: &str,
@@ -92,8 +107,6 @@ pub async fn drop_collection(
     io::remove_dir_all(&root).await?;
     Ok(())
 }
-
-// --- FONCTIONS UTILITAIRES ---
 
 pub async fn list_document_ids(
     cfg: &JsonDbConfig,
@@ -114,14 +127,11 @@ pub async fn list_document_ids(
             error = err,
             context = json!({
                 "root_path": root,
-                "action": "scan_directory_for_json",
-                "hint": "Erreur lors de la lecture d'une entrée dans le répertoire. Vérifiez les permissions de lecture."
+                "action": "scan_directory_for_json"
             })
         ),
     } {
         let p = e.path();
-
-        // Logique de filtrage (inchangée mais plus lisible car isolée)
         if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
                 if !stem.starts_with('_') {
@@ -135,15 +145,18 @@ pub async fn list_document_ids(
 }
 
 pub async fn list_documents(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine,
     space: &str,
     db: &str,
     collection: &str,
 ) -> RaiseResult<Vec<Value>> {
-    let ids = list_document_ids(cfg, space, db, collection).await?;
+    let ids = list_document_ids(&storage.config, space, db, collection).await?;
     let mut docs = Vec::with_capacity(ids.len());
+
     for id in ids {
-        if let Ok(doc) = read_document(cfg, space, db, collection, &id).await {
+        // ✅ C'est ici la magie ! En appelant read_document, on bénéficie du StorageEngine.
+        // Si 1000 documents sont listés, les lectures successives se feront en RAM (via le cache LRU)
+        if let Ok(doc) = read_document(storage, space, db, collection, &id).await {
             docs.push(doc);
         }
     }
@@ -169,7 +182,6 @@ pub async fn list_collection_names_fs(
             context = json!({ "root": root, "action": "list_next_entry" })
         ),
     } {
-        // Récupération du type de fichier sans map_err
         let ty = match e.file_type().await {
             Ok(t) => t,
             Err(err) => raise_error!(
@@ -193,28 +205,32 @@ pub async fn list_collection_names_fs(
 mod tests {
     use super::*;
     use crate::utils::{io::tempdir, json::json};
+
     #[tokio::test]
-    async fn test_collection_crud_async() {
+    async fn test_collection_crud_async_with_storage() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
+
+        // 1. Initialisation du StorageEngine pour les tests
+        let storage = StorageEngine::new(config);
         let (s, d, c) = ("space", "db", "col");
 
         let doc = json!({"id": "1", "data": "test"});
 
         // Create
-        create_document(&config, s, d, c, "1", &doc).await.unwrap();
+        create_document(&storage, s, d, c, "1", &doc).await.unwrap();
 
         // Read
-        let read = read_document(&config, s, d, c, "1").await.unwrap();
+        let read = read_document(&storage, s, d, c, "1").await.unwrap();
         assert_eq!(read["data"], "test");
 
         // List
-        let ids = list_document_ids(&config, s, d, c).await.unwrap();
+        let ids = list_document_ids(&storage.config, s, d, c).await.unwrap();
         assert_eq!(ids, vec!["1"]);
 
         // Delete
-        delete_document(&config, s, d, c, "1").await.unwrap();
-        let ids_after = list_document_ids(&config, s, d, c).await.unwrap();
+        delete_document(&storage, s, d, c, "1").await.unwrap();
+        let ids_after = list_document_ids(&storage.config, s, d, c).await.unwrap();
         assert!(ids_after.is_empty());
     }
 }

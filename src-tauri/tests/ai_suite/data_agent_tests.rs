@@ -4,14 +4,38 @@ use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{data_agent::DataAgent, Agent, AgentContext};
 use raise::utils::Arc;
+// 👇 Import indispensable du manager
+use raise::json_db::collections::manager::CollectionsManager;
 
 #[tokio::test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_data_agent_creates_class_and_enum() {
     let env = setup_test_env(LlmMode::Enabled).await;
-
     let test_root = env.storage.config.data_root.clone();
+
+    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
+    let data_mgr = CollectionsManager::new(&env.storage, "un2", "data");
+
+    // 1. Initialisation de la collection 'classes'
+    data_mgr
+        .create_collection(
+            "classes",
+            // On utilise un schéma générique tolérant issu de ton mod.rs
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection classes impossible");
+
+    // 2. Initialisation de la collection 'types'
+    data_mgr
+        .create_collection(
+            "types",
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection types impossible");
+    // -----------------------------------
 
     let agent_id = "data_agent_test";
     let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_data");

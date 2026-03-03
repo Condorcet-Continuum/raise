@@ -122,12 +122,8 @@ impl Agent for OrchestratorAgent {
 mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::{io::tempdir, Arc};
-
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::AppConfig;
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_orchestrator_id() {
@@ -138,22 +134,18 @@ mod tests {
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_clarification_logic() {
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let domain_root = dir.path().to_path_buf();
-        let config = JsonDbConfig::new(domain_root.clone());
-        let db = Arc::new(StorageEngine::new(config));
-
-        let app_cfg = AppConfig::get();
-        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
-        let _ = manager.init_db().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         // 🎯 Injection du LLM Mocké
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         // 🎯 LlmClient avec le manager et .await
@@ -163,16 +155,15 @@ mod tests {
         let ctx = AgentContext::new(
             "tester",
             "sess_orch_01",
-            db,
+            sandbox.db,
             llm,
-            domain_root.clone(),
-            domain_root.clone(),
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
         )
         .await;
 
         let agent = OrchestratorAgent::new();
         let intent = EngineeringIntent::Unknown;
-
         let result = agent.process(&ctx, &intent).await;
 
         match result {
@@ -190,25 +181,29 @@ mod tests {
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_routing_feedback() {
-        inject_mock_config();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let db = Arc::new(StorageEngine::new(config));
-
-        let app_cfg = AppConfig::get();
-        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
-        let _ = manager.init_db().await;
-
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();
-
-        let ctx = AgentContext::new("t", "s", db, llm, dir.path().into(), dir.path().into()).await;
+        let ctx = AgentContext::new(
+            "t",
+            "s",
+            sandbox.db,
+            llm,
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
+        )
+        .await;
         let agent = OrchestratorAgent::new();
 
         let intent = EngineeringIntent::CreateElement {

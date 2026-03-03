@@ -21,7 +21,6 @@ impl LockManager {
     }
 
     /// Récupère un verrou d'écriture ASYNC pour une collection
-    /// Retourne un Arc<tokio::sync::RwLock<()>>
     pub fn get_write_lock(&self, space: &str, db: &str, collection: &str) -> Arc<AsyncRwLock<()>> {
         let key = format!("{}/{}/{}", space, db, collection);
 

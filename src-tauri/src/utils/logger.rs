@@ -42,8 +42,8 @@ pub fn init_logging() {
         // =========================================================================
         // LAYER 2 : CONSOLE (Format Compact - Pour l'Humain)
         // =========================================================================
-        let env_filter =
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+        let env_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("warn,user_notification=info"));
 
         let console_layer = fmt::layer()
             .compact()

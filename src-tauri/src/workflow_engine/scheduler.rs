@@ -348,63 +348,40 @@ impl WorkflowScheduler {
 mod tests {
     use super::*;
     use crate::ai::orchestrator::AiOrchestrator;
-    use crate::json_db::schema::registry::SchemaRegistry;
-    use crate::json_db::schema::SchemaValidator;
-    use crate::json_db::test_utils::{ensure_db_exists, init_test_env};
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::{config::test_mocks, Arc, AsyncMutex};
+    use crate::utils::{Arc, AsyncMutex};
     use crate::workflow_engine::{NodeType, WorkflowEdge, WorkflowNode};
-    use serde_json::{json, Value}; // 🎯 FIX: Import explicite de serde_json::Value
 
-    /// Prépare un environnement complet pour les tests du Scheduler (DB, Orchestrator, Executor)
-    async fn setup_test_environment() -> (
-        &'static crate::json_db::test_utils::TestEnv, // 🎯 FIX: Utilisation d'une référence statique propre
-        CollectionsManager<'static>,
-        WorkflowScheduler,
-    ) {
-        let env_val = init_test_env().await;
-        // On rend l'environnement statique dès le départ pour éviter tout besoin de le cloner
-        let env = Box::leak(Box::new(env_val));
+    // 🎯 IMPORT DES OUTILS DE TEST MODERNES
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::data::json;
 
-        test_mocks::inject_mock_config();
-        ensure_db_exists(&env.cfg, &env.space, &env.db).await;
+    /// Prépare un environnement complet pour les tests du Scheduler (Orchestrator, Executor)
+    async fn setup_test_environment(
+        storage: Arc<crate::json_db::storage::StorageEngine>,
+        config: &crate::utils::config::AppConfig,
+    ) -> WorkflowScheduler {
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
-        // Préparation du schéma de DB pour les instances
-        let dest_schemas = env.cfg.db_schemas_root(&env.space, &env.db).join("v1");
-        std::fs::create_dir_all(&dest_schemas).unwrap();
-        let instance_schema =
-            json!({ "$schema": "http://json-schema.org/draft-07/schema#", "type": "object" });
-        std::fs::write(
-            dest_schemas.join("workflow_instances.json"),
-            instance_schema.to_string(),
+        // 1. 🎯 INJECTION DES MOCKS : Pour que l'Orchestrateur IA démarre sans paniquer
+        inject_mock_component(
+            &manager,
+            "llm",
+            json!({ "provider": "mock", "model": "test" }),
         )
-        .unwrap();
+        .await;
+        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
 
-        let reg = SchemaRegistry::from_db(&env.cfg, &env.space, &env.db)
-            .await
-            .unwrap();
-        let _ = SchemaValidator::compile_with_registry(&reg.uri("workflow_instances.json"), &reg)
-            .unwrap();
-
-        let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
-        manager
-            .create_collection(
-                "workflow_instances",
-                Some("workflow_instances.json".to_string()),
-            )
+        // 2. Création du Moteur
+        let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage.clone()))
             .await
             .unwrap();
 
-        // Création du Moteur
-        let orch = AiOrchestrator::new(ProjectModel::default(), None)
-            .await
-            .unwrap();
-        let pm = Arc::new(PluginManager::new(&env.storage, None));
+        let pm = Arc::new(PluginManager::new(&storage, None));
         let executor = WorkflowExecutor::new(Arc::new(AsyncMutex::new(orch)), pm);
-        let scheduler = WorkflowScheduler::new(executor);
 
-        (env, manager, scheduler)
+        WorkflowScheduler::new(executor)
     }
 
     /// Helper pour créer manuellement un DAG personnalisé pour les tests
@@ -413,7 +390,6 @@ mod tests {
         nodes: Vec<WorkflowNode>,
         edges: Vec<WorkflowEdge>,
     ) -> WorkflowDefinition {
-        // 🎯 FIX: Récupération automatique du premier nœud comme entry
         let entry = nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         WorkflowDefinition {
             id: id.to_string(),
@@ -427,7 +403,13 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_create_instance_and_persistence() {
-        let (_env, manager, mut scheduler) = setup_test_environment().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let mut scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let def = create_mock_workflow("wf_empty", vec![], vec![]);
         scheduler.definitions.insert("wf_empty".to_string(), def);
@@ -445,6 +427,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+
         assert_eq!(
             doc["workflowId"], "wf_empty",
             "Le workflowId doit être persisté"
@@ -456,7 +439,13 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_missing_definition_fails_safely() {
-        let (_env, manager, scheduler) = setup_test_environment().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let result = scheduler.create_instance("wf_ghost", &manager).await;
 
@@ -466,16 +455,11 @@ mod tests {
         );
 
         let err = result.unwrap_err();
-        let err_msg = err.to_string();
-
-        // 🎯 FIX : On valide le code d'erreur structuré RAISE
         assert!(
-            err_msg.contains("ERR_WF_DEFINITION_NOT_FOUND"),
-            "Le code d'erreur devrait être ERR_WF_DEFINITION_NOT_FOUND. Reçu : {}",
-            err_msg
+            err.to_string().contains("ERR_WF_DEFINITION_NOT_FOUND"),
+            "Le code d'erreur devrait être ERR_WF_DEFINITION_NOT_FOUND."
         );
 
-        // Optionnel : Validation de la déstructuration irréfutable
         let crate::utils::error::AppError::Structured(data) = err;
         assert_eq!(data.code, "ERR_WF_DEFINITION_NOT_FOUND");
         assert_eq!(data.context["workflow_id"], "wf_ghost");
@@ -485,7 +469,13 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_step_by_step_execution() {
-        let (_env, manager, mut scheduler) = setup_test_environment().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let mut scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let n_start = WorkflowNode {
             id: "n1".into(),
@@ -503,8 +493,6 @@ mod tests {
 
         let progress = scheduler.run_step(&mut instance, &manager).await.unwrap();
         assert!(progress, "Le scheduler aurait dû faire un pas");
-
-        // 🎯 FIX : Dès que le nœud End est exécuté, le moteur clôture intelligemment le workflow !
         assert_eq!(instance.status, ExecutionStatus::Completed);
 
         let progress_end = scheduler.run_step(&mut instance, &manager).await.unwrap();
@@ -519,7 +507,13 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_hitl_lifecycle_approved() {
-        let (_env, manager, mut scheduler) = setup_test_environment().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let mut scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let n_hitl = WorkflowNode {
             id: "hitl_1".into(),
@@ -534,7 +528,6 @@ mod tests {
             params: Value::Null,
         };
 
-        // 🎯 FIX: Utilisation de `from` et `to` au lieu de `source` et `target`
         let edge = WorkflowEdge {
             from: "hitl_1".into(),
             to: "end_1".into(),
@@ -584,7 +577,13 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_hitl_lifecycle_rejected() {
-        let (_env, manager, mut scheduler) = setup_test_environment().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let mut scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let n_hitl = WorkflowNode {
             id: "hitl_2".into(),
@@ -599,7 +598,6 @@ mod tests {
             params: Value::Null,
         };
 
-        // 🎯 FIX: Utilisation de `from` et `to`
         let edge = WorkflowEdge {
             from: "hitl_2".into(),
             to: "end_2".into(),
@@ -618,12 +616,10 @@ mod tests {
             .execute_instance_loop(&instance.id, &manager)
             .await
             .unwrap();
-
         scheduler
             .resume_node(&instance.id, "hitl_2", false, &manager)
             .await
             .unwrap();
-
         let _ = scheduler
             .execute_instance_loop(&instance.id, &manager)
             .await

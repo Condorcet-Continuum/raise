@@ -10,11 +10,11 @@ use raise::utils::config::{test_mocks, AppConfig}; // 🎯 Import the config and
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[test]
-fn test_dl_e2e_integration() -> anyhow::Result<()> {
+#[tokio::test]
+async fn test_dl_e2e_integration() -> anyhow::Result<()> {
     // --- 1. CONFIGURATION ROBUSTE & ISOLÉE ---
     // 🎯 Inject the mock configuration to guarantee a stable testing environment
-    test_mocks::inject_mock_config();
+    test_mocks::inject_mock_config().await;
     let config = &AppConfig::get().deep_learning;
     let device = config.to_device(); // Automatically resolves to CPU per the mock config
 

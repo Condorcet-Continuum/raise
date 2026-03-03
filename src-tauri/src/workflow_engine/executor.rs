@@ -116,26 +116,41 @@ impl WorkflowExecutor {
 }
 
 // =========================================================================
-// TESTS UNITAIRES (CONSERVÉS POUR ASSURER LA RÉTROCOMPATIBILITÉ GLOBALE)
+// TESTS UNITAIRES
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::ProjectModel;
-    use crate::utils::{config::test_mocks, data::json, io::tempdir};
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::data::json;
     use crate::workflow_engine::tools::SystemMonitorTool;
+    // N'oubliez pas d'importer le CollectionsManager si ce n'est pas déjà fait
+    use crate::json_db::collections::manager::CollectionsManager;
 
-    use crate::json_db::schema::registry::SchemaRegistry;
-    use crate::json_db::schema::SchemaValidator;
-    use crate::json_db::test_utils::{ensure_db_exists, init_test_env};
+    // 🎯 FIX : On passe la Config en plus pour pouvoir initialiser le Manager
+    async fn create_test_executor_with_tools(
+        storage: Arc<crate::json_db::storage::StorageEngine>,
+        config: &crate::utils::config::AppConfig,
+    ) -> WorkflowExecutor {
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
-    async fn create_test_executor_with_tools() -> WorkflowExecutor {
-        test_mocks::inject_mock_config();
+        // 1. 🎯 INJECTION DES MOCKS : On nourrit l'orchestrateur avec des composants factices
+        inject_mock_component(
+            &manager,
+            "llm",
+            json!({ "provider": "mock", "model": "test" }),
+        )
+        .await;
+        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
+
         let model = ProjectModel::default();
-        let orch = AiOrchestrator::new(model, None).await.unwrap();
-        let dir = tempdir().unwrap();
-        let storage = StorageEngine::new(JsonDbConfig::new(dir.path().to_path_buf()));
+
+        // 2. 🎯 ATTENTION : On passe `Some(storage.clone())` à l'orchestrateur
+        // pour qu'il utilise bien la DB de la Sandbox et non une DB globale !
+        let orch = AiOrchestrator::new(model, Some(storage.clone()))
+            .await
+            .unwrap();
         let plugin_manager = Arc::new(PluginManager::new(&storage, None));
 
         let mut exec = WorkflowExecutor::new(Arc::new(AsyncMutex::new(orch)), plugin_manager);
@@ -147,13 +162,18 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gate_pause() {
-        let executor = create_test_executor_with_tools().await;
+        let sandbox = AgentDbSandbox::new().await;
+
+        // 🎯 FIX : On passe db et config
+        let executor = create_test_executor_with_tools(sandbox.db.clone(), &sandbox.config).await;
+
         let node = WorkflowNode {
             id: "node_pause".into(),
             r#type: NodeType::GateHitl,
             name: "Human Check".into(),
             params: Value::Null,
         };
+
         let mut ctx = HashMap::new();
         let result = executor.execute_node(&node, &mut ctx).await;
         assert_eq!(result.unwrap(), ExecutionStatus::Paused);
@@ -163,43 +183,13 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_bridge_loading_and_compilation() {
-        let env = init_test_env().await;
-        test_mocks::inject_mock_config();
+        let sandbox = AgentDbSandbox::new().await;
 
-        let cfg = &env.cfg;
-        let space = &env.space;
-        let db = &env.db;
-        ensure_db_exists(cfg, space, db).await;
-
-        let dest_schemas = cfg.db_schemas_root(space, db).join("v1");
-        let _ = std::fs::create_dir_all(&dest_schemas);
-
-        let mandate_schema = json!({
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {
-                "id": { "type": "string" },
-                "meta": { "type": "object", "properties": { "author": { "type": "string" }, "version": { "type": "string" } }, "required": ["author", "version"] },
-                "governance": { "type": "object" },
-                "hardLogic": { "type": "object" }
-            },
-            "required": ["id", "meta", "governance"]
-        });
-        std::fs::write(
-            dest_schemas.join("mandates.json"),
-            mandate_schema.to_string(),
-        )
-        .unwrap();
-
-        let reg = SchemaRegistry::from_db(cfg, space, db).await.unwrap();
-        let root_uri = reg.uri("mandates.json");
-        let _validator = SchemaValidator::compile_with_registry(&root_uri, &reg).unwrap();
-
-        let manager = CollectionsManager::new(&env.storage, space, db);
-        manager
-            .create_collection("mandates", Some("mandates.json".to_string()))
-            .await
-            .unwrap();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let valid_mandate = json!({
             "id": "mandate_prod",
@@ -212,11 +202,13 @@ mod tests {
         manager
             .insert_raw("mandates", &valid_mandate)
             .await
-            .unwrap();
+            .expect("L'insertion du mandat a échoué");
+
         let result = WorkflowExecutor::load_and_prepare_workflow(&manager, "mandate_prod").await;
 
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Le chargement du workflow a échoué");
         let workflow = result.unwrap();
+
         assert!(workflow.nodes.len() >= 4);
     }
 }

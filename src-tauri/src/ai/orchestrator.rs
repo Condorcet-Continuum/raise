@@ -311,8 +311,11 @@ impl AiOrchestrator {
 mod tests {
     use super::*;
     use crate::ai::protocols::acl::{AclMessage, Performative};
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::NameType;
-    use crate::utils::{data::HashMap, io::tempdir, AsyncMutex, OnceLock};
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::data::json;
+    use crate::utils::{data::HashMap, AsyncMutex, OnceLock};
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {
         static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
@@ -330,24 +333,19 @@ mod tests {
     }
 
     // 🎯 HELPER POUR INJECTER LA BDD DE TEST AVANT L'ORCHESTRATEUR
-    async fn setup_mock_orchestrator_env() -> Arc<StorageEngine> {
-        crate::utils::config::test_mocks::inject_mock_config();
-        let config = AppConfig::get();
-        let storage_cfg = crate::json_db::storage::JsonDbConfig::new(
-            config.get_path("PATH_RAISE_DOMAIN").unwrap(),
-        );
-        let storage = Arc::new(StorageEngine::new(storage_cfg));
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage,
-            &config.system_domain,
-            &config.system_db,
-        );
-        manager.init_db().await.unwrap();
+    async fn setup_mock_orchestrator_env() -> AgentDbSandbox {
+        let sandbox = AgentDbSandbox::new().await;
 
-        crate::utils::config::test_mocks::inject_mock_component(&manager, "llm", crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })).await;
-        crate::utils::config::test_mocks::inject_mock_component(&manager, "nlp", crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        storage
+        inject_mock_component(&manager, "llm",  json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })).await;
+        inject_mock_component(&manager, "nlp",  json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+
+        sandbox
     }
 
     #[tokio::test]
@@ -355,10 +353,8 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_init() {
         let _guard = get_hf_lock().lock().await;
-        let _dir = tempdir().expect("temp dir");
-
-        let storage = setup_mock_orchestrator_env().await;
-        let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage)).await;
+        let sandbox = setup_mock_orchestrator_env().await;
+        let orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone())).await;
 
         assert!(
             orch.is_ok(),
@@ -384,10 +380,8 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_learning_cycle() {
         let _guard = get_hf_lock().lock().await;
-        let _dir = tempdir().expect("temp dir");
-
-        let storage = setup_mock_orchestrator_env().await;
-        let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage))
+        let sandbox = setup_mock_orchestrator_env().await;
+        let orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone()))
             .await
             .unwrap();
 
@@ -403,10 +397,8 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_agent_factory() {
         let _guard = get_hf_lock().lock().await;
-        let _dir = tempdir().expect("temp dir");
-
-        let storage = setup_mock_orchestrator_env().await;
-        let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage))
+        let sandbox = setup_mock_orchestrator_env().await;
+        let orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone()))
             .await
             .unwrap();
 
@@ -420,10 +412,8 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_clear_history() {
         let _guard = get_hf_lock().lock().await;
-        let _dir = tempdir().expect("temp dir");
-
-        let storage = setup_mock_orchestrator_env().await;
-        let mut orch = AiOrchestrator::new(ProjectModel::default(), Some(storage))
+        let sandbox = setup_mock_orchestrator_env().await;
+        let mut orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone()))
             .await
             .unwrap();
 
@@ -448,10 +438,8 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_learn_document() {
         let _guard = get_hf_lock().lock().await;
-        let _dir = tempdir().expect("temp dir");
-
-        let storage = setup_mock_orchestrator_env().await;
-        let mut orch = AiOrchestrator::new(ProjectModel::default(), Some(storage))
+        let sandbox = setup_mock_orchestrator_env().await;
+        let mut orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone()))
             .await
             .unwrap();
 

@@ -4,16 +4,16 @@ use crate::json_db::storage::JsonDbConfig;
 
 use crate::utils::async_recursion;
 use crate::utils::data::HashMap;
-use crate::utils::io;
-use crate::utils::json::{self};
+use crate::utils::io::{self, PathBuf};
+use crate::utils::json::json;
 
 use crate::utils::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct SchemaRegistry {
     pub(crate) by_uri: HashMap<String, Value>,
-    // AJOUT : On stocke le préfixe de base pour pouvoir reconstruire des URIs
     pub base_prefix: String,
+    pub(crate) schemas_root: Option<PathBuf>,
 }
 
 impl Default for SchemaRegistry {
@@ -27,32 +27,50 @@ impl SchemaRegistry {
         Self {
             by_uri: HashMap::new(),
             base_prefix: "db://unknown/unknown/schemas/v1/".to_string(),
+            schemas_root: None,
         }
     }
 
     pub async fn from_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResult<Self> {
-        // Préfixe standard : db://space/db/schemas/v1/
         let base_prefix = format!("db://{}/{}/schemas/v1/", space, db);
+        let schemas_root = config.db_schemas_root(space, db).join("v1");
 
         let mut registry = Self {
             by_uri: HashMap::new(),
             base_prefix: base_prefix.clone(),
+            schemas_root: Some(schemas_root.clone()),
         };
 
-        let schemas_root = config.db_schemas_root(space, db).join("v1");
-
-        if !io::exists(&schemas_root).await {
-            return Ok(registry);
+        // 🎯 1. CHARGEMENT DU FALLBACK SYSTÈME GLOBAL (_system/_system)
+        if space != "_system" || db != "_system" {
+            let sys_prefix = "db://_system/_system/schemas/v1/";
+            let sys_root = config.db_schemas_root("_system", "_system").join("v1");
+            if io::exists(&sys_root).await {
+                // On scanne le système global en lui appliquant son préfixe spécifique
+                registry
+                    .scan_directory(&sys_root, &sys_root, sys_prefix)
+                    .await?;
+            }
         }
-        registry
-            .scan_directory(&schemas_root, &schemas_root)
-            .await?;
+
+        // 🎯 2. CHARGEMENT DU DOMAINE COURANT (space/db)
+        if io::exists(&schemas_root).await {
+            // On scanne le domaine courant, qui viendra s'ajouter à la HashMap
+            registry
+                .scan_directory(&schemas_root, &schemas_root, &base_prefix)
+                .await?;
+        }
+
         Ok(registry)
     }
 
-    #[async_recursion]
-    async fn scan_directory(&mut self, root: &Path, current_dir: &Path) -> RaiseResult<()> {
-        // Utilisation de read_dir de la façade
+    #[async_recursion] // Adapte le chemin de la macro selon tes imports
+    async fn scan_directory(
+        &mut self,
+        root: &Path,
+        current_dir: &Path,
+        prefix: &str,
+    ) -> RaiseResult<()> {
         let mut entries = io::read_dir(current_dir).await?;
 
         while let Some(entry) = match entries.next_entry().await {
@@ -64,8 +82,6 @@ impl SchemaRegistry {
             ),
         } {
             let path = entry.path();
-
-            // Récupération du type de fichier sans closure
             let file_type = match entry.file_type().await {
                 Ok(ft) => ft,
                 Err(e) => raise_error!(
@@ -76,15 +92,15 @@ impl SchemaRegistry {
             };
 
             if file_type.is_dir() {
-                // La récursion utilise déjà le ? (RaiseResult)
-                self.scan_directory(root, &path).await?;
+                // 🎯 On passe le préfixe à la récursion
+                self.scan_directory(root, &path, prefix).await?;
             } else if file_type.is_file() && path.extension().is_some_and(|e| e == "json") {
-                // On traite la lecture et le parsing comme des étapes atomiques
                 if let Ok(content) = io::read_to_string(&path).await {
-                    if let Ok(schema) = json::parse(&content) {
+                    if let Ok(schema) = crate::utils::json::parse(&content) {
                         if let Ok(rel_path) = path.strip_prefix(root) {
                             let rel_str = rel_path.to_string_lossy().replace("\\", "/");
-                            let uri = format!("{}{}", self.base_prefix, rel_str);
+                            // 🎯 L'URI utilise le préfixe du contexte chargé, pas forcément celui de la base
+                            let uri = format!("{}{}", prefix, rel_str);
                             self.register(uri, schema);
                         }
                     }
@@ -93,6 +109,7 @@ impl SchemaRegistry {
         }
         Ok(())
     }
+
     pub fn register(&mut self, uri: String, schema: Value) {
         self.by_uri.insert(uri, schema);
     }
@@ -105,9 +122,147 @@ impl SchemaRegistry {
         self.by_uri.keys().cloned().collect()
     }
 
-    // AJOUT : La méthode manquante demandée par le compilateur
     pub fn uri(&self, relative_path: &str) -> String {
         format!("{}{}", self.base_prefix, relative_path)
+    }
+    // ============================================================================
+    // OPÉRATIONS DDL (Réservées au module json_db)
+    // ============================================================================
+
+    /// Résout le chemin physique d'un schéma sur le disque
+    fn get_physical_path(&self, uri: &str) -> RaiseResult<PathBuf> {
+        // 🎯 Utilisation de let-else au lieu de ok_or_else
+        let Some(root) = self.schemas_root.as_ref() else {
+            raise_error!(
+                "ERR_SCHEMA_NO_ROOT",
+                error = "Opération impossible : le registre n'est pas lié à un espace disque."
+            );
+        };
+
+        let Some(rel_path) = uri.strip_prefix(&self.base_prefix) else {
+            raise_error!(
+                "ERR_SCHEMA_URI_MISMATCH",
+                error = format!("L'URI '{}' n'appartient pas à ce registre.", uri)
+            );
+        };
+
+        Ok(root.join(rel_path))
+    }
+
+    /// Sauvegarde physique et en mémoire
+    async fn save_schema(&mut self, uri: &str, schema: Value) -> RaiseResult<()> {
+        let path = self.get_physical_path(uri)?;
+        if let Some(parent) = path.parent() {
+            io::ensure_dir(parent).await?;
+        }
+        io::write_json_atomic(&path, &schema).await?;
+        self.by_uri.insert(uri.to_string(), schema);
+        Ok(())
+    }
+
+    // --- LES MÉTHODES PUBLIQUES RESTREINTES ---
+
+    pub(in crate::json_db) async fn create_schema(
+        &mut self,
+        uri: &str,
+        schema: Value,
+    ) -> RaiseResult<()> {
+        if self.by_uri.contains_key(uri) {
+            // 🎯 Appel direct (la macro fait le return Err toute seule)
+            raise_error!(
+                "ERR_SCHEMA_ALREADY_EXISTS",
+                error = format!("Le schéma '{}' existe déjà.", uri)
+            );
+        }
+        self.save_schema(uri, schema).await
+    }
+
+    pub(in crate::json_db) async fn drop_schema(&mut self, uri: &str) -> RaiseResult<()> {
+        if !self.by_uri.contains_key(uri) {
+            raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
+        }
+        let path = self.get_physical_path(uri)?;
+        if io::exists(&path).await {
+            io::remove_file(&path).await?;
+        }
+        self.by_uri.remove(uri);
+        Ok(())
+    }
+
+    pub(in crate::json_db) async fn add_property(
+        &mut self,
+        uri: &str,
+        prop_name: &str,
+        prop_def: Value,
+    ) -> RaiseResult<()> {
+        let Some(mut schema) = self.by_uri.get(uri).cloned() else {
+            raise_error!(
+                "ERR_SCHEMA_NOT_FOUND",
+                error = format!("Schéma introuvable : {}", uri)
+            );
+        };
+
+        if schema.get("properties").is_none() {
+            if let Some(obj) = schema.as_object_mut() {
+                obj.insert("properties".to_string(), json!({}));
+            }
+        }
+
+        if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
+            if props.contains_key(prop_name) {
+                raise_error!(
+                    "ERR_SCHEMA_PROP_ALREADY_EXISTS",
+                    error = format!("La propriété '{}' existe déjà.", prop_name)
+                );
+            }
+            props.insert(prop_name.to_string(), prop_def);
+        }
+
+        self.save_schema(uri, schema).await
+    }
+
+    pub(in crate::json_db) async fn alter_property(
+        &mut self,
+        uri: &str,
+        prop_name: &str,
+        prop_def: Value,
+    ) -> RaiseResult<()> {
+        let Some(mut schema) = self.by_uri.get(uri).cloned() else {
+            raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
+        };
+
+        if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
+            if !props.contains_key(prop_name) {
+                raise_error!(
+                    "ERR_SCHEMA_PROP_NOT_FOUND",
+                    error = format!("La propriété '{}' est introuvable.", prop_name)
+                );
+            }
+            props.insert(prop_name.to_string(), prop_def);
+        }
+
+        self.save_schema(uri, schema).await
+    }
+
+    pub(in crate::json_db) async fn drop_property(
+        &mut self,
+        uri: &str,
+        prop_name: &str,
+    ) -> RaiseResult<()> {
+        let Some(mut schema) = self.by_uri.get(uri).cloned() else {
+            raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
+        };
+
+        if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
+            if props.remove(prop_name).is_none() {
+                raise_error!(
+                    "ERR_SCHEMA_PROP_NOT_FOUND",
+                    error = format!("La propriété '{}' est introuvable.", prop_name)
+                );
+            }
+        }
+
+        self.save_schema(uri, schema).await
     }
 }
 
@@ -152,6 +307,52 @@ mod tests {
         let expected_uri = format!("db://{}/{}/schemas/v1/users/user.schema.json", space, db);
         assert!(reg.get_by_uri(&expected_uri).is_some());
         assert_eq!(reg.uri("users/user.schema.json"), expected_uri);
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_schema_ddl_operations() -> RaiseResult<()> {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+        let space = "s1";
+        let db = "d1";
+
+        let mut reg = SchemaRegistry::from_db(&config, space, db).await?;
+        let uri = reg.uri("products/product.schema.json");
+
+        // 1. CREATE SCHEMA
+        let initial_schema = json!({
+            "type": "object",
+            "properties": { "name": { "type": "string" } }
+        });
+        reg.create_schema(&uri, initial_schema).await?;
+        assert!(reg.get_by_uri(&uri).is_some());
+
+        // 2. ADD PROPERTY
+        reg.add_property(&uri, "price", json!({ "type": "number" }))
+            .await?;
+        let schema_after_add = reg.get_by_uri(&uri).unwrap();
+        assert!(schema_after_add["properties"]["price"].is_object());
+
+        // 3. ALTER PROPERTY
+        reg.alter_property(&uri, "price", json!({ "type": "number", "minimum": 0 }))
+            .await?;
+        let schema_after_alter = reg.get_by_uri(&uri).unwrap();
+        assert_eq!(schema_after_alter["properties"]["price"]["minimum"], 0);
+
+        // 4. DROP PROPERTY
+        reg.drop_property(&uri, "name").await?;
+        let schema_after_drop_prop = reg.get_by_uri(&uri).unwrap();
+        assert!(schema_after_drop_prop["properties"]
+            .as_object()
+            .unwrap()
+            .get("name")
+            .is_none());
+
+        // 5. DROP SCHEMA
+        reg.drop_schema(&uri).await?;
+        assert!(reg.get_by_uri(&uri).is_none());
+        assert!(!io::exists(&reg.get_physical_path(&uri).unwrap()).await);
 
         Ok(())
     }

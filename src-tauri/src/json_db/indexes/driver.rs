@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(map.get_doc_ids("alice").unwrap()[0], "3");
     }
 
-    #[tokio::test] // Migration async
+    #[tokio::test]
     async fn test_driver_io_roundtrip_and_search() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("index.bin");

@@ -433,18 +433,18 @@ impl<'a> DataProvider for ModelLoader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::{data::json, io::tempdir};
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::data::json;
 
     #[tokio::test]
     async fn test_loader_index_and_semantic_resolution() {
-        inject_mock_config();
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "space1", "db1");
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let doc = json!({
             "id": "UUID-SEM-1", "name": "User", "@type": "OperationalActor"
@@ -461,12 +461,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_transverse_dispatch_comprehensive() {
-        inject_mock_config();
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "space_tr", "db_tr");
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         manager
             .insert_raw(
@@ -534,13 +534,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_access_on_transverse() {
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "space_prov", "db_prov");
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         manager
             .insert_raw(

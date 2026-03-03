@@ -5,24 +5,17 @@ use raise::json_db::{
     collections::manager::CollectionsManager,
     indexes::manager::IndexManager,
     query::{sql, Condition, FilterOperator, Query, QueryEngine, QueryFilter},
-    storage::JsonDbConfig,
     transactions::{manager::TransactionManager, TransactionRequest},
 };
-use raise::utils::{prelude::*, Arc}; // SSOT : Apporte json!, Arc, Value, etc.
+use raise::utils::prelude::*; // SSOT : Apporte json!, Arc, Value, etc.
 
 #[tokio::test]
 async fn test_json_db_global_scenario() {
     // 1. SETUP ENVIRONNEMENT (Robuste & Isolé)
     let env = setup_test_env(LlmMode::Disabled).await;
-
-    // Le TransactionManager a besoin de la configuration enveloppée dans un Arc
-    let config = Arc::new(JsonDbConfig {
-        data_root: env.domain_path.clone(),
-    });
-
     let col_mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
     let mut idx_mgr = IndexManager::new(&env.storage, &env.space, &env.db);
-    let tx_mgr = TransactionManager::new(&config, &env.space, &env.db);
+    let tx_mgr = TransactionManager::new(&env.storage, &env.space, &env.db);
 
     // 2. CRÉATION SCHÉMA & INDEX
     println!("--- Step 1: Create Collection & Index ---");

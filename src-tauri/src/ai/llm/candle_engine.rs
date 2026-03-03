@@ -249,6 +249,8 @@ impl CandleLlmEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_qwen_chatml_format() {
@@ -262,24 +264,18 @@ mod tests {
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_quick_inference() {
-        crate::utils::config::test_mocks::inject_mock_config();
-        let config = crate::utils::config::AppConfig::get();
-        let storage_cfg = crate::json_db::storage::JsonDbConfig::new(
-            config.get_path("PATH_RAISE_DOMAIN").unwrap(),
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
-        let storage = crate::json_db::storage::StorageEngine::new(storage_cfg);
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage,
-            &config.system_domain,
-            &config.system_db,
-        );
-        manager.init_db().await.unwrap();
 
         // Appel magique de ton Mock Helper !
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm",
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         // On passe le manager au moteur

@@ -616,14 +616,12 @@ impl<'a> QueryEngine<'a> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{io::tempdir, json::json, Arc, HashMap, Mutex};
+    use crate::utils::{json::json, Arc, HashMap, Mutex};
 
-    fn setup_test_db() -> (tempfile::TempDir, JsonDbConfig) {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        (dir, config)
-    }
+    // 🎯 On importe notre Sandbox magique
+    use crate::utils::config::test_mocks::DbSandbox;
+
+    // ❌ setup_test_db() a été entièrement supprimé !
 
     // Mock Provider Async
     struct MockIndex {
@@ -656,9 +654,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_query_execution() {
-        let (_dir, config) = setup_test_db();
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test", "db");
+        // 1. Initialisation idiomatique
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         manager.init_db().await.unwrap();
 
         let engine = QueryEngine::new(&manager);
@@ -692,9 +694,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_smart_like_and_array() {
-        let (_dir, config) = setup_test_db();
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test", "db");
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         manager.init_db().await.unwrap();
 
         let engine = QueryEngine::new(&manager);
@@ -727,9 +732,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_engine_uses_mock_index() {
-        let (_dir, config) = setup_test_db();
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test", "db");
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         manager.init_db().await.unwrap();
         manager.create_collection("users", None).await.unwrap();
 
@@ -772,12 +780,14 @@ mod tests {
         assert_eq!(result.documents[0]["id"], "1");
     }
 
-    #[test]
-    fn test_evaluate_condition_logic() {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test", "db");
+    #[tokio::test] // 🎯 Ce test est devenu asynchrone pour supporter la sandbox !
+    async fn test_evaluate_condition_logic() {
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         let engine = QueryEngine::new(&manager);
 
         let doc = json!({ "age": 25, "tags": ["a", "b"] });

@@ -4,6 +4,8 @@ use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
 use raise::utils::Arc;
+// 👇 N'oublions pas l'import du manager
+use raise::json_db::collections::manager::CollectionsManager;
 
 #[tokio::test]
 #[serial_test::serial] // Protection RTX 5060 en local
@@ -13,6 +15,20 @@ async fn test_software_agent_creates_component_end_to_end() {
 
     // --- CONTEXTE ---
     let test_data_root = env.storage.config.data_root.clone();
+
+    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
+    let la_mgr = CollectionsManager::new(&env.storage, "un2", "la");
+
+    // Initialisation de la collection 'components' pour la couche LA
+    la_mgr
+        .create_collection(
+            "components",
+            // On utilise le schéma générique tolérant
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection components impossible");
+    // -----------------------------------
 
     let agent_id = "software_agent_test";
     let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_la");

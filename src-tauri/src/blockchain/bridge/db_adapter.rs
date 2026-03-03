@@ -108,17 +108,16 @@ impl<'a> DbAdapter<'a> {
 mod tests {
     use super::*;
     use crate::blockchain::storage::commit::MutationOp;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::io::tempdir;
+    use crate::utils::config::test_mocks::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_db_adapter_upsert_logic() {
-        crate::utils::config::test_mocks::inject_mock_config();
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-
-        let adapter = DbAdapter::new(&storage, "test_space", "test_db");
+        let sandbox = AgentDbSandbox::new().await;
+        let adapter = DbAdapter::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let mutation = Mutation {
             element_id: "urn:oa:actor-001".to_string(),
@@ -134,7 +133,11 @@ mod tests {
         assert!(res.is_ok());
 
         // Vérification via le manager (persistance confirmée)
-        let manager = CollectionsManager::new(&storage, "test_space", "test_db");
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         let doc = manager
             .get_document("actors", "urn:oa:actor-001")
             .await

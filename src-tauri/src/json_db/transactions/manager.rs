@@ -6,7 +6,7 @@ use crate::json_db::query::{
     ComparisonOperator, Condition, FilterOperator, Query, QueryEngine, QueryFilter,
 };
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
-use crate::json_db::storage::{file_storage, JsonDbConfig, StorageEngine};
+use crate::json_db::storage::StorageEngine;
 use crate::json_db::transactions::lock_manager::LockManager;
 use crate::json_db::transactions::{Operation, Transaction, TransactionRequest};
 
@@ -14,6 +14,8 @@ use crate::utils::data::HashSet;
 use crate::utils::io::{self, Path};
 use crate::utils::json;
 use crate::utils::prelude::*;
+
+use crate::utils::config::AppConfig;
 
 /// Structure pour stocker l'inverse d'une opération réalisée (Undo Log en mémoire)
 enum UndoAction {
@@ -36,16 +38,16 @@ enum UndoAction {
 }
 
 pub struct TransactionManager<'a> {
-    config: &'a JsonDbConfig,
+    storage: &'a StorageEngine, // ✅ MODIFICATION : Injection du StorageEngine
     space: String,
     db: String,
     lock_manager: LockManager,
 }
 
 impl<'a> TransactionManager<'a> {
-    pub fn new(config: &'a JsonDbConfig, space: &str, db: &str) -> Self {
+    pub fn new(storage: &'a StorageEngine, space: &str, db: &str) -> Self {
         Self {
-            config,
+            storage,
             space: space.to_string(),
             db: db.to_string(),
             lock_manager: LockManager::new(),
@@ -56,8 +58,8 @@ impl<'a> TransactionManager<'a> {
     pub async fn execute_smart(&self, requests: Vec<TransactionRequest>) -> RaiseResult<()> {
         let mut prepared_ops = Vec::new();
 
-        let storage = StorageEngine::new(self.config.clone());
-        let col_mgr = CollectionsManager::new(&storage, &self.space, &self.db);
+        // ✅ MODIFICATION : Utilisation de l'instance centralisée
+        let col_mgr = CollectionsManager::new(self.storage, &self.space, &self.db);
         let query_engine = QueryEngine::new(&col_mgr);
 
         #[cfg(debug_assertions)]
@@ -65,7 +67,6 @@ impl<'a> TransactionManager<'a> {
 
         for req in requests {
             match req {
-                // --- INSERT ---
                 TransactionRequest::Insert {
                     collection,
                     id: _,
@@ -83,8 +84,6 @@ impl<'a> TransactionManager<'a> {
                         document,
                     });
                 }
-
-                // --- UPDATE ---
                 TransactionRequest::Update {
                     collection,
                     id,
@@ -92,7 +91,7 @@ impl<'a> TransactionManager<'a> {
                     document,
                 } => {
                     let final_id = self
-                        .resolve_id(&query_engine, &collection, id, handle)
+                        .resolve_id(&query_engine, &collection, id, handle, Some(&document))
                         .await?;
                     prepared_ops.push(Operation::Update {
                         collection,
@@ -101,12 +100,38 @@ impl<'a> TransactionManager<'a> {
                     });
                 }
 
-                // --- DELETE ---
+                TransactionRequest::Upsert {
+                    collection,
+                    id,
+                    handle,
+                    document,
+                } => {
+                    // On tente de résoudre l'ID. Si ça échoue (ok()), on sait que c'est un Insert.
+                    let found_id = self
+                        .resolve_id(&query_engine, &collection, id, handle, Some(&document))
+                        .await
+                        .ok();
+
+                    if let Some(existing_id) = found_id {
+                        prepared_ops.push(Operation::Update {
+                            collection,
+                            id: existing_id,
+                            document,
+                        });
+                    } else {
+                        let mut doc = document;
+                        col_mgr.prepare_document(&collection, &mut doc).await?;
+                        let new_id = doc.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+                        prepared_ops.push(Operation::Insert {
+                            collection,
+                            id: new_id,
+                            document: doc,
+                        });
+                    }
+                }
                 TransactionRequest::Delete { collection, id } => {
                     prepared_ops.push(Operation::Delete { collection, id });
                 }
-
-                // --- INSERT FROM FILE ---
                 TransactionRequest::InsertFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
                     col_mgr.prepare_document(&collection, &mut doc).await?;
@@ -117,8 +142,6 @@ impl<'a> TransactionManager<'a> {
                         document: doc,
                     });
                 }
-
-                // --- UPDATE FROM FILE ---
                 TransactionRequest::UpdateFrom { collection, path } => {
                     let doc = self.load_dataset_file(&path).await?;
                     let handle = doc
@@ -131,7 +154,7 @@ impl<'a> TransactionManager<'a> {
                         .map(|s| s.to_string());
 
                     let final_id = self
-                        .resolve_id(&query_engine, &collection, id_in_doc, handle)
+                        .resolve_id(&query_engine, &collection, id_in_doc, handle, Some(&doc))
                         .await?;
 
                     prepared_ops.push(Operation::Update {
@@ -140,8 +163,6 @@ impl<'a> TransactionManager<'a> {
                         document: doc,
                     });
                 }
-
-                // --- UPSERT FROM FILE ---
                 TransactionRequest::UpsertFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
                     let handle = doc
@@ -154,21 +175,17 @@ impl<'a> TransactionManager<'a> {
                         .map(|s| s.to_string());
 
                     let found_id = self
-                        .resolve_id(&query_engine, &collection, id_in_doc, handle)
+                        .resolve_id(&query_engine, &collection, id_in_doc, handle, Some(&doc))
                         .await
                         .ok();
 
                     if let Some(existing_id) = found_id {
-                        #[cfg(debug_assertions)]
-                        println!("🔄 Upsert: Document trouvé ({}), mise à jour.", existing_id);
                         prepared_ops.push(Operation::Update {
                             collection,
                             id: existing_id,
                             document: doc,
                         });
                     } else {
-                        #[cfg(debug_assertions)]
-                        println!("✨ Upsert: Nouveau document, création.");
                         col_mgr.prepare_document(&collection, &mut doc).await?;
                         let new_id = doc.get("id").and_then(|v| v.as_str()).unwrap().to_string();
                         prepared_ops.push(Operation::Insert {
@@ -192,20 +209,16 @@ impl<'a> TransactionManager<'a> {
 
     async fn load_dataset_file(&self, path: &str) -> RaiseResult<Value> {
         let config = AppConfig::get();
-
-        // 1. On récupère le domaine de base (qui est garanti d'exister)
         let domain_path = config
             .get_path("PATH_RAISE_DOMAIN")
             .expect("ERREUR: PATH_RAISE_DOMAIN introuvable dans la configuration !");
 
-        // 2. On cherche le dataset, sinon on utilise le fallback standard
         let dataset_root = config
             .get_path("PATH_RAISE_DATASET")
             .unwrap_or_else(|| domain_path.join("dataset"))
             .to_string_lossy()
             .to_string();
 
-        // 3. Interpolation propre
         let resolved_path = path.replace("$PATH_RAISE_DATASET", &dataset_root);
 
         let content = match io::read_to_string(Path::new(&resolved_path)).await {
@@ -218,7 +231,7 @@ impl<'a> TransactionManager<'a> {
                         "resolved_path": resolved_path,
                         "os_error": e.to_string(),
                         "action": "load_collection_file",
-                        "hint": "Vérifiez que le fichier existe et que l'application possède les droits de lecture sur ce répertoire."
+                        "hint": "Vérifiez que le fichier existe et que l'application possède les droits de lecture."
                     })
                 );
             }
@@ -232,6 +245,7 @@ impl<'a> TransactionManager<'a> {
         collection: &str,
         id: Option<String>,
         handle: Option<String>,
+        document: Option<&Value>,
     ) -> RaiseResult<String> {
         if let Some(i) = id {
             return Ok(i);
@@ -257,7 +271,29 @@ impl<'a> TransactionManager<'a> {
                 return Ok(doc.get("id").and_then(|v| v.as_str()).unwrap().to_string());
             }
         }
-
+        if let Some(doc) = document {
+            if let Some(name_val) = doc.get("name") {
+                let q = Query {
+                    collection: collection.to_string(),
+                    filter: Some(QueryFilter {
+                        operator: FilterOperator::And,
+                        conditions: vec![Condition::eq("name", name_val.clone())],
+                    }),
+                    sort: None,
+                    limit: Some(1),
+                    offset: None,
+                    projection: None,
+                };
+                let res = qe.execute_query(q).await?;
+                if let Some(found_doc) = res.documents.first() {
+                    return Ok(found_doc
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap()
+                        .to_string());
+                }
+            }
+        }
         raise_error!(
             "ERR_DB_IDENTITY_NOT_FOUND",
             error = format!(
@@ -267,7 +303,7 @@ impl<'a> TransactionManager<'a> {
             context = json!({
                 "collection": collection,
                 "action": "resolve_entity_identity",
-                "hint": "L'identifiant ou le handle spécifié n'existe pas dans cette collection. Vérifiez la casse et l'existence de l'entrée."
+                "hint": "L'identifiant ou le handle spécifié n'existe pas dans cette collection."
             })
         );
     }
@@ -286,7 +322,7 @@ impl<'a> TransactionManager<'a> {
         let mut tx = Transaction::new();
         op_block(&mut tx)?;
 
-        // 1. VERROUILLAGE (CORRIGÉ ASYNC)
+        // 1. VERROUILLAGE
         let collections_to_lock: HashSet<String> = tx
             .operations
             .iter()
@@ -310,7 +346,6 @@ impl<'a> TransactionManager<'a> {
             );
         }
 
-        // ICI : On utilise .write().await au lieu de .write().unwrap()
         for lock in &locks {
             _guards.push(lock.write().await);
         }
@@ -331,24 +366,27 @@ impl<'a> TransactionManager<'a> {
     }
 
     async fn write_wal(&self, tx: &Transaction) -> RaiseResult<()> {
-        let wal_path = self.config.db_root(&self.space, &self.db).join("wal");
-
+        let wal_path = self
+            .storage
+            .config
+            .db_root(&self.space, &self.db)
+            .join("wal");
         io::ensure_dir(&wal_path).await?;
-
         let tx_file = wal_path.join(format!("{}.json", tx.id));
         io::write_json_atomic(&tx_file, tx).await?;
         Ok(())
     }
 
-    /// Applique les opérations et gère le rollback "runtime" des index et fichiers
     async fn apply_transaction(&self, tx: &Transaction) -> RaiseResult<()> {
-        let storage = StorageEngine::new(self.config.clone());
-        let mut idx = IndexManager::new(&storage, &self.space, &self.db);
+        // ✅ MODIFICATION : On utilise self.storage au lieu d'en récréer un !
+        let mut idx = IndexManager::new(self.storage, &self.space, &self.db);
 
         let sys_path = self
+            .storage
             .config
             .db_root(&self.space, &self.db)
             .join("_system.json");
+
         let mut system_index = if sys_path.exists() {
             let c = io::read_to_string(&sys_path).await?;
             json::parse::<Value>(&c).unwrap_or(json!({"collections": {} }))
@@ -356,7 +394,6 @@ impl<'a> TransactionManager<'a> {
             json!({"collections": {} })
         };
 
-        // Stack pour annuler les opérations réussies si l'une échoue plus tard
         let mut undo_stack: Vec<UndoAction> = Vec::new();
 
         for op in &tx.operations {
@@ -373,38 +410,26 @@ impl<'a> TransactionManager<'a> {
                         }
                     }
 
-                    // A. Validation Schéma
                     if let Err(e) = self.apply_schema_logic(collection, &mut final_doc).await {
                         self.rollback_runtime(&mut idx, undo_stack).await?;
                         return Err(e);
                     }
 
-                    // B. Écriture Disque
-                    if let Err(e) = file_storage::write_document(
-                        self.config,
-                        &self.space,
-                        &self.db,
-                        collection,
-                        id,
-                        &final_doc,
-                    )
-                    .await
+                    // ✅ MODIFICATION : Write-Through (Cache + Disque)
+                    if let Err(e) = self
+                        .storage
+                        .write_document(&self.space, &self.db, collection, id, &final_doc)
+                        .await
                     {
                         self.rollback_runtime(&mut idx, undo_stack).await?;
                         return Err(e);
                     }
 
-                    // C. Mise à jour Index
                     if let Err(e) = idx.index_document(collection, &final_doc).await {
-                        file_storage::delete_document(
-                            self.config,
-                            &self.space,
-                            &self.db,
-                            collection,
-                            id,
-                        )
-                        .await
-                        .ok();
+                        self.storage
+                            .delete_document(&self.space, &self.db, collection, id)
+                            .await
+                            .ok();
                         self.rollback_runtime(&mut idx, undo_stack).await?;
                         return Err(e);
                     }
@@ -422,14 +447,11 @@ impl<'a> TransactionManager<'a> {
                     id,
                     document,
                 } => {
-                    let existing_opt = match file_storage::read_document(
-                        self.config,
-                        &self.space,
-                        &self.db,
-                        collection,
-                        id,
-                    )
-                    .await
+                    // ✅ MODIFICATION : Lecture via le Cache LRU
+                    let existing_opt = match self
+                        .storage
+                        .read_document(&self.space, &self.db, collection, id)
+                        .await
                     {
                         Ok(d) => d,
                         Err(e) => {
@@ -441,9 +463,7 @@ impl<'a> TransactionManager<'a> {
                     let mut final_doc = match existing_opt {
                         Some(d) => d,
                         None => {
-                            // Sécurisation de l'état avant sortie
                             self.rollback_runtime(&mut idx, undo_stack).await?;
-
                             raise_error!(
                                 "ERR_DB_UPDATE_TARGET_MISSING",
                                 error = format!("Impossible de mettre à jour le document {}/{} : cible introuvable.", collection, id),
@@ -452,14 +472,12 @@ impl<'a> TransactionManager<'a> {
                                     "document_id": id,
                                     "action": "execute_update_op",
                                     "transaction_state": "rolled_back",
-                                    "hint": "Le document a peut-être été supprimé par un autre processus durant l'opération."
                                 })
                             );
                         }
                     };
 
                     let old_doc_clone = final_doc.clone();
-
                     json_merge(&mut final_doc, document.clone());
 
                     if let Some(obj) = final_doc.as_object_mut() {
@@ -471,46 +489,30 @@ impl<'a> TransactionManager<'a> {
                         return Err(e);
                     }
 
-                    if let Err(e) = file_storage::write_document(
-                        self.config,
-                        &self.space,
-                        &self.db,
-                        collection,
-                        id,
-                        &final_doc,
-                    )
-                    .await
+                    // ✅ MODIFICATION : Mise à jour Cache + Disque
+                    if let Err(e) = self
+                        .storage
+                        .write_document(&self.space, &self.db, collection, id, &final_doc)
+                        .await
                     {
                         self.rollback_runtime(&mut idx, undo_stack).await?;
                         return Err(e);
                     }
 
                     if let Err(e) = idx.remove_document(collection, &old_doc_clone).await {
-                        file_storage::write_document(
-                            self.config,
-                            &self.space,
-                            &self.db,
-                            collection,
-                            id,
-                            &old_doc_clone,
-                        )
-                        .await
-                        .ok();
+                        self.storage
+                            .write_document(&self.space, &self.db, collection, id, &old_doc_clone)
+                            .await
+                            .ok();
                         self.rollback_runtime(&mut idx, undo_stack).await?;
                         return Err(e);
                     }
                     if let Err(e) = idx.index_document(collection, &final_doc).await {
                         idx.index_document(collection, &old_doc_clone).await.ok();
-                        file_storage::write_document(
-                            self.config,
-                            &self.space,
-                            &self.db,
-                            collection,
-                            id,
-                            &old_doc_clone,
-                        )
-                        .await
-                        .ok();
+                        self.storage
+                            .write_document(&self.space, &self.db, collection, id, &old_doc_clone)
+                            .await
+                            .ok();
                         self.rollback_runtime(&mut idx, undo_stack).await?;
                         return Err(e);
                     }
@@ -525,42 +527,30 @@ impl<'a> TransactionManager<'a> {
                 }
 
                 Operation::Delete { collection, id } => {
-                    let existing_opt = file_storage::read_document(
-                        self.config,
-                        &self.space,
-                        &self.db,
-                        collection,
-                        id,
-                    )
-                    .await
-                    .ok()
-                    .flatten();
+                    // ✅ MODIFICATION : Lecture via Cache
+                    let existing_opt = self
+                        .storage
+                        .read_document(&self.space, &self.db, collection, id)
+                        .await
+                        .ok()
+                        .flatten();
 
                     if let Some(old_doc) = existing_opt {
-                        if let Err(e) = file_storage::delete_document(
-                            self.config,
-                            &self.space,
-                            &self.db,
-                            collection,
-                            id,
-                        )
-                        .await
+                        // ✅ MODIFICATION : Suppression Cache + Disque
+                        if let Err(e) = self
+                            .storage
+                            .delete_document(&self.space, &self.db, collection, id)
+                            .await
                         {
                             self.rollback_runtime(&mut idx, undo_stack).await?;
                             return Err(e);
                         }
 
                         if let Err(e) = idx.remove_document(collection, &old_doc).await {
-                            file_storage::write_document(
-                                self.config,
-                                &self.space,
-                                &self.db,
-                                collection,
-                                id,
-                                &old_doc,
-                            )
-                            .await
-                            .ok();
+                            self.storage
+                                .write_document(&self.space, &self.db, collection, id, &old_doc)
+                                .await
+                                .ok();
                             self.rollback_runtime(&mut idx, undo_stack).await?;
                             return Err(e);
                         }
@@ -598,15 +588,11 @@ impl<'a> TransactionManager<'a> {
                     id,
                     inserted_doc,
                 } => {
-                    file_storage::delete_document(
-                        self.config,
-                        &self.space,
-                        &self.db,
-                        &collection,
-                        &id,
-                    )
-                    .await
-                    .ok();
+                    // ✅ MODIFICATION : Suppression via le StorageEngine
+                    self.storage
+                        .delete_document(&self.space, &self.db, &collection, &id)
+                        .await
+                        .ok();
                     idx.remove_document(&collection, &inserted_doc).await.ok();
                 }
                 UndoAction::Update {
@@ -615,16 +601,10 @@ impl<'a> TransactionManager<'a> {
                     previous_doc,
                     bad_doc,
                 } => {
-                    file_storage::write_document(
-                        self.config,
-                        &self.space,
-                        &self.db,
-                        &collection,
-                        &id,
-                        &previous_doc,
-                    )
-                    .await
-                    .ok();
+                    self.storage
+                        .write_document(&self.space, &self.db, &collection, &id, &previous_doc)
+                        .await
+                        .ok();
                     idx.remove_document(&collection, &bad_doc).await.ok();
                     idx.index_document(&collection, &previous_doc).await.ok();
                 }
@@ -633,16 +613,10 @@ impl<'a> TransactionManager<'a> {
                     id,
                     previous_doc,
                 } => {
-                    file_storage::write_document(
-                        self.config,
-                        &self.space,
-                        &self.db,
-                        &collection,
-                        &id,
-                        &previous_doc,
-                    )
-                    .await
-                    .ok();
+                    self.storage
+                        .write_document(&self.space, &self.db, &collection, &id, &previous_doc)
+                        .await
+                        .ok();
                     idx.index_document(&collection, &previous_doc).await.ok();
                 }
             }
@@ -652,6 +626,7 @@ impl<'a> TransactionManager<'a> {
 
     async fn apply_schema_logic(&self, collection: &str, doc: &mut Value) -> RaiseResult<()> {
         let meta_path = self
+            .storage
             .config
             .db_collection_path(&self.space, &self.db, collection)
             .join("_meta.json");
@@ -673,7 +648,7 @@ impl<'a> TransactionManager<'a> {
             if let Some(obj) = doc.as_object_mut() {
                 obj.insert("$schema".to_string(), Value::String(uri.clone()));
             }
-            let reg = SchemaRegistry::from_db(self.config, &self.space, &self.db).await?;
+            let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await?;
             let validator = match SchemaValidator::compile_with_registry(&uri, &reg) {
                 Ok(v) => v,
                 Err(e) => {
@@ -685,9 +660,8 @@ impl<'a> TransactionManager<'a> {
                         ),
                         context = json!({
                             "schema_uri": uri,
-                            "nested_error": e, // On conserve l'erreur structurée originale
+                            "nested_error": e,
                             "action": "initialize_validator",
-                            "hint": "Le schéma est peut-être mal formé ou une de ses dépendances ($ref) est manquante."
                         })
                     );
                 }
@@ -738,6 +712,7 @@ impl<'a> TransactionManager<'a> {
 
     async fn commit_wal(&self, tx: &Transaction) -> RaiseResult<()> {
         let path = self
+            .storage
             .config
             .db_root(&self.space, &self.db)
             .join("wal")
@@ -771,6 +746,7 @@ fn json_merge(a: &mut Value, b: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::utils::io::{self, tempdir, Path};
 
     async fn setup_test_db() -> (tempfile::TempDir, JsonDbConfig, String, String) {
@@ -800,16 +776,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_transaction_commit_success() {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig {
-            data_root: dir.path().to_path_buf(),
-        };
-        let (space, db) = ("test_space", "test_db");
-
-        io::ensure_dir(&config.db_root(space, db).join("users"))
+        let (_dir, config, space, db) = setup_test_db().await;
+        // ✅ On instancie le StorageEngine pour le test
+        let storage = StorageEngine::new(config.clone());
+        io::ensure_dir(&config.db_root(&space, &db).join("users"))
             .await
             .unwrap();
-        let tm = TransactionManager::new(&config, space, db);
+        let tm = TransactionManager::new(&storage, &space, &db);
         let res = tm
             .execute(|tx| {
                 tx.add_insert("users", "user1", json!({"name": "Alice"}));
@@ -829,36 +802,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_transaction_rollback_on_error() {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig {
-            data_root: dir.path().to_path_buf(),
-        };
-        let (space, db) = ("test_space", "test_db");
+        let (_dir, config, space, db) = setup_test_db().await;
+        let storage = StorageEngine::new(config.clone());
 
-        io::ensure_dir(&config.db_root(space, db).join("users"))
+        io::ensure_dir(&config.db_root(&space, &db).join("users"))
             .await
             .unwrap();
 
-        let tm = TransactionManager::new(&config, space, db);
+        let tm = TransactionManager::new(&storage, &space, &db);
         let res = tm
-        .execute(|tx| {
-            tx.add_insert("users", "user2", json!({"name": "Bob"}));
-            // Simulation d'une erreur métier interrompant la transaction
-            raise_error!(
-                "ERR_TX_SIMULATED_FAILURE",
-                error = "Échec intentionnel pour test de rollback",
-                context = json!({
-                    "transaction_id": "test_sync_001",
-                    "pending_ops": 1,
-                    "action": "validate_rollback_mechanism",
-                    "hint": "Ceci est une erreur contrôlée. La donnée 'user2' ne doit pas être présente en base."
-                })
-            );
-        })
-        .await;
+            .execute(|tx| {
+                tx.add_insert("users", "user2", json!({"name": "Bob"}));
+                raise_error!(
+                    "ERR_TX_SIMULATED_FAILURE",
+                    error = "Échec intentionnel pour test de rollback",
+                    context = json!({
+                        "transaction_id": "test_sync_001"
+                    })
+                );
+            })
+            .await;
         assert!(res.is_err());
         let doc_path = config
-            .db_collection_path(space, db, "users")
+            .db_collection_path(&space, &db, "users")
             .join("user2.json");
         assert!(!doc_path.exists());
     }
@@ -866,7 +832,8 @@ mod tests {
     #[tokio::test]
     async fn test_smart_insert_injects_metadata() {
         let (_dir, config, space, db) = setup_test_db().await;
-        let tm = TransactionManager::new(&config, &space, &db);
+        let storage = StorageEngine::new(config.clone());
+        let tm = TransactionManager::new(&storage, &space, &db);
         io::ensure_dir(&config.db_collection_path(&space, &db, "users"))
             .await
             .unwrap();
@@ -876,7 +843,7 @@ mod tests {
             document: json!({ "name": "Test User" }),
         }];
         tm.execute_smart(req).await.expect("Transaction failed");
-        let storage = StorageEngine::new(config.clone());
+
         let col_mgr = CollectionsManager::new(&storage, &space, &db);
         let res = QueryEngine::new(&col_mgr)
             .execute_query(Query::new("users"))
@@ -889,18 +856,16 @@ mod tests {
     #[tokio::test]
     async fn test_atomicity_failure_rollback_smart() {
         let (_dir, config, space, db) = setup_test_db().await;
-        let tm = TransactionManager::new(&config, &space, &db);
         let storage = StorageEngine::new(config.clone());
+        let tm = TransactionManager::new(&storage, &space, &db);
+
         let mut idx_mgr = IndexManager::new(&storage, &space, &db);
 
         io::ensure_dir(&config.db_collection_path(&space, &db, "items"))
             .await
             .unwrap();
-        // On crée un index pour vérifier qu'il est nettoyé après rollback
         idx_mgr.create_index("items", "val", "hash").await.unwrap();
 
-        // 1. Insertion Valide (item1)
-        // 2. Update Invalide (ghost_id) -> Crash
         let req = vec![
             TransactionRequest::Insert {
                 collection: "items".to_string(),
@@ -918,7 +883,6 @@ mod tests {
         let result = tm.execute_smart(req).await;
         assert!(result.is_err(), "La transaction aurait dû échouer");
 
-        // Vérification 1 : Rollback Fichier
         let doc_path = config
             .db_collection_path(&space, &db, "items")
             .join("item1.json");
@@ -927,7 +891,6 @@ mod tests {
             "Rollback Fichier échoué : item1 ne devrait pas être là"
         );
 
-        // Vérification 2 : Rollback Index (CRITIQUE)
         let search_res = idx_mgr.search("items", "val", &json!("A")).await.unwrap();
         assert!(
             search_res.is_empty(),
@@ -938,16 +901,14 @@ mod tests {
     #[tokio::test]
     async fn test_upsert_workflow() {
         let (_dir, config, space, db) = setup_test_db().await;
-
-        // Initialisation de la Source Unique de Vérité (SSOT)
         AppConfig::init().ok();
 
-        let tm = TransactionManager::new(&config, &space, &db);
+        let storage = StorageEngine::new(config.clone());
+        let tm = TransactionManager::new(&storage, &space, &db);
         io::ensure_dir(&config.db_collection_path(&space, &db, "actors"))
             .await
             .unwrap();
 
-        // ✅ LOGIQUE RÉALISTE : On récupère le domaine et on déduit le dataset s'il manque
         let app_cfg = AppConfig::get();
         let domain_path = app_cfg
             .get_path("PATH_RAISE_DOMAIN")
@@ -957,10 +918,8 @@ mod tests {
             .get_path("PATH_RAISE_DATASET")
             .unwrap_or_else(|| domain_path.join("dataset"));
 
-        // On s'assure que le dossier physique existe pour les fichiers mocks
         io::ensure_dir(&dataset_dir).await.unwrap();
 
-        // 1. Premier Insert : On passe la référence &dataset_dir (type &Path)
         create_dataset_file(
             &dataset_dir,
             "bob.json",
@@ -974,7 +933,6 @@ mod tests {
         }];
         tm.execute_smart(req1).await.unwrap();
 
-        // 2. Second Update
         create_dataset_file(
             &dataset_dir,
             "bob.json",
@@ -988,8 +946,6 @@ mod tests {
         }];
         tm.execute_smart(req2).await.unwrap();
 
-        // Vérification finale
-        let storage = StorageEngine::new(config.clone());
         let res = QueryEngine::new(&CollectionsManager::new(&storage, &space, &db))
             .execute_query(Query::new("actors"))
             .await
@@ -997,5 +953,67 @@ mod tests {
 
         assert_eq!(res.documents.len(), 1);
         assert_eq!(res.documents[0]["role"], "boss");
+    }
+
+    #[tokio::test]
+    async fn test_upsert_resolution_by_name() {
+        let (_dir, config, space, db) = setup_test_db().await;
+        let storage = StorageEngine::new(config.clone());
+        let tm = TransactionManager::new(&storage, &space, &db);
+
+        // 1. Initialisation de la collection
+        io::ensure_dir(&config.db_collection_path(&space, &db, "users"))
+            .await
+            .unwrap();
+
+        // 2. Premier passage : Insertion initiale d'Alice
+        let req1 = vec![TransactionRequest::Insert {
+            collection: "users".to_string(),
+            id: None, // On laisse le moteur générer l'ID
+            document: json!({
+                "name": "alice",
+                "username": "alice_raise",
+                "email": "alice@raise.local",
+                "default_domain": "_system"
+            }),
+        }];
+
+        tm.execute_smart(req1)
+            .await
+            .expect("L'insertion initiale a échoué");
+
+        // 3. Deuxième passage : "Upsert" par le nom
+        // On change l'email, mais on ne donne ni ID ni Handle.
+        // Le moteur DOIT trouver l'ID existant via le champ 'name'.
+        let req2 = vec![TransactionRequest::Update {
+            collection: "users".to_string(),
+            id: None,
+            handle: None,
+            document: json!({
+                "name": "alice",
+                "email": "new_alice@raise.local"
+            }),
+        }];
+
+        let res = tm.execute_smart(req2).await;
+        assert!(
+            res.is_ok(),
+            "Le moteur aurait dû résoudre l'identité via le nom sans erreur"
+        );
+
+        // 4. Vérification finale : Avons-nous un seul document mis à jour ?
+        let col_mgr = CollectionsManager::new(&storage, &space, &db);
+        let engine = QueryEngine::new(&col_mgr);
+        let query_res = engine.execute_query(Query::new("users")).await.unwrap();
+
+        assert_eq!(
+            query_res.documents.len(),
+            1,
+            "Il ne devrait y avoir qu'un seul document Alice"
+        );
+        assert_eq!(
+            query_res.documents[0]["email"], "new_alice@raise.local",
+            "L'email aurait dû être mis à jour"
+        );
     }
 }

@@ -95,6 +95,8 @@ pub async fn list_pending(
 mod tests {
     use super::*;
     use crate::json_db::transactions::manager::TransactionManager;
+    // ✅ AJOUT : Import du StorageEngine
+    use crate::json_db::storage::StorageEngine;
     use crate::utils::io::tempdir;
 
     #[tokio::test]
@@ -104,12 +106,12 @@ mod tests {
             data_root: dir.path().to_path_buf(),
         };
 
-        // On utilise le TransactionManager pour générer une écriture WAL indirectement
-        // ou on appelle write_entry directement.
-        let tm = TransactionManager::new(&config, "s", "d");
+        // ✅ MODIFICATION : On crée le StorageEngine pour le test
+        let storage = StorageEngine::new(config.clone());
+        let tm = TransactionManager::new(&storage, "s", "d");
 
         // Transaction vide qui réussit
-        let _ = tm.execute(|_| Ok(()));
+        let _ = tm.execute(|_| Ok(())).await; // <-- Ajout du .await
 
         // Le dossier WAL doit avoir été créé (même si vide après commit)
         let wal_path = config.db_root("s", "d").join("wal");

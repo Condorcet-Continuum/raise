@@ -1,8 +1,11 @@
 // FICHIER : src-tauri/src/ai/tools/file_system.rs
 
 use crate::ai::protocols::mcp::{McpTool, McpToolCall, McpToolResult, ToolDefinition};
-use crate::utils::{async_trait, io::PathBuf, prelude::*};
-use std::fs;
+use crate::utils::{
+    async_trait,
+    io::{self, PathBuf},
+    prelude::*,
+};
 
 /// Outil permettant à l'IA d'écrire un fichier sur le disque.
 pub struct FileWriteTool {
@@ -69,7 +72,7 @@ impl McpTool for FileWriteTool {
 
         // 3. Création des dossiers parents
         if let Some(parent) = full_path.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
+            if let Err(e) = io::create_dir_all(parent).await {
                 return McpToolResult::error(
                     call.id,
                     &format!("Impossible de créer le dossier parent: {}", e),
@@ -78,7 +81,7 @@ impl McpTool for FileWriteTool {
         }
 
         // 4. Écriture du fichier
-        match fs::write(&full_path, content) {
+        match io::write(&full_path, content).await {
             Ok(_) => {
                 McpToolResult::success(call.id, json!({ "status": "success", "path": full_path }))
             }
@@ -115,7 +118,7 @@ mod tests {
         assert!(!result.is_error);
         let file_path = dir.path().join("hello.txt");
         assert!(file_path.exists());
-        let saved_content = fs::read_to_string(file_path).unwrap();
+        let saved_content = io::read_to_string(&file_path).await.unwrap();
         assert_eq!(saved_content, "Hello World");
     }
 

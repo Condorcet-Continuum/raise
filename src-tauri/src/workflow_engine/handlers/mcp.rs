@@ -87,25 +87,42 @@ impl NodeHandler for McpHandler {
 mod tests {
     use super::*;
     use crate::ai::orchestrator::AiOrchestrator;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::{config::test_mocks, io::tempdir, Arc, AsyncMutex};
+    use crate::utils::{Arc, AsyncMutex};
     use crate::workflow_engine::critic::WorkflowCritic;
     use crate::workflow_engine::tools::{AgentTool, SystemMonitorTool};
 
-    async fn setup_dummy_context_with_tool() -> (
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::data::json;
+
+    // 🎯 FIX : La fonction prend la DB et la config en paramètres
+    async fn setup_dummy_context_with_tool(
+        storage: Arc<crate::json_db::storage::StorageEngine>,
+        config: &crate::utils::config::AppConfig,
+    ) -> (
         Arc<AsyncMutex<AiOrchestrator>>,
         Arc<PluginManager>,
         WorkflowCritic,
         HashMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
     ) {
-        test_mocks::inject_mock_config();
-        let orch = AiOrchestrator::new(ProjectModel::default(), None)
+        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+
+        // 1. 🎯 INJECTION DES MOCKS : L'orchestrateur IA trouve ses petits
+        inject_mock_component(
+            &manager,
+            "llm",
+            json!({ "provider": "mock", "model": "test" }),
+        )
+        .await;
+        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
+
+        // 2. 🎯 INITIALISATION : On utilise le StorageEngine de la Sandbox
+        let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage.clone()))
             .await
             .unwrap();
-        let dir = tempdir().unwrap();
-        let storage = StorageEngine::new(JsonDbConfig::new(dir.path().to_path_buf()));
+
         let plugin_manager = Arc::new(PluginManager::new(&storage, None));
         let critic = WorkflowCritic::default();
 
@@ -126,7 +143,13 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mcp_handler_success_and_injection() {
-        let (orch, pm, critic, tools) = setup_dummy_context_with_tool().await;
+        // 1. 🎯 MAGIE : La Sandbox initialise le dossier isolé et le schéma
+        let sandbox = AgentDbSandbox::new().await;
+
+        // 2. Injection dans le faux contexte
+        let (orch, pm, critic, tools) =
+            setup_dummy_context_with_tool(sandbox.db.clone(), &sandbox.config).await;
+
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
@@ -160,7 +183,10 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mcp_handler_missing_tool_fails_safely() {
-        let (orch, pm, critic, tools) = setup_dummy_context_with_tool().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let (orch, pm, critic, tools) =
+            setup_dummy_context_with_tool(sandbox.db.clone(), &sandbox.config).await;
+
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,

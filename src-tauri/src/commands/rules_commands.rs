@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/commands/rules_commands.rs
 
-use crate::utils::prelude::*;
+use crate::utils::{prelude::*, AsyncMutex};
 
 use crate::json_db::storage::StorageEngine;
 use crate::model_engine::loader::ModelLoader;
@@ -10,11 +10,10 @@ use crate::rules_engine::ast::Rule;
 use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
 
 use tauri::State;
-use tokio::sync::Mutex;
 
 // Note : Cette structure doit être cohérente avec l'initialisation dans main.rs.
 pub struct RuleEngineState {
-    pub model: Mutex<ProjectModel>,
+    pub model: AsyncMutex<ProjectModel>,
 }
 
 /// Commande 1 : Tester une règle "à la volée" (Dry Run) - ASYNC
@@ -96,9 +95,9 @@ pub async fn validate_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
-    use serde_json::json;
-    use tempfile::tempdir; // Requis pour simuler le stockage
+    use crate::utils::config::test_mocks::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_dry_run_rule_async() {
@@ -132,7 +131,7 @@ mod tests {
         let err = result.unwrap_err();
 
         // On déstructure l'erreur de la commande (le wrapper)
-        let crate::utils::error::AppError::Structured(data) = err;
+        let AppError::Structured(data) = err;
 
         // 1. La commande signale un échec global d'exécution
         assert_eq!(data.code, "ERR_RULE_EVAL_EXECUTION");
@@ -153,19 +152,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_model_integration() {
-        // Pour tester validate_model (qui utilise le loader), il faut une vraie DB temporaire
-
-        // 1. Setup DB
-        let dir = tempdir().unwrap();
-        let config = crate::json_db::storage::JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage,
-            "test_space",
-            "test_db",
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
 
         // 2. Setup Loader
         let loader = ModelLoader::new_with_manager(manager);

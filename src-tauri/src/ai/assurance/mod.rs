@@ -6,55 +6,34 @@ pub mod xai;
 pub use quality::{QualityReport, QualityStatus};
 pub use xai::{XaiFrame, XaiMethod};
 
-use crate::json_db::{
-    collections::manager::CollectionsManager, // 🎯 Import du moteur de Base de Données
-    storage::{JsonDbConfig, StorageEngine},
-};
-use crate::utils::{
-    config::AppConfig, // 🎯 Import de la configuration
-    prelude::*,
-};
-use std::path::Path;
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::utils::prelude::*;
 
 // --- PERSISTANCE (Assurance Store via JsonDB) ---
 pub mod persistence {
     use super::*;
 
-    /// Sauvegarde un rapport de qualité dans le JsonDb (avec validation de schéma JSON-LD)
+    /// Sauvegarde un rapport de qualité dans le JsonDb
     pub async fn save_quality_report(
-        domain_root: &Path,
+        manager: &CollectionsManager<'_>, // 🎯 FIX: On injecte le manager directement !
         report: &QualityReport,
     ) -> RaiseResult<String> {
-        let config = AppConfig::get();
-        let domain = &config.system_domain;
-        let db = &config.system_db;
-
-        // 🎯 Initialisation du moteur JsonDB
-        let db_config = JsonDbConfig::new(domain_root.to_path_buf());
-        let storage = StorageEngine::new(db_config);
-        let manager = CollectionsManager::new(&storage, domain, db);
-
         // S'assure que la collection existe avant d'écrire
         let _ = manager.create_collection("quality_reports", None).await;
 
         let doc = crate::utils::data::to_value(report)?;
 
-        // 🎯 L'Upsert gère automatiquement l'indexation et la validation du schéma
+        // L'Upsert gère automatiquement l'indexation et la validation du schéma
         manager.upsert_document("quality_reports", doc).await?;
 
         Ok(report.id.clone())
     }
 
-    /// Sauvegarde une trame XAI dans le JsonDb (avec validation de schéma JSON-LD)
-    pub async fn save_xai_frame(domain_root: &Path, frame: &XaiFrame) -> RaiseResult<String> {
-        let config = AppConfig::get();
-        let domain = &config.system_domain;
-        let db = &config.system_db;
-
-        let db_config = JsonDbConfig::new(domain_root.to_path_buf());
-        let storage = StorageEngine::new(db_config);
-        let manager = CollectionsManager::new(&storage, domain, db);
-
+    /// Sauvegarde une trame XAI dans le JsonDb
+    pub async fn save_xai_frame(
+        manager: &CollectionsManager<'_>, // 🎯 FIX: Idem ici
+        frame: &XaiFrame,
+    ) -> RaiseResult<String> {
         let _ = manager.create_collection("xai_frames", None).await;
 
         let doc = crate::utils::data::to_value(frame)?;
@@ -71,26 +50,17 @@ mod tests {
     use super::*;
     use crate::ai::assurance::quality::MetricCategory;
     use crate::ai::assurance::xai::ExplanationScope;
-    use crate::utils::config::test_mocks;
-    use crate::utils::io::tempdir; // 🎯 Sandbox
+    use crate::utils::config::test_mocks::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_save_assurance_artifacts_with_json_db() {
-        // 🎯 Sandbox pour éviter de polluer le vrai répertoire
-        test_mocks::inject_mock_config();
-        let config = AppConfig::get();
-        let domain = &config.system_domain;
-        let db = &config.system_db;
-
-        let dir = tempdir().unwrap();
-        let root_path = dir.path();
-
-        // Setup du manager pour vérifier la lecture à la fin du test
-        let db_config = JsonDbConfig::new(root_path.to_path_buf());
-        let storage = StorageEngine::new(db_config);
-        let manager = CollectionsManager::new(&storage, domain, db);
-
-        // 1. Test Sauvegarde Quality Report
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        // 3. Test Sauvegarde Quality Report
         let mut report = QualityReport::new("model_test", "dataset_v1");
         report.add_metric(
             "Accuracy",
@@ -101,7 +71,7 @@ mod tests {
             true,
         );
 
-        let report_id = persistence::save_quality_report(root_path, &report)
+        let report_id = persistence::save_quality_report(&manager, &report)
             .await
             .expect("Sauvegarde QualityReport échouée");
 
@@ -115,10 +85,10 @@ mod tests {
         assert_eq!(saved_report["model_id"], "model_test");
         assert_eq!(saved_report["global_score"], 100.0);
 
-        // 2. Test Sauvegarde XAI Frame
+        // 4. Test Sauvegarde XAI Frame
         let frame = XaiFrame::new("model_test", XaiMethod::Lime, ExplanationScope::Local);
 
-        let frame_id = persistence::save_xai_frame(root_path, &frame)
+        let frame_id = persistence::save_xai_frame(&manager, &frame)
             .await
             .expect("Sauvegarde XaiFrame échouée");
 

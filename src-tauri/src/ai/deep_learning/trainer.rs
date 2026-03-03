@@ -68,15 +68,15 @@ impl<'a> Trainer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::{test_mocks, AppConfig}; // 🎯 Import des mocks
+    use crate::utils::config::test_mocks::DbSandbox;
     use candle_core::DType;
     use candle_nn::VarBuilder;
 
-    #[test]
-    fn test_training_convergence() -> RaiseResult<()> {
+    #[tokio::test]
+    async fn test_training_convergence() -> RaiseResult<()> {
         // 1. Initialisation via le Singleton (Moule de test : 10, 20, 5)
-        test_mocks::inject_mock_config();
-        let config = &AppConfig::get().deep_learning;
+        let sandbox = DbSandbox::new().await;
+        let config = &sandbox.config.deep_learning;
         let device = config.to_device();
 
         let varmap = VarMap::new();

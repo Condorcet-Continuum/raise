@@ -246,12 +246,8 @@ impl Agent for SoftwareAgent {
 mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{io::tempdir, Arc};
-
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::config::AppConfig;
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_software_id() {
@@ -277,26 +273,18 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_software_generation_integration() {
-        // 1. Initialisation Mock Config
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let domain_root = dir.path().to_path_buf();
-        let dataset_root = dir.path().join("dataset");
-
-        let config = JsonDbConfig::new(domain_root.clone());
-        let db = Arc::new(StorageEngine::new(config));
-
-        // 2. Initialisation DB via AppConfig
-        let app_cfg = AppConfig::get();
-        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
-        let _ = manager.init_db().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         // 🎯 Injection du composant LLM pour le test
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         // 3. SEED DB : Injection du composant logique pour qu'il soit trouvé
@@ -320,10 +308,10 @@ mod tests {
         let ctx = AgentContext::new(
             "dev",
             "sess_sw_01",
-            db,
+            sandbox.db,
             llm,
-            domain_root.clone(),
-            dataset_root,
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
         )
         .await;
 

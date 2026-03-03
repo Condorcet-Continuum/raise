@@ -33,8 +33,8 @@ impl JsonDbConfig {
         self.db_root(space, db).join("collections").join(collection)
     }
 
-    pub fn db_schemas_root(&self, space: &str, _db: &str) -> PathBuf {
-        self.db_root(space, "_system").join("schemas")
+    pub fn db_schemas_root(&self, space: &str, db: &str) -> PathBuf {
+        self.db_root(space, db).join("schemas")
     }
 }
 
@@ -43,19 +43,51 @@ impl JsonDbConfig {
 #[derive(Debug, Clone)]
 pub struct StorageEngine {
     pub config: JsonDbConfig,
-    pub cache: cache::Cache<String, Value>,
+    // ✅ OPTIMISATION : Une clé structurée plutôt qu'une chaîne de caractères formatée !
+    pub cache: cache::Cache<(String, String, String, String), Value>,
 }
 
 impl StorageEngine {
     pub fn new(config: JsonDbConfig) -> Self {
         Self {
             config,
-            // Utilisation d'une capacité de 1000 avec la nouvelle logique LRU
             cache: cache::Cache::new(1000, None),
         }
     }
 
-    /// Écrit un document de manière asynchrone (Disque + Cache)
+    /// Lit un document en cherchant d'abord dans le cache LRU
+    pub async fn read_document(
+        &self,
+        space: &str,
+        db: &str,
+        collection: &str,
+        id: &str,
+    ) -> RaiseResult<Option<Value>> {
+        // La création d'un tuple est plus rapide qu'un format! macro
+        let cache_key = (
+            space.to_string(),
+            db.to_string(),
+            collection.to_string(),
+            id.to_string(),
+        );
+
+        // ✅ Point de suspension `.await`
+        if let Some(doc) = self.cache.get(&cache_key).await {
+            return Ok(Some(doc));
+        }
+
+        // Cache Miss : Lecture asynchrone sur disque
+        let doc_opt = file_storage::read_document(&self.config, space, db, collection, id).await?;
+
+        // Hydratation du cache si le document existe
+        if let Some(doc) = &doc_opt {
+            self.cache.put(cache_key, doc.clone()).await;
+        }
+
+        Ok(doc_opt)
+    }
+
+    /// Écrit un document sur le disque et met à jour le cache
     pub async fn write_document(
         &self,
         space: &str,
@@ -64,40 +96,18 @@ impl StorageEngine {
         id: &str,
         doc: &Value,
     ) -> RaiseResult<()> {
-        // 1. Écriture disque atomique et asynchrone
         file_storage::write_document(&self.config, space, db, collection, id, doc).await?;
 
-        // 2. Mise à jour du cache LRU (opération synchrone en RAM)
-        let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
-        self.cache.put(cache_key, doc.clone());
+        let cache_key = (
+            space.to_string(),
+            db.to_string(),
+            collection.to_string(),
+            id.to_string(),
+        );
 
+        // Write-through en mémoire (.await)
+        self.cache.put(cache_key, doc.clone()).await;
         Ok(())
-    }
-
-    /// Lit un document (Cache Hit d'abord, sinon Disque Async)
-    pub async fn read_document(
-        &self,
-        space: &str,
-        db: &str,
-        collection: &str,
-        id: &str,
-    ) -> RaiseResult<Option<Value>> {
-        let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
-
-        // 1. Vérification du cache
-        if let Some(doc) = self.cache.get(&cache_key) {
-            return Ok(Some(doc));
-        }
-
-        // 2. Lecture disque asynchrone
-        let doc_opt = file_storage::read_document(&self.config, space, db, collection, id).await?;
-
-        // 3. Mise en cache si trouvé
-        if let Some(doc) = &doc_opt {
-            self.cache.put(cache_key, doc.clone());
-        }
-
-        Ok(doc_opt)
     }
 
     /// Supprime un document (Disque Async + Cache)
@@ -108,12 +118,16 @@ impl StorageEngine {
         collection: &str,
         id: &str,
     ) -> RaiseResult<()> {
-        // Suppression disque
         file_storage::delete_document(&self.config, space, db, collection, id).await?;
 
-        // Suppression cache
-        let cache_key = format!("{}/{}/{}/{}", space, db, collection, id);
-        self.cache.remove(&cache_key);
+        let cache_key = (
+            space.to_string(),
+            db.to_string(),
+            collection.to_string(),
+            id.to_string(),
+        );
+
+        self.cache.remove(&cache_key).await;
         Ok(())
     }
 }
@@ -131,21 +145,25 @@ mod tests {
 
         let doc = json!({"val": 42});
 
-        // Test écriture
         engine
             .write_document("s", "d", "c", "1", &doc)
             .await
             .unwrap();
 
-        // Le cache doit contenir la valeur
-        assert!(engine.cache.get(&"s/d/c/1".to_string()).is_some());
+        // On utilise la nouvelle structure de clé
+        let key = (
+            "s".to_string(),
+            "d".to_string(),
+            "c".to_string(),
+            "1".to_string(),
+        );
 
-        // Lecture (doit retourner la valeur, idéalement depuis le cache)
-        let read = engine
-            .read_document("s", "d", "c", "1")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(read["val"], 42);
+        assert!(engine.cache.get(&key).await.is_some());
+
+        let read = engine.read_document("s", "d", "c", "1").await.unwrap();
+        assert_eq!(read, Some(doc));
+
+        engine.delete_document("s", "d", "c", "1").await.unwrap();
+        assert!(engine.cache.get(&key).await.is_none());
     }
 }

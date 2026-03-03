@@ -178,7 +178,7 @@ impl Agent for HardwareAgent {
                 let gen_path = ctx.paths.domain_root.join("src-gen");
 
                 // ✅ OPTIMISATION : Utilisation de la config globale pour CodeGenTool
-                let config = crate::utils::config::AppConfig::get();
+                let config = AppConfig::get();
                 let tool = CodeGenTool::new(
                     gen_path,
                     ctx.db.clone(),
@@ -266,12 +266,8 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::ai::protocols::acl::Performative;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{io::tempdir, Arc};
-
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::config::AppConfig;
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_category_detection() {
@@ -299,23 +295,17 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_hardware_generation_integration() {
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let domain_root = dir.path().to_path_buf();
-
-        let config = JsonDbConfig::new(domain_root.clone());
-        let db = Arc::new(StorageEngine::new(config));
-
-        let app_cfg = AppConfig::get();
-        let manager = CollectionsManager::new(&db, &app_cfg.system_domain, &app_cfg.system_db);
-        let _ = manager.init_db().await;
-
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         // 🎯 Injection du composant LLM
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let comp_doc = json!({
@@ -340,10 +330,10 @@ mod tests {
         let ctx = AgentContext::new(
             "tester",
             "sess_hw_01",
-            db,
+            sandbox.db,
             llm,
-            domain_root.clone(),
-            domain_root.clone(),
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
         )
         .await;
 
@@ -376,29 +366,18 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn generate_hardware_in_user_domain() {
-        inject_mock_config();
-
-        let app_config = AppConfig::get();
-        let domain_root = app_config
-            .get_path("PATH_RAISE_DOMAIN")
-            .expect("PATH_RAISE_DOMAIN doit être défini");
-
-        if !domain_root.exists() {
-            std::fs::create_dir_all(&domain_root).unwrap();
-        }
-
-        let config = JsonDbConfig::new(domain_root.clone());
-        let db = Arc::new(StorageEngine::new(config));
-
-        let manager =
-            CollectionsManager::new(&db, &app_config.system_domain, &app_config.system_db);
-        let _ = manager.init_db().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         // 🎯 Injection du composant LLM
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let comp_doc = json!({
@@ -423,10 +402,10 @@ mod tests {
         let ctx = AgentContext::new(
             "zair",
             "session_live",
-            db,
+            sandbox.db.clone(),
             llm,
-            domain_root.clone(),
-            domain_root.clone(),
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
         )
         .await;
 

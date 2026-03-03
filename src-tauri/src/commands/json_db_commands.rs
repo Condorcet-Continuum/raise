@@ -1,11 +1,11 @@
 // FICHIER : src-tauri/src/commands/json_db_commands.rs
 
-use crate::utils::prelude::*;
+use crate::utils::{io, prelude::*};
 
 use crate::json_db::collections::manager::{self, CollectionsManager};
 use crate::json_db::query::{sql::SqlRequest, Query, QueryEngine, QueryResult};
 use crate::json_db::schema::SchemaRegistry;
-use crate::json_db::storage::{file_storage, StorageEngine};
+use crate::json_db::storage::StorageEngine;
 use crate::json_db::transactions::manager::TransactionManager;
 use tauri::{command, State};
 
@@ -26,34 +26,20 @@ pub async fn jsondb_create_db(
     space: String,
     db: String,
 ) -> RaiseResult<bool> {
-    // 1. Création physique (Système de fichiers)
-    if let Err(e) = file_storage::create_db(&storage.config, &space, &db).await {
-        raise_error!(
-            "ERR_DB_FILESYSTEM_CREATION_FAILED",
-            error = e,
-            context = json!({
-                "action": "create_db_directory",
-                "space": space,
-                "db": db,
-                "data_root": storage.config.data_root,
-                "hint": "Impossible de créer les répertoires sur le disque. Vérifiez les permissions d'écriture."
-            })
-        );
-    }
-
     // 2. Récupération du manager (Accès logique)
     let manager = mgr(&storage, &space, &db)?;
 
-    // 3. Initialisation des tables/schémas internes
+    // 2. init_db() gère la validation des schémas, l'instanciation et délègue au storage !
     match manager.init_db().await {
-        Ok(_) => Ok(true),
+        Ok(created) => Ok(created),
         Err(e) => raise_error!(
-            "ERR_DB_LOGICAL_INIT_FAILED",
+            "ERR_DB_CREATION_FAILED",
             error = e,
             context = json!({
-                "action": "initialize_db_metadata",
+                "action": "create_and_initialize_db",
+                "space": space,
                 "db": db,
-                "hint": "Le répertoire a été créé mais l'initialisation des métadonnées a échoué."
+                "hint": "L'initialisation a échoué. Vérifiez que le schéma d'index est présent dans le noyau de confiance et que les permissions disque sont correctes."
             })
         ),
     }
@@ -65,17 +51,19 @@ pub async fn jsondb_drop_db(
     space: String,
     db: String,
 ) -> RaiseResult<bool> {
-    // 1. Exécution de la suppression physique avec capture d'erreur système
-    match file_storage::drop_db(&storage.config, &space, &db, file_storage::DropMode::Hard).await {
-        Ok(_) => Ok(true),
+    // 1. Toujours passer par le manager
+    let manager = mgr(&storage, &space, &db)?;
+
+    // 2. Exécution de la suppression logique et physique
+    match manager.drop_db().await {
+        Ok(dropped) => Ok(dropped),
         Err(e) => raise_error!(
             "ERR_DB_DROP_FAILED",
             error = e,
             context = json!({
-                "action": "drop_database_hard",
+                "action": "drop_database",
                 "space": space,
                 "db": db,
-                "mode": "Hard",
                 "hint": "Échec de la suppression physique. Un fichier est peut-être utilisé par un autre processus ou les permissions sont insuffisantes."
             })
         ),
@@ -535,7 +523,7 @@ pub async fn jsondb_execute_sql(
         }
         // CAS ÉCRITURE (INSERT / UPDATE)
         SqlRequest::Write(requests) => {
-            let tx_mgr = TransactionManager::new(&storage.config, &space, &db);
+            let tx_mgr = TransactionManager::new(&storage, &space, &db);
 
             if let Err(e) = tx_mgr.execute_smart(requests).await {
                 raise_error!(
@@ -646,7 +634,7 @@ pub async fn jsondb_init_demo_rules(
         .join("v1/invoices/default.json");
     if let Some(parent) = schema_path.parent() {
         // On remplace le map_err par un match ou un if let Err explicite
-        if let Err(e) = std::fs::create_dir_all(parent) {
+        if let Err(e) = io::create_dir_all(parent).await {
             raise_error!(
                 "ERR_FS_DIR_CREATION_FAIL",
                 error = e,
@@ -766,7 +754,7 @@ pub async fn jsondb_init_model_rules(
         .join("v1/la/functions.json");
     // 1. Création sécurisée du répertoire parent
     if let Some(parent) = schema_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
+        if let Err(e) = io::create_dir_all(parent).await {
             raise_error!(
                 "ERR_FS_DIR_CREATION_FAIL",
                 error = e,

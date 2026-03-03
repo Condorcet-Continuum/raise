@@ -14,14 +14,11 @@ pub use store::RuleStore;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules_engine::ast::Expr;
-    use crate::utils::data::json;
-
-    // Imports nécessaires pour les tests d'intégration du Store
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use std::collections::HashSet;
-    use tempfile::tempdir;
+    use crate::rules_engine::ast::Expr;
+    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::data::json;
+    use crate::utils::HashSet;
 
     #[tokio::test]
     async fn test_rete_light_workflow() {
@@ -85,13 +82,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_rule_store_indexing() {
-        // Setup de l'environnement DB temporaire
-        crate::utils::config::test_mocks::inject_mock_config();
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test_space", "test_db");
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let mut store = RuleStore::new(&manager);
 

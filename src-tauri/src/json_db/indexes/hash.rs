@@ -4,11 +4,12 @@ use crate::utils::data::HashMap;
 use crate::utils::prelude::*;
 
 use super::{driver, paths, IndexDefinition};
-use crate::json_db::storage::JsonDbConfig;
+// ✅ AJOUT : Import du StorageEngine
+use crate::json_db::storage::StorageEngine;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn update_hash_index(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine, // ✅ MODIFIÉ
     space: &str,
     db: &str,
     collection: &str,
@@ -17,27 +18,37 @@ pub async fn update_hash_index(
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
 ) -> RaiseResult<()> {
-    let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
-    // On spécifie le type concret HashMap pour le driver générique (appel async)
+    // ✅ MODIFIÉ : On extrait la config du storage pour le path
+    let path = paths::index_path(
+        &storage.config,
+        space,
+        db,
+        collection,
+        &def.name,
+        def.index_type,
+    );
     driver::update::<HashMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
 }
 
 /// Recherche des IDs de documents correspondant exactement à une valeur.
 pub async fn search_hash_index(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine, // ✅ MODIFIÉ
     space: &str,
     db: &str,
     collection: &str,
     def: &IndexDefinition,
     value: &Value,
 ) -> RaiseResult<Vec<String>> {
-    let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
+    let path = paths::index_path(
+        &storage.config,
+        space,
+        db,
+        collection,
+        &def.name,
+        def.index_type,
+    );
 
-    // IMPORTANT : La clé stockée dans l'index est la représentation stringifiée du JSON.
-    // Ex: Si value est string "admin", key sera "\"admin\"" (avec les guillemets).
     let key = value.to_string();
-
-    // Appel async au driver
     driver::search::<HashMap<String, Vec<String>>>(&path, &key).await
 }
 
@@ -45,10 +56,10 @@ pub async fn search_hash_index(
 mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
-    // Utilisation de la façade pour les tests
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::utils::{
-        io::{self, tempdir}, // fs enrichi + tempdir
-        json::json,          // macro json!
+        io::{self, tempdir},
+        json::json,
     };
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
@@ -57,10 +68,12 @@ mod tests {
         (dir, cfg)
     }
 
-    #[tokio::test] // Migration vers tokio test
+    #[tokio::test]
     async fn test_hash_lifecycle() {
         let (dir, cfg) = setup_env();
-        // Création structure dossiers nécessaire pour le test
+        // ✅ AJOUT : Création du StorageEngine pour les tests
+        let storage = StorageEngine::new(cfg);
+
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
         io::ensure_dir(&idx_dir).await.unwrap();
 
@@ -71,30 +84,30 @@ mod tests {
             unique: true,
         };
 
-        // 1. Insertion (Async)
+        // 1. Insertion
         let doc = json!({ "email": "test@mail.com" });
-        update_hash_index(&cfg, "s", "d", "c", &def, "doc1", None, Some(&doc))
+        update_hash_index(&storage, "s", "d", "c", &def, "doc1", None, Some(&doc))
             .await
             .unwrap();
 
-        // 2. Recherche (Succès - Async)
-        let results = search_hash_index(&cfg, "s", "d", "c", &def, &json!("test@mail.com"))
+        // 2. Recherche (Succès)
+        let results = search_hash_index(&storage, "s", "d", "c", &def, &json!("test@mail.com"))
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "doc1");
 
-        // 3. Recherche (Echec - Async)
-        let empty = search_hash_index(&cfg, "s", "d", "c", &def, &json!("other@mail.com"))
+        // 3. Recherche (Echec)
+        let empty = search_hash_index(&storage, "s", "d", "c", &def, &json!("other@mail.com"))
             .await
             .unwrap();
         assert!(empty.is_empty());
 
-        // 4. Suppression (Mise à jour vers None - Async)
-        update_hash_index(&cfg, "s", "d", "c", &def, "doc1", Some(&doc), None)
+        // 4. Suppression
+        update_hash_index(&storage, "s", "d", "c", &def, "doc1", Some(&doc), None)
             .await
             .unwrap();
-        let deleted = search_hash_index(&cfg, "s", "d", "c", &def, &json!("test@mail.com"))
+        let deleted = search_hash_index(&storage, "s", "d", "c", &def, &json!("test@mail.com"))
             .await
             .unwrap();
         assert!(deleted.is_empty());

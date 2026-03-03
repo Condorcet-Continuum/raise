@@ -12,13 +12,16 @@ async fn test_end_to_end_rules_execution() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let config = &env.storage.config;
 
+    // ✅ NOUVEAU : On crée une référence directe au StorageEngine
+    let storage = &env.storage;
+
     // On utilise l'espace et la DB fournis par l'environnement
     let space = &env.space;
     let db = &env.db;
 
     // L'init_db est déjà fait par setup_test_env, mais on peut le rappeler par sécurité
     // (create_db est idempotent)
-    CollectionsManager::new(&env.storage, space, db)
+    CollectionsManager::new(storage, space, db)
         .init_db()
         .await
         .unwrap();
@@ -54,7 +57,7 @@ async fn test_end_to_end_rules_execution() {
         ]
     });
 
-    // On écrit le schéma dans le dossier temporaire du test
+    // On écrit le schéma dans le dossier temporaire du test (le config reste utile ici)
     let schema_inv_path = config
         .db_schemas_root(space, db)
         .join("v1/invoices/default.json");
@@ -63,7 +66,8 @@ async fn test_end_to_end_rules_execution() {
     fs::write(&schema_inv_path, schema_content.to_string()).unwrap();
 
     // 3. Création collection
-    collections::create_collection(config, space, db, "invoices")
+    // ✅ CORRECTION : Remplacement de `config` par `storage`
+    collections::create_collection(storage, space, db, "invoices")
         .await
         .unwrap();
 
@@ -75,8 +79,9 @@ async fn test_end_to_end_rules_execution() {
         "price": 50
     });
 
+    // ✅ CORRECTION : Remplacement de `config` par `storage`
     let result =
-        collections::insert_with_schema(config, space, db, "invoices/default.json", invoice_input)
+        collections::insert_with_schema(storage, space, db, "invoices/default.json", invoice_input)
             .await
             .expect("Insert invoice failed");
 

@@ -70,7 +70,6 @@ pub mod net_client {
 /// **Le Prélude** : À utiliser via `use crate::utils::prelude::*;`
 pub mod prelude {
     pub use super::context::AppConfig;
-    // Ré-intégration de Result ici pour éviter les erreurs de type dans les services
     pub use super::core::{anyhow, AppError, Context, Local, RaiseResult, Result, Utc, Uuid};
     pub use super::data::{json, Deserialize, Serialize, Value};
     pub use super::io::Path;
@@ -101,8 +100,10 @@ pub use tracing::{debug, error, info, instrument, warn};
 pub use std::future::Future;
 pub use std::pin::Pin;
 pub use std::sync::{
-    Arc, Mutex, MutexGuard, Once, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    Arc, Mutex, Mutex as SyncMutex, MutexGuard, Once, OnceLock, RwLock, RwLockReadGuard,
+    RwLockWriteGuard,
 };
+
 pub use tokio::sync::mpsc;
 pub use tokio::sync::Mutex as AsyncMutex;
 pub use tokio::sync::RwLock as AsyncRwLock;

@@ -244,10 +244,11 @@ impl ModelValidator for ConsistencyChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::jsonld::vocabulary::{arcadia_types, namespaces};
     use crate::model_engine::types::NameType;
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::{data::HashMap, io::tempdir};
+    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::data::HashMap;
 
     fn create_dummy_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
         ArcadiaElement {
@@ -307,16 +308,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_validation_scans_transverse() {
-        // SETUP : Création d'un environnement DB avec une Exigence mal formée
-        use crate::json_db::collections::manager::CollectionsManager;
-        use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        let manager = CollectionsManager::new(&storage, "test_check", "db_check");
-        manager.init_db().await.unwrap();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         // Insertion d'une Exigence SANS NOM (doit déclencher SYS_002)
         let invalid_req = json!({

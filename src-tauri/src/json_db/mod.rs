@@ -11,14 +11,13 @@ pub mod transactions;
 
 // ============================================================================
 // UTILITAIRES DE TEST (Intégrés)
-// Ce module n'est compilé que lors de l'exécution des tests (cargo test)
 // ============================================================================
 #[cfg(test)]
 pub mod test_utils {
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::fs;
-    use crate::utils::prelude::*;
+    use crate::json_db::storage::JsonDbConfig;
+    use crate::utils::config::test_mocks::DbSandbox;
+    use crate::utils::io;
     use crate::utils::Once;
     use std::path::PathBuf;
 
@@ -27,125 +26,61 @@ pub mod test_utils {
     pub const TEST_SPACE: &str = "test_space";
     pub const TEST_DB: &str = "test_db";
 
+    /// Notre environnement de test intègre maintenant la Sandbox comme moteur principal
     pub struct TestEnv {
+        pub sandbox: DbSandbox, // 🎯 Encapsulation parfaite du moteur et du dossier
         pub cfg: JsonDbConfig,
-        pub storage: StorageEngine,
         pub space: String,
         pub db: String,
-        pub tmp_dir: tempfile::TempDir,
     }
 
-    /// Initialise un environnement de test complet (Async)
+    /// Initialise un environnement de test complet et isolé
     pub async fn init_test_env() -> TestEnv {
-        // Initialisation du logger une seule fois
+        // 1. Initialisation unique du Logger (plus besoin de thread complexe !)
         INIT.call_once(|| {
             let _ = tracing_subscriber::fmt()
                 .with_env_filter("info")
                 .with_test_writer()
                 .try_init();
-
-            crate::utils::config::test_mocks::inject_mock_config();
         });
 
-        let tmp_dir = tempfile::tempdir().expect("create temp dir");
-        let data_root = tmp_dir.path().to_path_buf();
+        // 2. 🎯 LA MAGIE : La Sandbox gère l'isolation, la DB, et le schéma maître (_system)
+        let sandbox = DbSandbox::new().await;
 
-        let cfg = JsonDbConfig {
-            data_root: data_root.clone(),
-        };
+        let data_root = sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap();
+        let cfg = JsonDbConfig::new(data_root.clone());
 
-        // 1. Création de la structure de base
-        let db_root = cfg.db_root(TEST_SPACE, TEST_DB);
-        fs::create_dir_all(&db_root).await.expect("create db root");
-
-        // 2. GESTION INTELLIGENTE DES SCHÉMAS (Réel ou Mock)
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let possible_paths = vec![
-            manifest_dir.join("../schemas/v1"),
-            manifest_dir.join("schemas/v1"),
-            PathBuf::from("schemas/v1"),
-        ];
-
-        let src_schemas = possible_paths.into_iter().find(|p| p.exists());
-        let dest_schemas_root = cfg.db_schemas_root(TEST_SPACE, TEST_DB).join("v1");
-
-        // Création du dossier destination
-        fs::create_dir_all(&dest_schemas_root)
+        // 3. Initialisation du namespace de test spécifique (TEST_SPACE / TEST_DB)
+        let mgr = CollectionsManager::new(&sandbox.storage, TEST_SPACE, TEST_DB);
+        mgr.init_db()
             .await
-            .expect("create schema dir");
+            .expect("Erreur init_db pour l'espace de test");
 
-        if let Some(src) = src_schemas {
-            // CAS A : Les fichiers réels existent (Dev local) -> On copie
-            if let Err(e) = fs::copy_dir_all(&src, &dest_schemas_root).await {
-                eprintln!(
-                    "⚠️ Warning: Echec copie schémas réels ({}), passage en mode Mock.",
-                    e
-                );
-                generate_mock_schemas(&dest_schemas_root).await;
-            }
-        } else {
-            // CAS B : Environnement isolé (CI/Test) -> On génère des bouchons
-            eprintln!(
-                "ℹ️ Info: Schémas source introuvables. Génération de schémas Mock pour le test."
-            );
-            generate_mock_schemas(&dest_schemas_root).await;
-        }
-
-        // 3. INITIALISATION DU MOTEUR
-        let storage = StorageEngine::new(cfg.clone());
-        let mgr = CollectionsManager::new(&storage, TEST_SPACE, TEST_DB);
-
-        // On ignore les erreurs d'init migration si on est en mode mock complet
-        let _ = mgr.init_db().await;
-
-        // 4. CRÉATION DES DATASETS MOCKS (Données de test)
+        // 4. Création des datasets
         create_mock_dataset(&data_root).await;
 
         TestEnv {
+            sandbox,
             cfg,
-            storage,
             space: TEST_SPACE.to_string(),
             db: TEST_DB.to_string(),
-            tmp_dir,
         }
     }
 
-    /// Génère des schémas minimaux pour permettre au moteur de démarrer sans erreurs
-    async fn generate_mock_schemas(root: &PathBuf) {
-        // Schéma minimal pour mandates.json (utilisé dans executor.rs)
-        let mandate_schema = r#"{
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "title": "Mandate",
-            "type": "object",
-            "properties": { "id": { "type": "string" } },
-            "required": ["id"]
-        }"#;
-
-        let _ = fs::write(root.join("mandates.json"), mandate_schema).await;
-
-        // Schéma minimal pour l'index système (utilisé par CollectionsManager)
-        let index_db_dir = root.join("db");
-        let _ = fs::create_dir_all(&index_db_dir).await;
-
-        let index_schema = r#"{
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "title": "Database Index",
-            "type": "object"
-        }"#;
-        let _ = fs::write(index_db_dir.join("index.schema.json"), index_schema).await;
-    }
-
     async fn create_mock_dataset(data_root: &PathBuf) {
+        // ... (⚠️ GARDEZ VOTRE CODE ACTUEL POUR CETTE FONCTION) ...
+        // Tout le contenu avec article.json, position_gps.json, etc. reste identique !
+
         let dataset_root = data_root.join("dataset");
-        let _ = fs::create_dir_all(&dataset_root).await;
+        let _ = io::create_dir_all(&dataset_root).await;
 
         // Mock Article
         let article_path = dataset_root.join("arcadia/v1/data/articles/article.json");
         if let Some(p) = article_path.parent() {
-            let _ = fs::create_dir_all(p).await;
+            let _ = io::create_dir_all(p).await;
         }
 
-        let mock_article = json!({
+        let mock_article = serde_json::json!({
             "handle": "mock-handle",
             "displayName": "Mock Article",
             "slug": "mock-slug",
@@ -153,28 +88,28 @@ pub mod test_utils {
             "status": "draft",
             "authorId": "00000000-0000-0000-0000-000000000000"
         });
-        let _ = fs::write_json_atomic(&article_path, &mock_article).await;
+        let _ = io::write_json_atomic(&article_path, &mock_article).await;
 
         // Mock Exchange Item
         let ex_path = dataset_root.join("arcadia/v1/data/exchange-items/position_gps.json");
         if let Some(p) = ex_path.parent() {
-            let _ = fs::create_dir_all(p).await;
+            let _ = io::create_dir_all(p).await;
         }
 
-        let _ = fs::write_json_atomic(
+        let _ = io::write_json_atomic(
             &ex_path,
-            &json!({ "name": "GPS Position", "mechanism": "Flow" }),
+            &serde_json::json!({ "name": "GPS Position", "mechanism": "Flow" }),
         )
         .await;
+
         let system_collections = data_root.join("_system/_system/collections");
 
-        // 1. Création de la fausse dApp
         let dapp_id = "mock-dapp-id";
         let dapp_path = system_collections.join("dapps");
-        let _ = fs::create_dir_all(&dapp_path).await;
-        let _ = fs::write_json_atomic(
+        let _ = io::create_dir_all(&dapp_path).await;
+        let _ = io::write_json_atomic(
             &dapp_path.join(format!("{}.json", dapp_id)),
-            &json!({
+            &serde_json::json!({
                 "id": dapp_id,
                 "handle": "raise-core",
                 "name": "raise_core",
@@ -183,30 +118,27 @@ pub mod test_utils {
         )
         .await;
 
-        // 2. Création du faux Service AI
         let service_id = "mock-ai-service-id";
         let services_path = system_collections.join(format!("dapps/{}/services", dapp_id));
-        let _ = fs::create_dir_all(&services_path).await;
-        let _ = fs::write_json_atomic(
+        let _ = io::create_dir_all(&services_path).await;
+        let _ = io::write_json_atomic(
             &services_path.join(format!("{}.json", service_id)),
-            &json!({
+            &serde_json::json!({
                 "id": service_id,
                 "identity": { "service_id": "AI", "status": "enabled" }
             }),
         )
         .await;
 
-        // 3. Création des faux Composants (ex: LLM et Embeddings pour Candle)
         let components_path = system_collections.join(format!(
             "dapps/{}/services/{}/components",
             dapp_id, service_id
         ));
-        let _ = fs::create_dir_all(&components_path).await;
+        let _ = io::create_dir_all(&components_path).await;
 
-        // Composant LLM
-        let _ = fs::write_json_atomic(
+        let _ = io::write_json_atomic(
             &components_path.join("mock-llm-comp.json"),
-            &json!({
+            &serde_json::json!({
                 "id": "mock-llm-comp",
                 "identity": { "component_id": "llm", "version": "1.0.0" },
                 "settings": {
@@ -218,10 +150,9 @@ pub mod test_utils {
         )
         .await;
 
-        // Composant Mémoire/Embeddings
-        let _ = fs::write_json_atomic(
+        let _ = io::write_json_atomic(
             &components_path.join("mock-mem-comp.json"),
-            &json!({
+            &serde_json::json!({
                 "id": "mock-mem-comp",
                 "identity": { "component_id": "memory", "version": "1.0.0" },
                 "settings": {
@@ -236,7 +167,7 @@ pub mod test_utils {
     pub async fn ensure_db_exists(cfg: &JsonDbConfig, space: &str, db: &str) {
         let db_path = cfg.db_root(space, db);
         if !db_path.exists() {
-            let _ = fs::create_dir_all(&db_path).await;
+            let _ = io::create_dir_all(&db_path).await;
         }
     }
 }
@@ -248,23 +179,18 @@ mod tests {
     #[tokio::test]
     async fn test_env_initialization() {
         let env = init_test_env().await;
-        assert!(env.tmp_dir.path().exists());
 
-        // Test que le fallback (Mock ou Réel) a fonctionné
-        // On vérifie simplement que le dossier v1 existe
-        let v1_path = env.cfg.db_schemas_root(&env.space, &env.db).join("v1");
-        assert!(
-            v1_path.exists(),
-            "Le dossier schemas/v1 doit exister (Réel ou Mock)"
-        );
+        // 🎯 L'accès au chemin temporaire se fait désormais via la config de la sandbox
+        let data_root = env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap();
+        assert!(data_root.exists());
 
-        // On vérifie qu'un fichier vital existe (mandates.json ou index)
-        let has_mandate = v1_path.join("mandates.json").exists();
-        let has_index = v1_path.join("db/index.schema.json").exists();
+        // Test que l'injection centralisée a fonctionné
+        let sys_schemas_dir = env.cfg.db_schemas_root("_system", "_system").join("v1");
+        let has_index = sys_schemas_dir.join("db/index.schema.json").exists();
 
         assert!(
-            has_mandate || has_index,
-            "Au moins un schéma doit être présent"
+            has_index,
+            "L'index.schema.json maître doit être présent dans le dossier temporaire"
         );
     }
 }

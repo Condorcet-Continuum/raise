@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/commands/workflow_commands.rs
 
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::{prelude::*, Arc, AsyncMutex, HashMap};
 
 use crate::workflow_engine::{
     ExecutionStatus, Mandate, WorkflowCompiler, WorkflowDefinition, WorkflowInstance,
@@ -9,11 +9,9 @@ use crate::workflow_engine::{
 
 // 🎯 FIX: Suppression de l'import du VIBRATION_SENSOR (Mutex supprimé)
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-use std::path::PathBuf;
+use crate::json_db::storage::StorageEngine;
 
 use tauri::{command, State};
-use tokio::sync::Mutex;
 
 /// Structure qui contient l'état global du moteur de workflow.
 #[derive(Default)]
@@ -42,57 +40,23 @@ impl From<&WorkflowInstance> for WorkflowView {
     }
 }
 
-// --- HELPER DB ---
-fn create_db_manager() -> RaiseResult<(StorageEngine, String, String)> {
-    let config = AppConfig::get();
-    let path = config
-        .get_path("PATH_RAISE_DOMAIN")
-        .unwrap_or_else(|| PathBuf::from("./_system"));
-
-    let storage = StorageEngine::new(JsonDbConfig::new(path));
-    Ok((
-        storage,
-        config.system_domain.clone(),
-        config.system_db.clone(),
-    ))
-}
-
 // --- COMMANDES EXPOSÉES AU FRONTEND ---
 
 /// Met à jour la valeur du capteur de vibration (Jumeau Numérique).
 #[command]
-pub async fn set_sensor_value(value: f64) -> RaiseResult<String> {
-    // 🎯 FIX: La commande Tauri écrit maintenant proprement dans le JsonDB (IPC par la donnée) !
-    let (storage, domain, db) = create_db_manager()?;
-    let manager = CollectionsManager::new(&storage, &domain, &db);
+pub async fn set_sensor_value(
+    storage: State<'_, Arc<StorageEngine>>,
+    value: f64,
+) -> RaiseResult<String> {
+    let config = AppConfig::get();
+    let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
-    let sensor_doc = serde_json::json!({
-        "id": "vibration_z",
-        "value": value,
-        "updatedAt": chrono::Utc::now().to_rfc3339()
-    });
-
-    match manager.insert_raw("digital_twin", &sensor_doc).await {
-        Ok(_) => (),
-        Err(e) => raise_error!(
-            "ERR_DT_SENSOR_WRITE_FAIL",
-            error = e,
-            context = json!({
-                "collection": "digital_twin",
-                "sensor_id": sensor_doc.get("id").unwrap_or(&json!("unknown")),
-                "action": "sync_sensor_to_digital_twin",
-                "hint": "Échec de l'écriture. Vérifiez l'intégrité du JSON ou les permissions du dossier 'digital_twin'."
-            })
-        ),
-    };
-
-    // Si on arrive ici, c'est que l'insertion a réussi
-    Ok(format!("Capteur mis à jour en base : {:.2}", value))
+    internal_set_sensor(&manager, value).await
 }
 
 #[command]
 pub async fn submit_mandate(
-    state: State<'_, Mutex<WorkflowStore>>,
+    state: State<'_, AsyncMutex<WorkflowStore>>,
     mandate: Mandate,
 ) -> RaiseResult<String> {
     let mut store = state.lock().await;
@@ -125,7 +89,7 @@ pub async fn submit_mandate(
 
 #[command]
 pub async fn register_workflow(
-    state: State<'_, Mutex<WorkflowStore>>,
+    state: State<'_, AsyncMutex<WorkflowStore>>,
     definition: WorkflowDefinition,
 ) -> RaiseResult<String> {
     let mut store = state.lock().await;
@@ -151,27 +115,23 @@ pub async fn register_workflow(
 
 #[command]
 pub async fn start_workflow(
-    state: State<'_, Mutex<WorkflowStore>>,
+    storage: State<'_, Arc<StorageEngine>>,
+    state: State<'_, AsyncMutex<WorkflowStore>>,
     workflow_id: String,
 ) -> RaiseResult<WorkflowView> {
-    let (storage, domain, db) = create_db_manager()?;
-    let manager = CollectionsManager::new(&storage, &domain, &db);
+    let config = AppConfig::get();
+    let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
     let instance_id = {
         let mut store = state.lock().await;
-        if store.scheduler.is_none() {
-            // 🚨 Alerte critique : Accès au moteur avant initialisation
-            raise_error!(
+        let scheduler = match store.scheduler.as_mut() {
+            Some(s) => s,
+            None => raise_error!(
                 "ERR_WF_SCHEDULER_NOT_READY",
-                context = json!({
-                    "component": "scheduler_store",
-                    "action": "check_engine_readiness",
-                    "hint": "Le scheduler n'a pas été trouvé dans le store global. Assurez-vous que la méthode d'initialisation du moteur a été appelée avec succès avant d'interagir avec les workflows."
-                })
-            );
-        }
+                context = json!({ "action": "start_workflow" })
+            ),
+        };
 
-        let scheduler = store.scheduler.as_mut().unwrap();
         let instance = scheduler.create_instance(&workflow_id, &manager).await?;
         let id = instance.id.clone();
         store.instances.insert(id.clone(), instance);
@@ -183,13 +143,14 @@ pub async fn start_workflow(
 
 #[command]
 pub async fn resume_workflow(
-    state: State<'_, Mutex<WorkflowStore>>,
+    storage: State<'_, Arc<StorageEngine>>,
+    state: State<'_, AsyncMutex<WorkflowStore>>,
     instance_id: String,
     node_id: String,
     approved: bool,
 ) -> RaiseResult<WorkflowView> {
-    let (storage, domain, db) = create_db_manager()?;
-    let manager = CollectionsManager::new(&storage, &domain, &db);
+    let config = AppConfig::get();
+    let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
     {
         let mut guard = state.lock().await;
@@ -197,12 +158,7 @@ pub async fn resume_workflow(
             Some(s) => s,
             None => raise_error!(
                 "ERR_ENGINE_NOT_INITIALIZED",
-                context = json!({
-                    "component": "scheduler",
-                    "action": "execute_task",
-                    "state": "uninitialized",
-                    "hint": "Le moteur d'exécution (Scheduler) n'a pas été démarré. Vérifiez l'ordre d'initialisation de votre application."
-                })
+                context = json!({ "action": "resume_workflow" })
             ),
         };
 
@@ -216,7 +172,7 @@ pub async fn resume_workflow(
 
 #[command]
 pub async fn get_workflow_state(
-    state: State<'_, Mutex<WorkflowStore>>,
+    state: State<'_, AsyncMutex<WorkflowStore>>,
     instance_id: String,
 ) -> RaiseResult<WorkflowView> {
     let store = state.lock().await;
@@ -238,7 +194,7 @@ pub async fn get_workflow_state(
 // --- HELPER : BOUCLE D'EXÉCUTION SOUVERAINE ---
 
 async fn run_workflow_loop(
-    state: State<'_, Mutex<WorkflowStore>>,
+    state: State<'_, AsyncMutex<WorkflowStore>>,
     instance_id: String,
     manager: &CollectionsManager<'_>,
 ) -> RaiseResult<WorkflowView> {
@@ -310,10 +266,28 @@ async fn run_workflow_loop(
     Ok(WorkflowView::from(&updated_instance))
 }
 
+async fn internal_set_sensor(manager: &CollectionsManager<'_>, value: f64) -> RaiseResult<String> {
+    let sensor_doc = serde_json::json!({
+        "id": "vibration_z",
+        "value": value,
+        "updatedAt": chrono::Utc::now().to_rfc3339()
+    });
+
+    if let Err(e) = manager.insert_raw("digital_twin", &sensor_doc).await {
+        raise_error!(
+            "ERR_DT_SENSOR_WRITE_FAIL",
+            error = e,
+            context = serde_json::json!({ "sensor_id": "vibration_z" })
+        );
+    }
+
+    Ok(format!("Capteur mis à jour : {:.2}", value))
+}
 // --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::config::test_mocks::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_store_not_initialized() {
@@ -328,23 +302,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_store_lifecycle() {
+        let store = WorkflowStore::default();
+        assert!(store.scheduler.is_none());
+        assert!(store.instances.is_empty());
+    }
+
+    #[tokio::test]
     #[serial_test::serial]
-    async fn test_set_sensor_value() {
-        crate::utils::config::test_mocks::inject_mock_config();
+    async fn test_internal_set_sensor() {
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        // 1. Mise à jour de la valeur via la commande
-        let result = set_sensor_value(10.5).await;
+        // 🎯 Test de la logique pure
+        let result = internal_set_sensor(&manager, 42.0).await;
         assert!(result.is_ok());
-
-        // 2. Vérification dans JsonDB (IPC validé)
-        let (storage, domain, db) = create_db_manager().unwrap();
-        let manager = CollectionsManager::new(&storage, &domain, &db);
 
         let doc = manager
             .get_document("digital_twin", "vibration_z")
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(doc["value"], 10.5);
+        assert_eq!(doc["value"], 42.0);
     }
 }

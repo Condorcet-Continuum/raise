@@ -21,6 +21,12 @@ pub enum TransactionRequest {
         handle: Option<String>,
         document: Value,
     },
+    Upsert {
+        collection: String,
+        id: Option<String>,
+        handle: Option<String>,
+        document: Value,
+    },
     Delete {
         collection: String,
         id: String,

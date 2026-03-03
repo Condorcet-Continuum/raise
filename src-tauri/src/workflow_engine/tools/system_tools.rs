@@ -77,36 +77,48 @@ impl AgentTool for SystemMonitorTool {
         Ok(metrics)
     }
 }
-
 // =========================================================================
 // TESTS UNITAIRES
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks;
+    // 🎯 IMPORT UNIQUE : On utilise la GlobalDbSandbox car l'outil s'appuie
+    // sur le Singleton global AppConfig, et le test est séquentiel (#[serial]).
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::config::test_mocks::GlobalDbSandbox;
 
     #[tokio::test]
     #[serial_test::serial]
     async fn test_system_tool_persistence_integration() {
-        test_mocks::inject_mock_config();
+        // 1. 🎯 MAGIE : La GlobalDbSandbox configure le mock, purge l'ancienne base,
+        // recrée le schéma et initialise le tout en UNE ligne !
+        let sandbox = GlobalDbSandbox::new().await;
 
-        let config = AppConfig::get();
-        let db_root = config.get_path("PATH_RAISE_DOMAIN").unwrap();
-        let storage = StorageEngine::new(JsonDbConfig::new(db_root));
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        // Injection manuelle d'une valeur critique pour tester le grounding de l'IA
+        // 2. Injection manuelle d'une valeur critique pour tester le grounding de l'IA
         let sensor_doc = serde_json::json!({
             "id": "vibration_z",
             "value": 15.5,
             "updatedAt": chrono::Utc::now().to_rfc3339()
         });
-        let _ = manager.insert_raw("digital_twin", &sensor_doc).await;
 
+        // On s'assure que l'insertion fonctionne (unwrap est utile dans les tests pour repérer les erreurs vite)
+        manager
+            .insert_raw("digital_twin", &sensor_doc)
+            .await
+            .unwrap();
+
+        // 3. Exécution de l'outil
         let tool = SystemMonitorTool::new();
         let result = tool.execute(&serde_json::json!({})).await.unwrap();
 
+        // 4. Vérifications
         assert_eq!(result["vibration_z"], 15.5);
         assert_eq!(result["status"], "ONLINE");
     }

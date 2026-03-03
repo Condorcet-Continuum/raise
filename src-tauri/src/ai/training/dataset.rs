@@ -94,23 +94,20 @@ pub async fn ai_export_dataset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::JsonDbConfig;
-    use serde_json::json;
-    use tempfile::tempdir;
+    use crate::utils::config::test_mocks::AgentDbSandbox;
 
     #[tokio::test] // CORRECTION : Utilisation de tokio pour les tests asynchrones
     async fn test_extract_domain_data_filtering() {
-        // A. Setup d'une base de données temporaire
-        let temp_dir = tempdir().expect("Échec création dossier temp");
-        let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
+        // A. Setup d'une base de données temporaire 100% isolée en UNE seule ligne !
+        let sandbox = AgentDbSandbox::new().await;
 
-        let space = "test_space";
-        let db = "test_db";
-        let manager = CollectionsManager::new(&storage, space, db);
+        // On crée des raccourcis vers les vrais noms de domaine et de DB de la configuration
+        let space = &sandbox.config.system_domain;
+        let db = &sandbox.config.system_db;
+
+        let manager = CollectionsManager::new(&sandbox.db, space, db);
 
         // B. Création de collections (une 'safety' et une 'other')
-        // Correction : await sur les opérations DB si elles sont async
         manager
             .create_collection("safety_rules", None)
             .await
@@ -120,14 +117,15 @@ mod tests {
             .await
             .unwrap();
 
-        let doc = json!({"id": "1", "content": "test"});
+        let doc = serde_json::json!({"id": "1", "content": "test"});
         manager.insert_raw("safety_rules", &doc).await.unwrap();
         manager.insert_raw("general_info", &doc).await.unwrap();
 
         // C. Test du filtrage par domaine 'safety'
-        let results = extract_domain_data(&storage, space, db, "safety")
+        let results = extract_domain_data(&sandbox.db, space, db, "safety")
             .await
             .unwrap();
+
         assert_eq!(
             results.len(),
             1,
@@ -136,9 +134,10 @@ mod tests {
         assert!(results[0].instruction.contains("safety"));
 
         // D. Test avec le domaine 'all'
-        let all_results = extract_domain_data(&storage, space, db, "all")
+        let all_results = extract_domain_data(&sandbox.db, space, db, "all")
             .await
             .unwrap();
+
         assert_eq!(
             all_results.len(),
             2,
@@ -146,14 +145,21 @@ mod tests {
         );
     }
 
-    #[tokio::test] // CORRECTION : Passage en test asynchrone
+    #[tokio::test]
     async fn test_extract_empty_domain() {
-        let temp_dir = tempdir().unwrap();
-        let storage = StorageEngine::new(JsonDbConfig::new(temp_dir.path().to_path_buf()));
+        let sandbox = AgentDbSandbox::new().await;
 
-        let results = extract_domain_data(&storage, "space", "db", "nonexistent")
-            .await
-            .unwrap();
+        // 2. On utilise le moteur et les noms réels configurés par la sandbox
+        let results = extract_domain_data(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+            "nonexistent",
+        )
+        .await
+        .unwrap();
+
+        // 3. Les assertions restent inchangées
         assert!(
             results.is_empty(),
             "Le dataset devrait être vide pour un domaine inconnu"

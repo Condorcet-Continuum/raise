@@ -284,9 +284,7 @@ fn extract_text_content(data: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::config::test_mocks::inject_mock_config;
-    use crate::utils::io::tempdir;
+    use crate::utils::config::test_mocks::AgentDbSandbox;
     use crate::utils::{AsyncMutex, OnceLock}; // 🎯 Import requis
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {
@@ -297,27 +295,21 @@ mod tests {
     #[tokio::test]
     async fn test_native_graph_store_end_to_end() {
         let _guard = get_hf_lock().lock().await;
-        inject_mock_config();
-
-        let dir = tempdir().unwrap();
-
-        // 🎯 Création de la DB de mock pour le GraphStore
-        let app_config = AppConfig::get();
-        let storage_cfg = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(storage_cfg);
-        let manager =
-            CollectionsManager::new(&storage, &app_config.system_domain, &app_config.system_db);
-        manager.init_db().await.unwrap();
-
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         // 🎯 Injection du modèle NLP pour éviter le plantage
         crate::utils::config::test_mocks::inject_mock_component(
             &manager,
             "nlp",
-            crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })
+            json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })
         ).await;
 
         // 🎯 On passe le manager
-        let store = GraphStore::new(dir.path().to_path_buf(), &manager)
+        let store = GraphStore::new(sandbox.domain_root.clone(), &manager)
             .await
             .unwrap();
 

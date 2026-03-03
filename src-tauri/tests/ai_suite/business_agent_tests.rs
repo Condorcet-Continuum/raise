@@ -1,18 +1,38 @@
-// FICHIER : src-tauri/tests/ai_suite/business_agent_tests.rs
-
 use crate::common::{setup_test_env, LlmMode};
-// On importe uniquement ce dont on a besoin
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{business_agent::BusinessAgent, Agent, AgentContext};
 use raise::utils::Arc;
+// 👇 Ajout de l'import du manager
+use raise::json_db::collections::manager::CollectionsManager;
 
 #[tokio::test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_business_agent_generates_oa_entities() {
     let env = setup_test_env(LlmMode::Enabled).await;
-
     let test_root = env.storage.config.data_root.clone();
+
+    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
+    let oa_mgr = CollectionsManager::new(&env.storage, "un2", "oa");
+
+    // 1. Initialisation de la collection 'capabilities' (avec un schéma générique de fallback)
+    oa_mgr
+        .create_collection(
+            "capabilities",
+            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection capabilities impossible");
+
+    // 2. Initialisation de la collection 'actors' (avec ton schéma spécifique !)
+    oa_mgr
+        .create_collection(
+            "actors",
+            Some("https://raise.io/schemas/v1/actors/actor.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection actors impossible");
+    // -----------------------------------
 
     let agent_id = "business_agent_test";
     let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_oa");

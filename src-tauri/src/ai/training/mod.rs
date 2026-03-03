@@ -1,8 +1,7 @@
 // FICHIER : src-tauri/src/ai/training/mod.rs
 
 use crate::json_db::storage::StorageEngine;
-use crate::utils::config::AppConfig;
-use crate::utils::prelude::*;
+use crate::utils::{config::AppConfig, io, prelude::*};
 use candle_core::{Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarMap};
 use tokenizers::Tokenizer;
@@ -269,7 +268,7 @@ pub async fn ai_train_domain_native(
     let lora_dir = home
         .join("raise_domain/_system/ai-assets/lora")
         .join(format!("raise-{}-adapter", domain));
-    match std::fs::create_dir_all(&lora_dir) {
+    match io::create_dir_all(&lora_dir).await {
         Ok(_) => (), // Le dossier existe ou a été créé, tout va bien
         Err(e) => raise_error!(
             "ERR_FS_LORA_DIR_CREATE",
@@ -305,39 +304,36 @@ pub async fn ai_train_domain_native(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::JsonDbConfig;
-    use crate::utils::io::tempdir;
+    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
 
     #[tokio::test]
     #[serial_test::serial]
     // On garde l'ignore si CUDA n'est pas là car Device::new_cuda(0) est "hardcoded" dans ta fonction
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_train_domain_native_empty_data() {
-        crate::utils::config::test_mocks::inject_mock_config();
-
-        let temp_dir = tempdir().expect("Échec dossier temp");
-        // On mocke le home directory pour que le chargement du tokenizer ne panique pas
-        // (Note: Assure-tu que tokenizer.json existe dans le dossier mocké ou que le chargement est court-circuité)
-
-        let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-
-        let app_config = AppConfig::get();
+        let sandbox = AgentDbSandbox::new().await;
         let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage,
-            &app_config.system_domain,
-            &app_config.system_db,
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
 
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm",
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json" }),
+            json!({ "rust_tokenizer_file": "tokenizer.json" }),
         )
         .await;
 
-        let result = ai_train_domain_native(&storage, "space", "db", "nonexistent", 1, 0.001).await;
+        let result = ai_train_domain_native(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+            "nonexistent",
+            1,
+            0.001,
+        )
+        .await;
 
         // 🎯 VALIDATION DU NOUVEAU STANDARD D'ERREUR
         assert!(result.is_err());
@@ -353,7 +349,7 @@ mod tests {
         );
 
         // Optionnel : On peut même vérifier le contexte injecté !
-        let crate::utils::error::AppError::Structured(data) = err;
+        let AppError::Structured(data) = err;
 
         assert_eq!(data.code, "ERR_DATA_DOMAIN_EMPTY");
         assert_eq!(data.context["domain"], "nonexistent");

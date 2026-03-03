@@ -152,7 +152,7 @@ pub async fn get_simple(url: &str) -> RaiseResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::prelude::*; // Utilisation du prélude pour AppError, etc.
+    use crate::utils::prelude::*;
 
     #[test]
     fn test_client_singleton_is_stable() {

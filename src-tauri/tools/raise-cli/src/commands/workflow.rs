@@ -151,23 +151,18 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
             let definition = WorkflowCompiler::compile(&mandate);
 
             // 2. Connexion à la base de données pour persister le Mandat
-            let (storage, _sched, domain, db) = init_cli_engine().await?;
-            let manager = CollectionsManager::new(&storage, &domain, &db);
+            let config = AppConfig::get();
+            let db_root = config
+                .get_path("PATH_RAISE_DOMAIN")
+                .unwrap_or_else(|| std::path::PathBuf::from("./_system"));
+            let storage = StorageEngine::new(JsonDbConfig::new(db_root));
+
+            let manager =
+                CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
             let json_mandate = serde_json::to_value(&mandate).unwrap();
 
-            // Persistance pour que le serveur Tauri puisse le trouver
-            let Ok(_) = manager.insert_raw("mandates", &json_mandate).await else {
-                raise_error!(
-                    "MANDATE_SAVE_FAILED",
-                    error = "Échec de l'insertion en base de données",
-                    context = json!({
-                        "collection": "mandates",
-                        "mandate_id": json_mandate.get("id"),
-                        "critical": true
-                    })
-                );
-            };
+            manager.insert_raw("mandates", &json_mandate).await?;
 
             user_success!(
                 "MANDATE_COMPILE_SUCCESS",
@@ -358,18 +353,8 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
             });
 
             // 3. Persistance dans la collection 'digital_twin' (IPC par la donnée)
-            // Note: On utilise insert_raw (qui fait un upsert si l'ID existe déjà dans votre implémentation)
-            let Ok(_) = manager.insert_raw("digital_twin", &sensor_doc).await else {
-                raise_error!(
-                    "SENSOR_WRITE_FAILED",
-                    error = "Échec d'écriture dans le jumeau numérique",
-                    context = json!({
-                        "collection": "digital_twin",
-                        "sensor_id": sensor_doc.get("id"),
-                        "critical": true
-                    })
-                );
-            };
+            manager.insert_raw("digital_twin", &sensor_doc).await?;
+
             user_success!(
                 "SENSOR_UPDATED",
                 json!({
@@ -387,32 +372,32 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
 // =========================================================================
 // TESTS UNITAIRES ET D'INTÉGRATION CLI
 // =========================================================================
-// =========================================================================
-// TESTS UNITAIRES ET D'INTÉGRATION CLI
-// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raise::utils::config::test_mocks;
-    use tempfile::tempdir;
+    use raise::utils::config::test_mocks::GlobalDbSandbox;
 
     #[tokio::test]
     #[serial_test::serial]
     async fn test_cli_set_sensor_writes_to_db() {
-        test_mocks::inject_mock_config();
+        let sandbox = GlobalDbSandbox::new().await;
 
         let args = WorkflowArgs {
             command: WorkflowCommands::SetSensor { value: 42.5 },
         };
-        let result = handle(args).await;
-        assert!(result.is_ok(), "La commande SetSensor a échoué");
 
-        let config = AppConfig::get();
-        let db_root = config
-            .get_path("PATH_RAISE_DOMAIN")
-            .unwrap_or_else(|| std::path::PathBuf::from("./_system"));
-        let storage = StorageEngine::new(JsonDbConfig::new(db_root));
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        let result = handle(args).await;
+
+        // 🎯 FIX : Si le résultat est une erreur, on fait paniquer le test EN AFFICHANT l'erreur détaillée !
+        if let Err(e) = &result {
+            panic!("❌ La commande SetSensor a échoué avec l'erreur : {:?}", e);
+        }
+
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let doc = manager
             .get_document("digital_twin", "vibration_z")
@@ -426,10 +411,8 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn test_cli_submit_mandate_compiles_and_persists() {
-        test_mocks::inject_mock_config();
-
-        let dir = tempdir().unwrap();
-        let mandate_path = dir.path().join("test_mandate.json");
+        let sandbox = GlobalDbSandbox::new().await;
+        let mandate_path = sandbox.domain_root.join("test_mandate.json");
 
         // 🎯 FIX : On donne un ID explicite pour pouvoir le récupérer directement
         let valid_mandate = serde_json::json!({
@@ -440,7 +423,9 @@ mod tests {
             "hardLogic": { "vetos": [] },
             "observability": { "heartbeatMs": 100 }
         });
-        std::fs::write(&mandate_path, valid_mandate.to_string()).unwrap();
+        io::write(&mandate_path, valid_mandate.to_string())
+            .await
+            .unwrap();
 
         let args = WorkflowArgs {
             command: WorkflowCommands::SubmitMandate {
@@ -449,14 +434,21 @@ mod tests {
         };
 
         let result = handle(args).await;
-        assert!(result.is_ok(), "La commande SubmitMandate a échoué");
 
-        let config = AppConfig::get();
-        let db_root = config.get_path("PATH_RAISE_DOMAIN").unwrap();
-        let storage = StorageEngine::new(JsonDbConfig::new(db_root));
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        // 🎯 FIX : Si le résultat est une erreur, on fait paniquer le test EN AFFICHANT l'erreur détaillée !
+        if let Err(e) = &result {
+            panic!(
+                "❌ La commande SubmitMandate a échoué avec l'erreur : {:?}",
+                e
+            );
+        }
 
-        // 🎯 FIX : Utilisation de get_document au lieu du list_documents inexistant
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
         let doc = manager
             .get_document("mandates", "mandate_cli_test_123")
             .await
@@ -472,11 +464,9 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn test_cli_submit_mandate_invalid_path_fails_safely() {
-        // 1. Initialisation du contexte pour éviter les paniques hors-CUDA
-        raise::utils::config::test_mocks::inject_mock_config();
+        let _sandbox = GlobalDbSandbox::new().await;
 
         let fake_path = "path/to/nothing.yaml";
-
         // 🎯 FIX : On utilise la struct WorkflowArgs et l'énum WorkflowCommands
         // pour appeler la fonction 'handle' définie dans le module parent.
         let args = WorkflowArgs {
@@ -493,8 +483,7 @@ mod tests {
             "Le CLI ne doit pas paniquer mais retourner une Err pour un fichier manquant"
         );
 
-        let err = result.unwrap_err();
-        let err_msg = err.to_string();
+        let err_msg = result.unwrap_err().to_string();
 
         // 3. Validation du code d'erreur structuré RAISE
         // Dans handle, si le fichier manque, raise_error! "FS_MANDATE_NOT_FOUND" est appelée.

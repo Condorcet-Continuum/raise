@@ -4,7 +4,6 @@ use crate::utils::{prelude::*, HashMap};
 use crate::json_db::collections::manager::CollectionsManager;
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use serde::{Deserialize, Serialize};
 
 // --- STRUCTURES DU MANDAT ---
 
@@ -165,12 +164,11 @@ impl Mandate {
 mod tests {
     use super::*;
     use crate::json_db::test_utils::init_test_env;
-    use serde_json::json;
 
     #[tokio::test]
     async fn test_fetch_mandate_success() {
         let env = init_test_env().await;
-        let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
+        let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
         let full_json = json!({
@@ -200,7 +198,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_mandate_with_ast() {
         let env = init_test_env().await;
-        let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
+        let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
         // Une règle dynamique injectée
@@ -238,7 +236,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_mandate_schema_mismatch() {
         let env = init_test_env().await;
-        let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
+        let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
         let bad_json = json!({

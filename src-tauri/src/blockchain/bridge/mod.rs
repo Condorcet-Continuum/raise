@@ -21,8 +21,9 @@ pub struct ArcadiaBridge<'a> {
 impl<'a> ArcadiaBridge<'a> {
     /// Initialise un nouveau pont Arcadia pour un espace et une base de données spécifiques.
     pub fn new(storage: &'a StorageEngine, app_state: &'a AppState) -> Self {
+        let config = AppConfig::get();
         Self {
-            db_adapter: DbAdapter::new(storage, "un2", "_system"),
+            db_adapter: DbAdapter::new(storage, &config.system_domain, &config.system_db),
             model_sync: ModelSync::new(app_state),
         }
     }
@@ -71,23 +72,20 @@ impl<'a> ArcadiaBridge<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blockchain::storage::commit::{Mutation, MutationOp};
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
-    use crate::utils::{io::tempdir, Mutex};
+    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::Mutex;
 
     #[tokio::test]
     async fn test_bridge_full_cycle_logic() {
-        crate::utils::config::test_mocks::inject_mock_config();
-        // Setup Environnement
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
+        let sandbox = AgentDbSandbox::new().await;
         let app_state = AppState {
             model: Mutex::new(ProjectModel::default()),
         };
 
-        let bridge = ArcadiaBridge::new(&storage, &app_state);
+        let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);
 
         // Création d'un commit de test
         let mutation = Mutation {
@@ -134,8 +132,10 @@ mod tests {
         }
 
         // 2. Vérification Disque (DbAdapter via CollectionsManager)
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &storage, "un2", "_system",
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
 
         // CORRECTION : Le DbAdapter en mode schemaless (test) utilise parfois "components" par défaut.
@@ -156,15 +156,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_bridge_is_ready() {
-        let dir = tempdir().unwrap();
-        let storage = StorageEngine::new(JsonDbConfig::new(dir.path().to_path_buf()));
+    #[tokio::test]
+    async fn test_bridge_is_ready() {
+        let sandbox = AgentDbSandbox::new().await;
         let app_state = AppState {
             model: Mutex::new(ProjectModel::default()),
         };
 
-        let bridge = ArcadiaBridge::new(&storage, &app_state);
+        let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);
         assert!(bridge.model_sync.is_ready());
     }
 }

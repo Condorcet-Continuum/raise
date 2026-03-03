@@ -1,9 +1,7 @@
 // FICHIER : src-tauri/src/commands/ai_commands.rs
 
 use crate::utils::config::AppConfig;
-use crate::utils::{data::HashMap, io::PathBuf, prelude::*, Arc};
-use std::sync::Mutex as SyncMutex;
-use tokio::sync::Mutex as AsyncMutex;
+use crate::utils::{data::HashMap, io::PathBuf, prelude::*, Arc, AsyncMutex, SyncMutex};
 
 use crate::ai::agents::AgentResult;
 use crate::ai::orchestrator::AiOrchestrator;

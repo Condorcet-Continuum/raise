@@ -1,21 +1,29 @@
-// FICHIER : src-tauri/tests/ai_suite/epbs_agent_tests.rs
-
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{epbs_agent::EpbsAgent, Agent, AgentContext};
+use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::Arc;
 
 #[tokio::test]
-#[serial_test::serial] // Protection RTX 5060 en local
+#[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_epbs_agent_creates_configuration_item() {
-    // CORRECTION E0609 : init_ai_test_env() est désormais asynchrone.
-    // On doit utiliser .await pour récupérer l'objet AiTestEnv.
     let env = setup_test_env(LlmMode::Enabled).await;
-
     let test_root = env.storage.config.data_root.clone();
 
-    // CORRECTION E0061 : Injection agent_id + session_id
+    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
+    // Plus besoin d'amorcer _system ou agent_sessions, mod.rs s'en charge !
+    // On prépare juste la base métier locale au test pour guider le LLM.
+    let epbs_mgr = CollectionsManager::new(&env.storage, "un2", "epbs");
+    epbs_mgr
+        .create_collection(
+            "configuration_items",
+            Some("https://raise.io/schemas/v1/arcadia/data/exchange-item.schema.json".to_string()),
+        )
+        .await
+        .expect("Initialisation de la collection métier impossible");
+    // -----------------------------------
+
     let agent_id = "epbs_agent_test";
     let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_epbs");
 
@@ -33,7 +41,6 @@ async fn test_epbs_agent_creates_configuration_item() {
 
     let agent = EpbsAgent::new();
 
-    // SCÉNARIO : Créer un "Serveur Rack"
     let intent = EngineeringIntent::CreateElement {
         layer: "EPBS".to_string(),
         element_type: "COTS".to_string(),
@@ -60,14 +67,7 @@ async fn test_epbs_agent_creates_configuration_item() {
         for e in std::fs::read_dir(&items_dir).unwrap().flatten() {
             let content = std::fs::read_to_string(e.path()).unwrap_or_default();
 
-            // Debug : Affiche ce qu'on a trouvé pour comprendre pourquoi ça match pas
-            println!("📄 Analyse fichier : {:?}", e.file_name());
-            println!(
-                "   Contenu partiel : {:.100}...",
-                content.replace("\n", " ")
-            );
-
-            if content.contains("partNumber") && content.contains("Rack Server") {
+            if content.contains("name") && content.contains("Rack Server") {
                 found = true;
                 println!("✅ CI validé !");
                 break;

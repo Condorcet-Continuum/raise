@@ -3,20 +3,17 @@
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use raise::utils::config::test_mocks::{inject_mock_component, inject_mock_config};
+use raise::utils::config::test_mocks::inject_mock_component;
+
 use raise::utils::config::AppConfig;
 use raise::utils::{
     async_recursion,
-    io::{self, Path, PathBuf},
+    io::{self, Path, PathBuf, TempDir},
     prelude::*,
     Once,
 };
-use tempfile::TempDir;
-use tokio::sync::OnceCell;
 
 static INIT: Once = Once::new();
-// 🎯 Utilisation d'un OnceCell asynchrone pour partager le client LLM
-static SHARED_CLIENT: OnceCell<LlmClient> = OnceCell::const_new();
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -38,7 +35,21 @@ pub struct UnifiedTestEnv {
 pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-        inject_mock_config();
+
+        // 🎯 On isole la création du runtime dans un thread natif séparé
+        std::thread::spawn(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            rt.block_on(async {
+                // Utilisation de raise:: car nous sommes en dehors de la crate principale
+                raise::utils::config::test_mocks::inject_mock_config().await;
+            });
+        })
+        .join()
+        .unwrap(); // On attend la fin du thread et on propage la panique si besoin
     });
 
     let app_config = AppConfig::get();
@@ -70,7 +81,9 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     // Initialisation du stockage isolé
     let storage = StorageEngine::new(db_config);
     let mgr = CollectionsManager::new(&storage, &space, &db);
-    mgr.init_db().await.expect("init_db failed");
+    mgr.init_db()
+        .await
+        .expect("❌ Échec de l'initialisation de l'index système");
 
     // 🎯 3. INJECTION DU MOCK IA EN BASE (Requis pour l'init LLM)
     inject_mock_component(
@@ -89,16 +102,12 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
             }
             let _ = std::fs::write(&mock_model_file, b"dummy content");
 
-            // On utilise tokio::sync::OnceCell pour un appel async
-            let shared = SHARED_CLIENT
-                .get_or_init(|| async {
-                    LlmClient::new(&mgr)
-                        .await
-                        .expect("❌ Impossible d'initialiser le LlmClient partagé")
-                })
-                .await;
+            // Fini le OnceCell ! Le client est désormais lié au bon dossier temporaire.
+            let isolated_client = LlmClient::new(&mgr)
+                .await
+                .expect("❌ Impossible d'initialiser le LlmClient isolé");
 
-            Some(shared.clone())
+            Some(isolated_client)
         }
         LlmMode::Disabled => None,
     };
@@ -189,7 +198,6 @@ async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
     )
     .await?;
 
-    // ✅ CORRECTION FINALE : "value" au lieu de "source"
     // Conformément à la struct Replace dans ast.rs
     let finance_schema = json!({
         "$id": "https://raise.io/schemas/v1/workunits/finance.schema.json",
@@ -244,12 +252,23 @@ async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
     // 6. DB INDEX
     let db_dir = base_path.join("db");
     io::create_dir_all(&db_dir).await?;
-    let index_schema = json!({
+
+    let index_schema_def = json!({
         "$id": "https://raise.io/schemas/v1/db/index.schema.json",
         "type": "object",
         "additionalProperties": true
     });
-    io::write_json_atomic(&db_dir.join("index.schema.json"), &index_schema).await?;
+    io::write_json_atomic(&db_dir.join("index.schema.json"), &index_schema_def).await?;
+
+    // On crée un index qui déclare explicitement les collections
+    let index_schema = json!({
+        "name": "_system",
+        "collections": {
+            "agent_sessions": { "schema": "https://raise.io/schemas/v1/configs/config.schema.json" },
+            "configuration_items": { "schema": "https://raise.io/schemas/v1/arcadia/data/exchange-item.schema.json" }
+        }
+    });
+    io::write_json_atomic(&db_dir.join("_system.json"), &index_schema).await?;
 
     Ok(base_path.to_path_buf())
 }

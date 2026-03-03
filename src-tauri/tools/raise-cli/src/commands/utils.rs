@@ -136,7 +136,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_utils_info() {
-        raise::utils::config::test_mocks::inject_mock_config();
+        raise::utils::config::test_mocks::inject_mock_config().await;
 
         let args = UtilsArgs {
             command: UtilsCommands::Info,

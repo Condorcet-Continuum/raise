@@ -1,16 +1,15 @@
 // FICHIER : src-tauri/src/json_db/indexes/btree.rs
 
-// FAÇADE UNIQUE
-
 use crate::utils::data::BTreeMap;
 use crate::utils::prelude::*;
 
 use super::{driver, paths, IndexDefinition};
-use crate::json_db::storage::JsonDbConfig;
+// ✅ AJOUT : Import du StorageEngine
+use crate::json_db::storage::StorageEngine;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn update_btree_index(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine, // ✅ MODIFIÉ
     space: &str,
     db: &str,
     collection: &str,
@@ -19,25 +18,34 @@ pub async fn update_btree_index(
     old_doc: Option<&Value>,
     new_doc: Option<&Value>,
 ) -> RaiseResult<()> {
-    let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
-    // Appel au driver qui doit être async
+    let path = paths::index_path(
+        &storage.config,
+        space,
+        db,
+        collection,
+        &def.name,
+        def.index_type,
+    );
     driver::update::<BTreeMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
 }
 
-/// Recherche exacte via l'index BTree.
-/// Note: La structure BTree permettra à l'avenir des recherches par plage (Range Search)
-/// mais pour l'instant nous exposons une recherche exacte standard.
 pub async fn search_btree_index(
-    cfg: &JsonDbConfig,
+    storage: &StorageEngine, // ✅ MODIFIÉ
     space: &str,
     db: &str,
     collection: &str,
     def: &IndexDefinition,
     value: &Value,
 ) -> RaiseResult<Vec<String>> {
-    let path = paths::index_path(cfg, space, db, collection, &def.name, def.index_type);
+    let path = paths::index_path(
+        &storage.config,
+        space,
+        db,
+        collection,
+        &def.name,
+        def.index_type,
+    );
     let key = value.to_string();
-    // Appel au driver qui doit être async
     driver::search::<BTreeMap<String, Vec<String>>>(&path, &key).await
 }
 
@@ -45,6 +53,7 @@ pub async fn search_btree_index(
 mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
+    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::utils::{
         io::{self, tempdir},
         json::json,
@@ -56,9 +65,12 @@ mod tests {
         (dir, cfg)
     }
 
-    #[tokio::test] // Migration vers tokio test
+    #[tokio::test]
     async fn test_btree_lifecycle() {
         let (dir, cfg) = setup_env();
+        // ✅ AJOUT : Création du StorageEngine pour les tests
+        let storage = StorageEngine::new(cfg);
+
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
         io::create_dir_all(&idx_dir).await.unwrap();
 
@@ -69,32 +81,29 @@ mod tests {
             unique: false,
         };
 
-        // 1. Insertion (Async)
         let doc1 = json!({ "age": 30 });
-        update_btree_index(&cfg, "s", "d", "c", &def, "u1", None, Some(&doc1))
+        update_btree_index(&storage, "s", "d", "c", &def, "u1", None, Some(&doc1))
             .await
             .unwrap();
 
         let doc2 = json!({ "age": 25 });
-        update_btree_index(&cfg, "s", "d", "c", &def, "u2", None, Some(&doc2))
+        update_btree_index(&storage, "s", "d", "c", &def, "u2", None, Some(&doc2))
             .await
             .unwrap();
 
-        // 2. Recherche Exacte (Async)
-        let results = search_btree_index(&cfg, "s", "d", "c", &def, &json!(30))
+        let results = search_btree_index(&storage, "s", "d", "c", &def, &json!(30))
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "u1");
 
-        let results_25 = search_btree_index(&cfg, "s", "d", "c", &def, &json!(25))
+        let results_25 = search_btree_index(&storage, "s", "d", "c", &def, &json!(25))
             .await
             .unwrap();
         assert_eq!(results_25.len(), 1);
         assert_eq!(results_25[0], "u2");
 
-        // 3. Recherche vide (Async)
-        let results_empty = search_btree_index(&cfg, "s", "d", "c", &def, &json!(99))
+        let results_empty = search_btree_index(&storage, "s", "d", "c", &def, &json!(99))
             .await
             .unwrap();
         assert!(results_empty.is_empty());

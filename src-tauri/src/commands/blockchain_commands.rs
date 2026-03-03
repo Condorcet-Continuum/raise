@@ -8,10 +8,10 @@ use crate::blockchain::{
 use crate::utils::{
     data::{self, Value},
     prelude::*,
+    AsyncMutex,
 };
 use std::sync::Mutex;
 use tauri::State;
-use tokio::sync::Mutex as AsyncMutex;
 
 // --- IMPORTS ARCADIA P2P ---
 use crate::blockchain::p2p::behavior::ArcadiaBehavior;

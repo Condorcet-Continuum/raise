@@ -200,23 +200,21 @@ impl<'a> Migrator<'a> {
 mod tests {
     use super::*;
     use crate::json_db::migrations::{Migration, MigrationStep};
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{io::tempdir, json::json};
-
-    fn create_test_env() -> (StorageEngine, tempfile::TempDir) {
-        let temp_dir = tempdir().expect("Impossible de créer dossier temp DB");
-        let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
-        (storage, temp_dir)
-    }
+    use crate::utils::config::test_mocks::DbSandbox;
+    use crate::utils::json::json;
 
     #[tokio::test]
     async fn test_migration_lifecycle() {
-        let (storage, _dir) = create_test_env();
-        let space = "test_space";
-        let db = "test_db";
-        let migrator = Migrator::new(&storage, space, db);
+        // 1. Initialisation en une ligne
+        let sandbox = DbSandbox::new().await;
 
+        // 2. On instancie le Migrator avec la sandbox
+        let migrator = Migrator::new(
+            &sandbox.storage,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        migrator.manager.init_db().await.unwrap();
         let m1 = Migration {
             id: "m1".to_string(),
             version: "1.0.0".to_string(),
@@ -280,8 +278,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_field() {
-        let (storage, _dir) = create_test_env();
-        let migrator = Migrator::new(&storage, "space", "db");
+        // 1. Initialisation en une ligne
+        let sandbox = DbSandbox::new().await;
+
+        // 2. On instancie le Migrator avec la sandbox
+        let migrator = Migrator::new(
+            &sandbox.storage,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
         // Init DB requis pour les fonctions internes
         migrator.manager.init_db().await.unwrap();
 
@@ -290,6 +296,7 @@ mod tests {
             .create_collection("products", None)
             .await
             .unwrap();
+
         migrator
             .manager
             .insert_raw("products", &json!({"id": "p1", "cost": 100}))
@@ -317,6 +324,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+
         assert!(doc.get("cost").is_none());
         assert_eq!(doc["price"], 100);
     }
