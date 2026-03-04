@@ -96,8 +96,8 @@ mod tests {
 
     // 🎯 IMPORTS AJOUTÉS : On récupère l'injecteur de mocks et le manager
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
     use crate::utils::data::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     // 🎯 FIX : On passe la config en plus pour utiliser le CollectionsManager
     async fn setup_dummy_context(

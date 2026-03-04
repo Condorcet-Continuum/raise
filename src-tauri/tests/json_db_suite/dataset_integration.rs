@@ -9,10 +9,12 @@ use raise::utils::prelude::*; // SSOT : Apporte Value, json, Result, etc.
 async fn debug_import_exchange_item() {
     // 1. Initialisation de l'environnement isolé
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
     // 2. Création du fichier factice (remplace l'ancienne méthode)
-    let data_path = seed_mock_datasets(&env.domain_path).await.unwrap();
+    let data_path = seed_mock_datasets(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap())
+        .await
+        .unwrap();
 
     // 3. Lecture du fichier via notre SSOT
     let mut json_doc: Value = io::read_json(&data_path)
@@ -20,7 +22,7 @@ async fn debug_import_exchange_item() {
         .expect("Lecture ou parsing JSON impossible");
 
     // 4. Injection du schéma
-    let schema_rel_path = "arcadia/data/exchange-item.schema.json";
+    let schema_rel_path = "db/generic.schema.json";
     let db_schema_uri = format!(
         "db://{}/{}/schemas/v1/{}",
         env.space, env.db, schema_rel_path
@@ -31,7 +33,7 @@ async fn debug_import_exchange_item() {
     }
 
     // 5. Création et insertion dans la base
-    mgr.create_collection("exchange-items", Some(db_schema_uri))
+    mgr.create_collection("exchange-items", &db_schema_uri)
         .await
         .expect("Échec création collection");
 

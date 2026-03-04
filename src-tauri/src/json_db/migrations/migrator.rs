@@ -29,7 +29,12 @@ impl<'a> Migrator<'a> {
         if !exists {
             #[cfg(debug_assertions)]
             println!("⚙️ Création de la table de suivi des migrations...");
-            self.manager.create_collection("_migrations", None).await?;
+            self.manager
+                .create_collection(
+                    "_migrations",
+                    "db://_system/_system/schemas/v1/db/generic.schema.json",
+                )
+                .await?;
         }
         Ok(())
     }
@@ -95,7 +100,13 @@ impl<'a> Migrator<'a> {
     async fn execute_step(&self, step: &MigrationStep) -> RaiseResult<()> {
         match step {
             MigrationStep::CreateCollection { name, schema } => {
-                let schema_str = schema.as_str().map(ToString::to_string);
+                let schema_str = schema.as_str().unwrap_or_else(|| {
+                    panic!(
+                        "🚨 MIGRATION ÉCHOUÉE : Le schéma est obligatoire pour la collection '{}'. \
+                        Remplacez `Value::Null` par `Value::String(\"db://_system/...\")` dans vos migrations !", 
+                        name
+                    );
+                });
                 self.manager.create_collection(name, schema_str).await?;
                 println!("   -> Collection créée : {}", name);
             }
@@ -200,8 +211,8 @@ impl<'a> Migrator<'a> {
 mod tests {
     use super::*;
     use crate::json_db::migrations::{Migration, MigrationStep};
-    use crate::utils::config::test_mocks::DbSandbox;
     use crate::utils::json::json;
+    use crate::utils::mock::DbSandbox;
 
     #[tokio::test]
     async fn test_migration_lifecycle() {
@@ -221,7 +232,7 @@ mod tests {
             description: "Init Users".to_string(),
             up: vec![MigrationStep::CreateCollection {
                 name: "users".to_string(),
-                schema: json!(null),
+                schema: json!("db://_system/_system/schemas/v1/db/generic.schema.json"),
             }],
             down: vec![],
             applied_at: None,
@@ -293,7 +304,10 @@ mod tests {
 
         migrator
             .manager
-            .create_collection("products", None)
+            .create_collection(
+                "products",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
 

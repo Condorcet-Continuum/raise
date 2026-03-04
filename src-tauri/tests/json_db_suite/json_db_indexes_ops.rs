@@ -12,13 +12,16 @@ async fn test_create_and_drop_index_lifecycle() {
 
     // Le CollectionsManager est déjà initialisé dans UnifiedTestEnv,
     // mais on en crée une instance locale pour plus de clarté dans le test.
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let collection = "indexed_articles";
 
     // 2. PRÉPARATION : Création collection et données
-    mgr.create_collection(collection, None)
-        .await
-        .expect("❌ Impossible de créer la collection de test");
+    mgr.create_collection(
+        collection,
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .expect("❌ Impossible de créer la collection de test");
 
     let doc = json!({
         "handle": "test-handle",
@@ -39,6 +42,7 @@ async fn test_create_and_drop_index_lifecycle() {
 
     // 4. VÉRIFICATION PHYSIQUE 1 : Le fichier _meta.json
     let meta_path = env
+        .sandbox
         .storage
         .config
         .db_collection_path(&env.space, &env.db, collection)
@@ -55,6 +59,7 @@ async fn test_create_and_drop_index_lifecycle() {
 
     // 5. VÉRIFICATION PHYSIQUE 2 : Le fichier d'index .idx
     let index_path = env
+        .sandbox
         .storage
         .config
         .db_collection_path(&env.space, &env.db, collection)

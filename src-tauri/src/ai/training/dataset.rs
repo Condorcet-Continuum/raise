@@ -94,7 +94,7 @@ pub async fn ai_export_dataset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test] // CORRECTION : Utilisation de tokio pour les tests asynchrones
     async fn test_extract_domain_data_filtering() {
@@ -109,11 +109,17 @@ mod tests {
 
         // B. Création de collections (une 'safety' et une 'other')
         manager
-            .create_collection("safety_rules", None)
+            .create_collection(
+                "safety_rules",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
         manager
-            .create_collection("general_info", None)
+            .create_collection(
+                "general_info",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
 

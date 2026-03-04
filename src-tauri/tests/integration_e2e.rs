@@ -21,7 +21,7 @@ async fn test_full_stack_integration() {
     let env = setup_test_env(LlmMode::Disabled).await;
 
     // On utilise le manager pointant sur l'espace de test isolé généré par setup_test_env
-    let manager = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
     // L'init_db est déjà fait par setup_test_env, mais on peut vérifier qu'il est prêt
     // (Les schémas système sont déjà en place grâce à common/mod.rs)
@@ -46,7 +46,13 @@ async fn test_full_stack_integration() {
         "@type": "LogicalComponent"
         // Pas de description -> Doit déclencher la règle
     });
-
+    manager
+        .create_collection(
+            "la",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await
+        .unwrap();
     // insert_raw va créer la collection "la" si elle n'existe pas
     manager
         .insert_raw("la", &valid_json)

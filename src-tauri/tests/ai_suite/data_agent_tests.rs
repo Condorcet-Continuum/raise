@@ -12,17 +12,16 @@ use raise::json_db::collections::manager::CollectionsManager;
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_data_agent_creates_class_and_enum() {
     let env = setup_test_env(LlmMode::Enabled).await;
-    let test_root = env.storage.config.data_root.clone();
+    let test_root = env.sandbox.storage.config.data_root.clone();
 
     // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
-    let data_mgr = CollectionsManager::new(&env.storage, "un2", "data");
+    let data_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "data");
 
     // 1. Initialisation de la collection 'classes'
     data_mgr
         .create_collection(
             "classes",
-            // On utilise un schéma générique tolérant issu de ton mod.rs
-            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
         .expect("Initialisation de la collection classes impossible");
@@ -31,7 +30,7 @@ async fn test_data_agent_creates_class_and_enum() {
     data_mgr
         .create_collection(
             "types",
-            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
         .expect("Initialisation de la collection types impossible");
@@ -43,7 +42,7 @@ async fn test_data_agent_creates_class_and_enum() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.storage.clone()),
+        Arc::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),

@@ -616,12 +616,8 @@ impl<'a> QueryEngine<'a> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::mock::DbSandbox;
     use crate::utils::{json::json, Arc, HashMap, Mutex};
-
-    // 🎯 On importe notre Sandbox magique
-    use crate::utils::config::test_mocks::DbSandbox;
-
-    // ❌ setup_test_db() a été entièrement supprimé !
 
     // Mock Provider Async
     struct MockIndex {
@@ -665,7 +661,13 @@ mod tests {
 
         let engine = QueryEngine::new(&manager);
 
-        manager.create_collection("users", None).await.unwrap();
+        manager
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .insert_raw("users", &json!({"id": "1", "age": 20, "role": "user"}))
             .await
@@ -704,7 +706,13 @@ mod tests {
 
         let engine = QueryEngine::new(&manager);
 
-        manager.create_collection("docs", None).await.unwrap();
+        manager
+            .create_collection(
+                "docs",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .insert_raw("docs", &json!({"id": "1", "tags": ["rust", "code"]}))
             .await
@@ -739,7 +747,13 @@ mod tests {
             &sandbox.config.system_db,
         );
         manager.init_db().await.unwrap();
-        manager.create_collection("users", None).await.unwrap();
+        manager
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         // On insère "user" et "admin"
         manager

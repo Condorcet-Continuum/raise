@@ -11,7 +11,7 @@ async fn drop_is_idempotent_and_recreate_works() {
     let env = setup_test_env(LlmMode::Disabled).await;
 
     let cfg = JsonDbConfig {
-        data_root: env.domain_path.clone(),
+        data_root: env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
     };
 
     let space = &env.space;

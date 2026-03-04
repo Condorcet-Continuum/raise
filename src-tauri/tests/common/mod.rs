@@ -2,13 +2,12 @@
 
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use raise::utils::config::test_mocks::inject_mock_component;
+use raise::json_db::storage::JsonDbConfig;
+// 🎯 On importe directement DbSandbox depuis notre nouvelle façade
+use raise::utils::mock::{inject_mock_component, DbSandbox};
 
-use raise::utils::config::AppConfig;
 use raise::utils::{
-    async_recursion,
-    io::{self, Path, PathBuf, TempDir},
+    io::{self, Path, PathBuf},
     prelude::*,
     Once,
 };
@@ -24,63 +23,38 @@ pub enum LlmMode {
 
 #[allow(dead_code)]
 pub struct UnifiedTestEnv {
-    pub storage: StorageEngine,
+    // 🎯 La Sandbox encapsule désormais StorageEngine, AppConfig et le TempDir !
+    pub sandbox: DbSandbox,
     pub client: Option<LlmClient>,
     pub space: String,
     pub db: String,
-    pub domain_path: PathBuf,
-    pub _tmp_dir: TempDir,
 }
 
 pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-
-        // 🎯 On isole la création du runtime dans un thread natif séparé
-        std::thread::spawn(|| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-
-            rt.block_on(async {
-                // Utilisation de raise:: car nous sommes en dehors de la crate principale
-                raise::utils::config::test_mocks::inject_mock_config().await;
-            });
-        })
-        .join()
-        .unwrap(); // On attend la fin du thread et on propage la panique si besoin
     });
 
-    let app_config = AppConfig::get();
+    // 🎯 1. ISOLATION : On délègue tout à la DbSandbox de utils::mock !
+    // Cela crée le TempDir, initialise JsonDbConfig, injecte le schéma 'sessions' et génère l'AppConfig.
+    let sandbox = DbSandbox::new().await;
 
-    // 🎯 1. ISOLATION : On crée un dossier UNIQUE pour ce test précis
-    let test_uuid = uuid::Uuid::new_v4().to_string();
-    let temp_dir = tempfile::Builder::new()
-        .prefix(&format!("raise_it_{}_", test_uuid))
-        .tempdir()
-        .expect("❌ Impossible de créer le dossier temporaire");
-
-    let domain_path = temp_dir.path().to_path_buf();
+    let space = sandbox.config.system_domain.clone();
+    let db = sandbox.config.system_db.clone();
+    let domain_path = sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
     // 🎯 2. INITIALISATION DB & MANAGER AVANT LE LLM
-    let space = "_system".to_string();
-    let db = "_system".to_string();
     let db_config = JsonDbConfig::new(domain_path.clone());
 
-    let mock_src = domain_path.join("mock_schemas_src");
-    let src_schemas = generate_mock_schemas(&mock_src)
+    // On cible directement le dossier final des schémas de la sandbox
+    let dest_schemas = db_config.db_schemas_root(&space, &db).join("v1");
+
+    // On génère les schémas spécifiques à l'IA directement à leur emplacement définitif (plus besoin de copier)
+    generate_mock_schemas(&dest_schemas)
         .await
         .expect("fail mock schemas");
 
-    let dest_schemas = db_config.db_schemas_root(&space, &db).join("v1");
-    copy_dir_recursive(&src_schemas, &dest_schemas)
-        .await
-        .expect("fail copy schemas");
-
-    // Initialisation du stockage isolé
-    let storage = StorageEngine::new(db_config);
-    let mgr = CollectionsManager::new(&storage, &space, &db);
+    let mgr = CollectionsManager::new(&sandbox.storage, &space, &db);
     mgr.init_db()
         .await
         .expect("❌ Échec de l'initialisation de l'index système");
@@ -95,14 +69,12 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     // 🎯 4. SATISFAIRE LLMCLIENT AVEC LE MANAGER
     let client = match llm_mode {
         LlmMode::Enabled => {
-            let global_domain = app_config.get_path("PATH_RAISE_DOMAIN").unwrap();
-            let mock_model_file = global_domain.join("_system/ai-assets/models/mock.gguf");
+            let mock_model_file = domain_path.join("_system/ai-assets/models/mock.gguf");
             if let Some(parent) = mock_model_file.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
             let _ = std::fs::write(&mock_model_file, b"dummy content");
 
-            // Fini le OnceCell ! Le client est désormais lié au bon dossier temporaire.
             let isolated_client = LlmClient::new(&mgr)
                 .await
                 .expect("❌ Impossible d'initialiser le LlmClient isolé");
@@ -113,12 +85,10 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     };
 
     UnifiedTestEnv {
-        storage,
+        sandbox,
         client,
         space,
         db,
-        domain_path,
-        _tmp_dir: temp_dir, // Vital : maintient le dossier vivant pendant le test
     }
 }
 
@@ -198,7 +168,6 @@ async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
     )
     .await?;
 
-    // Conformément à la struct Replace dans ast.rs
     let finance_schema = json!({
         "$id": "https://raise.io/schemas/v1/workunits/finance.schema.json",
         "type": "object",
@@ -235,10 +204,9 @@ async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
             {
                 "id": "rule-gen-ref",
                 "target": "summary.generated_ref",
-                // UTILISATION DU BON NOM DE CHAMP 'value'
                 "expr": {
                     "replace": {
-                        "value": { "var": "billing_model" }, // ✅ C'était l'erreur (source -> value)
+                        "value": { "var": "billing_model" },
                         "pattern": { "val": "fixed" },
                         "replacement": { "val": "FIN-2025-OK" }
                     }
@@ -260,7 +228,6 @@ async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
     });
     io::write_json_atomic(&db_dir.join("index.schema.json"), &index_schema_def).await?;
 
-    // On crée un index qui déclare explicitement les collections
     let index_schema = json!({
         "name": "_system",
         "collections": {
@@ -271,62 +238,6 @@ async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
     io::write_json_atomic(&db_dir.join("_system.json"), &index_schema).await?;
 
     Ok(base_path.to_path_buf())
-}
-
-#[allow(dead_code)]
-#[async_recursion]
-async fn copy_dir_recursive(src: &Path, dst: &Path) -> RaiseResult<()> {
-    if !dst.exists() {
-        io::create_dir_all(dst).await?;
-    }
-    let mut entries = io::read_dir(src).await?;
-
-    while let Some(entry) = match entries.next_entry().await {
-        Ok(e) => e,
-        Err(e) => raise_error!(
-            "ERR_FS_READ_DIR_ITERATION",
-            context = json!({
-                "source": src.to_string_lossy(),
-                "io_error": e.to_string(),
-                "action": "next_entry",
-                "hint": "Échec lors de l'itération sur le répertoire. Le dossier a peut-être été déplacé ou supprimé pendant la lecture."
-            })
-        ),
-    } {
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let dest_path = dst.join(&file_name);
-
-        // 1. Détermination du type de fichier
-        let ty = match entry.file_type().await {
-            Ok(t) => t,
-            Err(e) => raise_error!(
-                "ERR_FS_METADATA_FETCH",
-                context = json!({
-                    "path": path.to_string_lossy(),
-                    "io_error": e.to_string(),
-                    "action": "get_file_type",
-                    "hint": "Impossible de lire les métadonnées du fichier pour déterminer s'il s'agit d'un dossier."
-                })
-            ),
-        };
-
-        // 2. Dispatching récursif ou copie directe
-        if ty.is_dir() {
-            Box::pin(copy_dir_recursive(&path, &dest_path)).await?;
-        } else if let Err(e) = io::copy(&path, &dest_path).await {
-            raise_error!(
-                "ERR_FS_COPY_FAILED",
-                context = json!({
-                    "from": path.to_string_lossy(),
-                    "to": dest_path.to_string_lossy(),
-                    "io_error": e.to_string(),
-                    "hint": "La copie du fichier a échoué. Vérifiez l'espace disque ou les permissions d'écriture sur la destination."
-                })
-            );
-        }
-    }
-    Ok(())
 }
 
 #[allow(dead_code)]

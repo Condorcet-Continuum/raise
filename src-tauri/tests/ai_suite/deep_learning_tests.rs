@@ -6,7 +6,8 @@ use raise::ai::deep_learning::models::sequence_net::SequenceNet;
 use raise::ai::deep_learning::serialization;
 use raise::ai::deep_learning::trainer::Trainer;
 use raise::commands::ai_commands::DlState;
-use raise::utils::config::{test_mocks, AppConfig}; // 🎯 Import the config and mock injector
+use raise::utils::config::AppConfig;
+use raise::utils::mock;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 async fn test_dl_e2e_integration() -> anyhow::Result<()> {
     // --- 1. CONFIGURATION ROBUSTE & ISOLÉE ---
     // 🎯 Inject the mock configuration to guarantee a stable testing environment
-    test_mocks::inject_mock_config().await;
+    mock::inject_mock_config().await;
     let config = &AppConfig::get().deep_learning;
     let device = config.to_device(); // Automatically resolves to CPU per the mock config
 

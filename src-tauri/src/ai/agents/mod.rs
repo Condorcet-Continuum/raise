@@ -239,7 +239,12 @@ pub mod tools {
         let manager = CollectionsManager::new(&ctx.db, "un2", "_system");
 
         // On s'assure que la collection existe (tolérance aux erreurs)
-        let _ = manager.create_collection("agent_sessions", None).await;
+        let _ = manager
+            .create_collection(
+                "agent_sessions",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await;
 
         match manager
             .get_document("agent_sessions", &ctx.session_id)

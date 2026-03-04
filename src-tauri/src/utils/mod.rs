@@ -15,6 +15,10 @@ pub mod logger;
 pub mod macros;
 pub mod net;
 pub mod os;
+pub mod session;
+
+#[cfg(any(test, debug_assertions))]
+pub mod mock;
 
 // --- 2. FAÇADES SÉMANTIQUES (Contrat de Service) ---
 

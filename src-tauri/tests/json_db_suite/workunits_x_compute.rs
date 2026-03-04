@@ -11,7 +11,7 @@ async fn workunit_compute_then_validate_minimal() {
     let env = setup_test_env(LlmMode::Disabled).await;
 
     // 2. Chargement du registre des schémas depuis la DB isolée
-    let reg = SchemaRegistry::from_db(&env.storage.config, &env.space, &env.db)
+    let reg = SchemaRegistry::from_db(&env.sandbox.storage.config, &env.space, &env.db)
         .await
         .expect("❌ Impossible de charger le registre des schémas");
 
@@ -60,9 +60,9 @@ async fn workunit_compute_then_validate_minimal() {
 async fn finance_compute_minimal() {
     // 1. Initialisation de l'environnement
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
-    let reg = SchemaRegistry::from_db(&env.storage.config, &env.space, &env.db)
+    let reg = SchemaRegistry::from_db(&env.sandbox.storage.config, &env.space, &env.db)
         .await
         .expect("❌ Échec init registre");
 
@@ -91,7 +91,19 @@ async fn finance_compute_minimal() {
         "summary": {}, // Destiné à recevoir les x_rules
         "synthese_build": {}
     });
+    mgr.create_collection(
+        "finance_test_collection",
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .unwrap();
 
+    mgr.create_collection(
+        "_system_rules",
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .unwrap();
     // 3. EXÉCUTION DU MOTEUR DE RÈGLES (Business Logic)
     // On applique les règles dynamiques définies dans le schéma
     manager::apply_business_rules(

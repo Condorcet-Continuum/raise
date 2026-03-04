@@ -64,6 +64,8 @@ use raise::commands::ai_commands::DlState;
 
 use raise::spatial_engine;
 
+use raise::utils::session::SessionManager;
+
 #[allow(clippy::await_holding_lock)]
 fn main() {
     if let Err(e) = AppConfig::init() {
@@ -136,6 +138,11 @@ fn main() {
             let storage_engine = storage.clone();
             app.manage(storage);
             app.manage(plugin_mgr.clone());
+
+            // Instanciation et injection du SessionManager
+            let shared_storage = Arc::new(storage_engine.clone());
+            let session_manager = SessionManager::new(shared_storage);
+            app.manage(session_manager);
 
             let app_state = Arc::new(AppState {
                 model: Mutex::new(ProjectModel::default()),
@@ -361,6 +368,9 @@ fn main() {
             traceability_commands::get_traceability_matrix,
             traceability_commands::get_element_neighbors,
             utils_commands::get_app_info,
+            utils_commands::session_login,
+            utils_commands::session_logout,
+            utils_commands::session_get,
             workflow_commands::submit_mandate,
             workflow_commands::register_workflow,
             workflow_commands::start_workflow,
@@ -383,15 +393,24 @@ async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> a
             up: vec![
                 MigrationStep::CreateCollection {
                     name: "articles".to_string(),
-                    schema: Value::Null,
+                    // 🎯 FIX : On remplace Value::Null par le schéma générique
+                    schema: Value::String(
+                        "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
+                    ),
                 },
                 MigrationStep::CreateCollection {
                     name: "systems".to_string(),
-                    schema: Value::Null,
+                    // 🎯 FIX
+                    schema: Value::String(
+                        "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
+                    ),
                 },
                 MigrationStep::CreateCollection {
                     name: "exchange_items".to_string(),
-                    schema: Value::Null,
+                    // 🎯 FIX
+                    schema: Value::String(
+                        "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
+                    ),
                 },
             ],
             down: vec![],
@@ -452,10 +471,13 @@ async fn load_arcadia_ontologies(ontology_root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raise::utils::config::test_mocks::DbSandbox;
+
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[cfg(test)]
+    use raise::utils::mock::DbSandbox;
 
     #[tokio::test]
     async fn test_load_ontologies_from_directory_success() {

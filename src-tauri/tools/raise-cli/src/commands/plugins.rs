@@ -1,6 +1,11 @@
+// FICHIER : src-tauri/tools/raise-cli/src/commands/plugins.rs
+
 use clap::{Args, Subcommand};
 
 use raise::{user_info, user_success, utils::prelude::*};
+
+// 🎯 NOUVEAU : Import du contexte global CLI
+use crate::CliContext;
 
 // Note: L'import de PluginManager est retiré pour satisfaire Clippy.
 // Le branchement réel nécessitera l'instanciation de StorageEngine.
@@ -27,14 +32,29 @@ pub enum PluginsCommands {
     Info { name: String },
 }
 
-pub async fn handle(args: PluginsArgs) -> RaiseResult<()> {
+// 🎯 La signature intègre le CliContext
+pub async fn handle(args: PluginsArgs, ctx: CliContext) -> RaiseResult<()> {
+    // 🎯 Heartbeat automatique
+    let _ = ctx.session_mgr.touch().await;
+
     match args.command {
         PluginsCommands::List => {
-            user_info!("PLUGINS", "Interrogation du catalogue actif...");
+            // 🎯 Mise en conformité stricte JSON
+            user_info!(
+                "PLUGINS_LIST_START",
+                json!({"action": "Interrogation du catalogue actif..."})
+            );
 
             // Simulation des capacités du PluginManager
-            user_info!("ACTIVE", "workflow_spy, logic_bridge, sensor_evaluator");
-            user_success!("LIST_OK", "3 plugins chargés dans le runtime WASM.");
+            user_info!(
+                "PLUGINS_ACTIVE",
+                json!({"plugins": ["workflow_spy", "logic_bridge", "sensor_evaluator"]})
+            );
+
+            user_success!(
+                "PLUGINS_LIST_OK",
+                json!({"count": 3, "status": "chargés dans le runtime WASM"})
+            );
         }
 
         PluginsCommands::Load { id, path } => {
@@ -75,12 +95,28 @@ pub async fn handle(args: PluginsArgs) -> RaiseResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CliContext;
+    use raise::utils::mock::DbSandbox;
+    use raise::utils::session::SessionManager;
+    use raise::utils::Arc;
 
     #[tokio::test]
     async fn test_plugins_list_flow() {
+        // 🎯 On simule le contexte global pour le test
+        let sandbox = DbSandbox::new().await;
+        let storage = Arc::new(sandbox.storage.clone());
+        let session_mgr = SessionManager::new(storage.clone());
+
+        let ctx = CliContext {
+            config: AppConfig::get(),
+            session_mgr,
+            storage,
+        };
+
         let args = PluginsArgs {
             command: PluginsCommands::List,
         };
-        assert!(handle(args).await.is_ok());
+
+        assert!(handle(args, ctx).await.is_ok());
     }
 }

@@ -434,8 +434,8 @@ impl<'a> DataProvider for ModelLoader<'a> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
     use crate::utils::data::json;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_loader_index_and_semantic_resolution() {
@@ -449,6 +449,13 @@ mod tests {
         let doc = json!({
             "id": "UUID-SEM-1", "name": "User", "@type": "OperationalActor"
         });
+        manager
+            .create_collection(
+                "oa",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager.insert_raw("oa", &doc).await.unwrap();
 
         let loader = ModelLoader::new_with_manager(manager);
@@ -467,7 +474,13 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-
+        manager
+            .create_collection(
+                "transverse",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .insert_raw(
                 "transverse",
@@ -540,7 +553,13 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-
+        manager
+            .create_collection(
+                "transverse",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .insert_raw(
                 "transverse",

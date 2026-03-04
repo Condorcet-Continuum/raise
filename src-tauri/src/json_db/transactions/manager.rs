@@ -15,8 +15,6 @@ use crate::utils::io::{self, Path};
 use crate::utils::json;
 use crate::utils::prelude::*;
 
-use crate::utils::config::AppConfig;
-
 /// Structure pour stocker l'inverse d'une opération réalisée (Undo Log en mémoire)
 enum UndoAction {
     Insert {
@@ -208,14 +206,11 @@ impl<'a> TransactionManager<'a> {
     }
 
     async fn load_dataset_file(&self, path: &str) -> RaiseResult<Value> {
-        let config = AppConfig::get();
-        let domain_path = config
-            .get_path("PATH_RAISE_DOMAIN")
-            .expect("ERREUR: PATH_RAISE_DOMAIN introuvable dans la configuration !");
-
-        let dataset_root = config
-            .get_path("PATH_RAISE_DATASET")
-            .unwrap_or_else(|| domain_path.join("dataset"))
+        let dataset_root = self
+            .storage
+            .config
+            .data_root
+            .join("dataset")
             .to_string_lossy()
             .to_string();
 
@@ -743,28 +738,15 @@ fn json_merge(a: &mut Value, b: Value) {
 // TESTS
 // ============================================================================
 
+// ============================================================================
+// TESTS
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::io::{self, tempdir, Path};
-
-    async fn setup_test_db() -> (tempfile::TempDir, JsonDbConfig, String, String) {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig {
-            data_root: dir.path().to_path_buf(),
-        };
-        let space = "test_space";
-        let db = "test_db";
-        let db_path = config.db_root(space, db);
-
-        io::ensure_dir(&db_path).await.unwrap();
-        io::write_json_atomic(&db_path.join("_system.json"), &json!({ "collections": {} }))
-            .await
-            .unwrap();
-
-        (dir, config, space.to_string(), db.to_string())
-    }
+    use crate::utils::io::{self, Path};
+    use crate::utils::mock::DbSandbox;
 
     async fn create_dataset_file(root: &Path, rel_path: &str, content: Value) {
         let full_path = root.join(rel_path);
@@ -776,40 +758,56 @@ mod tests {
 
     #[tokio::test]
     async fn test_transaction_commit_success() {
-        let (_dir, config, space, db) = setup_test_db().await;
-        // ✅ On instancie le StorageEngine pour le test
-        let storage = StorageEngine::new(config.clone());
-        io::ensure_dir(&config.db_root(&space, &db).join("users"))
+        let sandbox = DbSandbox::new().await;
+        let space = &sandbox.config.system_domain;
+        let db = &sandbox.config.system_db;
+        let storage = &sandbox.storage;
+
+        let col_mgr = CollectionsManager::new(storage, space, db);
+        col_mgr.init_db().await.unwrap();
+        col_mgr
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
-        let tm = TransactionManager::new(&storage, &space, &db);
+
+        let tm = TransactionManager::new(storage, space, db);
         let res = tm
             .execute(|tx| {
                 tx.add_insert("users", "user1", json!({"name": "Alice"}));
                 Ok(())
             })
             .await;
+
         assert!(res.is_ok());
-        assert!(
-            io::exists(
-                &config
-                    .db_collection_path(&space, &db, "users")
-                    .join("user1.json")
-            )
-            .await
-        );
+
+        let doc_path = storage
+            .config
+            .db_collection_path(space, db, "users")
+            .join("user1.json");
+        assert!(crate::utils::io::exists(&doc_path).await);
     }
 
     #[tokio::test]
     async fn test_transaction_rollback_on_error() {
-        let (_dir, config, space, db) = setup_test_db().await;
-        let storage = StorageEngine::new(config.clone());
+        let sandbox = DbSandbox::new().await;
+        let space = &sandbox.config.system_domain;
+        let db = &sandbox.config.system_db;
+        let storage = &sandbox.storage;
 
-        io::ensure_dir(&config.db_root(&space, &db).join("users"))
+        let col_mgr = CollectionsManager::new(storage, space, db);
+        col_mgr.init_db().await.unwrap();
+        col_mgr
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
 
-        let tm = TransactionManager::new(&storage, &space, &db);
+        let tm = TransactionManager::new(storage, space, db);
         let res = tm
             .execute(|tx| {
                 tx.add_insert("users", "user2", json!({"name": "Bob"}));
@@ -822,21 +820,37 @@ mod tests {
                 );
             })
             .await;
+
         assert!(res.is_err());
-        let doc_path = config
-            .db_collection_path(&space, &db, "users")
+
+        let doc_path = storage
+            .config
+            .db_collection_path(space, db, "users")
             .join("user2.json");
-        assert!(!doc_path.exists());
+        assert!(
+            !doc_path.exists(),
+            "Le rollback a échoué, le fichier a été écrit !"
+        );
     }
 
     #[tokio::test]
     async fn test_smart_insert_injects_metadata() {
-        let (_dir, config, space, db) = setup_test_db().await;
-        let storage = StorageEngine::new(config.clone());
-        let tm = TransactionManager::new(&storage, &space, &db);
-        io::ensure_dir(&config.db_collection_path(&space, &db, "users"))
+        let sandbox = DbSandbox::new().await;
+        let space = &sandbox.config.system_domain;
+        let db = &sandbox.config.system_db;
+        let storage = &sandbox.storage;
+
+        let col_mgr = CollectionsManager::new(storage, space, db);
+        col_mgr.init_db().await.unwrap();
+        col_mgr
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
+
+        let tm = TransactionManager::new(storage, space, db);
         let req = vec![TransactionRequest::Insert {
             collection: "users".to_string(),
             id: None,
@@ -844,7 +858,6 @@ mod tests {
         }];
         tm.execute_smart(req).await.expect("Transaction failed");
 
-        let col_mgr = CollectionsManager::new(&storage, &space, &db);
         let res = QueryEngine::new(&col_mgr)
             .execute_query(Query::new("users"))
             .await
@@ -855,16 +868,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_atomicity_failure_rollback_smart() {
-        let (_dir, config, space, db) = setup_test_db().await;
-        let storage = StorageEngine::new(config.clone());
-        let tm = TransactionManager::new(&storage, &space, &db);
+        let sandbox = DbSandbox::new().await;
+        let space = &sandbox.config.system_domain;
+        let db = &sandbox.config.system_db;
+        let storage = &sandbox.storage;
 
-        let mut idx_mgr = IndexManager::new(&storage, &space, &db);
-
-        io::ensure_dir(&config.db_collection_path(&space, &db, "items"))
+        let col_mgr = CollectionsManager::new(storage, space, db);
+        col_mgr.init_db().await.unwrap();
+        col_mgr
+            .create_collection(
+                "items",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
+
+        let mut idx_mgr = IndexManager::new(storage, space, db);
         idx_mgr.create_index("items", "val", "hash").await.unwrap();
+
+        let tm = TransactionManager::new(storage, space, db);
 
         let req = vec![
             TransactionRequest::Insert {
@@ -883,8 +905,9 @@ mod tests {
         let result = tm.execute_smart(req).await;
         assert!(result.is_err(), "La transaction aurait dû échouer");
 
-        let doc_path = config
-            .db_collection_path(&space, &db, "items")
+        let doc_path = storage
+            .config
+            .db_collection_path(space, db, "items")
             .join("item1.json");
         assert!(
             !doc_path.exists(),
@@ -900,24 +923,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_upsert_workflow() {
-        let (_dir, config, space, db) = setup_test_db().await;
-        AppConfig::init().ok();
+        let sandbox = DbSandbox::new().await;
+        let space = &sandbox.config.system_domain;
+        let db = &sandbox.config.system_db;
+        let storage = &sandbox.storage;
 
-        let storage = StorageEngine::new(config.clone());
-        let tm = TransactionManager::new(&storage, &space, &db);
-        io::ensure_dir(&config.db_collection_path(&space, &db, "actors"))
+        let col_mgr = CollectionsManager::new(storage, space, db);
+        col_mgr.init_db().await.unwrap();
+        col_mgr
+            .create_collection(
+                "actors",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
 
-        let app_cfg = AppConfig::get();
-        let domain_path = app_cfg
+        let tm = TransactionManager::new(storage, space, db);
+
+        let dataset_dir = sandbox
+            .config
             .get_path("PATH_RAISE_DOMAIN")
-            .expect("PATH_RAISE_DOMAIN doit être défini dans la sandbox");
-
-        let dataset_dir = app_cfg
-            .get_path("PATH_RAISE_DATASET")
-            .unwrap_or_else(|| domain_path.join("dataset"));
-
+            .unwrap()
+            .join("dataset");
         io::ensure_dir(&dataset_dir).await.unwrap();
 
         create_dataset_file(
@@ -946,7 +973,7 @@ mod tests {
         }];
         tm.execute_smart(req2).await.unwrap();
 
-        let res = QueryEngine::new(&CollectionsManager::new(&storage, &space, &db))
+        let res = QueryEngine::new(&col_mgr)
             .execute_query(Query::new("actors"))
             .await
             .unwrap();
@@ -957,19 +984,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_upsert_resolution_by_name() {
-        let (_dir, config, space, db) = setup_test_db().await;
-        let storage = StorageEngine::new(config.clone());
-        let tm = TransactionManager::new(&storage, &space, &db);
+        let sandbox = DbSandbox::new().await;
+        let space = &sandbox.config.system_domain;
+        let db = &sandbox.config.system_db;
+        let storage = &sandbox.storage;
 
-        // 1. Initialisation de la collection
-        io::ensure_dir(&config.db_collection_path(&space, &db, "users"))
+        let col_mgr = CollectionsManager::new(storage, space, db);
+        col_mgr.init_db().await.unwrap();
+        col_mgr
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
             .unwrap();
 
-        // 2. Premier passage : Insertion initiale d'Alice
+        let tm = TransactionManager::new(storage, space, db);
+
         let req1 = vec![TransactionRequest::Insert {
             collection: "users".to_string(),
-            id: None, // On laisse le moteur générer l'ID
+            id: None,
             document: json!({
                 "name": "alice",
                 "username": "alice_raise",
@@ -982,9 +1016,6 @@ mod tests {
             .await
             .expect("L'insertion initiale a échoué");
 
-        // 3. Deuxième passage : "Upsert" par le nom
-        // On change l'email, mais on ne donne ni ID ni Handle.
-        // Le moteur DOIT trouver l'ID existant via le champ 'name'.
         let req2 = vec![TransactionRequest::Update {
             collection: "users".to_string(),
             id: None,
@@ -996,24 +1027,12 @@ mod tests {
         }];
 
         let res = tm.execute_smart(req2).await;
-        assert!(
-            res.is_ok(),
-            "Le moteur aurait dû résoudre l'identité via le nom sans erreur"
-        );
+        assert!(res.is_ok(), "Le moteur aurait dû résoudre l'identité");
 
-        // 4. Vérification finale : Avons-nous un seul document mis à jour ?
-        let col_mgr = CollectionsManager::new(&storage, &space, &db);
         let engine = QueryEngine::new(&col_mgr);
         let query_res = engine.execute_query(Query::new("users")).await.unwrap();
 
-        assert_eq!(
-            query_res.documents.len(),
-            1,
-            "Il ne devrait y avoir qu'un seul document Alice"
-        );
-        assert_eq!(
-            query_res.documents[0]["email"], "new_alice@raise.local",
-            "L'email aurait dû être mis à jour"
-        );
+        assert_eq!(query_res.documents.len(), 1);
+        assert_eq!(query_res.documents[0]["email"], "new_alice@raise.local");
     }
 }

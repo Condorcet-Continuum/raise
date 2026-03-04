@@ -163,7 +163,7 @@ impl McpTool for CodeGenTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_codegen_tool_full_integration() {
@@ -175,6 +175,13 @@ mod tests {
         );
 
         let comp_id = "comp-rust-01";
+        manager
+            .create_collection(
+                "pa_components",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .upsert_document(
                 "pa_components",

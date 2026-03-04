@@ -97,7 +97,7 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_dry_run_rule_async() {

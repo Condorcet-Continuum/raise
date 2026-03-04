@@ -14,17 +14,16 @@ async fn test_software_agent_creates_component_end_to_end() {
     let env = setup_test_env(LlmMode::Enabled).await;
 
     // --- CONTEXTE ---
-    let test_data_root = env.storage.config.data_root.clone();
+    let test_data_root = env.sandbox.storage.config.data_root.clone();
 
     // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
-    let la_mgr = CollectionsManager::new(&env.storage, "un2", "la");
+    let la_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "la");
 
     // Initialisation de la collection 'components' pour la couche LA
     la_mgr
         .create_collection(
             "components",
-            // On utilise le schéma générique tolérant
-            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
         .expect("Initialisation de la collection components impossible");
@@ -36,7 +35,7 @@ async fn test_software_agent_creates_component_end_to_end() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.storage.clone()),
+        Arc::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for BusinessAgent tests"),

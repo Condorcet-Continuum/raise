@@ -10,16 +10,15 @@ use raise::json_db::collections::manager::CollectionsManager;
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_hardware_agent_handles_both_electronics_and_infra() {
     let env = setup_test_env(LlmMode::Enabled).await;
-    let test_root = env.storage.config.data_root.clone();
+    let test_root = env.sandbox.storage.config.data_root.clone();
 
     // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
     // On prépare la base métier locale au test pour guider le LLM
-    let pa_mgr = CollectionsManager::new(&env.storage, "un2", "pa");
+    let pa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "pa");
     pa_mgr
         .create_collection(
             "physical_nodes",
-            // On utilise un schéma mocké existant issu de ton mod.rs
-            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
         .expect("Initialisation de la collection métier impossible");
@@ -31,7 +30,7 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.storage.clone()),
+        Arc::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for BusinessAgent tests"),

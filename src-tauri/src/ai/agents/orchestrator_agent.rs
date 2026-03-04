@@ -123,7 +123,7 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_orchestrator_id() {

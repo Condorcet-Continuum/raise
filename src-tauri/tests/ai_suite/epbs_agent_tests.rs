@@ -9,16 +9,16 @@ use raise::utils::Arc;
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_epbs_agent_creates_configuration_item() {
     let env = setup_test_env(LlmMode::Enabled).await;
-    let test_root = env.storage.config.data_root.clone();
+    let test_root = env.sandbox.storage.config.data_root.clone();
 
     // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
     // Plus besoin d'amorcer _system ou agent_sessions, mod.rs s'en charge !
     // On prépare juste la base métier locale au test pour guider le LLM.
-    let epbs_mgr = CollectionsManager::new(&env.storage, "un2", "epbs");
+    let epbs_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "epbs");
     epbs_mgr
         .create_collection(
             "configuration_items",
-            Some("https://raise.io/schemas/v1/arcadia/data/exchange-item.schema.json".to_string()),
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
         .expect("Initialisation de la collection métier impossible");
@@ -30,7 +30,7 @@ async fn test_epbs_agent_creates_configuration_item() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.storage.clone()),
+        Arc::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),

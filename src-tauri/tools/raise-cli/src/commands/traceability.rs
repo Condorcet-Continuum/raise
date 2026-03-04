@@ -9,6 +9,9 @@ use raise::traceability::{
     reporting::audit_report::AuditGenerator, ChangeTracker, ImpactAnalyzer, Tracer,
 };
 
+// 🎯 NOUVEAU : Import du contexte global CLI
+use crate::CliContext;
+
 #[derive(Args, Clone, Debug)]
 pub struct TraceabilityArgs {
     #[command(subcommand)]
@@ -50,18 +53,23 @@ fn get_docs(model: &ProjectModel) -> HashMap<String, Value> {
     docs
 }
 
-pub async fn handle(args: TraceabilityArgs) -> RaiseResult<()> {
+// 🎯 La signature attend maintenant le CliContext complet
+pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> {
+    // 🎯 Heartbeat automatique : on signale que la session est active
+    let _ = ctx.session_mgr.touch().await;
+
     match args.command {
         TraceabilityCommands::Audit => {
-            user_info!("TRACE_START", "Initialisation du moteur de traçage...");
+            // 🎯 Utilisation stricte du contexte JSON pour les macros
+            user_info!(
+                "TRACE_START",
+                json!({"step": "init", "message": "Initialisation du moteur de traçage..."})
+            );
 
             let model = ProjectModel::default();
             let docs = get_docs(&model);
 
-            // 🎯 FIX : Utilisation du constructeur de rétro-compatibilité
             let tracer = Tracer::from_legacy_model(&model);
-
-            // 🎯 FIX : Utilisation du générateur de rapport universel
             let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name);
 
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
@@ -85,16 +93,21 @@ pub async fn handle(args: TraceabilityArgs) -> RaiseResult<()> {
                     "action": "evaluating_side_effects"
                 })
             );
-            let model = ProjectModel::default();
 
-            // 🎯 FIX : Plus de lifetime 'a dans Tracer
+            let model = ProjectModel::default();
             let tracer = Tracer::from_legacy_model(&model);
             let analyzer = ImpactAnalyzer::new(tracer);
 
-            user_info!("RESULT", "Calcul des propagations de changement...");
+            // 🎯 Remplacement de la simple string par un JSON structuré
+            user_info!(
+                "IMPACT_CALCULATING",
+                json!({"step": "graph_traversal", "message": "Calcul des propagations de changement..."})
+            );
+
             let report = analyzer.analyze(&component_id, 3);
 
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
+
             user_success!(
                 "IMPACT_ANALYSIS_SUCCESS",
                 json!({
@@ -106,23 +119,49 @@ pub async fn handle(args: TraceabilityArgs) -> RaiseResult<()> {
         }
 
         TraceabilityCommands::History => {
-            user_info!("TRACKER", "Consultation de l'historique des changements...");
+            user_info!(
+                "TRACKER_START",
+                json!({"action": "fetch_history", "message": "Consultation de l'historique des changements..."})
+            );
+
             let _tracker = ChangeTracker::new();
-            user_success!("HISTORY_READY", "Historique de traçabilité chargé.");
+
+            user_success!(
+                "HISTORY_READY",
+                json!({"status": "loaded", "message": "Historique de traçabilité chargé."})
+            );
         }
     }
     Ok(())
 }
 
+// --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CliContext;
+    use raise::utils::mock::DbSandbox;
+    use raise::utils::session::SessionManager;
+    use raise::utils::Arc;
 
     #[tokio::test]
     async fn test_traceability_cli_flow() {
+        // 🎯 On simule le contexte global pour le test
+        let sandbox = DbSandbox::new().await;
+        let storage = Arc::new(sandbox.storage.clone());
+        let session_mgr = SessionManager::new(storage.clone());
+
+        let ctx = CliContext {
+            config: AppConfig::get(),
+            session_mgr,
+            storage,
+        };
+
         let args = TraceabilityArgs {
             command: TraceabilityCommands::Audit,
         };
-        assert!(handle(args).await.is_ok());
+
+        // On passe le contexte à handle()
+        assert!(handle(args, ctx).await.is_ok());
     }
 }

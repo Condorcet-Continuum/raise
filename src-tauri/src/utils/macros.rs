@@ -46,6 +46,54 @@ macro_rules! user_success {
     }};
 }
 
+/// Affiche un avertissement (jaune/orange) à l'utilisateur
+#[macro_export]
+macro_rules! user_warn {
+    ($key:expr) => {{
+        let msg = $crate::utils::i18n::t($key);
+        tracing::warn!(
+            target: "user_notification",
+            event_id = $key,
+            severity = "warning",
+            "⚠️ {}", msg
+        );
+    }};
+    ($key:expr, $context:expr) => {{
+        let msg = $crate::utils::i18n::t($key);
+        tracing::warn!(
+            target: "user_notification",
+            event_id = $key,
+            severity = "warning",
+            context = %$context,
+            "⚠️ {}", msg
+        );
+    }};
+}
+
+/// Affiche une information de débogage (mode verbeux) à l'utilisateur
+#[macro_export]
+macro_rules! user_debug {
+    ($key:expr) => {{
+        let msg = $crate::utils::i18n::t($key);
+        tracing::debug!(
+            target: "user_notification",
+            event_id = $key,
+            severity = "debug",
+            "🐛 {}", msg
+        );
+    }};
+    ($key:expr, $context:expr) => {{
+        let msg = $crate::utils::i18n::t($key);
+        tracing::debug!(
+            target: "user_notification",
+            event_id = $key,
+            severity = "debug",
+            context = %$context,
+            "🐛 {}", msg
+        );
+    }};
+}
+
 #[macro_export]
 macro_rules! user_error {
     ($key:expr) => {{
@@ -160,6 +208,28 @@ macro_rules! raise_error {
     };
 }
 
+#[macro_export]
+macro_rules! require_session {
+    ($state:expr) => {{
+        match $state.get_current_session().await {
+            Some(session) => {
+                // On signale l'activité pour repousser l'expiration
+                let _ = $state.touch().await;
+                session
+            }
+            None => {
+                // 🛑 Interception automatique : on lève une erreur structurée !
+                return Err($crate::build_error!(
+                    "ERR_UNAUTHORIZED",
+                    error = "Accès refusé : aucune session active",
+                    context = serde_json::json!({
+                        "hint": "Vous devez appeler 'session_login' avant d'exécuter cette commande."
+                    })
+                ));
+            }
+        }
+    }};
+}
 // ============================================================================
 // TESTS UNITAIRES DES MACROS
 // ============================================================================
@@ -228,5 +298,47 @@ mod tests {
 
         let AppError::Structured(data) = result.unwrap_err();
         assert_eq!(data.code, "ERR_CRITICAL");
+    }
+    #[tokio::test]
+    async fn test_require_session_guard() {
+        use crate::utils::mock::AgentDbSandbox;
+        use crate::utils::session::{Session, SessionManager};
+        use crate::utils::Uuid;
+        // Fonction bouchon simulant une commande Tauri
+        async fn mock_protected_command(manager: &SessionManager) -> RaiseResult<Session> {
+            // L'appel de la macro : c'est ça qu'on teste !
+            let session = crate::require_session!(manager);
+
+            // Si on arrive ici, la macro n'a pas fait de `return Err`
+            Ok(session)
+        }
+
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = SessionManager::new(sandbox.db.clone());
+
+        // 1. Cas d'échec : Pas de session
+        let err_result = mock_protected_command(&manager).await;
+        assert!(err_result.is_err(), "La macro aurait dû bloquer l'accès");
+
+        let AppError::Structured(err_data) = err_result.unwrap_err();
+        assert_eq!(err_data.code, "ERR_UNAUTHORIZED");
+        assert_eq!(
+            err_data.context["technical_error"].as_str().unwrap(),
+            "Accès refusé : aucune session active"
+        );
+
+        // 2. Cas de succès : Session active
+        let valid_uuid = Uuid::new_v4().to_string();
+        let _ = manager.start_session(&valid_uuid).await.unwrap();
+
+        let success_result = mock_protected_command(&manager).await;
+        assert!(
+            success_result.is_ok(),
+            "La macro aurait dû laisser passer la requête"
+        );
+
+        let session = success_result.unwrap();
+        assert_eq!(session.user_id, valid_uuid);
+        assert_eq!(session.user_name, valid_uuid);
     }
 }

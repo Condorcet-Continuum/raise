@@ -1,8 +1,13 @@
+// FICHIER : src-tauri/tools/raise-cli/src/commands/genetics.rs
+
 use clap::{Args, Subcommand};
-use raise::{user_info, user_success, utils::prelude::*};
+use raise::{user_info, user_success, user_warn, utils::prelude::*}; // 🎯 Ajout de user_warn
 
 // Imports du Core (chemin relatif à l'arborescence src-tauri)
 use raise::genetics::engine::GeneticConfig;
+
+// 🎯 NOUVEAU : Import du contexte global CLI
+use crate::CliContext;
 
 /// Commandes pour le Moteur Génétique (Raise Genetics Engine)
 #[derive(Args, Clone, Debug)]
@@ -38,7 +43,11 @@ pub enum GeneticsCommands {
     },
 }
 
-pub async fn handle(args: GeneticsArgs) -> RaiseResult<()> {
+// 🎯 La signature intègre le CliContext
+pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
+    // 🎯 Heartbeat automatique
+    let _ = ctx.session_mgr.touch().await;
+
     match args.command {
         GeneticsCommands::Evolve {
             population,
@@ -46,7 +55,11 @@ pub async fn handle(args: GeneticsArgs) -> RaiseResult<()> {
             mutation_rate,
             crossover_rate,
         } => {
-            user_info!("GENETICS_START", "Initialisation du moteur NSGA-II...");
+            // 🎯 Mise en conformité stricte JSON
+            user_info!(
+                "GENETICS_START",
+                json!({"action": "Initialisation du moteur NSGA-II..."})
+            );
 
             // 1. Création de la configuration réelle du Core
             let config = GeneticConfig {
@@ -59,9 +72,14 @@ pub async fn handle(args: GeneticsArgs) -> RaiseResult<()> {
 
             // Validation conforme Clippy
             if !(0.0..=1.0).contains(&config.mutation_rate) {
-                user_info!(
+                // 🎯 Utilisation de user_warn avec payload structuré
+                user_warn!(
                     "CONFIG_WARN",
-                    "Mutation rate hors bornes, ajustement requis."
+                    json!({
+                        "issue": "Mutation rate hors bornes, ajustement requis.",
+                        "field": "mutation_rate",
+                        "value": config.mutation_rate
+                    })
                 );
             }
 
@@ -79,16 +97,17 @@ pub async fn handle(args: GeneticsArgs) -> RaiseResult<()> {
             // TODO: Ici nous instancierons le GeneticEngine avec SystemModelProvider
             // Pour l'instant on valide que la structure de config est acceptée
 
+            // 🎯 Payload JSON pour le succès
             user_success!(
                 "GENETICS_DONE",
-                "Simulation prête à être exécutée sur le modèle système."
+                json!({"status": "Simulation prête à être exécutée sur le modèle système."})
             );
         }
         GeneticsCommands::Inspect { id } => {
             let target = id.as_deref().unwrap_or("Meilleur Pareto Front");
             user_info!(
                 "INSPECT_TARGET",
-                json!({ "target": format!("{:?}", target) })
+                json!({ "target": target }) // format!("{:?}", target) n'est plus nécessaire
             );
         }
     }
@@ -99,9 +118,24 @@ pub async fn handle(args: GeneticsArgs) -> RaiseResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CliContext;
+    use raise::utils::mock::DbSandbox;
+    use raise::utils::session::SessionManager;
+    use raise::utils::Arc;
 
     #[tokio::test]
     async fn test_genetics_config_mapping() {
+        // 🎯 On simule le contexte global pour le test
+        let sandbox = DbSandbox::new().await;
+        let storage = Arc::new(sandbox.storage.clone());
+        let session_mgr = SessionManager::new(storage.clone());
+
+        let ctx = CliContext {
+            config: AppConfig::get(),
+            session_mgr,
+            storage,
+        };
+
         let args = GeneticsArgs {
             command: GeneticsCommands::Evolve {
                 population: 10,
@@ -110,6 +144,7 @@ mod tests {
                 crossover_rate: 0.9,
             },
         };
-        assert!(handle(args).await.is_ok());
+
+        assert!(handle(args, ctx).await.is_ok());
     }
 }

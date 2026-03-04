@@ -8,12 +8,15 @@ use raise::utils::prelude::*; // Apporte Value, json!, Result, etc.
 async fn query_get_article_by_id() {
     // 1. Initialisation de l'environnement isolé
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
     // 2. Création de la collection
-    mgr.create_collection("articles", None)
-        .await
-        .expect("❌ Échec de la création de la collection 'articles'");
+    mgr.create_collection(
+        "articles",
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .expect("❌ Échec de la création de la collection 'articles'");
 
     let doc = json!({
         "handle": "my-article",
@@ -54,11 +57,14 @@ async fn query_get_article_by_id() {
 #[tokio::test]
 async fn query_find_one_article_by_handle() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
-    mgr.create_collection("articles", None)
-        .await
-        .expect("❌ Échec create_collection");
+    mgr.create_collection(
+        "articles",
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .expect("❌ Échec create_collection");
 
     let docs = vec![
         json!({ "handle": "a1", "slug": "a1", "displayName": "A1", "title": "T", "status": "draft" }),
@@ -89,11 +95,14 @@ async fn query_find_one_article_by_handle() {
 #[tokio::test]
 async fn query_find_many_with_sort_and_limit_simulated() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
-    mgr.create_collection("articles", None)
-        .await
-        .expect("❌ Échec create_collection");
+    mgr.create_collection(
+        "articles",
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .expect("❌ Échec create_collection");
 
     for i in 0..5 {
         let doc = json!({

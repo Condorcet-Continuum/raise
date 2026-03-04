@@ -1,23 +1,19 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/workflow.rs
 
 use clap::{Args, Subcommand};
-use std::sync::Arc;
-use tokio::sync::Mutex as AsyncMutex;
 
 use raise::{
-    user_error, user_info, user_success,
+    raise_error, user_error, user_info, user_success,
     utils::{
-        config::AppConfig,
         io::{self},
         prelude::*,
-        Utc,
+        Arc, AsyncMutex, Utc,
     },
 };
 
 // Imports Cœur Raise
 use raise::ai::orchestrator::AiOrchestrator;
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 use raise::model_engine::types::ProjectModel;
 use raise::plugins::manager::PluginManager;
 
@@ -25,6 +21,9 @@ use raise::workflow_engine::{
     compiler::WorkflowCompiler, executor::WorkflowExecutor, mandate::Mandate,
     scheduler::WorkflowScheduler, ExecutionStatus, WorkflowInstance,
 };
+
+// 🎯 NOUVEAU : Import du contexte global CLI
+use crate::CliContext;
 
 /// Pilotage avancé du Workflow Engine (Neuro-Symbolic & Sovereign)
 #[derive(Args, Clone, Debug)]
@@ -65,17 +64,10 @@ pub enum WorkflowCommands {
 }
 
 // --- HELPER D'INITIALISATION DU MOTEUR ---
-// Permet au CLI de se connecter à la même base de données que le serveur Tauri
-// et d'instancier son propre exécuteur IA.
-async fn init_cli_engine() -> RaiseResult<(StorageEngine, WorkflowScheduler, String, String)> {
-    let config = AppConfig::get();
-    let db_root = config
-        .get_path("PATH_RAISE_DOMAIN")
-        .unwrap_or_else(|| std::path::PathBuf::from("./_system"));
-
-    let storage = StorageEngine::new(JsonDbConfig::new(db_root));
-    let domain = config.system_domain.clone();
-    let db = config.system_db.clone();
+// 🎯 On utilise le contexte existant sans recréer de StorageEngine !
+async fn init_cli_engine(ctx: &CliContext) -> RaiseResult<(WorkflowScheduler, String, String)> {
+    let domain = ctx.config.system_domain.clone();
+    let db = ctx.config.system_db.clone();
 
     // Initialisation du moteur (Léger pour le CLI)
     let orch = match AiOrchestrator::new(ProjectModel::default(), None).await {
@@ -90,16 +82,22 @@ async fn init_cli_engine() -> RaiseResult<(StorageEngine, WorkflowScheduler, Str
             })
         ),
     };
-    let pm = Arc::new(PluginManager::new(&storage, None));
+
+    // 🎯 Utilisation du storage global partagé
+    let pm = Arc::new(PluginManager::new(&ctx.storage, None));
 
     let executor = WorkflowExecutor::new(Arc::new(AsyncMutex::new(orch)), pm);
     let scheduler = WorkflowScheduler::new(executor);
 
-    Ok((storage, scheduler, domain, db))
+    Ok((scheduler, domain, db))
 }
 
 // --- POINT D'ENTRÉE PRINCIPAL ---
-pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
+// 🎯 La signature intègre le CliContext
+pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
+    // 🎯 Heartbeat automatique
+    let _ = ctx.session_mgr.touch().await;
+
     match args.command {
         WorkflowCommands::SubmitMandate { path } => {
             user_info!(
@@ -150,15 +148,12 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
             // 1. Compilation pour vérifier la validité
             let definition = WorkflowCompiler::compile(&mandate);
 
-            // 2. Connexion à la base de données pour persister le Mandat
-            let config = AppConfig::get();
-            let db_root = config
-                .get_path("PATH_RAISE_DOMAIN")
-                .unwrap_or_else(|| std::path::PathBuf::from("./_system"));
-            let storage = StorageEngine::new(JsonDbConfig::new(db_root));
-
-            let manager =
-                CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+            // 2. Connexion à la base de données via le contexte !
+            let manager = CollectionsManager::new(
+                &ctx.storage,
+                &ctx.config.system_domain,
+                &ctx.config.system_db,
+            );
 
             let json_mandate = serde_json::to_value(&mandate).unwrap();
 
@@ -184,8 +179,10 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
                     "timestamp": Utc::now().to_rfc3339()
                 })
             );
-            let (storage, mut scheduler, domain, db) = init_cli_engine().await?;
-            let manager = CollectionsManager::new(&storage, &domain, &db);
+
+            // 🎯 Injection du contexte dans le helper
+            let (mut scheduler, domain, db) = init_cli_engine(&ctx).await?;
+            let manager = CollectionsManager::new(&ctx.storage, &domain, &db);
 
             // Hack CLI: On "charge" la définition dans le scheduler courant en feignant le mandate_id
             let mandate_id = workflow_id.replace("wf_", "");
@@ -206,10 +203,10 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
 
             match final_status {
                 ExecutionStatus::Completed => {
-                    user_success!("WORKFLOW_COMPLETED");
+                    // 🎯 Mise en conformité stricte JSON
+                    user_success!("WORKFLOW_COMPLETED", json!({"status": "finished"}));
                 }
                 ExecutionStatus::Paused => {
-                    // Cas HITL (Human In The Loop) : on ajoute du contexte
                     user_info!(
                         "WORKFLOW_PAUSED_HITL",
                         json!({
@@ -247,8 +244,10 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
                     "timestamp": Utc::now().to_rfc3339()
                 })
             );
-            let (storage, mut scheduler, domain, db) = init_cli_engine().await?;
-            let manager = CollectionsManager::new(&storage, &domain, &db);
+
+            // 🎯 Injection du contexte
+            let (mut scheduler, domain, db) = init_cli_engine(&ctx).await?;
+            let manager = CollectionsManager::new(&ctx.storage, &domain, &db);
 
             // On a besoin de charger la définition pour exécuter la boucle
             let doc = manager
@@ -267,13 +266,16 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
                 .await?;
 
             // Relance de la machine
-            user_info!("ENGINE", "Relance de la boucle d'exécution...");
+            user_info!(
+                "ENGINE",
+                json!({"action": "Relance de la boucle d'exécution..."})
+            );
             let final_status = scheduler
                 .execute_instance_loop(&instance_id, &manager)
                 .await?;
 
             if final_status == ExecutionStatus::Completed {
-                user_success!("DONE", "Workflow terminé avec succès !");
+                user_success!("DONE", json!({"status": "Workflow terminé avec succès !"}));
             } else {
                 user_info!(
                     "WORKFLOW_STATUS_CHANGED",
@@ -287,13 +289,12 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
         }
 
         WorkflowCommands::Status { instance_id } => {
-            let config = AppConfig::get();
-            let db_root = config
-                .get_path("PATH_RAISE_DOMAIN")
-                .unwrap_or_else(|| std::path::PathBuf::from("./_system"));
-            let storage = StorageEngine::new(JsonDbConfig::new(db_root));
-            let manager =
-                CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+            // 🎯 Plus d'AppConfig::get()
+            let manager = CollectionsManager::new(
+                &ctx.storage,
+                &ctx.config.system_domain,
+                &ctx.config.system_db,
+            );
 
             match manager
                 .get_document("workflow_instances", &instance_id)
@@ -336,14 +337,12 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
         }
 
         WorkflowCommands::SetSensor { value } => {
-            // 1. Initialisation légère de l'accès DB (sans charger l'IA)
-            let config = AppConfig::get();
-            let db_root = config
-                .get_path("PATH_RAISE_DOMAIN")
-                .unwrap_or_else(|| std::path::PathBuf::from("./_system"));
-            let storage = StorageEngine::new(JsonDbConfig::new(db_root));
-            let manager =
-                CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+            // 🎯 Plus d'AppConfig::get()
+            let manager = CollectionsManager::new(
+                &ctx.storage,
+                &ctx.config.system_domain,
+                &ctx.config.system_db,
+            );
 
             // 2. Création de l'entité Jumeau Numérique
             let sensor_doc = serde_json::json!({
@@ -375,20 +374,38 @@ pub async fn handle(args: WorkflowArgs) -> RaiseResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raise::utils::config::test_mocks::GlobalDbSandbox;
+    use raise::utils::mock::GlobalDbSandbox;
+    use raise::utils::session::SessionManager;
 
     #[tokio::test]
     #[serial_test::serial]
     async fn test_cli_set_sensor_writes_to_db() {
         let sandbox = GlobalDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        manager
+            .create_collection(
+                "digital_twin",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+        // 🎯 On construit le contexte
+        let ctx = CliContext {
+            config: sandbox.config,
+            session_mgr: SessionManager::new(sandbox.db.clone()),
+            storage: sandbox.db.clone(),
+        };
 
         let args = WorkflowArgs {
             command: WorkflowCommands::SetSensor { value: 42.5 },
         };
 
-        let result = handle(args).await;
+        let result = handle(args, ctx).await;
 
-        // 🎯 FIX : Si le résultat est une erreur, on fait paniquer le test EN AFFICHANT l'erreur détaillée !
         if let Err(e) = &result {
             panic!("❌ La commande SetSensor a échoué avec l'erreur : {:?}", e);
         }
@@ -413,8 +430,25 @@ mod tests {
     async fn test_cli_submit_mandate_compiles_and_persists() {
         let sandbox = GlobalDbSandbox::new().await;
         let mandate_path = sandbox.domain_root.join("test_mandate.json");
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        manager
+            .create_collection(
+                "mandates",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+        // 🎯 On construit le contexte
+        let ctx = CliContext {
+            config: sandbox.config,
+            session_mgr: SessionManager::new(sandbox.db.clone()),
+            storage: sandbox.db.clone(),
+        };
 
-        // 🎯 FIX : On donne un ID explicite pour pouvoir le récupérer directement
         let valid_mandate = serde_json::json!({
             "id": "mandate_cli_test_123",
             "name": { "fr": "Mandat de Test" },
@@ -433,9 +467,8 @@ mod tests {
             },
         };
 
-        let result = handle(args).await;
+        let result = handle(args, ctx).await;
 
-        // 🎯 FIX : Si le résultat est une erreur, on fait paniquer le test EN AFFICHANT l'erreur détaillée !
         if let Err(e) = &result {
             panic!(
                 "❌ La commande SubmitMandate a échoué avec l'erreur : {:?}",
@@ -464,20 +497,24 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn test_cli_submit_mandate_invalid_path_fails_safely() {
-        let _sandbox = GlobalDbSandbox::new().await;
+        let sandbox = GlobalDbSandbox::new().await;
+
+        // 🎯 On construit le contexte
+        let ctx = CliContext {
+            config: sandbox.config,
+            session_mgr: SessionManager::new(sandbox.db.clone()),
+            storage: sandbox.db.clone(),
+        };
 
         let fake_path = "path/to/nothing.yaml";
-        // 🎯 FIX : On utilise la struct WorkflowArgs et l'énum WorkflowCommands
-        // pour appeler la fonction 'handle' définie dans le module parent.
         let args = WorkflowArgs {
             command: WorkflowCommands::SubmitMandate {
                 path: fake_path.to_string(),
             },
         };
 
-        let result = super::handle(args).await;
+        let result = super::handle(args, ctx).await;
 
-        // 2. On vérifie que le CLI retourne une erreur propre au lieu de paniquer
         assert!(
             result.is_err(),
             "Le CLI ne doit pas paniquer mais retourner une Err pour un fichier manquant"
@@ -485,8 +522,6 @@ mod tests {
 
         let err_msg = result.unwrap_err().to_string();
 
-        // 3. Validation du code d'erreur structuré RAISE
-        // Dans handle, si le fichier manque, raise_error! "FS_MANDATE_NOT_FOUND" est appelée.
         assert!(
             err_msg.contains("FS_MANDATE_NOT_FOUND"),
             "L'erreur attendue était FS_MANDATE_NOT_FOUND. Reçu : {}",

@@ -75,12 +75,41 @@ mod tests {
     use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
     use crate::utils::Mutex;
 
     #[tokio::test]
     async fn test_bridge_full_cycle_logic() {
         let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        manager
+            .create_collection(
+                "sa",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+
+        manager
+            .create_collection(
+                "components",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+
+        manager
+            .create_collection(
+                "elements",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+
         let app_state = AppState {
             model: Mutex::new(ProjectModel::default()),
         };

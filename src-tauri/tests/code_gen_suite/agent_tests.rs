@@ -12,7 +12,7 @@ async fn test_software_agent_creates_component_end_to_end() {
     let env = setup_test_env(LlmMode::Enabled).await;
 
     // --- CONTEXTE ---
-    let test_data_root = env.storage.config.data_root.clone();
+    let test_data_root = env.sandbox.storage.config.data_root.clone();
 
     let agent_id = "software_agent_test";
     let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_codegen");
@@ -20,7 +20,7 @@ async fn test_software_agent_creates_component_end_to_end() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.storage.clone()),
+        Arc::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),

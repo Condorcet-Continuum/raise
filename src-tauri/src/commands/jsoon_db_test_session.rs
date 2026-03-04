@@ -9,6 +9,10 @@ use crate::json_db::storage::StorageEngine;
 use crate::json_db::transactions::manager::TransactionManager;
 use tauri::{command, State};
 
+// 🎯 NOUVEAU : Import de la sécurité des sessions
+use crate::require_session;
+use crate::utils::session::SessionManager;
+
 // Helper pour instancier le manager rapidement
 fn mgr<'a>(
     storage: &'a State<'_, StorageEngine>,
@@ -23,13 +27,13 @@ fn mgr<'a>(
 #[command]
 pub async fn jsondb_create_db(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>, // 🛡️ Injection
     space: String,
     db: String,
 ) -> RaiseResult<bool> {
-    // 2. Récupération du manager (Accès logique)
-    let manager = mgr(&storage, &space, &db)?;
+    let _session = require_session!(session_state); // 🛡️ Guard
 
-    // 2. init_db() gère la validation des schémas, l'instanciation et délègue au storage !
+    let manager = mgr(&storage, &space, &db)?;
     match manager.init_db().await {
         Ok(created) => Ok(created),
         Err(e) => raise_error!(
@@ -48,13 +52,13 @@ pub async fn jsondb_create_db(
 #[command]
 pub async fn jsondb_drop_db(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
 ) -> RaiseResult<bool> {
-    // 1. Toujours passer par le manager
-    let manager = mgr(&storage, &space, &db)?;
+    let _session = require_session!(session_state);
 
-    // 2. Exécution de la suppression logique et physique
+    let manager = mgr(&storage, &space, &db)?;
     match manager.drop_db().await {
         Ok(dropped) => Ok(dropped),
         Err(e) => raise_error!(
@@ -75,19 +79,19 @@ pub async fn jsondb_drop_db(
 #[command]
 pub async fn jsondb_create_collection(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
-    schema_uri: String,
+    schema_uri: Option<String>,
 ) -> RaiseResult<bool> {
+    let _session = require_session!(session_state);
+
     let manager = mgr(&storage, &space, &db)?;
-
-    // 1. Capture des noms pour le diagnostic
     let coll_name = collection.clone();
-    let uri_info = schema_uri.clone();
+    let uri_info = schema_uri.clone().unwrap_or_else(|| "None".to_string());
 
-    // 2. Création avec validation du schéma optionnel
-    match manager.create_collection(&collection, &schema_uri).await {
+    match manager.create_collection(&collection, schema_uri).await {
         Ok(_) => Ok(true),
         Err(e) => raise_error!(
             "ERR_DB_COLLECTION_CREATION_FAILED",
@@ -105,13 +109,13 @@ pub async fn jsondb_create_collection(
 #[command]
 pub async fn jsondb_list_collections(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
 ) -> RaiseResult<Vec<String>> {
-    // 1. Accès au manager (gestion automatique du verrouillage)
-    let manager = mgr(&storage, &space, &db)?;
+    let _session = require_session!(session_state);
 
-    // 2. Récupération de la liste avec capture du contexte spatial
+    let manager = mgr(&storage, &space, &db)?;
     match manager.list_collections().await {
         Ok(collections) => Ok(collections),
         Err(e) => raise_error!(
@@ -130,16 +134,16 @@ pub async fn jsondb_list_collections(
 #[command]
 pub async fn jsondb_drop_collection(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
 ) -> RaiseResult<bool> {
-    let manager = mgr(&storage, &space, &db)?;
+    let _session = require_session!(session_state);
 
-    // 1. Capture du nom pour le contexte d'erreur
+    let manager = mgr(&storage, &space, &db)?;
     let coll_name = collection.clone();
 
-    // 2. Exécution de la suppression
     match manager.drop_collection(&collection).await {
         Ok(_) => Ok(true),
         Err(e) => raise_error!(
@@ -155,23 +159,24 @@ pub async fn jsondb_drop_collection(
         ),
     }
 }
+
 // --- GESTION INDEXES ---
 
 #[command]
 pub async fn jsondb_create_index(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
     field: String,
     kind: String,
 ) -> RaiseResult<bool> {
-    let manager = mgr(&storage, &space, &db)?;
+    let _session = require_session!(session_state);
 
-    // 1. Capture du contexte pour le diagnostic technique
+    let manager = mgr(&storage, &space, &db)?;
     let coll_name = collection.clone();
 
-    // 2. Création de l'index avec capture d'erreurs de contraintes
     match manager.create_index(&collection, &field, &kind).await {
         Ok(_) => Ok(true),
         Err(e) => raise_error!(
@@ -191,18 +196,18 @@ pub async fn jsondb_create_index(
 #[command]
 pub async fn jsondb_drop_index(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
     field: String,
 ) -> RaiseResult<bool> {
-    let manager = mgr(&storage, &space, &db)?;
+    let _session = require_session!(session_state);
 
-    // 1. Capture du contexte pour identifier l'optimisation supprimée
+    let manager = mgr(&storage, &space, &db)?;
     let coll_name = collection.clone();
     let field_name = field.clone();
 
-    // 2. Suppression avec gestion des erreurs I/O
     match manager.drop_index(&collection, &field).await {
         Ok(_) => Ok(true),
         Err(e) => raise_error!(
@@ -224,12 +229,14 @@ pub async fn jsondb_drop_index(
 #[command]
 pub async fn jsondb_evaluate_draft(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
     mut doc: Value,
 ) -> RaiseResult<Value> {
-    // 1. Registry Init
+    let _session = require_session!(session_state);
+
     let registry = match SchemaRegistry::from_db(&storage.config, &space, &db).await {
         Ok(reg) => reg,
         Err(e) => {
@@ -241,14 +248,12 @@ pub async fn jsondb_evaluate_draft(
         }
     };
 
-    // 2. Extraction du Schéma
     let meta_path = storage
         .config
         .db_collection_path(&space, &db, &collection)
         .join("_meta.json");
 
     let schema_uri = if meta_path.exists() {
-        // 1. Lecture du fichier sans map_err
         let content = match std::fs::read_to_string(&meta_path) {
             Ok(c) => c,
             Err(e) => raise_error!(
@@ -258,7 +263,6 @@ pub async fn jsondb_evaluate_draft(
             ),
         };
 
-        // 2. Parsing JSON sans map_err
         let meta: Value = match serde_json::from_str(&content) {
             Ok(m) => m,
             Err(e) => raise_error!(
@@ -268,7 +272,6 @@ pub async fn jsondb_evaluate_draft(
             ),
         };
 
-        // 3. Extraction sécurisée
         meta.get("schema")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
@@ -283,22 +286,19 @@ pub async fn jsondb_evaluate_draft(
         );
     };
 
-    // Si pas de schéma, on valide par défaut
     if schema_uri.is_empty() {
         return Ok(doc);
     }
 
-    // 3. Application des Règles (Correction du Type &str)
     let manager = mgr(&storage, &space, &db)?;
 
-    // On passe &schema_uri car String implémente Deref pour str
     match manager::apply_business_rules(
         &manager,
         &collection,
         &mut doc,
-        None, // Version
+        None,
         &registry,
-        &schema_uri, // <--- LA RÉPARATION : expected &str, found &str
+        &schema_uri,
     )
     .await
     {
@@ -316,14 +316,17 @@ pub async fn jsondb_evaluate_draft(
 #[command]
 pub async fn jsondb_insert_document(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
     document: Value,
 ) -> RaiseResult<Value> {
+    let _session = require_session!(session_state);
+
     let manager = mgr(&storage, &space, &db)?;
-    // 1. On capture le nom de la collection pour le contexte
     let collection_name = collection.clone();
+    
     match manager.insert_with_schema(&collection, document).await {
         Ok(id) => Ok(id),
         Err(e) => raise_error!(
@@ -341,19 +344,20 @@ pub async fn jsondb_insert_document(
 #[command]
 pub async fn jsondb_update_document(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
     id: String,
     document: Value,
 ) -> RaiseResult<Value> {
+    let _session = require_session!(session_state);
+
     let manager = mgr(&storage, &space, &db)?;
-    // 1. Capture du contexte pour le diagnostic
     let coll_name = collection.clone();
     let doc_id = id.clone();
 
     match manager.update_document(&collection, &id, document).await {
-        // On transforme le () en une Value de succès
         Ok(_) => Ok(json!({
             "status": "success",
             "message": format!("Document {} mis à jour dans {}", doc_id, coll_name)
@@ -373,13 +377,15 @@ pub async fn jsondb_update_document(
 #[command]
 pub async fn jsondb_get_document(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
     id: String,
 ) -> RaiseResult<Option<Value>> {
+    let _session = require_session!(session_state);
+
     let manager = mgr(&storage, &space, &db)?;
-    // 1. Capture du contexte pour le diagnostic
     let coll_name = collection.clone();
     let doc_id = id.clone();
 
@@ -401,21 +407,20 @@ pub async fn jsondb_get_document(
 #[command]
 pub async fn jsondb_delete_document(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
     id: String,
 ) -> RaiseResult<bool> {
-    let manager = mgr(&storage, &space, &db)?;
+    let _session = require_session!(session_state);
 
-    // On garde le contexte pour l'erreur au cas où
+    let manager = mgr(&storage, &space, &db)?;
     let coll_name = collection.clone();
     let doc_id = id.clone();
 
     match manager.delete_document(&collection, &id).await {
-        // CORRECTION : On renvoie true pour correspondre à RaiseResult<bool>
         Ok(_) => Ok(true),
-
         Err(e) => raise_error!(
             "ERR_DB_DELETE_FAILED",
             error = e,
@@ -432,10 +437,13 @@ pub async fn jsondb_delete_document(
 #[command]
 pub async fn jsondb_list_all(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     collection: String,
 ) -> RaiseResult<Vec<Value>> {
+    let _session = require_session!(session_state);
+
     let manager = mgr(&storage, &space, &db)?;
 
     let documents = match manager.list_all(&collection).await {
@@ -449,9 +457,9 @@ pub async fn jsondb_list_all(
                 "hint": "Échec de lecture de la base de données. Vérifiez l'existence du dossier de collection et les permissions système."
             })
         ),
-    }; // On a extrait les documents avec succès
+    };
 
-    Ok(documents) // <--- C'est cette ligne qui manquait pour satisfaire le compilateur !
+    Ok(documents)
 }
 
 // --- REQUÊTES (MODIFIÉ POUR INSERT SQL) ---
@@ -459,10 +467,13 @@ pub async fn jsondb_list_all(
 #[command]
 pub async fn jsondb_execute_query(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     query: Query,
 ) -> RaiseResult<QueryResult> {
+    let _session = require_session!(session_state);
+
     let manager = mgr(&storage, &space, &db)?;
     let engine = QueryEngine::new(&manager);
     let query_context = format!("{:?}", query);
@@ -484,13 +495,15 @@ pub async fn jsondb_execute_query(
 #[command]
 pub async fn jsondb_execute_sql(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
     sql: String,
 ) -> RaiseResult<QueryResult> {
+    let _session = require_session!(session_state);
+
     let manager = mgr(&storage, &space, &db)?;
 
-    // 1. Parsing SQL avec capture d'erreur de syntaxe
     let request = match crate::json_db::query::sql::parse_sql(&sql) {
         Ok(req) => req,
         Err(e) => raise_error!(
@@ -505,7 +518,6 @@ pub async fn jsondb_execute_sql(
     };
 
     match request {
-        // CAS LECTURE (SELECT)
         SqlRequest::Read(query) => {
             let engine = QueryEngine::new(&manager);
             match engine.execute_query(query).await {
@@ -521,7 +533,6 @@ pub async fn jsondb_execute_sql(
                 ),
             }
         }
-        // CAS ÉCRITURE (INSERT / UPDATE)
         SqlRequest::Write(requests) => {
             let tx_mgr = TransactionManager::new(&storage, &space, &db);
 
@@ -551,12 +562,14 @@ pub async fn jsondb_execute_sql(
 #[command]
 pub async fn jsondb_init_demo_rules(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
 ) -> RaiseResult<()> {
+    let _session = require_session!(session_state);
+
     let mgr = mgr(&storage, &space, &db)?;
 
-    // 1. Initialisation de la DB
     if let Err(e) = mgr.init_db().await {
         raise_error!(
             "ERR_DB_INIT_FAIL",
@@ -565,14 +578,7 @@ pub async fn jsondb_init_demo_rules(
         );
     }
 
-    // 2. Création de la collection
-    if let Err(e) = mgr
-        .create_collection(
-            "users",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await
-    {
+    if let Err(e) = mgr.create_collection("users", None).await {
         raise_error!(
             "ERR_DB_CREATE_COLLECTION_FAIL",
             error = e,
@@ -580,7 +586,6 @@ pub async fn jsondb_init_demo_rules(
         );
     }
 
-    // 3. Insertion du document de test
     let user_doc = json!({ "id": "u_dev", "name": "Alice Dev", "tjm": 500.0 });
     if let Err(e) = mgr.insert_raw("users", &user_doc).await {
         raise_error!(
@@ -593,6 +598,7 @@ pub async fn jsondb_init_demo_rules(
             })
         );
     }
+    
     let schema_content = json!({
         "type": "object",
         "properties": {
@@ -638,8 +644,8 @@ pub async fn jsondb_init_demo_rules(
         .config
         .db_schemas_root(&space, &db)
         .join("v1/invoices/default.json");
+        
     if let Some(parent) = schema_path.parent() {
-        // On remplace le map_err par un match ou un if let Err explicite
         if let Err(e) = io::create_dir_all(parent).await {
             raise_error!(
                 "ERR_FS_DIR_CREATION_FAIL",
@@ -652,7 +658,7 @@ pub async fn jsondb_init_demo_rules(
             );
         }
     }
-    // 1. Sérialisation sécurisée
+
     let pretty_json = match serde_json::to_string_pretty(&schema_content) {
         Ok(s) => s,
         Err(e) => raise_error!(
@@ -666,7 +672,6 @@ pub async fn jsondb_init_demo_rules(
         ),
     };
 
-    // 2. Écriture disque sans map_err
     if let Err(e) = std::fs::write(&schema_path, pretty_json) {
         raise_error!(
             "ERR_FS_WRITE_FAIL",
@@ -680,7 +685,7 @@ pub async fn jsondb_init_demo_rules(
     }
 
     let schema_uri = format!("db://{}/{}/schemas/v1/invoices/default.json", space, db);
-    if let Err(e) = mgr.create_collection("invoices", &schema_uri).await {
+    if let Err(e) = mgr.create_collection("invoices", Some(schema_uri)).await {
         raise_error!(
             "ERR_DB_COLLECTION_CREATION_FAIL",
             error = e,
@@ -698,11 +703,14 @@ pub async fn jsondb_init_demo_rules(
 #[command]
 pub async fn jsondb_init_model_rules(
     storage: State<'_, StorageEngine>,
+    session_state: State<'_, SessionManager>,
     space: String,
     db: String,
 ) -> RaiseResult<()> {
+    let _session = require_session!(session_state);
+
     let mgr = mgr(&storage, &space, &db)?;
-    // Initialisation du moteur de stockage
+    
     if let Err(e) = mgr.init_db().await {
         raise_error!(
             "ERR_DB_INIT_FAIL",
@@ -758,7 +766,7 @@ pub async fn jsondb_init_model_rules(
         .config
         .db_schemas_root(&space, &db)
         .join("v1/la/functions.json");
-    // 1. Création sécurisée du répertoire parent
+        
     if let Some(parent) = schema_path.parent() {
         if let Err(e) = io::create_dir_all(parent).await {
             raise_error!(
@@ -773,7 +781,6 @@ pub async fn jsondb_init_model_rules(
         }
     }
 
-    // 2. Sérialisation sécurisée (on remplace le unwrap)
     let pretty_json = match serde_json::to_string_pretty(&schema_content) {
         Ok(s) => s,
         Err(e) => raise_error!(
@@ -786,7 +793,6 @@ pub async fn jsondb_init_model_rules(
         ),
     };
 
-    // 3. Écriture disque sans map_err
     if let Err(e) = std::fs::write(&schema_path, pretty_json) {
         raise_error!(
             "ERR_FS_WRITE_FAIL",
@@ -801,7 +807,7 @@ pub async fn jsondb_init_model_rules(
 
     let schema_uri = format!("db://{}/{}/schemas/v1/la/functions.json", space, db);
     let _ = mgr
-        .create_collection("logical_functions", &schema_uri)
+        .create_collection("logical_functions", Some(schema_uri))
         .await;
 
     Ok(())

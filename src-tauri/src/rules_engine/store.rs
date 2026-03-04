@@ -147,7 +147,7 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_store_idempotency_and_retrieval() {
@@ -157,6 +157,14 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
+
+        manager
+            .create_collection(
+                "_system_rules",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         let mut store = RuleStore::new(&manager);
 

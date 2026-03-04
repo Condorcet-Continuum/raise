@@ -94,8 +94,8 @@ mod tests {
     use crate::workflow_engine::tools::{AgentTool, SystemMonitorTool};
 
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
     use crate::utils::data::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     // 🎯 FIX : La fonction prend la DB et la config en paramètres
     async fn setup_dummy_context_with_tool(

@@ -161,8 +161,8 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::config::test_mocks::AgentDbSandbox;
     use crate::utils::data::HashMap;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_naming_validation_unit() {
@@ -202,6 +202,13 @@ mod tests {
             "name": "Copy of Req 1", // Trigger RULE_NAMING
             "type": "Requirement"
         });
+        manager
+            .create_collection(
+                "transverse",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager.insert_raw("transverse", &req).await.unwrap();
 
         let loader = ModelLoader::new_with_manager(manager);

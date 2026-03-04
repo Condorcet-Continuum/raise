@@ -7,7 +7,7 @@ pub use quality::{QualityReport, QualityStatus};
 pub use xai::{XaiFrame, XaiMethod};
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*;
+use crate::utils::{data, prelude::*};
 
 // --- PERSISTANCE (Assurance Store via JsonDB) ---
 pub mod persistence {
@@ -19,9 +19,14 @@ pub mod persistence {
         report: &QualityReport,
     ) -> RaiseResult<String> {
         // S'assure que la collection existe avant d'écrire
-        let _ = manager.create_collection("quality_reports", None).await;
+        let _ = manager
+            .create_collection(
+                "quality_reports",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await;
 
-        let doc = crate::utils::data::to_value(report)?;
+        let doc = data::to_value(report)?;
 
         // L'Upsert gère automatiquement l'indexation et la validation du schéma
         manager.upsert_document("quality_reports", doc).await?;
@@ -34,9 +39,14 @@ pub mod persistence {
         manager: &CollectionsManager<'_>, // 🎯 FIX: Idem ici
         frame: &XaiFrame,
     ) -> RaiseResult<String> {
-        let _ = manager.create_collection("xai_frames", None).await;
+        let _ = manager
+            .create_collection(
+                "xai_frames",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await;
 
-        let doc = crate::utils::data::to_value(frame)?;
+        let doc = data::to_value(frame)?;
 
         manager.upsert_document("xai_frames", doc).await?;
 
@@ -50,7 +60,7 @@ mod tests {
     use super::*;
     use crate::ai::assurance::quality::MetricCategory;
     use crate::ai::assurance::xai::ExplanationScope;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_save_assurance_artifacts_with_json_db() {

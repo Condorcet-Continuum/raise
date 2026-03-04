@@ -86,7 +86,7 @@ mod tests {
     // 🎯 IMPORT UNIQUE : On utilise la GlobalDbSandbox car l'outil s'appuie
     // sur le Singleton global AppConfig, et le test est séquentiel (#[serial]).
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::GlobalDbSandbox;
+    use crate::utils::mock::GlobalDbSandbox;
 
     #[tokio::test]
     #[serial_test::serial]
@@ -107,7 +107,13 @@ mod tests {
             "value": 15.5,
             "updatedAt": chrono::Utc::now().to_rfc3339()
         });
-
+        manager
+            .create_collection(
+                "digital_twin",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         // On s'assure que l'insertion fonctionne (unwrap est utile dans les tests pour repérer les erreurs vite)
         manager
             .insert_raw("digital_twin", &sensor_doc)

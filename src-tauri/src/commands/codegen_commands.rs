@@ -116,7 +116,7 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::arcadia;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
 
     /// Test d'intégration complet : DB -> Loader -> Transformer -> Sortie
     /// Vérifie que la logique interne de la commande fonctionne correctement.
@@ -139,7 +139,13 @@ mod tests {
                 { arcadia::PROP_ID: "FUNC-1", arcadia::PROP_NAME: "Login" }
             ]
         });
-
+        manager
+            .create_collection(
+                "la",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         // Insertion dans la collection "la" (Logical Architecture)
         manager.insert_raw("la", &component).await.unwrap();
 

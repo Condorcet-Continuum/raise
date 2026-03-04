@@ -1,7 +1,6 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/ai.rs
 
 use clap::{Args, Subcommand};
-//use std::io::{self as std_io};
 
 // --- IMPORTS MÉTIER RAISE ---
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
@@ -12,14 +11,17 @@ use raise::ai::agents::{
 };
 use raise::ai::llm::client::LlmClient;
 use raise::ai::training::ai_train_domain_native;
-use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-// 🎯 NOUVEAU : Import du manager
 use raise::json_db::collections::manager::CollectionsManager;
 
 use raise::{
-    user_error, user_info, user_success,
-    utils::{config::AppConfig, io, os, prelude::*, Arc},
+    user_error,
+    user_info,
+    user_success,
+    utils::{io, os, prelude::*}, // AppConfig n'est plus importé, on l'a via CliContext !
 };
+
+// 🎯 NOUVEAU : Import du contexte global CLI
+use crate::CliContext;
 
 #[derive(Args, Debug, Clone)]
 pub struct AiArgs {
@@ -62,35 +64,47 @@ pub enum AiCommands {
     },
 }
 
-pub async fn handle(args: AiArgs) -> RaiseResult<()> {
-    let config = AppConfig::get();
+// 🎯 La signature intègre le CliContext
+pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
+    // 🎯 Heartbeat automatique
+    let _ = ctx.session_mgr.touch().await;
 
-    let space = &config.system_domain;
-    let db = &config.system_db;
+    let space = &ctx.config.system_domain;
+    let db = &ctx.config.system_db;
 
-    let domain_path = config
+    let domain_path = ctx
+        .config
         .get_path("PATH_RAISE_DOMAIN")
         .expect("ERREUR: PATH_RAISE_DOMAIN introuvable !");
 
-    let dataset_path = config
+    let dataset_path = ctx
+        .config
         .get_path("PATH_RAISE_DATASET")
         .unwrap_or_else(|| domain_path.join("dataset"));
 
     io::ensure_dir(&domain_path).await?;
 
     // 2. MOTEURS ET CONTEXTE (OPTIMISÉ)
-    let storage = Arc::new(StorageEngine::new(JsonDbConfig::new(domain_path.clone())));
-
-    // 🎯 Création du manager pour le CLI
+    // 🎯 On réutilise le storage global !
+    let storage = ctx.storage.clone();
     let manager = CollectionsManager::new(&storage, space, db);
-
-    // 🎯 Instanciation asynchrone du LLM avec le manager
     let client = LlmClient::new(&manager).await?;
 
-    // 🎯 Instanciation asynchrone du Contexte Agent
-    let ctx = AgentContext::new(
-        "cli_user",
-        "cli_session",
+    // 🎯 On récupère la vraie identité de l'utilisateur CLI !
+    let current_session = ctx.session_mgr.get_current_session().await;
+    let user_id = current_session
+        .as_ref()
+        .map(|s| s.user_id.clone())
+        .unwrap_or_else(|| "cli_user".to_string());
+    let session_id = current_session
+        .as_ref()
+        .map(|s| s.id.clone())
+        .unwrap_or_else(|| "cli_session".to_string());
+
+    // Instanciation asynchrone du Contexte Agent avec les vraies IDs
+    let agent_ctx = AgentContext::new(
+        &user_id,
+        &session_id,
         storage.clone(),
         client.clone(),
         domain_path.clone(),
@@ -100,9 +114,9 @@ pub async fn handle(args: AiArgs) -> RaiseResult<()> {
 
     // 3. EXÉCUTION
     match args.command.unwrap_or(AiCommands::Interactive) {
-        AiCommands::Interactive => run_interactive_mode(&ctx, client).await?,
+        AiCommands::Interactive => run_interactive_mode(&agent_ctx, client).await?,
         AiCommands::Classify { input, execute } => {
-            process_input(&ctx, &input, client, execute).await
+            process_input(&agent_ctx, &input, client, execute).await
         }
         AiCommands::Train {
             domain,
@@ -110,40 +124,42 @@ pub async fn handle(args: AiArgs) -> RaiseResult<()> {
             epochs,
             lr,
         } => {
-            // 🎯 Résolution dynamique simple (l'objet ScopeConfig a été allégé)
             let final_domain = domain
-                .or_else(|| config.user.as_ref().and_then(|u| u.default_domain.clone()))
                 .or_else(|| {
-                    config
+                    ctx.config
+                        .user
+                        .as_ref()
+                        .and_then(|u| u.default_domain.clone())
+                })
+                .or_else(|| {
+                    ctx.config
                         .workstation
                         .as_ref()
                         .and_then(|w| w.default_domain.clone())
                 })
-                .unwrap_or_else(|| config.system_domain.clone());
+                .unwrap_or_else(|| ctx.config.system_domain.clone());
 
             let final_db = target_db
-                .or_else(|| config.user.as_ref().and_then(|u| u.default_db.clone()))
+                .or_else(|| ctx.config.user.as_ref().and_then(|u| u.default_db.clone()))
                 .or_else(|| {
-                    config
+                    ctx.config
                         .workstation
                         .as_ref()
                         .and_then(|w| w.default_db.clone())
                 })
-                .unwrap_or_else(|| config.system_db.clone());
+                .unwrap_or_else(|| ctx.config.system_db.clone());
 
-            // 🎯 Les valeurs par défaut de l'IA sont gérées plus simplement
             let final_epochs = epochs.unwrap_or(3);
-            let final_lr = lr.unwrap_or(config.deep_learning.learning_rate);
+            let final_lr = lr.unwrap_or(ctx.config.deep_learning.learning_rate);
+
             user_info!(
                 "AI_TRAINING_START",
                 json!({ "domain": final_domain, "db": final_db, "lr": final_lr, "epochs": final_epochs })
             );
 
-            let train_storage =
-                StorageEngine::new(JsonDbConfig::new(domain_path.join(space).join(&final_db)));
-
+            // 🎯 Utilisation propre du storage global existant
             match ai_train_domain_native(
-                &train_storage,
+                &storage,
                 space,
                 &final_db,
                 &final_domain,
@@ -165,11 +181,12 @@ pub async fn handle(args: AiArgs) -> RaiseResult<()> {
 }
 
 async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseResult<()> {
-    user_info!("AI_INTERACTIVE_WELCOME");
-    user_info!("AI_INTERACTIVE_SEPARATOR");
-    user_info!("AI_LLM_CONNECTED", "local");
+    // 🎯 Mise en conformité JSON stricte
+    user_info!("AI_INTERACTIVE_WELCOME", json!({}));
+    user_info!("AI_INTERACTIVE_SEPARATOR", json!({}));
+    user_info!("AI_LLM_CONNECTED", json!({"mode": "local"}));
     user_info!("AI_STORAGE_PATH", json!({ "path": ctx.paths.domain_root }));
-    user_info!("AI_EXIT_HINT");
+    user_info!("AI_EXIT_HINT", json!({}));
 
     loop {
         print!("RAISE-AI> ");
@@ -177,7 +194,7 @@ async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseRes
         let input = os::read_stdin_line()?;
 
         if input.eq_ignore_ascii_case("exit") {
-            user_info!("AI_GOODBYE");
+            user_info!("AI_GOODBYE", json!({}));
             break;
         }
         if input.is_empty() {
@@ -191,7 +208,7 @@ async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseRes
 
 async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execute: bool) {
     let classifier = IntentClassifier::new(client);
-    user_info!("AI_ANALYZING");
+    user_info!("AI_ANALYZING", json!({"input_length": input.len()}));
 
     let intent = classifier.classify(input).await;
 
@@ -206,7 +223,7 @@ async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execu
             run_agent(BusinessAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "SA" => {
-            user_info!("AI_AGENT_START", "System Agent (SA)");
+            user_info!("AI_AGENT_START", json!({"agent": "System Agent (SA)"}));
             run_agent(SystemAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement {
@@ -214,31 +231,37 @@ async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execu
             ref element_type,
             ..
         } if layer == "LA" || element_type.contains("Software") => {
-            user_info!("AI_AGENT_START", "Software Agent (LA)");
+            user_info!("AI_AGENT_START", json!({"agent": "Software Agent (LA)"}));
             run_agent(SoftwareAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::GenerateCode { .. } => {
-            user_info!("AI_CODE_GEN_START");
+            user_info!(
+                "AI_CODE_GEN_START",
+                json!({"agent": "Software Agent (Code)"})
+            );
             run_agent(SoftwareAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "PA" => {
-            user_info!("AI_AGENT_START", "Hardware Agent (PA)");
+            user_info!("AI_AGENT_START", json!({"agent": "Hardware Agent (PA)"}));
             run_agent(HardwareAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "EPBS" => {
-            user_info!("AI_AGENT_START", "EPBS Agent");
+            user_info!("AI_AGENT_START", json!({"agent": "EPBS Agent"}));
             run_agent(EpbsAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "DATA" => {
-            user_info!("AI_AGENT_START", "Data Agent");
+            user_info!("AI_AGENT_START", json!({"agent": "Data Agent"}));
             run_agent(DataAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "TRANSVERSE" => {
-            user_info!("AI_AGENT_START", "Transverse Agent");
+            user_info!("AI_AGENT_START", json!({"agent": "Transverse Agent"}));
             run_agent(TransverseAgent::new(), ctx, &intent, execute).await;
         }
         _ => {
-            user_error!("AI_INTENT_UNKNOWN", json!({ "intent_raw": intent }));
+            user_error!(
+                "AI_INTENT_UNKNOWN",
+                json!({ "intent_raw": format!("{:?}", intent) })
+            );
         }
     }
 }
@@ -258,7 +281,7 @@ async fn run_agent<A: Agent>(
                 }
             }
             Ok(None) => {
-                user_info!("AI_NO_ACTION");
+                user_info!("AI_NO_ACTION", json!({}));
             }
             Err(e) => {
                 user_error!(
@@ -268,16 +291,18 @@ async fn run_agent<A: Agent>(
             }
         }
     } else {
-        user_info!("AI_SIMULATION_MODE");
+        user_info!("AI_SIMULATION_MODE", json!({}));
     }
 }
 
 // --- TESTS UNITAIRES ---
+// Note : Ces tests vérifient principalement le parsing (Clap) et la logique de distribution des intents.
+// Ils n'appellent pas directement "handle", il n'est donc pas nécessaire de mocker le CliContext ici.
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
-    use raise::utils::config::test_mocks;
+    use raise::utils::mock;
 
     #[derive(Parser)]
     struct TestCli {
@@ -287,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ai_parsing_robustness() {
-        test_mocks::inject_mock_config().await;
+        mock::inject_mock_config().await;
 
         let cli = TestCli::parse_from(vec!["test"]);
         assert!(cli.args.command.is_none());
@@ -308,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_intent_dispatch_layers() {
-        test_mocks::inject_mock_config().await;
+        mock::inject_mock_config().await;
 
         let test_cases = vec![
             ("SA", "System Agent"),
@@ -350,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_intent_dispatch_software_logic() {
-        test_mocks::inject_mock_config().await;
+        mock::inject_mock_config().await;
 
         let intent_la = EngineeringIntent::CreateElement {
             layer: "LA".into(),
@@ -368,7 +393,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_business_dispatch() {
-        test_mocks::inject_mock_config().await;
+        mock::inject_mock_config().await;
 
         let intent = EngineeringIntent::DefineBusinessUseCase {
             domain: "Aéronautique".into(),
@@ -386,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ai_train_parsing() {
-        test_mocks::inject_mock_config().await;
+        mock::inject_mock_config().await;
 
         let cli = TestCli::parse_from(vec![
             "test", "train", "--domain", "safety", "--epochs", "10",

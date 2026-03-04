@@ -14,14 +14,12 @@ async fn seed_actors(
     env_db: &str,
 ) {
     let schema_uri = format!(
-        "db://{}/{}/schemas/v1/actors/actor.schema.json",
+        "db://{}/{}/schemas/v1/db/generic.schema.json",
         env_space, env_db
     );
 
     // On ignore si la collection existe déjà, mais on s'assure qu'elle est prête
-    mgr.create_collection(collection, Some(schema_uri))
-        .await
-        .ok();
+    mgr.create_collection(collection, &schema_uri).await.ok();
 
     let actors_data = vec![
         json!({ "handle": "alice", "displayName": "Alice Admin", "kind": "human", "roles": ["admin"], "tags": ["core", "paris"], "x_age": 30, "x_city": "Paris", "x_active": true }),
@@ -54,7 +52,7 @@ async fn exec_sql_read(engine: &QueryEngine<'_>, sql: &str) -> raise::json_db::q
 #[tokio::test]
 async fn test_sql_select_by_kind() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_kind";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -72,7 +70,7 @@ async fn test_sql_select_by_kind() {
 #[tokio::test]
 async fn test_sql_numeric_comparison_x_props() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_age";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -90,7 +88,7 @@ async fn test_sql_numeric_comparison_x_props() {
 #[tokio::test]
 async fn test_sql_logical_and_mixed() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_logical";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -114,7 +112,7 @@ async fn test_sql_logical_and_mixed() {
 #[tokio::test]
 async fn test_sql_like_display_name() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_like";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -132,7 +130,7 @@ async fn test_sql_like_display_name() {
 #[tokio::test]
 async fn test_sql_order_by_x_prop() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_order";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -163,7 +161,7 @@ async fn test_sql_order_by_x_prop() {
 #[tokio::test]
 async fn test_sql_json_array_contains() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_tags";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 

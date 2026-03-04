@@ -183,7 +183,13 @@ mod tests {
             },
             "observability": { "heartbeatMs": 100 }
         });
-
+        manager
+            .create_collection(
+                "mandates",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager.insert_raw("mandates", &full_json).await.unwrap();
 
         let result = Mandate::fetch_from_store(&manager, "man_01").await;
@@ -223,7 +229,13 @@ mod tests {
             },
             "observability": { "heartbeatMs": 100 }
         });
-
+        manager
+            .create_collection(
+                "mandates",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager.insert_raw("mandates", &full_json).await.unwrap();
 
         let result = Mandate::fetch_from_store(&manager, "man_ast").await;
@@ -244,7 +256,13 @@ mod tests {
             "meta": { "author": "Hacker", "version": "0.0", "status": "DRAFT" },
             "governance": { "strategy": "PERFORMANCE" }
         });
-
+        manager
+            .create_collection(
+                "mandates",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager.insert_raw("mandates", &bad_json).await.unwrap();
 
         let result = Mandate::fetch_from_store(&manager, "man_broken").await;

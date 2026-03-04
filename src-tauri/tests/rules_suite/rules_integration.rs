@@ -10,10 +10,10 @@ use std::fs;
 async fn test_end_to_end_rules_execution() {
     // 1. SETUP ROBUSTE
     let env = setup_test_env(LlmMode::Disabled).await;
-    let config = &env.storage.config;
+    let config = &env.sandbox.storage.config;
 
     // ✅ NOUVEAU : On crée une référence directe au StorageEngine
-    let storage = &env.storage;
+    let storage = &env.sandbox.storage;
 
     // On utilise l'espace et la DB fournis par l'environnement
     let space = &env.space;
@@ -25,7 +25,17 @@ async fn test_end_to_end_rules_execution() {
         .init_db()
         .await
         .unwrap();
+    let manager = CollectionsManager::new(storage, space, db);
+    manager.init_db().await.unwrap();
 
+    // 🎯 FIX STRICT SCHEMA : On déclare légalement la collection _system_rules
+    manager
+        .create_collection(
+            "_system_rules",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await
+        .unwrap();
     // 2. CRÉATION DU SCHÉMA
     let schema_content = json!({
         "type": "object",

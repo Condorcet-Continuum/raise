@@ -24,13 +24,7 @@ async fn load_test_doc(domain_path: &Path) -> Value {
 }
 
 /// Helper pour insérer un article avec un handle spécifique
-async fn seed_article(
-    mgr: &CollectionsManager<'_>,
-    handle: &str,
-    doc_template: &Value,
-    env_space: &str,
-    env_db: &str,
-) -> String {
+async fn seed_article(mgr: &CollectionsManager<'_>, handle: &str, doc_template: &Value) -> String {
     let mut doc = doc_template.clone();
     if let Some(obj) = doc.as_object_mut() {
         obj.remove("id");
@@ -50,15 +44,13 @@ async fn seed_article(
         );
     }
 
-    let schema_uri = format!(
-        "db://{}/{}/schemas/v1/articles/article.schema.json",
-        env_space, env_db
-    );
-
     // On s'assure que la collection existe
-    mgr.create_collection("articles", Some(schema_uri))
-        .await
-        .ok();
+    mgr.create_collection(
+        "articles",
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .ok();
 
     let stored = mgr
         .insert_with_schema("articles", doc)
@@ -71,11 +63,11 @@ async fn seed_article(
 #[tokio::test]
 async fn query_get_article_by_id() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
-    let base_doc = load_test_doc(&env.domain_path).await;
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
     let handle = "query-get-id";
-    let id = seed_article(&mgr, handle, &base_doc, &env.space, &env.db).await;
+    let id = seed_article(&mgr, handle, &base_doc).await;
 
     let loaded = mgr
         .get("articles", &id)
@@ -89,11 +81,11 @@ async fn query_get_article_by_id() {
 #[tokio::test]
 async fn query_find_one_article_by_handle() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
-    let base_doc = load_test_doc(&env.domain_path).await;
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
     let handle = "query-find-one";
-    seed_article(&mgr, handle, &base_doc, &env.space, &env.db).await;
+    seed_article(&mgr, handle, &base_doc).await;
 
     let engine = QueryEngine::new(&mgr);
     let filter = QueryFilter {
@@ -124,12 +116,12 @@ async fn query_find_one_article_by_handle() {
 #[tokio::test]
 async fn query_find_many_with_sort_and_limit() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
-    let base_doc = load_test_doc(&env.domain_path).await;
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
     // Insertion de 10 articles : sort-0 à sort-9
     for i in 0..10 {
-        seed_article(&mgr, &format!("sort-{}", i), &base_doc, &env.space, &env.db).await;
+        seed_article(&mgr, &format!("sort-{}", i), &base_doc).await;
     }
 
     let engine = QueryEngine::new(&mgr);

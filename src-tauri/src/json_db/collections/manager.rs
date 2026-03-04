@@ -392,23 +392,12 @@ impl<'a> CollectionsManager<'a> {
     }
 
     // --- GESTION DES COLLECTIONS ---
-    pub async fn create_collection(
-        &self,
-        name: &str,
-        schema_uri: Option<String>,
-    ) -> RaiseResult<()> {
+    pub async fn create_collection(&self, name: &str, schema_uri: &str) -> RaiseResult<()> {
         if !self.storage.config.db_root(&self.space, &self.db).exists() {
             self.init_db().await?;
         }
 
-        let final_schema_uri = if let Some(uri) = schema_uri {
-            self.resolve_best_schema_uri(&uri)
-        } else {
-            self.resolve_schema_from_index(name)
-                .await
-                .unwrap_or_default()
-        };
-
+        let final_schema_uri = self.resolve_best_schema_uri(schema_uri);
         let col_path = self
             .storage
             .config
@@ -631,17 +620,25 @@ impl<'a> CollectionsManager<'a> {
             .config
             .db_collection_path(&self.space, &self.db, collection)
             .join("_meta.json");
+
         if !meta_path.exists() {
-            let schema_hint = doc
-                .get("$schema")
-                .and_then(|s| s.as_str())
-                .map(|s| s.to_string());
-            self.create_collection(collection, schema_hint).await?;
+            let schema_hint = doc.get("$schema").and_then(|s| s.as_str());
+            if let Some(uri) = schema_hint {
+                self.create_collection(collection, uri).await?;
+            } else {
+                raise_error!(
+                    "ERR_DB_STRICT_SCHEMA_REQUIRED",
+                    error = "Impossible de créer la collection à la volée : aucun '$schema' défini dans le document.",
+                    context = json!({ "collection": collection })
+                );
+            }
         }
+
         self.storage
             .write_document(&self.space, &self.db, collection, id, doc)
             .await?;
         self.add_item_to_index(collection, id).await?;
+
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         if let Err(_e) = idx_mgr.index_document(collection, doc).await {
             #[cfg(debug_assertions)]
@@ -831,13 +828,17 @@ impl<'a> CollectionsManager<'a> {
             let validator = SchemaValidator::compile_with_registry(uri, &reg)?;
             validator.compute_then_validate(doc)?;
         } else {
-            #[cfg(debug_assertions)]
-            warn!(
-                "⚠️ ATTENTION: Aucun schéma trouvé pour la collection '{}'. Insertion schemaless.",
-                collection
+            // 🎯 FIN DU SCHEMALESS : On bloque purement et simplement l'insertion !
+            raise_error!(
+                "ERR_DB_STRICT_SCHEMA_REQUIRED",
+                error = "Insertion refusée : Aucun schéma de validation n'est défini pour cette collection.",
+                context = json!({
+                    "collection": collection,
+                    "action": "prepare_document",
+                    "hint": "RAISE fonctionne désormais en mode 'Schéma Strict'. Vous devez créer un fichier 'schema' dans le dossier de la collection."
+                })
             );
         }
-
         if let Err(e) = self.apply_semantic_logic(doc, resolved_uri.as_deref()) {
             raise_error!(
                 "ERR_AI_SEMANTIC_VALIDATION_FAIL",
@@ -1203,9 +1204,7 @@ fn resolve_refs_recursive<'a>(
 mod tests {
     use super::*;
     // 🎯 Import de notre Sandbox magique !
-    use crate::utils::config::test_mocks::DbSandbox;
-
-    // ❌ La fonction setup_env() a été entièrement supprimée !
+    use crate::utils::mock::DbSandbox;
 
     #[tokio::test]
     async fn test_manager_get_document_integration() {
@@ -1214,6 +1213,13 @@ mod tests {
         // 2. On passe la référence au storage de la sandbox
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         manager.init_db().await.unwrap();
+        manager
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         let doc = json!({ "id": "user_123", "name": "Test User" });
         manager.insert_raw("users", &doc).await.unwrap();
@@ -1231,6 +1237,13 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         manager.init_db().await.unwrap();
+        manager
+            .create_collection(
+                "items",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         for i in 0..100 {
             let doc = json!({ "id": i.to_string(), "val": i });
@@ -1255,7 +1268,13 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         manager.init_db().await.unwrap();
-
+        manager
+            .create_collection(
+                "items",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .insert_raw("items", &json!({ "id": "1", "val": "A" }))
             .await
@@ -1275,7 +1294,12 @@ mod tests {
         let mgr = CollectionsManager::new(&sandbox.storage, "test", "crud");
         mgr.init_db().await.unwrap();
 
-        mgr.create_collection("items", None).await.unwrap();
+        mgr.create_collection(
+            "items",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await
+        .unwrap();
 
         // 1. CREATE (Insert)
         let doc = json!({ "name": "Item 1", "price": 100 });
@@ -1309,7 +1333,12 @@ mod tests {
         let mgr = CollectionsManager::new(&sandbox.storage, "test", "upsert");
         mgr.init_db().await.unwrap();
 
-        mgr.create_collection("configs", None).await.unwrap();
+        mgr.create_collection(
+            "configs",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await
+        .unwrap();
 
         let data1 = json!({ "id": "config-01", "val": "A" });
         let res1 = mgr.upsert_document("configs", data1).await.unwrap();
@@ -1367,7 +1396,13 @@ mod tests {
         manager.init_db().await.unwrap();
 
         // On s'assure que la collection existe
-        manager.create_collection("users", None).await.unwrap();
+        manager
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         // 1. On prépare deux documents de test
         let doc_alice = json!({ "id": "u_100", "name": "Alice" });
@@ -1433,14 +1468,20 @@ mod tests {
 
         // 1. Initialisation normale
         manager.init_db().await.unwrap();
-
+        manager
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         // 2. 🚨 SIMULATION DE CORRUPTION : On supprime physiquement l'index de la base
         let sys_path = manager
             .storage
             .config
             .db_root(&manager.space, &manager.db)
             .join("_system.json");
-        crate::utils::io::remove_file(&sys_path).await.unwrap();
+        io::remove_file(&sys_path).await.unwrap();
 
         // 3. On tente une insertion : le système DOIT bloquer immédiatement
         let doc = json!({ "id": "1", "name": "Test Fail Fast" });
@@ -1465,7 +1506,13 @@ mod tests {
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
 
         manager.init_db().await.unwrap();
-        manager.create_collection("users", None).await.unwrap();
+        manager
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         // 1. On insère un document (ce qui appelle add_item_to_index)
         let doc = json!({ "id": "u1", "name": "Alice" });
@@ -1500,7 +1547,13 @@ mod tests {
         manager.init_db().await.unwrap();
 
         // 1. On crée une collection dynamique
-        manager.create_collection("temporary", None).await.unwrap();
+        manager
+            .create_collection(
+                "temporary",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         let index = manager.load_index().await.unwrap();
         assert!(

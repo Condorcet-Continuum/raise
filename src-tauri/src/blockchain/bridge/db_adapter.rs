@@ -108,11 +108,16 @@ impl<'a> DbAdapter<'a> {
 mod tests {
     use super::*;
     use crate::blockchain::storage::commit::MutationOp;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_db_adapter_upsert_logic() {
         let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         let adapter = DbAdapter::new(
             &sandbox.db,
             &sandbox.config.system_domain,
@@ -127,6 +132,14 @@ mod tests {
                 "name": "Pilot"
             }),
         };
+
+        manager
+            .create_collection(
+                "actors",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         // Application de la mutation
         let res = adapter.apply_mutation(&mutation).await;

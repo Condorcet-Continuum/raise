@@ -287,7 +287,7 @@ async fn internal_set_sensor(manager: &CollectionsManager<'_>, value: f64) -> Ra
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_store_not_initialized() {
@@ -318,7 +318,14 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        // 🎯 Test de la logique pure
+        manager
+            .create_collection(
+                "digital_twin",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+
         let result = internal_set_sensor(&manager, 42.0).await;
         assert!(result.is_ok());
 

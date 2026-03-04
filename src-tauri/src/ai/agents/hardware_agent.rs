@@ -267,7 +267,7 @@ mod tests {
     use crate::ai::llm::client::LlmClient;
     use crate::ai::protocols::acl::Performative;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_category_detection() {
@@ -319,6 +319,14 @@ mod tests {
                 "artifactName": "fpga_ctrl"
             }
         });
+        manager
+            .create_collection(
+                "pa_components",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+
         manager
             .upsert_document("pa_components", comp_doc)
             .await
@@ -391,6 +399,13 @@ mod tests {
                 "artifactName": "video_proc"
             }
         });
+        manager
+            .create_collection(
+                "pa_components",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .upsert_document("pa_components", comp_doc)
             .await

@@ -1,9 +1,14 @@
+// FICHIER : src-tauri/tools/raise-cli/src/commands/code_gen.rs
+
 use clap::{Args, Subcommand, ValueEnum};
 
 use raise::{user_info, user_success, utils::prelude::*};
 
 // Imports depuis le cœur code_generator
 use raise::code_generator::TargetLanguage;
+
+// 🎯 NOUVEAU : Import du contexte global CLI
+use crate::CliContext;
 
 /// Forge logicielle et matérielle (Arcadia-to-Code)
 #[derive(Args, Clone, Debug)]
@@ -46,7 +51,11 @@ impl From<CliTargetLanguage> for TargetLanguage {
     }
 }
 
-pub async fn handle(args: CodeGenArgs) -> RaiseResult<()> {
+// 🎯 La signature intègre le CliContext
+pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
+    // 🎯 Heartbeat automatique
+    let _ = ctx.session_mgr.touch().await;
+
     match args.command {
         CodeGenCommands::Generate { element_id, lang } => {
             let target: TargetLanguage = lang.into();
@@ -59,11 +68,17 @@ pub async fn handle(args: CodeGenArgs) -> RaiseResult<()> {
                 json!({ "language": format!("{:?}", target) })
             );
 
-            // Simulation du cycle de vie du CodeGeneratorService
-            user_info!("SYNC", "Extraction des injections de code utilisateur...");
+            // 🎯 Mise en conformité stricte JSON
+            user_info!(
+                "SYNC",
+                json!({"action": "Extraction des injections de code utilisateur..."})
+            );
 
             if target == TargetLanguage::Rust {
-                user_info!("LINT", "Exécution programmée de Clippy & Rustfmt.");
+                user_info!(
+                    "LINT",
+                    json!({"action": "Exécution programmée de Clippy & Rustfmt."})
+                );
             }
 
             user_success!(
@@ -79,15 +94,32 @@ pub async fn handle(args: CodeGenArgs) -> RaiseResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CliContext;
+    use raise::utils::config::AppConfig;
+    use raise::utils::mock::DbSandbox;
+    use raise::utils::session::SessionManager;
+    use raise::utils::Arc;
 
     #[tokio::test]
     async fn test_codegen_cli_dispatch() {
+        // 🎯 On simule le contexte global pour le test
+        let sandbox = DbSandbox::new().await;
+        let storage = Arc::new(sandbox.storage.clone());
+        let session_mgr = SessionManager::new(storage.clone());
+
+        let ctx = CliContext {
+            config: AppConfig::get(),
+            session_mgr,
+            storage,
+        };
+
         let args = CodeGenArgs {
             command: CodeGenCommands::Generate {
                 element_id: "Logical_CPU".into(),
                 lang: CliTargetLanguage::Vhdl,
             },
         };
-        assert!(handle(args).await.is_ok());
+
+        assert!(handle(args, ctx).await.is_ok());
     }
 }

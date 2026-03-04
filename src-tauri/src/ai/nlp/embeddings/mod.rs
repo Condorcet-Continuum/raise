@@ -102,7 +102,7 @@ impl EmbeddingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     #[tokio::test]
     async fn test_default_engine_init() {

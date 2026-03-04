@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tools/raise-cli/src/commands/jsondb.rs
+
 use clap::{Args, Subcommand};
 
 // --- IMPORTS RAISE ---
@@ -6,18 +8,19 @@ use raise::json_db::{
     indexes::manager::IndexManager,
     jsonld::VocabularyRegistry,
     query::{Condition, FilterOperator, Projection, Query, QueryEngine, QueryFilter},
-    storage::{JsonDbConfig, StorageEngine},
     transactions::{manager::TransactionManager, TransactionRequest},
 };
 use raise::{
-    user_error, user_info, user_success,
+    raise_error, user_error, user_info, user_success,
     utils::{
         data::{self, Deserialize, Value},
         io::{self, Path, PathBuf},
         prelude::*,
-        Arc,
     },
 };
+
+// 🎯 NOUVEAU : Import du contexte global CLI
+use crate::CliContext;
 
 // --- DÉFINITION DES ARGUMENTS ---
 
@@ -193,34 +196,28 @@ pub enum JsondbCommands {
 
 // --- HANDLER PRINCIPAL ---
 
-pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
+// 🎯 La signature intègre le CliContext
+pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
     if let JsondbCommands::Usage = args.command {
         print_examples();
         return Ok(());
     }
 
-    // RÉCUPÉRATION DE LA CONFIGURATION
-    let app_config = AppConfig::get();
-    let root_dir = args.root.unwrap_or_else(|| {
-        app_config
-            .get_path("PATH_RAISE_DOMAIN")
-            .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !")
-            .clone()
-    });
+    // 🎯 Heartbeat automatique
+    let _ = ctx.session_mgr.touch().await;
+
+    // 🎯 On utilise le storage du contexte au lieu de recréer
+    let storage = &ctx.storage;
+    let root_dir = storage.config.data_root.clone();
 
     bootstrap_ontologies(&root_dir, &args.space).await;
 
-    let config = Arc::new(JsonDbConfig {
-        data_root: root_dir.clone(),
-    });
-
-    let storage = StorageEngine::new((*config).clone());
-    let col_mgr = CollectionsManager::new(&storage, &args.space, &args.db);
-    let mut idx_mgr = IndexManager::new(&storage, &args.space, &args.db);
-    let tx_mgr = TransactionManager::new(&storage, &args.space, &args.db);
+    let col_mgr = CollectionsManager::new(storage, &args.space, &args.db);
+    let mut idx_mgr = IndexManager::new(storage, &args.space, &args.db);
+    let tx_mgr = TransactionManager::new(storage, &args.space, &args.db);
 
     // Feedback contextuel
-    if app_config.core.log_level == "debug" || app_config.core.log_level == "trace" {
+    if ctx.config.core.log_level == "debug" || ctx.config.core.log_level == "trace" {
         user_info!("JSONDB_CTX_ROOT", json!({ "path": root_dir }));
         user_info!(
             "JSONDB_CTX_SPACE",
@@ -235,9 +232,9 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
     if !matches!(
         args.command,
         JsondbCommands::CreateDb | JsondbCommands::DropDb { .. }
-    ) && !config.db_root(&args.space, &args.db).exists()
+    ) && !storage.config.db_root(&args.space, &args.db).exists()
     {
-        user_info!("JSONDB_BOOTSTRAP_AUTO");
+        user_info!("JSONDB_BOOTSTRAP_AUTO", json!({"status": "starting"}));
         let _ = col_mgr.init_db().await;
     }
 
@@ -251,7 +248,6 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
                 "JSONDB_SCHEMAS_LISTED",
                 json!({ "space": args.space, "db": args.db, "count": schemas.len() })
             );
-            // On affiche le joli tableau JSON
             println!("{}", data::stringify_pretty(&schemas)?);
         }
         JsondbCommands::CreateSchema { name, schema } => {
@@ -307,13 +303,11 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
 
         JsondbCommands::CreateDb => {
             if col_mgr.init_db().await? {
-                // Succès de l'initialisation : on sépare l'espace de la DB
                 user_success!(
                     "JSONDB_INIT_SUCCESS",
                     json!({ "space": args.space, "db": args.db })
                 );
             } else {
-                // Info : la base existe déjà
                 user_info!(
                     "JSONDB_EXISTS",
                     json!({ "space": args.space, "db": args.db })
@@ -322,16 +316,14 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
         }
         JsondbCommands::DropDb { force } => {
             if !force {
-                // Cas 1 : Simple avertissement (Pas de données nécessaires, juste la clé i18n)
-                user_error!("JSONDB_DROP_WARN");
+                // 🎯 Utilisation stricte avec contexte JSON vide
+                user_error!("JSONDB_DROP_WARN", json!({}));
             } else if col_mgr.drop_db().await? {
-                // Cas 2 : Succès de la suppression avec contexte structuré
                 user_success!(
                     "JSONDB_DROP_SUCCESS",
                     json!({ "space": args.space, "db": args.db, "action": "permanent_deletion" })
                 );
             } else {
-                // Cas 3 : Erreur logique (non trouvé) avec contexte structuré
                 user_error!(
                     "JSONDB_DROP_NOT_FOUND",
                     json!({ "space": args.space, "db": args.db })
@@ -355,9 +347,7 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
             } else {
                 format!("db://{}/{}/schemas/v1/{}", args.space, args.db, raw_schema)
             };
-            col_mgr
-                .create_collection(&name, Some(schema_uri.clone()))
-                .await?;
+            col_mgr.create_collection(&name, &schema_uri).await?;
             user_success!(
                 "JSONDB_COL_CREATED",
                 json!({ "collection": name, "status": "active" })
@@ -372,7 +362,6 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
         }
         JsondbCommands::ListCollections => {
             let cols = col_mgr.list_collections().await?;
-            // REFAC: Utilisation de data::stringify_pretty
             println!("{}", data::stringify_pretty(&cols)?);
         }
         JsondbCommands::CreateIndex {
@@ -388,7 +377,11 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
         }
         JsondbCommands::DropIndex { collection, field } => {
             idx_mgr.drop_index(&collection, &field).await?;
-            user_success!("JSONDB_INDEX_DROPPED");
+            // 🎯 Ajout d'un contexte JSON
+            user_success!(
+                "JSONDB_INDEX_DROPPED",
+                json!({"collection": collection, "field": field})
+            );
         }
         JsondbCommands::ListIndexes { collection, field } => {
             let indexes = idx_mgr.list_indexes(&collection, field.as_deref()).await?;
@@ -405,11 +398,10 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
                 "JSONDB_LIST_SUCCESS",
                 json!({
                     "collection": collection,
-                    "count": result.total_count,
-                    "data": result.documents
+                    "count": result.total_count
                 })
             );
-            println!("{}", data::stringify_pretty(&result)?);
+            println!("{}", data::stringify_pretty(&result.documents)?);
         }
         JsondbCommands::Insert { collection, data } => {
             let json_val = parse_data(&data).await?;
@@ -454,7 +446,6 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
                 raise_error!("ERR_CLI_MISSING_ARG", error = "Fournir --id ou --name");
             };
 
-            // On passe la patate chaude au manager
             col_mgr.delete_identity(&collection, identity).await?;
 
             user_success!(
@@ -489,12 +480,10 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
                 query.projection = Some(Projection::Include(f));
             }
             let result = QueryEngine::new(&col_mgr).execute_query(query).await?;
-            // REFAC: Utilisation de data::stringify_pretty
             println!("{}", data::stringify_pretty(&result.documents)?);
         }
         JsondbCommands::Sql { query } => {
             use raise::json_db::query::sql::{parse_sql, SqlRequest};
-            // 1. Parsing de la requête avec contexte riche
             let sql_request = match parse_sql(&query) {
                 Ok(req) => req,
                 Err(e) => raise_error!(
@@ -508,7 +497,6 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
                 ),
             };
 
-            // 2. Exécution selon le type de requête
             match sql_request {
                 SqlRequest::Read(query_struct) => {
                     let result = QueryEngine::new(&col_mgr)
@@ -519,7 +507,7 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
                 }
                 SqlRequest::Write(requests) => {
                     tx_mgr.execute_smart(requests).await?;
-                    user_success!("JSONDB_SQL_TX_SUCCESS");
+                    user_success!("JSONDB_SQL_TX_SUCCESS", json!({"status": "committed"}));
                 }
             }
         }
@@ -531,10 +519,19 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
             } else {
                 vec![json]
             };
+
+            // 🎯 CORRECTIF : On sauvegarde le compte avant de consommer (move) le vecteur
+            let docs_count = docs.len();
+
             for doc in docs {
                 col_mgr.insert_with_schema(&collection, doc).await?;
             }
-            user_success!("JSONDB_IMPORT_SUCCESS");
+
+            // 🎯 On utilise docs_count au lieu de docs.len()
+            user_success!(
+                "JSONDB_IMPORT_SUCCESS",
+                json!({"collection": collection, "docs_imported": docs_count})
+            );
         }
         JsondbCommands::Transaction { file } => {
             let json_val: Value = io::read_json(&file).await?;
@@ -547,10 +544,8 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
             let reqs: Vec<TransactionRequest> = if let Ok(w) =
                 data::from_value::<Wrapper>(json_val.clone())
             {
-                // Cas 1 : Format "Wrapper" (succès immédiat)
                 w.operations
             } else {
-                // Cas 2 : Tentative de repli vers le format "Vec direct"
                 match data::from_value::<Vec<TransactionRequest>>(json_val) {
                     Ok(ops) => ops,
                     Err(e) => raise_error!(
@@ -570,7 +565,8 @@ pub async fn handle(args: JsondbArgs) -> RaiseResult<()> {
                 json!({ "batch_size": reqs.len(), "mode": "atomic" })
             );
             tx_mgr.execute_smart(reqs).await?;
-            user_success!("JSONDB_TX_SUCCESS");
+            // 🎯 Ajout d'un contexte JSON
+            user_success!("JSONDB_TX_SUCCESS", json!({"status": "committed"}));
         }
     }
     Ok(())
@@ -584,7 +580,6 @@ async fn parse_data(input: &str) -> RaiseResult<Value> {
         let data = io::read_json(path).await?;
         Ok(data)
     } else {
-        // REFAC: Utilisation de data::parse
         Ok(data::parse(input)?)
     }
 }
@@ -611,7 +606,7 @@ async fn bootstrap_ontologies(root_dir: &Path, space: &str) {
 }
 
 fn print_examples() {
-    user_info!("JSONDB_USAGE_TITLE");
+    user_info!("JSONDB_USAGE_TITLE", json!({}));
 }
 
 // --- TESTS UNITAIRES (Patrimoine Conservé & Adapté) ---
@@ -663,7 +658,7 @@ mod tests {
         match cli.args.command {
             JsondbCommands::ListIndexes { collection, field } => {
                 assert_eq!(collection, "users");
-                assert_eq!(field, Some("email".to_string())); // 👈 On vérifie que le champ est bien parsé
+                assert_eq!(field, Some("email".to_string()));
             }
             _ => panic!("Parsing list-indexes failed"),
         }
@@ -744,7 +739,6 @@ mod tests {
     #[test]
     fn test_transaction_wrapper_deserialization() {
         let json = r#"{"operations": []}"#;
-        // REFAC: test avec data::parse
         let res: RaiseResult<data::Value> = data::parse(json);
         assert!(res.is_ok());
     }
@@ -760,7 +754,7 @@ mod tests {
         let args = vec![
             "test",
             "create-schema",
-            "--name", // 🎯 FIX: Changement de --uri à --name
+            "--name",
             "db://test/schema",
             "--schema",
             "{}",
@@ -768,7 +762,6 @@ mod tests {
         let cli = TestCli::parse_from(args);
         match cli.args.command {
             JsondbCommands::CreateSchema { name, .. } => {
-                // 🎯 FIX: Changement de uri à name
                 assert_eq!(name, "db://test/schema");
             }
             _ => panic!("Parsing create-schema failed"),

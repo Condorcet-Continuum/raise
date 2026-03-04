@@ -192,8 +192,8 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::NameType;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
     use crate::utils::data::HashMap;
+    use crate::utils::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_dynamic_rule_application() {
@@ -276,6 +276,13 @@ mod tests {
             "type": "Requirement",
             "priority": "Low"
         });
+        manager
+            .create_collection(
+                "transverse",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager.insert_raw("transverse", &req).await.unwrap();
 
         let loader = ModelLoader::new_with_manager(manager);

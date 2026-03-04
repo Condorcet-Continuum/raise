@@ -16,8 +16,8 @@ pub mod transactions;
 pub mod test_utils {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::JsonDbConfig;
-    use crate::utils::config::test_mocks::DbSandbox;
     use crate::utils::io;
+    use crate::utils::mock::DbSandbox;
     use crate::utils::Once;
     use std::path::PathBuf;
 

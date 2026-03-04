@@ -122,8 +122,8 @@ impl WorkflowExecutor {
 mod tests {
     use super::*;
     use crate::model_engine::types::ProjectModel;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
     use crate::utils::data::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::tools::SystemMonitorTool;
     // N'oubliez pas d'importer le CollectionsManager si ce n'est pas déjà fait
     use crate::json_db::collections::manager::CollectionsManager;
@@ -198,6 +198,14 @@ mod tests {
             "hardLogic": { "vetos": [{ "rule": "VIBRATION_MAX", "active": true, "action": "STOP" }] },
             "observability": { "heartbeatMs": 100 }
         });
+
+        manager
+            .create_collection(
+                "mandates",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         manager
             .insert_raw("mandates", &valid_mandate)

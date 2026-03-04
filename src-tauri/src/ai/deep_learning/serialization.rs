@@ -43,8 +43,8 @@ pub fn load_checkpoint(varmap: &mut VarMap, path: impl AsRef<Path>) -> RaiseResu
 mod tests {
     use super::*;
     use crate::ai::deep_learning::trainer::Trainer;
-    use crate::utils::config::test_mocks::DbSandbox;
     use crate::utils::io::{self, Path};
+    use crate::utils::mock::DbSandbox;
     use candle_core::{DType, Tensor};
 
     #[tokio::test]

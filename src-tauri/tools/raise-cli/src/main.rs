@@ -1,12 +1,30 @@
+// FICHIER : src-tauri/tools/raise-cli/src/main.rs
+
 use clap::{Parser, Subcommand};
 
 // On garde le module local des commandes
 mod commands;
 
 use raise::{
-    build_error, user_error, user_info,
-    utils::{context, prelude::*},
+    raise_error, user_debug, user_error, user_info, user_warn,
+    utils::{context, prelude::*, Arc},
 };
+
+// NOUVEAUX IMPORTS : Moteur de stockage et Session
+use raise::json_db::storage::{JsonDbConfig, StorageEngine};
+use raise::utils::session::SessionManager;
+
+// ============================================================================
+// 🎯 DÉFINITION DU CONTEXTE GLOBAL DU CLI
+// ============================================================================
+#[derive(Clone)]
+pub struct CliContext {
+    pub config: &'static AppConfig,
+    pub session_mgr: SessionManager,
+    pub storage: Arc<StorageEngine>,
+}
+
+// ============================================================================
 
 #[derive(Parser)]
 #[command(name = "raise-cli")]
@@ -14,7 +32,6 @@ use raise::{
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
-    // Optionnel pour permettre le mode Shell Interactif
     command: Option<Commands>,
 }
 
@@ -38,66 +55,98 @@ enum Commands {
 async fn main() -> RaiseResult<()> {
     // 1. Initialisation de la Configuration (CRITIQUE)
     if let Err(e) = AppConfig::init() {
-        eprintln!("❌ CRITICAL ERROR: Impossible d'initialiser la configuration.");
-        eprintln!("   Détails : {}", e);
-        std::process::exit(1);
+        raise_error!(
+            "CLI_CRITICAL_INIT_FAILED",
+            error = e,
+            context = json!({"step": "AppConfig::init", "hint": "Vérifiez vos fichiers de configuration"})
+        );
     }
 
     // 2. Initialisation du Logger
     context::init_logging();
 
-    // 3. Initialisation de la Langue (Lecture directe depuis JSON-DB)
+    // 3. Initialisation de la Langue
     let config = AppConfig::get();
     context::init_i18n(&config.core.language).await?;
 
-    // Message d'accueil système traduit
+    // 4. INITIALISATION DU MOTEUR DE STOCKAGE ET DE SESSION
+    let db_root = config
+        .get_path("PATH_RAISE_DOMAIN")
+        .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !");
+
+    let storage = Arc::new(StorageEngine::new(JsonDbConfig::new(db_root)));
+    let session_mgr = SessionManager::new(storage.clone());
+
+    // 🎯 5. CRÉATION DU CONTEXTE UNIFIÉ
+    let ctx = CliContext {
+        config: AppConfig::get(),
+        session_mgr,
+        storage,
+    };
+
+    // 6. AUTO-LOGIN SILENCIEUX STRICT (Tolérance Zéro)
+    let username = match ctx.config.user.as_ref() {
+        // <-- Utilisation de ctx.config
+        Some(user_config) => user_config.id.clone(),
+        None => {
+            raise_error!(
+                "CLI_USER_NOT_FOUND",
+                context = json!({
+                    "action": "cli_auto_login",
+                    "hint": "Aucun utilisateur n'a été résolu par AppConfig. Assurez-vous que votre compte OS existe dans la collection 'users'."
+                })
+            );
+        }
+    };
+
+    if let Err(e) = ctx.session_mgr.start_session(&username).await {
+        raise_error!(
+            "CLI_SESSION_START_FAILED",
+            error = e,
+            context = json!({
+                "user": username,
+                "hint": "Le démarrage de la session a échoué. Vérifiez que la base de données système est accessible."
+            })
+        );
+    }
+
     user_info!(
         "CLI_START_INITIALIZED",
         json!({
             "version": env!("CARGO_PKG_VERSION"),
             "mode": if cfg!(debug_assertions) { "debug" } else { "release" },
-            "component": "cli_engine"
+            "component": "cli_engine",
+            "active_user": username
         })
     );
 
-    // 4. Parsing & Dispatch
+    // 7. Parsing & Dispatch
     let cli = Cli::parse();
 
     match cli.command {
         Some(cmd) => {
-            // Mode "One-Shot"
-            if let Err(e) = execute_command(cmd.clone()).await {
-                // 🛠️ build_error! crée l'objet AppError et logue via tracing,
-                // mais il ne contient PAS de 'return', ce qui nous permet de continuer.
-                let err = build_error!(
+            if let Err(e) = execute_command(cmd.clone(), ctx.clone()).await {
+                raise_error!(
                     "CLI_COMMAND_EXECUTION_FAILED",
                     error = e,
                     context = json!({
-                        // On utilise format! car Commands n'implémente pas Serialize
                         "command": format!("{:?}", cmd),
-                        "exit_code": 1,
                         "trace": "critical_failure"
                     })
                 );
-
-                // 🚩 On affiche l'erreur structurée (avec sa clé, son message et son contexte)
-                // puis on coupe proprement le processus.
-                eprintln!("{}", err);
-                std::process::exit(1);
             }
         }
         None => {
-            // Mode "Global Shell"
-            run_global_shell().await?;
+            run_global_shell(ctx).await?;
         }
     }
 
-    tracing::debug!("Fin de l'exécution du CLI");
+    user_debug!("CLI_EXECUTION_FINISHED");
     Ok(())
 }
 
 /// Boucle principale du Shell Global (REPL)
-async fn run_global_shell() -> RaiseResult<()> {
+async fn run_global_shell(ctx: CliContext) -> RaiseResult<()> {
     use rustyline::error::ReadlineError;
     use rustyline::DefaultEditor;
 
@@ -120,16 +169,16 @@ async fn run_global_shell() -> RaiseResult<()> {
             );
         }
     };
-    let config = AppConfig::get();
-    let history_path = config
+
+    // 🎯 CORRECTION 1 : On utilise le contexte au lieu d'appeler AppConfig::get()
+    let history_path = ctx
+        .config
         .get_path("PATH_RAISE_DOMAIN")
-        .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !")
+        .unwrap()
         .join("_system")
         .join("history.txt");
 
-    if rl.load_history(&history_path).is_err() {
-        // Pas d'historique au premier lancement, c'est normal
-    }
+    let _ = rl.load_history(&history_path);
 
     loop {
         let readline = rl.readline("RAISE> ");
@@ -161,13 +210,11 @@ async fn run_global_shell() -> RaiseResult<()> {
                         match Cli::try_parse_from(full_args) {
                             Ok(cli) => {
                                 if let Some(cmd) = cli.command {
-                                    // 1. On clone pour garder la propriété de 'cmd' en cas d'erreur
-                                    if let Err(e) = execute_command(cmd.clone()).await {
-                                        // 🚀 Utilisation du Cas 2 : Métadonnées structurées
+                                    if let Err(e) = execute_command(cmd.clone(), ctx.clone()).await
+                                    {
                                         user_error!(
                                             "CLI_COMMAND_EXECUTION_FAILED",
                                             json!({
-                                                // 2. On utilise le format Debug pour contourner l'absence de Serialize
                                                 "command": format!("{:?}", cmd),
                                                 "error_detail": format!("{:?}", e),
                                                 "context": "interactive_repl_execution"
@@ -186,7 +233,6 @@ async fn run_global_shell() -> RaiseResult<()> {
             }
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
             Err(err) => {
-                // 🚀 Capture structurée avant la rupture de la boucle
                 user_error!(
                     "CLI_SHELL_FATAL_ERROR",
                     json!({
@@ -201,26 +247,32 @@ async fn run_global_shell() -> RaiseResult<()> {
     }
 
     if let Err(e) = rl.save_history(&history_path) {
-        tracing::warn!("Impossible de sauvegarder l'historique : {}", e);
+        user_warn!(
+            "CLI_HISTORY_SAVE_FAILED",
+            json!({
+                "error": e.to_string(),
+                "path": history_path
+            })
+        );
     }
 
     Ok(())
 }
 
-async fn execute_command(cmd: Commands) -> RaiseResult<()> {
+async fn execute_command(cmd: Commands, ctx: CliContext) -> RaiseResult<()> {
     match cmd {
-        Commands::Workflow(args) => commands::workflow::handle(args).await,
-        Commands::ModelEngine(args) => commands::model_engine::handle(args).await,
-        Commands::Jsondb(args) => commands::jsondb::handle(args).await,
-        Commands::Ai(args) => commands::ai::handle(args).await,
-        Commands::Genetics(args) => commands::genetics::handle(args).await,
-        Commands::Blockchain(args) => commands::blockchain::handle(args).await,
-        Commands::Plugins(args) => commands::plugins::handle(args).await,
-        Commands::Traceability(args) => commands::traceability::handle(args).await,
-        Commands::Spatial(args) => commands::spatial::handle(args).await,
-        Commands::CodeGen(args) => commands::code_gen::handle(args).await,
-        Commands::Validator(args) => commands::validator::handle(args).await,
-        Commands::Utils(args) => commands::utils::handle(args).await,
+        Commands::Workflow(args) => commands::workflow::handle(args, ctx).await,
+        Commands::ModelEngine(args) => commands::model_engine::handle(args, ctx).await,
+        Commands::Jsondb(args) => commands::jsondb::handle(args, ctx).await,
+        Commands::Ai(args) => commands::ai::handle(args, ctx).await,
+        Commands::Genetics(args) => commands::genetics::handle(args, ctx).await,
+        Commands::Blockchain(args) => commands::blockchain::handle(args, ctx).await,
+        Commands::Plugins(args) => commands::plugins::handle(args, ctx).await,
+        Commands::Traceability(args) => commands::traceability::handle(args, ctx).await,
+        Commands::Spatial(args) => commands::spatial::handle(args, ctx).await,
+        Commands::CodeGen(args) => commands::code_gen::handle(args, ctx).await,
+        Commands::Validator(args) => commands::validator::handle(args, ctx).await,
+        Commands::Utils(args) => commands::utils::handle(args, ctx).await,
     }
 }
 

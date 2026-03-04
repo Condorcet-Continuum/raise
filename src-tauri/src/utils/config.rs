@@ -1,20 +1,19 @@
 // FICHIER : src-tauri/src/utils/config.rs
 
-use crate::raise_error;
-use crate::utils::error::RaiseResult;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::OnceLock;
-
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 
+// 🎯 FAÇADE UTILS : Utilisation stricte du contrat de service
+use super::io::PathBuf;
+use super::prelude::*;
+use super::{HashMap, OnceLock};
+
+use serde::Deserializer; // Non exporté par la façade
+use std::env;
+use std::fs; // Conservé pour les opérations synchrones d'initialisation
+
 /// Singleton global pour la configuration
-static CONFIG: OnceLock<AppConfig> = OnceLock::new();
+pub static CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
 /// Constantes Système (Single Source of Truth)
 pub const SYSTEM_DOMAIN: &str = "_system";
@@ -293,7 +292,8 @@ impl AppConfig {
         Ok(config)
     }
 
-    fn create_default_test_config() -> Self {
+    // 🎯 FIX : On passe en pub(crate) pour que mock.rs puisse générer la config
+    pub(crate) fn create_default_test_config() -> Self {
         let mut paths = HashMap::new();
         let tmp = env::temp_dir();
         paths.insert(
@@ -549,170 +549,5 @@ mod tests {
 
         let config: AppConfig = serde_json::from_value(json_data).unwrap();
         assert_eq!(config.paths.get("P1").unwrap(), "/v1");
-    }
-}
-
-// --- MODULE MOCKS PUBLIC ---
-
-// --- MODULE MOCKS PUBLIC ---
-
-pub mod test_mocks {
-    use super::*;
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use serde_json::json;
-    use std::sync::Arc;
-    use tempfile::TempDir;
-    use tokio::fs;
-
-    pub async fn inject_mock_component(
-        manager: &CollectionsManager<'_>,
-        comp_id: &str,
-        settings: Value,
-    ) {
-        let doc = json!({
-            "id": format!("mock-{}", comp_id),
-            "identity": { "component_id": comp_id },
-            "settings": settings
-        });
-        let _ = manager.insert_raw("components", &doc).await;
-    }
-
-    pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
-        let schema_dir = db_cfg.db_schemas_root("_system", "_system").join("v1/db");
-        let schema_file = schema_dir.join("index.schema.json");
-
-        if fs::metadata(&schema_file).await.is_err() {
-            let _ = fs::create_dir_all(&schema_dir).await;
-
-            let core_schema = json!({
-                "$id": "db://_system/_system/schemas/v1/db/index.schema.json",
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string" },
-                    "version": { "type": "integer", "default": 1 },
-                    "space": { "type": "string" },
-                    "database": { "type": "string" },
-                    "collections": { "type": "object", "default": {} },
-                    "rules": { "type": "object", "default": {} },
-                    "schemas": { "type": "object", "default": { "v1": {} } }
-                },
-                "required": ["name", "version", "space", "database", "collections", "rules", "schemas"]
-            });
-
-            let _ = fs::write(schema_file, core_schema.to_string()).await;
-        }
-    }
-
-    pub async fn inject_mock_config() {
-        // Singleton Mémoire : Initialisation unique
-        if CONFIG.get().is_none() {
-            let config = AppConfig::create_default_test_config();
-            let _ = CONFIG.set(config);
-        }
-
-        let app_cfg = AppConfig::get();
-
-        if let Some(path) = app_cfg.paths.get("PATH_RAISE_DOMAIN") {
-            let db_cfg = JsonDbConfig::new(PathBuf::from(path));
-
-            // On réutilise notre helper pour écrire le schéma dans le dossier par défaut
-            inject_schema_to_path(&db_cfg).await;
-        }
-    }
-    pub struct DbSandbox {
-        // Le `_` indique qu'on le garde juste en mémoire pour la durée de vie de la struct
-        _dir: TempDir,
-        pub storage: StorageEngine,
-        pub config: AppConfig,
-    }
-    pub struct AgentDbSandbox {
-        _dir: TempDir,
-        pub db: Arc<StorageEngine>,
-        pub config: AppConfig,
-        pub domain_root: std::path::PathBuf,
-    }
-
-    impl DbSandbox {
-        /// Constructeur idiomatique
-        pub async fn new() -> Self {
-            inject_mock_config().await;
-            let config = AppConfig::get();
-
-            let dir = tempfile::tempdir().expect("Création du dossier temporaire échouée");
-            let db_cfg = JsonDbConfig::new(dir.path().to_path_buf());
-
-            inject_schema_to_path(&db_cfg).await;
-            let storage = StorageEngine::new(db_cfg);
-
-            Self {
-                _dir: dir, // Garde le dossier en vie !
-                storage,
-                config: config.clone(),
-            }
-        }
-    }
-
-    impl AgentDbSandbox {
-        /// Constructeur idiomatique
-        pub async fn new() -> Self {
-            let base = DbSandbox::new().await;
-            let db = std::sync::Arc::new(base.storage);
-            let domain_root = base.config.get_path("PATH_RAISE_DOMAIN").unwrap();
-
-            // 🎯 ASTUCE : On crée un manager éphémère juste pour initialiser la base !
-            let temp_manager =
-                CollectionsManager::new(&db, &base.config.system_domain, &base.config.system_db);
-            temp_manager
-                .init_db()
-                .await
-                .expect("Erreur lors de l'initialisation de la DB dans la Sandbox");
-
-            Self {
-                _dir: base._dir,
-                db,
-                config: base.config,
-                domain_root,
-            }
-        }
-    }
-
-    pub struct GlobalDbSandbox {
-        pub db: Arc<StorageEngine>,
-        pub config: &'static AppConfig,
-        pub domain_root: std::path::PathBuf,
-    }
-
-    impl GlobalDbSandbox {
-        pub async fn new() -> Self {
-            // 1. Initialise le mock global
-            inject_mock_config().await;
-            let config = AppConfig::get();
-            let db_root = config.get_path("PATH_RAISE_DOMAIN").unwrap();
-
-            // 2. Prépare le moteur sur le dossier global
-            let cfg_db = JsonDbConfig::new(db_root.clone());
-            let storage = StorageEngine::new(cfg_db.clone());
-            let manager =
-                CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
-
-            // 3. 🎯 ON NETTOIE D'ABORD les résidus du test précédent
-            let _ = manager.drop_db().await;
-
-            // 4. 🎯 ON INJECTE LE SCHÉMA ENSUITE, dans un dossier tout propre
-            inject_schema_to_path(&cfg_db).await;
-
-            // 5. On initialise la base de données
-            manager
-                .init_db()
-                .await
-                .expect("Impossible d'initialiser la GlobalDbSandbox");
-
-            Self {
-                db: Arc::new(storage),
-                config,
-                domain_root: db_root,
-            }
-        }
     }
 }

@@ -12,7 +12,8 @@ async fn test_rust_skeleton_generation() {
     let env = setup_test_env(LlmMode::Enabled).await;
 
     // 1. Initialisation du service
-    let service = CodeGeneratorService::new(env.domain_path.clone());
+    let service =
+        CodeGeneratorService::new(env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap());
 
     // 2. Donnée Mock (Forcer la logique Rust_Crate)
     let actor = json!({

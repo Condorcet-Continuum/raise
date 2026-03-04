@@ -238,8 +238,9 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
     use crate::utils::io::{self};
+    use crate::utils::json::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_transverse_id() {
@@ -269,6 +270,14 @@ mod tests {
             "layer": "LA",
             "type": "LogicalComponent"
         });
+
+        manager
+            .create_collection(
+                "la_components",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .upsert_document("la_components", comp_doc)
             .await

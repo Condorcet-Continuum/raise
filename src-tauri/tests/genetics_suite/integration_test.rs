@@ -20,10 +20,18 @@ async fn test_genetics_integration_with_json_db() {
     let env = setup_test_env(LlmMode::Disabled).await;
 
     // 2. Manager sur un espace de test dédié
-    let manager = CollectionsManager::new(&env.storage, "testing", "arcadia");
+    let manager = CollectionsManager::new(&env.sandbox.storage, "testing", "arcadia");
 
     let lf_schema = "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json";
     let lc_schema = "https://raise.local/schemas/v1/arcadia/la/logical-component.schema.json";
+
+    manager
+        .create_collection(
+            "la",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await
+        .unwrap();
 
     manager.insert_raw("la", &json!({
         "id": "f_ctrl", "name": "Control", "type": lf_schema, "properties": { "complexity": 50.0 }

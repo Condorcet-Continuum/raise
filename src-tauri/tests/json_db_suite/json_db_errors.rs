@@ -9,7 +9,7 @@ use raise::utils::json::json; // 🎯 AJOUT VITAL pour le 4ème argument
 async fn open_missing_db_fails() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = JsonDbConfig {
-        data_root: env.domain_path.clone(),
+        data_root: env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
     };
 
     let db_missing = "db_introuvable_123";
@@ -26,7 +26,7 @@ async fn open_missing_db_fails() {
 async fn create_db_is_idempotent() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = JsonDbConfig {
-        data_root: env.domain_path.clone(),
+        data_root: env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
     };
 
     // 🎯 On fournit un plan de construction vide (mais valide syntaxiquement)

@@ -163,7 +163,7 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     // 🎯 IMPORT UNIQUE : La Sandbox remplace tout le setup manuel !
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
     use crate::utils::prelude::*;
     use serde_json::json;
 
@@ -179,7 +179,13 @@ mod tests {
         );
 
         // On a juste besoin de créer la collection "locales" pour ce test
-        manager.create_collection("locales", None).await.unwrap();
+        manager
+            .create_collection(
+                "locales",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         // Insertion d'un document de langue valide
         let doc = json!({
@@ -215,7 +221,13 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        manager.create_collection("locales", None).await.unwrap();
+        manager
+            .create_collection(
+                "locales",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         let mut translator = Translator::new();
 

@@ -68,7 +68,7 @@ impl<'a> Trainer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks::DbSandbox;
+    use crate::utils::mock::DbSandbox;
     use candle_core::DType;
     use candle_nn::VarBuilder;
 

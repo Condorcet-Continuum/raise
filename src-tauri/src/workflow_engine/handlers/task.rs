@@ -58,8 +58,8 @@ mod tests {
 
     // 🎯 IMPORTS AJOUTÉS : On récupère notre Sandbox et les injecteurs
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
     use crate::utils::data::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     // 🎯 FIX : La fonction prend la DB et la config de la Sandbox en paramètres
     async fn setup_dummy_context(

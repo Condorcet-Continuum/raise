@@ -313,8 +313,8 @@ mod tests {
     use crate::ai::protocols::acl::{AclMessage, Performative};
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::NameType;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
     use crate::utils::data::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
     use crate::utils::{data::HashMap, AsyncMutex, OnceLock};
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {

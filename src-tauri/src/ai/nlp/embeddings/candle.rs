@@ -287,7 +287,7 @@ fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     #[tokio::test]
     #[serial_test::serial]

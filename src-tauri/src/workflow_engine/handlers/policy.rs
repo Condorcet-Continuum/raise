@@ -85,8 +85,8 @@ mod tests {
 
     // 🎯 IMPORTS AJOUTÉS : On récupère notre Sandbox et les injecteurs
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
     use crate::utils::data::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     /// Helper pour générer rapidement un HandlerContext factice sans surcharger les tests
     // 🎯 FIX : La fonction prend la DB et la config en paramètres

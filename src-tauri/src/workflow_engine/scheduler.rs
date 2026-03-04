@@ -354,8 +354,8 @@ mod tests {
     use crate::workflow_engine::{NodeType, WorkflowEdge, WorkflowNode};
 
     // 🎯 IMPORT DES OUTILS DE TEST MODERNES
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
     use crate::utils::data::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     /// Prépare un environnement complet pour les tests du Scheduler (Orchestrator, Executor)
     async fn setup_test_environment(
@@ -363,6 +363,14 @@ mod tests {
         config: &crate::utils::config::AppConfig,
     ) -> WorkflowScheduler {
         let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+
+        manager
+            .create_collection(
+                "workflow_instances",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         // 1. 🎯 INJECTION DES MOCKS : Pour que l'Orchestrateur IA démarre sans paniquer
         inject_mock_component(

@@ -55,7 +55,8 @@ impl AgentContext {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::json::json;
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     #[tokio::test] // 🎯 Les tests deviennent asynchrones
     #[serial_test::serial] // Protection RTX 5060 en local
@@ -72,7 +73,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();
@@ -104,10 +105,10 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        crate::utils::config::test_mocks::inject_mock_component(
+        inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+            json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();

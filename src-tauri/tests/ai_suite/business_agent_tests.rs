@@ -10,16 +10,16 @@ use raise::json_db::collections::manager::CollectionsManager;
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_business_agent_generates_oa_entities() {
     let env = setup_test_env(LlmMode::Enabled).await;
-    let test_root = env.storage.config.data_root.clone();
+    let test_root = env.sandbox.storage.config.data_root.clone();
 
     // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
-    let oa_mgr = CollectionsManager::new(&env.storage, "un2", "oa");
+    let oa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "oa");
 
     // 1. Initialisation de la collection 'capabilities' (avec un schéma générique de fallback)
     oa_mgr
         .create_collection(
             "capabilities",
-            Some("https://raise.io/schemas/v1/configs/config.schema.json".to_string()),
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
         .expect("Initialisation de la collection capabilities impossible");
@@ -28,7 +28,7 @@ async fn test_business_agent_generates_oa_entities() {
     oa_mgr
         .create_collection(
             "actors",
-            Some("https://raise.io/schemas/v1/actors/actor.schema.json".to_string()),
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
         .expect("Initialisation de la collection actors impossible");
@@ -40,7 +40,7 @@ async fn test_business_agent_generates_oa_entities() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.storage.clone()),
+        Arc::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),

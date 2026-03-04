@@ -304,7 +304,7 @@ pub async fn ai_train_domain_native(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     #[tokio::test]
     #[serial_test::serial]

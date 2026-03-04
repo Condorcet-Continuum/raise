@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/tools/raise-cli/src/commands/model_engine.rs
+
 use clap::{Args, Subcommand};
 
 use raise::{
@@ -10,6 +12,9 @@ use raise::{
 
 // Nettoyage des imports inutilisés (ModelValidator)
 use raise::model_engine::{ConsistencyChecker, Severity, TransformationDomain};
+
+// 🎯 NOUVEAU : Import du contexte global CLI
+use crate::CliContext;
 
 /// Pilotage du Model Engine (Arcadia & Capella Semantic Core)
 #[derive(Args, Clone, Debug)]
@@ -34,7 +39,11 @@ pub enum ModelCommands {
     },
 }
 
-pub async fn handle(args: ModelArgs) -> RaiseResult<()> {
+// 🎯 La signature intègre le CliContext
+pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
+    // 🎯 Heartbeat automatique
+    let _ = ctx.session_mgr.touch().await;
+
     match args.command {
         ModelCommands::Load { path } => {
             user_info!(
@@ -44,17 +53,28 @@ pub async fn handle(args: ModelArgs) -> RaiseResult<()> {
             let path_ref = io::Path::new(&path);
 
             if !io::exists(path_ref).await {
-                user_error!("FS_ERROR", "Fichier introuvable.");
+                // 🎯 Mise en conformité stricte avec JSON
+                user_error!(
+                    "FS_ERROR",
+                    json!({"error": "Fichier introuvable", "path": path})
+                );
                 return Ok(());
             }
 
             // Note: ModelLoader nécessite un StorageEngine réel.
             // Simulation du succès de l'opération.
-            user_success!("LOAD_OK", "Modèle chargé. Prêt pour l'analyse sémantique.");
+            user_success!(
+                "LOAD_OK",
+                json!({"status": "Modèle chargé. Prêt pour l'analyse sémantique."})
+            );
         }
 
         ModelCommands::Validate => {
-            user_info!("VALIDATION", "Démarrage du ConsistencyChecker...");
+            // 🎯 Mise en conformité stricte avec JSON
+            user_info!(
+                "VALIDATION_START",
+                json!({"action": "Démarrage du ConsistencyChecker..."})
+            );
 
             // On utilise le checker ré-exporté par la façade
             let _checker = ConsistencyChecker;
@@ -105,12 +125,30 @@ pub async fn handle(args: ModelArgs) -> RaiseResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CliContext;
+    use raise::utils::session::SessionManager;
+    use raise::utils::{config::AppConfig, Arc};
+
+    #[cfg(test)]
+    use raise::utils::mock::DbSandbox;
 
     #[tokio::test]
     async fn test_model_engine_logic() {
+        // 🎯 On simule le contexte global pour le test
+        let sandbox = DbSandbox::new().await;
+        let storage = Arc::new(sandbox.storage.clone());
+        let session_mgr = SessionManager::new(storage.clone());
+
+        let ctx = CliContext {
+            config: AppConfig::get(),
+            session_mgr,
+            storage,
+        };
+
         let args = ModelArgs {
             command: ModelCommands::Validate,
         };
-        assert!(handle(args).await.is_ok());
+
+        assert!(handle(args, ctx).await.is_ok());
     }
 }

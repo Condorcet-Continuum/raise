@@ -247,8 +247,8 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::jsonld::vocabulary::{arcadia_types, namespaces};
     use crate::model_engine::types::NameType;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
     use crate::utils::data::HashMap;
+    use crate::utils::mock::AgentDbSandbox;
 
     fn create_dummy_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
         ArcadiaElement {
@@ -321,6 +321,13 @@ mod tests {
             "name": "", // Nom vide -> Erreur
             "type": "https://raise.io/ontology/arcadia/transverse#Requirement"
         });
+        manager
+            .create_collection(
+                "transverse",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
         manager
             .insert_raw("transverse", &invalid_req)
             .await

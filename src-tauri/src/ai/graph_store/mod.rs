@@ -284,7 +284,7 @@ fn extract_text_content(data: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
+    use crate::utils::mock::AgentDbSandbox;
     use crate::utils::{AsyncMutex, OnceLock}; // 🎯 Import requis
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {
@@ -302,7 +302,7 @@ mod tests {
             &sandbox.config.system_db,
         );
         // 🎯 Injection du modèle NLP pour éviter le plantage
-        crate::utils::config::test_mocks::inject_mock_component(
+        crate::utils::mock::inject_mock_component(
             &manager,
             "nlp",
             json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })

@@ -16,8 +16,8 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::config::test_mocks::AgentDbSandbox;
     use crate::utils::data::json;
+    use crate::utils::mock::AgentDbSandbox;
     use crate::utils::HashSet;
 
     #[tokio::test]
@@ -28,7 +28,6 @@ mod tests {
             Expr::Var("item.price".to_string()),
         ]);
 
-        // CORRECTION E0063 : Ajout des champs description et severity
         let _r1 = Rule {
             id: "calc_total".to_string(),
             target: "total".to_string(),
@@ -88,6 +87,14 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
+
+        manager
+            .create_collection(
+                "_system_rules",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
 
         let mut store = RuleStore::new(&manager);
 

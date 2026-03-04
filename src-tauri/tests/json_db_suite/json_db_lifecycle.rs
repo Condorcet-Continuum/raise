@@ -13,7 +13,7 @@ use serde_json::Value;
 async fn db_lifecycle_minimal() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = JsonDbConfig {
-        data_root: env.domain_path.clone(),
+        data_root: env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
     };
 
     let space = "lifecycle_minimal";
@@ -52,12 +52,15 @@ async fn db_lifecycle_minimal() {
 #[tokio::test]
 async fn test_collection_drop_cleans_system_index() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let collection = "temp_collection_to_drop";
 
-    mgr.create_collection(collection, None)
-        .await
-        .expect("❌ Échec création");
+    mgr.create_collection(
+        collection,
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .expect("❌ Échec création");
 
     // 🎯 FIX : Annotation de type explicite pour lever l'ambiguïté
     let sys_json: Value = mgr.load_index().await.expect("❌ Lecture via manager");
@@ -78,9 +81,14 @@ async fn test_collection_drop_cleans_system_index() {
 #[tokio::test]
 async fn test_system_index_strict_conformance() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let mgr = CollectionsManager::new(&env.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
-    mgr.create_collection("init_trigger", None).await.unwrap();
+    mgr.create_collection(
+        "init_trigger",
+        "db://_system/_system/schemas/v1/db/generic.schema.json",
+    )
+    .await
+    .unwrap();
 
     // 🎯 FIX : Annotation de type explicite
     let doc: Value = mgr
@@ -97,7 +105,7 @@ async fn test_system_index_strict_conformance() {
         Some(expected_schema)
     );
 
-    let registry = SchemaRegistry::from_db(&env.storage.config, &env.space, &env.db)
+    let registry = SchemaRegistry::from_db(&env.sandbox.storage.config, &env.space, &env.db)
         .await
         .unwrap();
     let validator = SchemaValidator::compile_with_registry(expected_schema, &registry).unwrap();

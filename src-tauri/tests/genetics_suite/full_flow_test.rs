@@ -18,7 +18,14 @@ async fn test_arcadia_to_genetics_pipeline() {
     let env = setup_test_env(LlmMode::Disabled).await;
 
     // 2. Création d'un manager sur un workspace spécifique au test
-    let manager = CollectionsManager::new(&env.storage, "test_workspace", "arcadia_db");
+    let manager = CollectionsManager::new(&env.sandbox.storage, "test_workspace", "arcadia_db");
+    manager
+        .create_collection(
+            "la",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await
+        .unwrap();
 
     manager
         .insert_raw(
