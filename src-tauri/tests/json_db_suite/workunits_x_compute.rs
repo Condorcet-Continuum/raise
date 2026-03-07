@@ -16,11 +16,7 @@ async fn workunit_compute_then_validate_minimal() {
         .expect("❌ Impossible de charger le registre des schémas");
 
     // Construction de l'URI SSOT
-    let root_uri = format!(
-        "db://{}/{}/schemas/v1/workunits/workunit.schema.json",
-        env.space, env.db
-    );
-
+    let root_uri = "db://_system/_system/schemas/v1/mock/actors.schema.json".to_string();
     if reg.get_by_uri(&root_uri).is_none() {
         panic!(
             "❌ Schéma workunit introuvable dans le registre : {}",
@@ -33,12 +29,12 @@ async fn workunit_compute_then_validate_minimal() {
 
     // 3. Donnée conforme au workunit.schema.json
     let doc = json!({
-        "id": Uuid::new_v4().to_string(),
+        "_id": Uuid::new_v4().to_string(),
         "code": "WU-DEVOPS-01",
         "name": { "fr": "DevOps pipeline" },
         "status": "draft",
         "version": "1.0.0",
-        "createdAt": chrono::Utc::now().to_rfc3339(),
+        "createdAt": Utc::now().to_rfc3339(),
         "finance": {
             "version": "1.0.0",
             "billing_model": "time_material",
@@ -66,10 +62,7 @@ async fn finance_compute_minimal() {
         .await
         .expect("❌ Échec init registre");
 
-    let root_uri = format!(
-        "db://{}/{}/schemas/v1/workunits/finance.schema.json",
-        env.space, env.db
-    );
+    let root_uri = "db://_system/_system/schemas/v1/mock/finance.schema.json".to_string();
 
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)
         .expect("❌ Échec compilation validateur finance");

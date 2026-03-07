@@ -223,7 +223,7 @@ mod tests {
     fn test_legacy_generation() {
         let generator = RustGenerator::new();
         let engine = setup_engine();
-        let element = json!({ "name": "LegacyComponent", "id": "123" });
+        let element = json!({ "name": "LegacyComponent", "_id": "123" });
         let files = generator.generate(&element, &engine).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path.to_str().unwrap(), "LegacyComponent.rs");
@@ -236,7 +236,7 @@ mod tests {
 
         let element = json!({
             "name": "VisionSystem",
-            "id": "UUID-VISION",
+            "_id": "UUID-VISION",
             "description": "Handles camera input",
             "implementation": {
                 "technology": "Rust_Crate",

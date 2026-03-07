@@ -37,6 +37,7 @@ pub struct VisualArtifact {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct XaiFrame {
+    #[serde(rename = "_id")]
     pub id: String,
     pub model_id: String,
     pub timestamp: i64,

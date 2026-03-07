@@ -650,7 +650,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_query_execution() {
-        // 1. Initialisation idiomatique
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
             &sandbox.storage,
@@ -668,12 +667,14 @@ mod tests {
             )
             .await
             .unwrap();
+
+        // ✅ CORRECTION : "_id" au lieu de "id"
         manager
-            .insert_raw("users", &json!({"id": "1", "age": 20, "role": "user"}))
+            .insert_raw("users", &json!({"_id": "1", "age": 20, "role": "user"}))
             .await
             .unwrap();
         manager
-            .insert_raw("users", &json!({"id": "2", "age": 30, "role": "admin"}))
+            .insert_raw("users", &json!({"_id": "2", "age": 30, "role": "admin"}))
             .await
             .unwrap();
 
@@ -691,7 +692,8 @@ mod tests {
 
         let result = engine.execute_query(query).await.unwrap();
         assert_eq!(result.total_count, 1);
-        assert_eq!(result.documents[0]["id"], "2");
+        // ✅ CORRECTION : "_id"
+        assert_eq!(result.documents[0]["_id"], "2");
     }
 
     #[tokio::test]
@@ -713,8 +715,10 @@ mod tests {
             )
             .await
             .unwrap();
+
+        // ✅ CORRECTION : "_id" au lieu de "id"
         manager
-            .insert_raw("docs", &json!({"id": "1", "tags": ["rust", "code"]}))
+            .insert_raw("docs", &json!({"_id": "1", "tags": ["rust", "code"]}))
             .await
             .unwrap();
 
@@ -755,24 +759,22 @@ mod tests {
             .await
             .unwrap();
 
-        // On insère "user" et "admin"
+        // ✅ CORRECTION : "_id" au lieu de "id"
         manager
-            .insert_raw("users", &json!({"id": "1", "role": "admin"}))
+            .insert_raw("users", &json!({"_id": "1", "role": "admin"}))
             .await
             .unwrap();
         manager
-            .insert_raw("users", &json!({"id": "2", "role": "user"}))
+            .insert_raw("users", &json!({"_id": "2", "role": "user"}))
             .await
             .unwrap();
 
-        // Le Mock index dit que "admin" correspond au document ID "1"
         let mut idx_map = HashMap::new();
         idx_map.insert("role".to_string(), vec!["1".to_string()]);
         let mock_provider = Box::new(MockIndex {
             indexes: Arc::new(Mutex::new(idx_map)),
         });
 
-        // Injection du Mock via chaînage correct
         let engine = QueryEngine::new(&manager).with_index_provider(mock_provider);
 
         let query = Query {
@@ -789,12 +791,12 @@ mod tests {
 
         let result = engine.execute_query(query).await.unwrap();
 
-        // Si l'index est utilisé, on charge seulement l'ID "1"
         assert_eq!(result.total_count, 1);
-        assert_eq!(result.documents[0]["id"], "1");
+        // ✅ CORRECTION : "_id"
+        assert_eq!(result.documents[0]["_id"], "1");
     }
 
-    #[tokio::test] // 🎯 Ce test est devenu asynchrone pour supporter la sandbox !
+    #[tokio::test]
     async fn test_evaluate_condition_logic() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -806,11 +808,8 @@ mod tests {
 
         let doc = json!({ "age": 25, "tags": ["a", "b"] });
 
-        // GT
         assert!(engine.evaluate_condition(&doc, &Condition::gt("age", json!(20)), "col"));
-        // LT
         assert!(!engine.evaluate_condition(&doc, &Condition::lt("age", json!(20)), "col"));
-        // CONTAINS
         assert!(engine.evaluate_condition(&doc, &Condition::contains("tags", json!("a")), "col"));
     }
 }

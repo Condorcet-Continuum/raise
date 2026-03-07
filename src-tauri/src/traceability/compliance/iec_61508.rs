@@ -70,7 +70,7 @@ mod tests {
         docs.insert(
             "Turbine_01".to_string(),
             json!({
-                "id": "Turbine_01",
+                "_id": "Turbine_01",
                 "domain": "Industrial",
                 "name": "Gas Turbine Control",
                 "sil": 3
@@ -81,7 +81,7 @@ mod tests {
         docs.insert(
             "Conveyor_02".to_string(),
             json!({
-                "id": "Conveyor_02",
+                "_id": "Conveyor_02",
                 "domain": "Industrial",
                 "name": "Main Conveyor Belt"
             }),
@@ -91,7 +91,7 @@ mod tests {
         docs.insert(
             "Office_PC".to_string(),
             json!({
-                "id": "Office_PC",
+                "_id": "Office_PC",
                 "domain": "Corporate"
             }),
         );

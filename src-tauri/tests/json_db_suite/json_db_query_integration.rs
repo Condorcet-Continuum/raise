@@ -27,7 +27,7 @@ async fn load_test_doc(domain_path: &Path) -> Value {
 async fn seed_article(mgr: &CollectionsManager<'_>, handle: &str, doc_template: &Value) -> String {
     let mut doc = doc_template.clone();
     if let Some(obj) = doc.as_object_mut() {
-        obj.remove("id");
+        obj.remove("_id");
         obj.remove("name");
         obj.remove("exchangeMechanism");
 
@@ -57,7 +57,7 @@ async fn seed_article(mgr: &CollectionsManager<'_>, handle: &str, doc_template: 
         .await
         .expect("❌ Échec insertion article de test");
 
-    stored["id"].as_str().unwrap().to_string()
+    stored["_id"].as_str().unwrap().to_string()
 }
 
 #[tokio::test]

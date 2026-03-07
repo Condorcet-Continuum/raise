@@ -34,14 +34,14 @@ async fn test_genetics_integration_with_json_db() {
         .unwrap();
 
     manager.insert_raw("la", &json!({
-        "id": "f_ctrl", "name": "Control", "type": lf_schema, "properties": { "complexity": 50.0 }
+        "_id": "f_ctrl", "name": "Control", "type": lf_schema, "properties": { "complexity": 50.0 }
     })).await.unwrap();
 
     manager
         .insert_raw(
             "la",
             &json!({
-                "id": "c_cpu", "name": "CPU", "type": lc_schema, "properties": { "capacity": 100.0 }
+                "_id": "c_cpu", "name": "CPU", "type": lc_schema, "properties": { "capacity": 100.0 }
             }),
         )
         .await

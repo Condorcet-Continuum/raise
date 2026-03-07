@@ -122,7 +122,7 @@ mod tests {
             operation: MutationOp::Create,
             // Payload "Shotgun" pour garantir la détection du type par ModelSync
             payload: json!({
-                "id": "urn:sa:radar-01",
+                "_id": "urn:sa:radar-01",
                 "@type": "SystemComponent",
                 "type": "SystemComponent",
                 "kind": "SystemComponent",

@@ -34,7 +34,7 @@ pub struct CrudPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Session {
-    pub id: String,
+    pub _id: String,
     pub created_at: String,
     pub updated_at: String,
 
@@ -91,7 +91,7 @@ impl SessionManager {
         };
         let now = Utc::now();
         let session = Session {
-            id: Uuid::new_v4().to_string(),
+            _id: Uuid::new_v4().to_string(),
             created_at: now.to_rfc3339(),
             updated_at: now.to_rfc3339(),
             user_id: final_user_id,
@@ -146,7 +146,7 @@ impl SessionManager {
                 "updated_at": session.updated_at
             });
             // On ignore silencieusement si la DB échoue à ce stade précis (heartbeat)
-            let _ = mgr.update_document("sessions", &session.id, patch).await;
+            let _ = mgr.update_document("sessions", &session._id, patch).await;
         }
 
         Ok(())
@@ -157,7 +157,7 @@ impl SessionManager {
         let session_id_to_delete = {
             let mut lock = self.current_session.write().await;
             if let Some(session) = lock.take() {
-                Some(session.id)
+                Some(session._id)
             } else {
                 None
             }
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(session.user_id, user_uuid);
         assert_eq!(session.status, SessionStatus::Active);
         assert!(
-            !session.id.is_empty(),
+            !session._id.is_empty(),
             "L'UUID de la session doit être généré"
         );
 
@@ -235,7 +235,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        let doc_opt = db_mgr.get_document("sessions", &session.id).await.unwrap();
+        let doc_opt = db_mgr.get_document("sessions", &session._id).await.unwrap();
         assert!(
             doc_opt.is_some(),
             "La session n'a pas été sauvegardée dans json_db"
@@ -272,7 +272,7 @@ mod tests {
             &sandbox.config.system_db,
         );
         let doc = db_mgr
-            .get_document("sessions", &session.id)
+            .get_document("sessions", &session._id)
             .await
             .unwrap()
             .unwrap();
@@ -302,7 +302,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        let doc_opt = db_mgr.get_document("sessions", &session.id).await.unwrap();
+        let doc_opt = db_mgr.get_document("sessions", &session._id).await.unwrap();
         assert!(
             doc_opt.is_none(),
             "La session aurait dû être supprimée physiquement"

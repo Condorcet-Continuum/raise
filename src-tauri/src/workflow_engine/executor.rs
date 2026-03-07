@@ -192,7 +192,7 @@ mod tests {
         );
 
         let valid_mandate = json!({
-            "id": "mandate_prod",
+            "_id": "mandate_prod",
             "meta": { "author": "BridgeTest", "version": "1.0", "status": "ACTIVE" },
             "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": { "agent_security": 1.0 } },
             "hardLogic": { "vetos": [{ "rule": "VIBRATION_MAX", "active": true, "action": "STOP" }] },

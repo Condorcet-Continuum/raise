@@ -48,7 +48,7 @@ impl DynamicValidator {
     /// Construit le contexte JSON pour l'évaluation de la règle
     fn build_context(element: &ArcadiaElement) -> Value {
         let mut context = json!({
-            "id": element.id,
+            "_id": element.id,
             "name": element.name.as_str(),
             "kind": element.kind,
             "description": element.description
@@ -271,6 +271,7 @@ mod tests {
 
         // Création d'une exigence invalide (Low priority)
         let req = json!({
+            "_id": "REQ-LOW",
             "id": "REQ-LOW",
             "name": "Slow Request",
             "type": "Requirement",

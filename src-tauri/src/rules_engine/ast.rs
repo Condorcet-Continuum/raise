@@ -5,6 +5,7 @@ use crate::utils::prelude::*;
 /// Représentation en mémoire d'une règle définie dans 'quality-rule.schema.json'.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Rule {
+    #[serde(rename = "_id", alias = "id")]
     pub id: String,
     pub target: String,
     pub expr: Expr,
@@ -138,7 +139,7 @@ mod tests {
     #[test]
     fn test_rule_struct_compliance() {
         let json_rule = r#"{
-            "id": "RULE_001",
+            "_id": "RULE_001",
             "target": "oa.actors",
             "description": "Check",
             "expr": { "len": { "var": "name" } }

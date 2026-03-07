@@ -32,7 +32,7 @@ impl Default for NameType {
 /// Structure générique représentant n'importe quel élément du modèle Arcadia.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ArcadiaElement {
-    #[serde(default)]
+    #[serde(default, rename = "_id", alias = "id")]
     pub id: String,
 
     #[serde(default)]
@@ -178,7 +178,7 @@ mod tests {
     fn test_arcadia_element_flattening() {
         // Teste que les champs inconnus vont bien dans "properties"
         let json_data = json!({
-            "id": "123",
+            "_id": "123",
             "name": "MyElement",
             "type": "LogicalComponent",
             "custom_prop": "value",

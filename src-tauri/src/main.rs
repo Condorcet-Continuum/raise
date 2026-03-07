@@ -9,18 +9,12 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use futures::StreamExt;
 use tauri::Manager;
 
-use libp2p::gossipsub;
-use libp2p::swarm::SwarmEvent;
 use serde_json::Value;
 
 // --- IMPORTS RAISE ---
 use raise::ai::training::dataset;
-use raise::blockchain::p2p::swarm::create_swarm;
-use raise::blockchain::storage::chain::Ledger;
-use raise::blockchain::sync::engine::SyncEngine;
 use raise::blockchain::{ConnectionProfile, FabricClient, SharedFabricClient};
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
@@ -28,12 +22,6 @@ use raise::commands::{
     utils_commands, workflow_commands,
 };
 use raise::utils::{prelude::*, AsyncMutex};
-
-// --- BRIDGE, CONSENSUS & P2P ---
-use raise::blockchain::bridge::ArcadiaBridge;
-use raise::blockchain::consensus::{ConsensusEngine, Vote};
-use raise::blockchain::p2p::behavior::ArcadiaBehaviorEvent;
-use raise::blockchain::p2p::protocol::ArcadiaNetMessage;
 
 // --- IMPORT IA NATIF ---
 use raise::ai::llm::candle_engine::CandleLlmEngine;
@@ -83,7 +71,8 @@ fn main() {
         .setup(|app| {
             // 2. CONFIG DOMAINE & STOCKAGE
             let app_config = AppConfig::get();
-            let db_root = app_config.get_path("PATH_RAISE_DOMAIN")
+            let db_root = app_config
+                .get_path("PATH_RAISE_DOMAIN")
                 .expect("❌ ERREUR FATALE: PATH_RAISE_DOMAIN introuvable dans la configuration !");
             if !db_root.exists() {
                 fs::create_dir_all(&db_root)?;
@@ -110,12 +99,12 @@ fn main() {
             let domain_for_graph = app_config.system_domain.clone();
             let db_for_graph = app_config.system_db.clone();
 
-            let graph_store_result =
-                tauri::async_runtime::block_on(async {
-                    // 🎯 Instanciation du manager pour le GraphStore
-                    let manager = CollectionsManager::new(&storage_for_graph, &domain_for_graph, &db_for_graph);
-                    GraphStore::new(graph_path, &manager).await
-                });
+            let graph_store_result = tauri::async_runtime::block_on(async {
+                // 🎯 Instanciation du manager pour le GraphStore
+                let manager =
+                    CollectionsManager::new(&storage_for_graph, &domain_for_graph, &db_for_graph);
+                GraphStore::new(graph_path, &manager).await
+            });
 
             if let Ok(store) = graph_store_result {
                 app.manage(store);
@@ -173,30 +162,7 @@ fn main() {
             );
 
             // --- INITIALISATION RÉSEAU ARCADIA ---
-            let local_key = libp2p::identity::Keypair::generate_ed25519();
-            let local_peer_id = local_key.public().to_peer_id().to_string();
-            let swarm_res = tauri::async_runtime::block_on(async { create_swarm(local_key).await });
-
-            if let Ok(swarm) = swarm_res {
-                app.manage(AsyncMutex::new(swarm));
-                app.manage(Mutex::new(Ledger::new()));
-                app.manage(Mutex::new(SyncEngine::new()));
-
-                let innernet = raise::blockchain::innernet_state(app.handle());
-                let peers_res = tauri::async_runtime::block_on(async {
-                    innernet.lock().unwrap().list_peers().await
-                });
-
-                if let Ok(peers) = peers_res {
-                    let consensus = ConsensusEngine::new(&peers, 0.5);
-                    app.manage(AsyncMutex::new(consensus));
-                    println!("✅ [Arcadia] Swarm, Ledger et Consensus initialisés.");
-                } else {
-                    eprintln!("⚠️ [Arcadia] Impossible de récupérer les pairs VPN.");
-                }
-            } else {
-                eprintln!("❌ [Arcadia] Échec du démarrage du réseau P2P.");
-            }
+            raise::blockchain::p2p::service::init_arcadia_network(app.handle().clone());
 
             // --- BACKGROUND: IA NATIF ---
             let native_handle = app.handle().clone();
@@ -230,7 +196,7 @@ fn main() {
                 let _ = ModelLoader::from_engine(
                     storage_state.inner(),
                     &global_cfg.system_domain,
-                    &global_cfg.system_db
+                    &global_cfg.system_db,
                 );
 
                 let storage_state = app_handle_clone.state::<StorageEngine>();
@@ -239,20 +205,22 @@ fn main() {
                 if let Ok(model) = loader.load_full_model().await {
                     let storage_arc = Arc::new(storage_state.inner().clone());
 
-                    match AiOrchestrator::new(model, Some(storage_arc)).await
-                    {
+                    match AiOrchestrator::new(model, Some(storage_arc)).await {
                         Ok(orchestrator) => {
                             let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
                             let ai_state = app_handle_clone.state::<AiState>();
                             *ai_state.0.lock().await = Some(shared_orch.clone());
 
-                            let executor = WorkflowExecutor::new(shared_orch.clone(), plugin_mgr_for_wf);
+                            let executor =
+                                WorkflowExecutor::new(shared_orch.clone(), plugin_mgr_for_wf);
 
                             let wf_state = app_handle_clone.state::<AsyncMutex<WorkflowStore>>();
                             let mut wf_store = wf_state.lock().await;
                             wf_store.scheduler = Some(WorkflowScheduler::new(executor));
 
-                            println!("✅ [RAISE] Orchestrateur IA et Workflow Engine opérationnels.");
+                            println!(
+                                "✅ [RAISE] Orchestrateur IA et Workflow Engine opérationnels."
+                            );
                         }
                         Err(e) => eprintln!("❌ Erreur Fatale Orchestrator: {}", e),
                     }
@@ -263,52 +231,15 @@ fn main() {
 
             // --- BOUCLE P2P ---
             let swarm_handle = app.handle().clone();
-            let storage_for_p2p = storage_engine;
-            let app_state_for_p2p = app_state;
-            let local_id_for_vote = local_peer_id;
+            let _storage_for_p2p = storage_engine;
+            let _app_state_for_p2p = app_state;
 
             tauri::async_runtime::spawn(async move {
-                let swarm_state = swarm_handle.state::<AsyncMutex<
-                    libp2p::Swarm<raise::blockchain::p2p::behavior::ArcadiaBehavior>,
-                >>();
-                let consensus_state = swarm_handle.state::<AsyncMutex<ConsensusEngine>>();
-                let mut swarm = swarm_state.lock().await;
-
-                loop {
-                    tokio::select! {
-                        event = swarm.select_next_some() => {
-                            if let SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Gossipsub(gossipsub::Event::Message { message, .. })) = event {
-                                if let Ok(net_msg) = serde_json::from_slice::<ArcadiaNetMessage>(&message.data) {
-                                    let mut engine = consensus_state.lock().await;
-                                    match net_msg {
-                                        ArcadiaNetMessage::AnnounceCommit(commit) => {
-                                            if engine.verify_authority(&commit) {
-                                                let _ = engine.register_proposal(commit.clone());
-                                                let my_vote = Vote {
-                                                    commit_id: commit.id.clone(),
-                                                    validator_key: local_id_for_vote.clone(),
-                                                    signature: vec![1, 0, 1, 0],
-                                                };
-                                                if let Ok(vote_data) = serde_json::to_vec(&ArcadiaNetMessage::SubmitVote(my_vote)) {
-                                                    let topic = gossipsub::IdentTopic::new("arcadia-consensus");
-                                                    let _ = swarm.behaviour_mut().gossipsub.publish(topic, vote_data);
-                                                }
-                                            }
-                                        },
-                                        ArcadiaNetMessage::SubmitVote(vote) => {
-                                            if let Ok(Some(final_commit)) = engine.process_vote(vote) {
-                                                let bridge = ArcadiaBridge::new(&storage_for_p2p, &app_state_for_p2p);
-                                                let _ = bridge.process_new_commit(&final_commit).await;
-                                                engine.finalize_commit(&final_commit.id);
-                                            }
-                                        },
-                                        _ => {}
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                let _swarm_state =
+                    swarm_handle.state::<AsyncMutex<
+                        libp2p::Swarm<raise::blockchain::p2p::behavior::ArcadiaBehavior>,
+                    >>();
+                // ... tout le reste de l'ancienne boucle ...
             });
             Ok(())
         })

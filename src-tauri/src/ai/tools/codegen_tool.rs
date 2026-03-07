@@ -186,7 +186,7 @@ mod tests {
             .upsert_document(
                 "pa_components",
                 json!({
-                    "id": comp_id,
+                    "_id": comp_id,
                     "name": "MyRustComponent",
                     "implementation": { "technology": "rust" }
                 }),

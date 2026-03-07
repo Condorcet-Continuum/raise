@@ -131,7 +131,8 @@ mod tests {
         // 2. Injection de données (Un composant logiciel avec une fonction)
         let component_id = "UUID-COMP-1";
         let component = json!({
-            arcadia::PROP_ID: component_id,
+            "_id": component_id, // 🎯 Pour la base de données stricte
+            "id": component_id, // 🎯 Pour le ModelLoader (contournement Serde flatten)
             arcadia::PROP_NAME: "AuthService",
             "@type": "LogicalComponent", // Sera mappé en LA_COMPONENT
             // Allocation fonctionnelle simulée (pour tester l'hydratation/transformation)

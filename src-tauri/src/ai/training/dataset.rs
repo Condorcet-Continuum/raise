@@ -123,7 +123,7 @@ mod tests {
             .await
             .unwrap();
 
-        let doc = serde_json::json!({"id": "1", "content": "test"});
+        let doc = serde_json::json!({"_id": "1", "content": "test"});
         manager.insert_raw("safety_rules", &doc).await.unwrap();
         manager.insert_raw("general_info", &doc).await.unwrap();
 

@@ -78,7 +78,7 @@ impl<'a> RuleStore<'a> {
                 "_target_collection".to_string(),
                 serde_json::json!(collection),
             );
-            obj.insert("id".to_string(), serde_json::json!(rule.id));
+            obj.insert("_id".to_string(), serde_json::json!(rule.id));
         }
 
         self.db_manager.insert_raw("_system_rules", &doc).await?;

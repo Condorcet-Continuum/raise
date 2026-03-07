@@ -31,7 +31,7 @@ async fn test_arcadia_to_genetics_pipeline() {
         .insert_raw(
             "la",
             &json!({
-                "id": "lf_nav_01",
+                "_id": "lf_nav_01",
                 "name": "Navigation",
                 "type": "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json",
                 "properties": { "complexity": 45.0 }
@@ -44,7 +44,7 @@ async fn test_arcadia_to_genetics_pipeline() {
         .insert_raw(
             "la",
             &json!({
-                "id": "lc_cpu_01",
+                "_id": "lc_cpu_01",
                 "name": "CPU",
                 "type": "https://raise.local/schemas/v1/arcadia/la/logical-component.schema.json",
                 "properties": { "capacity": 100.0 }

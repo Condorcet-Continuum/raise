@@ -189,7 +189,7 @@ mod tests {
 
         // Insertion d'un document de langue valide
         let doc = json!({
-            "id": Uuid::new_v4().to_string(),
+            "_id": Uuid::new_v4().to_string(),
             "locale": "fr",
             "translations": [
                 { "key": "WELCOME", "value": "Bienvenue sur RAISE" },

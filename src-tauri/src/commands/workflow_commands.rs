@@ -268,7 +268,7 @@ async fn run_workflow_loop(
 
 async fn internal_set_sensor(manager: &CollectionsManager<'_>, value: f64) -> RaiseResult<String> {
     let sensor_doc = serde_json::json!({
-        "id": "vibration_z",
+        "_id": "vibration_z",
         "value": value,
         "updatedAt": chrono::Utc::now().to_rfc3339()
     });

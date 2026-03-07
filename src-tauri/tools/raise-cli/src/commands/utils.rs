@@ -53,7 +53,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                     json!({
                         "user_id": session.user_id,
                         "status": format!("{:?}", session.status),
-                        "session_id": session.id,
+                        "session_id": session._id,
                         "domain": session.context.current_domain,
                         "db": session.context.current_db,
                     })
@@ -126,7 +126,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                         "CURRENT_USER",
                         json!({
                             "username": session.user_id,
-                            "session_id": session.id,
+                            "session_id": session._id,
                             "created_at": session.created_at,
                             "last_activity": session.last_activity_at
                         })
@@ -151,7 +151,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                 "AUTH_SUCCESS",
                 json!({
                     "user": session.user_id,
-                    "session_id": session.id,
+                    "session_id": session._id,
                     "message": "Session manuelle établie et persistée."
                 })
             );

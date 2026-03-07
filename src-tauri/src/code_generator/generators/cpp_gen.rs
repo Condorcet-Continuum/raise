@@ -36,17 +36,6 @@ impl LanguageGenerator for CppGenerator {
             "description": desc
         });
 
-        /* 💡 NOTE IMPORTANTE :
-        Si votre méthode `render` exige spécifiquement un objet `tera::Context`
-        (et non un Value générique), remplacez le bloc ci-dessus par :
-
-        let context = tera::Context::from_serialize(crate::utils::prelude::json!({
-            "name": name,
-            "id": id,
-            "description": desc
-        })).unwrap_or_default();
-        */
-
         // 1. Génération du Header (.hpp)
         let header_content = template_engine.render("cpp/header", &context)?;
         let header_file = GeneratedFile {
@@ -89,7 +78,7 @@ mod tests {
 
         let element = json!({
             "name": "NavigationSystem",
-            "id": "NAV_001"
+            "_id": "NAV_001"
         });
 
         let files = gen.generate(&element, &engine).unwrap();

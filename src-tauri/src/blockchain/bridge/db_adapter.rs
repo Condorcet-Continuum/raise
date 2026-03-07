@@ -35,7 +35,10 @@ impl<'a> DbAdapter<'a> {
                 // On prépare les données en injectant l'ID et les métadonnées blockchain
                 let mut data = mutation.payload.clone();
                 if let Some(obj) = data.as_object_mut() {
-                    obj.insert("id".to_string(), Value::String(mutation.element_id.clone()));
+                    obj.insert(
+                        "_id".to_string(),
+                        Value::String(mutation.element_id.clone()),
+                    );
                     obj.insert(
                         "_blockchain_sync".to_string(),
                         json!({

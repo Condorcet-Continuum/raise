@@ -2,6 +2,7 @@
 use crate::utils::prelude::*;
 
 use crate::blockchain::p2p::protocol::{ArcadiaNetMessage, ArcadiaResponse};
+use libp2p::connection_limits;
 use libp2p::gossipsub;
 use libp2p::kad;
 use libp2p::request_response;
@@ -19,6 +20,9 @@ pub struct ArcadiaBehavior {
 
     /// Request-Response pour les échanges directs (sync de chaîne, requêtes spécifiques).
     pub request_response: request_response::cbor::Behaviour<ArcadiaNetMessage, ArcadiaResponse>,
+
+    /// LIMITE DE CONNEXIONS
+    pub limits: connection_limits::Behaviour,
 }
 
 impl ArcadiaBehavior {
@@ -69,10 +73,18 @@ impl ArcadiaBehavior {
             request_response::Config::default(),
         );
 
+        let limits = connection_limits::Behaviour::new(
+            connection_limits::ConnectionLimits::default()
+                .with_max_established_per_peer(Some(2))
+                .with_max_established_incoming(Some(50))
+                .with_max_established_outgoing(Some(50)),
+        );
+
         Ok(Self {
             kademlia,
             gossipsub,
             request_response,
+            limits,
         })
     }
 }

@@ -536,28 +536,29 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
         JsondbCommands::Transaction { file } => {
             let json_val: Value = io::read_json(&file).await?;
 
-            #[derive(Deserialize)]
-            struct Wrapper {
-                operations: Vec<TransactionRequest>,
-            }
-
-            let reqs: Vec<TransactionRequest> = if let Ok(w) =
-                data::from_value::<Wrapper>(json_val.clone())
-            {
+            // 🎯 RÉSOLUTION : On vérifie le type AVANT de désérialiser
+            // pour éviter de déclencher des logs d'erreurs inutiles.
+            let reqs: Vec<TransactionRequest> = if json_val.is_array() {
+                // Cas 1 : Tableau direct [...]
+                data::from_value::<Vec<TransactionRequest>>(json_val)?
+            } else if json_val.get("operations").is_some() {
+                // Cas 2 : Objet Wrapper { "operations": [...] }
+                #[derive(Deserialize)]
+                struct Wrapper {
+                    operations: Vec<TransactionRequest>,
+                }
+                let w: Wrapper = data::from_value(json_val)?;
                 w.operations
             } else {
-                match data::from_value::<Vec<TransactionRequest>>(json_val) {
-                    Ok(ops) => ops,
-                    Err(e) => raise_error!(
-                        "ERR_JSONDB_INVALID_FORMAT",
-                        error = e,
-                        context = json!({
-                            "action": "parse_transaction_fallback",
-                            "attempted_types": ["Wrapper", "Vec<TransactionRequest>"],
-                            "hint": "Le JSON fourni ne correspond à aucun des schémas de transaction supportés."
-                        })
-                    ),
-                }
+                // Cas 3 : Format inconnu
+                raise_error!(
+                    "ERR_JSONDB_INVALID_FORMAT",
+                    error = "FORMAT_NOT_RECOGNIZED",
+                    context = json!({
+                        "action": "parse_transaction_file",
+                        "hint": "Le fichier doit être soit un tableau d'opérations [...], soit un objet { \"operations\": [...] }."
+                    })
+                )
             };
 
             user_info!(

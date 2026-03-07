@@ -67,12 +67,21 @@ impl<'a> TransactionManager<'a> {
             match req {
                 TransactionRequest::Insert {
                     collection,
-                    id: _,
+                    id,
                     mut document,
                 } => {
+                    // 🎯 1. On résout les dépendances intra-transactionnelles
+                    self.resolve_intra_tx_refs(&mut document, &prepared_ops);
+
+                    // 🎯 Si un ID est fourni dans la requête, on force son injection en _id
+                    if let Some(explicit_id) = id {
+                        if let Some(obj) = document.as_object_mut() {
+                            obj.insert("_id".to_string(), Value::String(explicit_id));
+                        }
+                    }
                     col_mgr.prepare_document(&collection, &mut document).await?;
                     let final_id = document
-                        .get("id")
+                        .get("_id")
                         .and_then(|v| v.as_str())
                         .unwrap()
                         .to_string();
@@ -86,10 +95,20 @@ impl<'a> TransactionManager<'a> {
                     collection,
                     id,
                     handle,
-                    document,
+                    mut document,
                 } => {
+                    // 🎯 1. Résolution intra-transaction
+                    self.resolve_intra_tx_refs(&mut document, &prepared_ops);
+
                     let final_id = self
-                        .resolve_id(&query_engine, &collection, id, handle, Some(&document))
+                        .resolve_id(
+                            &query_engine,
+                            &collection,
+                            id,
+                            handle,
+                            Some(&document),
+                            &prepared_ops,
+                        )
                         .await?;
                     prepared_ops.push(Operation::Update {
                         collection,
@@ -102,11 +121,19 @@ impl<'a> TransactionManager<'a> {
                     collection,
                     id,
                     handle,
-                    document,
+                    mut document,
                 } => {
+                    self.resolve_intra_tx_refs(&mut document, &prepared_ops);
                     // On tente de résoudre l'ID. Si ça échoue (ok()), on sait que c'est un Insert.
                     let found_id = self
-                        .resolve_id(&query_engine, &collection, id, handle, Some(&document))
+                        .resolve_id(
+                            &query_engine,
+                            &collection,
+                            id,
+                            handle,
+                            Some(&document),
+                            &prepared_ops,
+                        )
                         .await
                         .ok();
 
@@ -119,7 +146,7 @@ impl<'a> TransactionManager<'a> {
                     } else {
                         let mut doc = document;
                         col_mgr.prepare_document(&collection, &mut doc).await?;
-                        let new_id = doc.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+                        let new_id = doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string();
                         prepared_ops.push(Operation::Insert {
                             collection,
                             id: new_id,
@@ -132,8 +159,10 @@ impl<'a> TransactionManager<'a> {
                 }
                 TransactionRequest::InsertFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
+                    // 🎯 Résolution intra-transaction pour les fichiers
+                    self.resolve_intra_tx_refs(&mut doc, &prepared_ops);
                     col_mgr.prepare_document(&collection, &mut doc).await?;
-                    let final_id = doc.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+                    let final_id = doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string();
                     prepared_ops.push(Operation::Insert {
                         collection,
                         id: final_id,
@@ -141,18 +170,27 @@ impl<'a> TransactionManager<'a> {
                     });
                 }
                 TransactionRequest::UpdateFrom { collection, path } => {
-                    let doc = self.load_dataset_file(&path).await?;
+                    let mut doc = self.load_dataset_file(&path).await?;
+                    // 🎯  Résolution intra-transaction
+                    self.resolve_intra_tx_refs(&mut doc, &prepared_ops);
                     let handle = doc
                         .get("handle")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     let id_in_doc = doc
-                        .get("id")
+                        .get("_id")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
                     let final_id = self
-                        .resolve_id(&query_engine, &collection, id_in_doc, handle, Some(&doc))
+                        .resolve_id(
+                            &query_engine,
+                            &collection,
+                            id_in_doc,
+                            handle,
+                            Some(&doc),
+                            &prepared_ops,
+                        )
                         .await?;
 
                     prepared_ops.push(Operation::Update {
@@ -163,17 +201,27 @@ impl<'a> TransactionManager<'a> {
                 }
                 TransactionRequest::UpsertFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
+                    // 🎯 Résolution intra-transaction
+                    self.resolve_intra_tx_refs(&mut doc, &prepared_ops);
+
                     let handle = doc
                         .get("handle")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     let id_in_doc = doc
-                        .get("id")
+                        .get("_id")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
                     let found_id = self
-                        .resolve_id(&query_engine, &collection, id_in_doc, handle, Some(&doc))
+                        .resolve_id(
+                            &query_engine,
+                            &collection,
+                            id_in_doc,
+                            handle,
+                            Some(&doc),
+                            &prepared_ops,
+                        )
                         .await
                         .ok();
 
@@ -185,7 +233,7 @@ impl<'a> TransactionManager<'a> {
                         });
                     } else {
                         col_mgr.prepare_document(&collection, &mut doc).await?;
-                        let new_id = doc.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+                        let new_id = doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string();
                         prepared_ops.push(Operation::Insert {
                             collection,
                             id: new_id,
@@ -241,10 +289,45 @@ impl<'a> TransactionManager<'a> {
         id: Option<String>,
         handle: Option<String>,
         document: Option<&Value>,
+        pending_ops: &[Operation],
     ) -> RaiseResult<String> {
         if let Some(i) = id {
             return Ok(i);
         }
+
+        // 🎯 1. CHERCHER DANS LE CACHE (Les opérations déjà préparées dans ce Batch)
+        for op in pending_ops.iter().rev() {
+            if let Operation::Insert {
+                collection: c,
+                id: op_id,
+                document: d,
+            }
+            | Operation::Update {
+                collection: c,
+                id: op_id,
+                document: d,
+            } = op
+            {
+                if c == collection {
+                    // Recherche par Handle
+                    if let Some(h) = &handle {
+                        if d.get("handle").and_then(|v| v.as_str()) == Some(h.as_str()) {
+                            return Ok(op_id.clone());
+                        }
+                    }
+                    // Recherche par Name
+                    if let Some(doc) = document {
+                        if let Some(n) = doc.get("name").and_then(|v| v.as_str()) {
+                            if d.get("name").and_then(|v| v.as_str()) == Some(n) {
+                                return Ok(op_id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 🎯 2. CHERCHER DANS LA BASE DE DONNÉES
         if let Some(h) = handle {
             let q = Query {
                 collection: collection.to_string(),
@@ -263,7 +346,7 @@ impl<'a> TransactionManager<'a> {
             };
             let res = qe.execute_query(q).await?;
             if let Some(doc) = res.documents.first() {
-                return Ok(doc.get("id").and_then(|v| v.as_str()).unwrap().to_string());
+                return Ok(doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string());
             }
         }
         if let Some(doc) = document {
@@ -282,7 +365,7 @@ impl<'a> TransactionManager<'a> {
                 let res = qe.execute_query(q).await?;
                 if let Some(found_doc) = res.documents.first() {
                     return Ok(found_doc
-                        .get("id")
+                        .get("_id")
                         .and_then(|v| v.as_str())
                         .unwrap()
                         .to_string());
@@ -400,8 +483,8 @@ impl<'a> TransactionManager<'a> {
                 } => {
                     let mut final_doc = document.clone();
                     if let Some(obj) = final_doc.as_object_mut() {
-                        if !obj.contains_key("id") {
-                            obj.insert("id".to_string(), Value::String(id.clone()));
+                        if !obj.contains_key("_id") {
+                            obj.insert("_id".to_string(), Value::String(id.clone()));
                         }
                     }
 
@@ -476,7 +559,7 @@ impl<'a> TransactionManager<'a> {
                     json_merge(&mut final_doc, document.clone());
 
                     if let Some(obj) = final_doc.as_object_mut() {
-                        obj.insert("id".to_string(), Value::String(id.clone()));
+                        obj.insert("_id".to_string(), Value::String(id.clone()));
                     }
 
                     if let Err(e) = self.apply_schema_logic(collection, &mut final_doc).await {
@@ -721,6 +804,65 @@ impl<'a> TransactionManager<'a> {
     async fn rollback_wal(&self, tx: &Transaction) -> RaiseResult<()> {
         self.commit_wal(tx).await
     }
+
+    fn resolve_intra_tx_refs(&self, doc: &mut Value, pending_ops: &[Operation]) {
+        let mut new_val = None;
+
+        match doc {
+            Value::Object(map) => {
+                for (_, v) in map.iter_mut() {
+                    self.resolve_intra_tx_refs(v, pending_ops);
+                }
+            }
+            Value::Array(arr) => {
+                for v in arr.iter_mut() {
+                    self.resolve_intra_tx_refs(v, pending_ops);
+                }
+            }
+            Value::String(s) => {
+                if s.starts_with("ref:") {
+                    let parts: Vec<&str> = s.split(':').collect();
+                    if parts.len() == 4 {
+                        let target_col = parts[1];
+                        let target_field = parts[2];
+                        let target_val = parts[3];
+
+                        // On fouille dans les documents de la transaction courante (du plus récent au plus ancien)
+                        for op in pending_ops.iter().rev() {
+                            if let Operation::Insert {
+                                collection,
+                                id,
+                                document,
+                            }
+                            | Operation::Update {
+                                collection,
+                                id,
+                                document,
+                            } = op
+                            {
+                                if collection == target_col {
+                                    if let Some(val) =
+                                        document.get(target_field).and_then(|v| v.as_str())
+                                    {
+                                        if val == target_val {
+                                            new_val = Some(id.clone());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Mutation In-Place si on a trouvé l'ID dans la transaction courante !
+        if let Some(id) = new_val {
+            *doc = Value::String(id);
+        }
+    }
 }
 
 fn json_merge(a: &mut Value, b: Value) {
@@ -863,7 +1005,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.documents.len(), 1);
-        assert!(res.documents[0].get("id").is_some());
+        assert!(res.documents[0].get("_id").is_some());
     }
 
     #[tokio::test]
@@ -892,7 +1034,7 @@ mod tests {
             TransactionRequest::Insert {
                 collection: "items".to_string(),
                 id: Some("item1".to_string()),
-                document: json!({ "val": "A" }),
+                document: json!({ "_id": "item1","val": "A" }),
             },
             TransactionRequest::Update {
                 collection: "items".to_string(),

@@ -2,9 +2,8 @@
 
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::json_db::storage::JsonDbConfig;
-// 🎯 On importe directement DbSandbox depuis notre nouvelle façade
-use raise::utils::mock::{inject_mock_component, DbSandbox};
+// 🎯 Import massif de notre façade utils::mock
+use raise::utils::mock::{inject_collection_schema, inject_mock_component, DbSandbox};
 
 use raise::utils::{
     io::{self, Path, PathBuf},
@@ -23,7 +22,7 @@ pub enum LlmMode {
 
 #[allow(dead_code)]
 pub struct UnifiedTestEnv {
-    // 🎯 La Sandbox encapsule désormais StorageEngine, AppConfig et le TempDir !
+    // 🎯 La Sandbox encapsule StorageEngine, AppConfig et le TempDir !
     pub sandbox: DbSandbox,
     pub client: Option<LlmClient>,
     pub space: String,
@@ -35,38 +34,32 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     });
 
-    // 🎯 1. ISOLATION : On délègue tout à la DbSandbox de utils::mock !
-    // Cela crée le TempDir, initialise JsonDbConfig, injecte le schéma 'sessions' et génère l'AppConfig.
+    // 1. ISOLATION : DbSandbox prépare l'environnement de base (index.schema.json, config, db).
     let sandbox = DbSandbox::new().await;
 
     let space = sandbox.config.system_domain.clone();
     let db = sandbox.config.system_db.clone();
     let domain_path = sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
-    // 🎯 2. INITIALISATION DB & MANAGER AVANT LE LLM
-    let db_config = JsonDbConfig::new(domain_path.clone());
+    // 2. INJECTION DES SCHÉMAS DE TEST
+    // Au lieu d'écraser l'index système, on utilise la méthode officielle de mock.rs
+    // qui va correctement créer les dossiers, les schémas ET les fichiers _meta.json.
+    inject_custom_test_schemas(&domain_path).await;
 
-    // On cible directement le dossier final des schémas de la sandbox
-    let dest_schemas = db_config.db_schemas_root(&space, &db).join("v1");
-
-    // On génère les schémas spécifiques à l'IA directement à leur emplacement définitif (plus besoin de copier)
-    generate_mock_schemas(&dest_schemas)
-        .await
-        .expect("fail mock schemas");
-
+    // 3. INITIALISATION DB & MANAGER
     let mgr = CollectionsManager::new(&sandbox.storage, &space, &db);
     mgr.init_db()
         .await
         .expect("❌ Échec de l'initialisation de l'index système");
 
-    // 🎯 3. INJECTION DU MOCK IA EN BASE (Requis pour l'init LLM)
+    // 4. INJECTION DU MOCK IA EN BASE (Requis pour l'init LLM)
     inject_mock_component(
         &mgr,
         "llm",
         json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
     ).await;
 
-    // 🎯 4. SATISFAIRE LLMCLIENT AVEC LE MANAGER
+    // 5. SATISFAIRE LLMCLIENT AVEC LE MANAGER
     let client = match llm_mode {
         LlmMode::Enabled => {
             let mock_model_file = domain_path.join("_system/ai-assets/models/mock.gguf");
@@ -92,39 +85,23 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     }
 }
 
-async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
-    io::create_dir_all(base_path).await?;
-
-    // 1. ARCADIA DATA
-    let arcadia_data = base_path.join("arcadia/data");
-    io::create_dir_all(&arcadia_data).await?;
-    let exchange_schema = json!({
-        "$id": "https://raise.io/schemas/v1/arcadia/data/exchange-item.schema.json",
+/// 🎯 DÉLÉGATION À MOCK.RS : Création propre des collections de test
+async fn inject_custom_test_schemas(domain_root: &Path) {
+    inject_collection_schema(
+        domain_root,
+        "configuration_items",
+        r#"{
         "type": "object",
         "properties": { "name": { "type": "string" }, "exchangeMechanism": { "type": "string" } },
         "additionalProperties": true
-    });
-    io::write_json_atomic(
-        &arcadia_data.join("exchange-item.schema.json"),
-        &exchange_schema,
+    }"#,
     )
-    .await?;
+    .await;
 
-    // 2. CONFIGS
-    let configs_dir = base_path.join("configs");
-    io::create_dir_all(&configs_dir).await?;
-    let config_schema = json!({
-        "$id": "https://raise.io/schemas/v1/configs/config.schema.json",
-        "type": "object",
-        "additionalProperties": true
-    });
-    io::write_json_atomic(&configs_dir.join("config.schema.json"), &config_schema).await?;
-
-    // 3. ACTORS
-    let actors_dir = base_path.join("actors");
-    io::create_dir_all(&actors_dir).await?;
-    let actor_schema = json!({
-        "$id": "https://raise.io/schemas/v1/actors/actor.schema.json",
+    inject_collection_schema(
+        domain_root,
+        "actors",
+        r#"{
         "type": "object",
         "properties": {
             "handle": { "type": "string" },
@@ -136,40 +113,25 @@ async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
             "tags": { "type": "array", "items": { "type": "string" } }
         },
         "additionalProperties": true
-    });
-    io::write_json_atomic(&actors_dir.join("actor.schema.json"), &actor_schema).await?;
+    }"#,
+    )
+    .await;
 
-    // 4. ARTICLES
-    let articles_dir = base_path.join("articles");
-    io::create_dir_all(&articles_dir).await?;
-    let article_schema = json!({
-        "$id": "https://raise.io/schemas/v1/articles/article.schema.json",
+    inject_collection_schema(
+        domain_root,
+        "articles",
+        r#"{
         "type": "object",
         "properties": {
             "handle": { "type": "string" },
             "title": { "type": "string" }
         },
         "additionalProperties": true
-    });
-    io::write_json_atomic(&articles_dir.join("article.schema.json"), &article_schema).await?;
-
-    // 5. WORKUNITS & FINANCE
-    let workunits_dir = base_path.join("workunits");
-    io::create_dir_all(&workunits_dir).await?;
-
-    let workunit_schema = json!({
-        "$id": "https://raise.io/schemas/v1/workunits/workunit.schema.json",
-        "type": "object",
-        "additionalProperties": true
-    });
-    io::write_json_atomic(
-        &workunits_dir.join("workunit.schema.json"),
-        &workunit_schema,
+    }"#,
     )
-    .await?;
+    .await;
 
-    let finance_schema = json!({
-        "$id": "https://raise.io/schemas/v1/workunits/finance.schema.json",
+    inject_collection_schema(domain_root, "finance", r#"{
         "type": "object",
         "properties": {
             "billing_model": { "type": "string" },
@@ -214,30 +176,7 @@ async fn generate_mock_schemas(base_path: &Path) -> RaiseResult<PathBuf> {
             }
         ],
         "additionalProperties": true
-    });
-    io::write_json_atomic(&workunits_dir.join("finance.schema.json"), &finance_schema).await?;
-
-    // 6. DB INDEX
-    let db_dir = base_path.join("db");
-    io::create_dir_all(&db_dir).await?;
-
-    let index_schema_def = json!({
-        "$id": "https://raise.io/schemas/v1/db/index.schema.json",
-        "type": "object",
-        "additionalProperties": true
-    });
-    io::write_json_atomic(&db_dir.join("index.schema.json"), &index_schema_def).await?;
-
-    let index_schema = json!({
-        "name": "_system",
-        "collections": {
-            "agent_sessions": { "schema": "https://raise.io/schemas/v1/configs/config.schema.json" },
-            "configuration_items": { "schema": "https://raise.io/schemas/v1/arcadia/data/exchange-item.schema.json" }
-        }
-    });
-    io::write_json_atomic(&db_dir.join("_system.json"), &index_schema).await?;
-
-    Ok(base_path.to_path_buf())
+    }"#).await;
 }
 
 #[allow(dead_code)]

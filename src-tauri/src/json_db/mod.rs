@@ -68,9 +68,6 @@ pub mod test_utils {
     }
 
     async fn create_mock_dataset(data_root: &PathBuf) {
-        // ... (⚠️ GARDEZ VOTRE CODE ACTUEL POUR CETTE FONCTION) ...
-        // Tout le contenu avec article.json, position_gps.json, etc. reste identique !
-
         let dataset_root = data_root.join("dataset");
         let _ = io::create_dir_all(&dataset_root).await;
 
@@ -80,13 +77,15 @@ pub mod test_utils {
             let _ = io::create_dir_all(p).await;
         }
 
+        // ✅ CORRECTION : snake_case + _id
         let mock_article = serde_json::json!({
+            "_id": "mock-article-001",
             "handle": "mock-handle",
-            "displayName": "Mock Article",
+            "display_name": "Mock Article",
             "slug": "mock-slug",
             "title": "Mock Title",
             "status": "draft",
-            "authorId": "00000000-0000-0000-0000-000000000000"
+            "author_id": "00000000-0000-0000-0000-000000000000"
         });
         let _ = io::write_json_atomic(&article_path, &mock_article).await;
 
@@ -96,9 +95,10 @@ pub mod test_utils {
             let _ = io::create_dir_all(p).await;
         }
 
+        // ✅ CORRECTION : Ajout de _id
         let _ = io::write_json_atomic(
             &ex_path,
-            &serde_json::json!({ "name": "GPS Position", "mechanism": "Flow" }),
+            &serde_json::json!({ "_id": "mock-gps-001", "name": "GPS Position", "mechanism": "Flow" }),
         )
         .await;
 
@@ -107,13 +107,15 @@ pub mod test_utils {
         let dapp_id = "mock-dapp-id";
         let dapp_path = system_collections.join("dapps");
         let _ = io::create_dir_all(&dapp_path).await;
+
+        // ✅ CORRECTION : _id + snake_case pour plugin_config
         let _ = io::write_json_atomic(
             &dapp_path.join(format!("{}.json", dapp_id)),
             &serde_json::json!({
-                "id": dapp_id,
+                "_id": dapp_id,
                 "handle": "raise-core",
                 "name": "raise_core",
-                "pluginConfig": { "rustPackageName": "raise_core" }
+                "plugin_config": { "rust_package_name": "raise_core" }
             }),
         )
         .await;
@@ -121,10 +123,12 @@ pub mod test_utils {
         let service_id = "mock-ai-service-id";
         let services_path = system_collections.join(format!("dapps/{}/services", dapp_id));
         let _ = io::create_dir_all(&services_path).await;
+
+        // ✅ CORRECTION : _id
         let _ = io::write_json_atomic(
             &services_path.join(format!("{}.json", service_id)),
             &serde_json::json!({
-                "id": service_id,
+                "_id": service_id,
                 "identity": { "service_id": "AI", "status": "enabled" }
             }),
         )
@@ -136,10 +140,11 @@ pub mod test_utils {
         ));
         let _ = io::create_dir_all(&components_path).await;
 
+        // ✅ CORRECTION : _id
         let _ = io::write_json_atomic(
             &components_path.join("mock-llm-comp.json"),
             &serde_json::json!({
-                "id": "mock-llm-comp",
+                "_id": "mock-llm-comp",
                 "identity": { "component_id": "llm", "version": "1.0.0" },
                 "settings": {
                     "provider": "candle_native",
@@ -150,10 +155,11 @@ pub mod test_utils {
         )
         .await;
 
+        // ✅ CORRECTION : _id
         let _ = io::write_json_atomic(
             &components_path.join("mock-mem-comp.json"),
             &serde_json::json!({
-                "id": "mock-mem-comp",
+                "_id": "mock-mem-comp",
                 "identity": { "component_id": "memory", "version": "1.0.0" },
                 "settings": {
                     "provider": "candle_embeddings",

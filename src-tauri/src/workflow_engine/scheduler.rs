@@ -331,7 +331,7 @@ impl WorkflowScheduler {
                     "action": "insert_workflow_instance",
                     "db_error": e.to_string(),
                     // On extrait l'ID de manière sécurisée pour le contexte
-                    "instance_id": json_val.get("id").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "instance_id": json_val.get("_id").and_then(|v| v.as_str()).unwrap_or("unknown"),
                     "hint": "L'écriture sur le disque a échoué. Vérifiez l'espace disque disponible, les permissions du dossier 'workflow_instances' ou l'intégrité de l'index."
                 })
             );

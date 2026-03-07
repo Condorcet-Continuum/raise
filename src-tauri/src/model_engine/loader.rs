@@ -447,7 +447,7 @@ mod tests {
         );
 
         let doc = json!({
-            "id": "UUID-SEM-1", "name": "User", "@type": "OperationalActor"
+            "_id": "UUID-SEM-1", "name": "User", "@type": "OperationalActor"
         });
         manager
             .create_collection(
@@ -484,39 +484,39 @@ mod tests {
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "id": "REQ-1", "name": "Req1", "type": "Requirement" }),
+                &json!({ "_id": "REQ-1", "name": "Req1", "type": "Requirement" }),
             )
             .await
             .unwrap();
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "id": "SC-1", "name": "Scen1", "type": "Scenario" }),
+                &json!({ "_id": "SC-1", "name": "Scen1", "type": "Scenario" }),
             )
             .await
             .unwrap();
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "id": "FC-1", "name": "Chain1", "type": "FunctionalChain" }),
+                &json!({ "_id": "FC-1", "name": "Chain1", "type": "FunctionalChain" }),
             )
             .await
             .unwrap();
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "id": "CST-1", "name": "Const1", "type": "Constraint" }),
+                &json!({ "_id": "CST-1", "name": "Const1", "type": "Constraint" }),
             )
             .await
             .unwrap();
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "id": "COM-1", "name": "Def1", "type": "CommonDefinition" }),
+                &json!({ "_id": "COM-1", "name": "Def1", "type": "CommonDefinition" }),
             )
             .await
             .unwrap();
-        manager.insert_raw("transverse", &json!({ "id": "OTH-1", "name": "Other1", "type": "https://raise.io/ontology/arcadia/transverse#CustomThing" })).await.unwrap();
+        manager.insert_raw("transverse", &json!({ "_id": "OTH-1", "name": "Other1", "type": "https://raise.io/ontology/arcadia/transverse#CustomThing" })).await.unwrap();
 
         let loader = ModelLoader::new_with_manager(manager);
         let model = loader.load_full_model().await.unwrap();
@@ -564,7 +564,7 @@ mod tests {
             .insert_raw(
                 "transverse",
                 &json!({
-                    "id": "REQ-TEST", "name": "Limit", "properties": { "max": 120 }
+                    "_id": "REQ-TEST", "name": "Limit", "properties": { "max": 120 }
                 }),
             )
             .await

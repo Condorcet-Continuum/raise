@@ -96,7 +96,7 @@ async fn test_system_index_strict_conformance() {
         .await
         .expect("❌ L'index doit être lisible");
 
-    assert!(doc.get("id").is_some());
+    assert!(doc.get("_id").is_some());
 
     let expected_schema = "db://_system/_system/schemas/v1/db/index.schema.json";
 

@@ -89,7 +89,7 @@ mod tests {
         docs.insert(
             "ai_safe".to_string(),
             json!({
-                "id": "ai_safe",
+                "_id": "ai_safe",
                 "nature": "AI_Model",
                 "risk_level": "Low"
             }),
@@ -99,7 +99,7 @@ mod tests {
         docs.insert(
             "ai_illegal".to_string(),
             json!({
-                "id": "ai_illegal",
+                "_id": "ai_illegal",
                 "nature": "AI_Model",
                 "name": "BlackBox"
             }),
@@ -109,7 +109,7 @@ mod tests {
         docs.insert(
             "ai_high_risk".to_string(),
             json!({
-                "id": "ai_high_risk",
+                "_id": "ai_high_risk",
                 "nature": "AI_Model",
                 "risk_level": "High"
             }),
@@ -138,7 +138,7 @@ mod tests {
         docs.insert(
             "hardware_v1".to_string(),
             json!({
-                "id": "hardware_v1",
+                "_id": "hardware_v1",
                 "nature": "Hardware"
             }),
         );

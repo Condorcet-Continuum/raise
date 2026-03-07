@@ -81,12 +81,12 @@ pub async fn insert_with_schema(
     }
     validator.compute_then_validate(&mut doc)?;
 
-    let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+    let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
-            error = "Identifiant 'id' manquant ou n'est pas une chaîne de caractères",
+            error = "Identifiant '_id' manquant ou n'est pas une chaîne de caractères",
             context = json!({
-                "expected_field": "id",
+                "expected_field": "_id",
                 "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
                 "action": "extract_document_id"
             })
@@ -103,12 +103,12 @@ pub async fn insert_raw(
     collection_name: &str,
     doc: &Value,
 ) -> RaiseResult<()> {
-    let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+    let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
-            error = "Document invalide : le champ 'id' est manquant ou n'est pas une chaîne de caractères.",
+            error = "Document invalide : le champ '_id' est manquant ou n'est pas une chaîne de caractères.",
             context = json!({
-                "expected_field": "id",
+                "expected_field": "_id",
                 "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
                 "action": "document_identity_check"
             })
@@ -131,12 +131,12 @@ pub async fn update_with_schema(
     validator.compute_then_validate(&mut doc)?;
 
     let collection_name = collection_from_schema_rel(schema_rel);
-    let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+    let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
-            error = "Document invalide : le champ 'id' est manquant ou n'est pas une chaîne de caractères.",
+            error = "Document invalide : le champ '_id' est manquant ou n'est pas une chaîne de caractères.",
             context = json!({
-                "expected_field": "id",
+                "expected_field": "_id",
                 "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
                 "action": "verify_document_identity"
             })
@@ -153,12 +153,12 @@ pub async fn update_raw(
     collection_name: &str,
     doc: &Value,
 ) -> RaiseResult<()> {
-    let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+    let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
-            error = "Document invalide : le champ 'id' est manquant ou n'est pas une chaîne de caractères.",
+            error = "Document invalide : le champ '_id' est manquant ou n'est pas une chaîne de caractères.",
             context = json!({
-                "expected_field": "id",
+                "expected_field": "_id",
                 "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
                 "action": "verify_document_identity"
             })

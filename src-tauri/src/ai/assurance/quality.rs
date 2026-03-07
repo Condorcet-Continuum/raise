@@ -30,6 +30,7 @@ pub struct QualityMetric {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct QualityReport {
+    #[serde(rename = "_id")]
     pub id: String,
     pub model_id: String,
     pub dataset_version: String,

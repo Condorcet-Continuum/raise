@@ -73,11 +73,11 @@ impl HardwareAgent {
         let clean_json = extract_json_from_llm(&response);
         let mut data: Value = data::parse(&clean_json).unwrap_or(json!({ "name": name }));
 
-        data["id"] = json!(Uuid::new_v4().to_string());
+        data["_id"] = json!(Uuid::new_v4().to_string());
         data["layer"] = json!("PA");
         data["type"] = json!("PhysicalNode");
         data["nature"] = json!(category);
-        data["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+        data["createdAt"] = json!(Utc::now().to_rfc3339());
 
         Ok(data)
     }
@@ -172,7 +172,10 @@ impl Agent for HardwareAgent {
                     );
                 };
 
-                let component_id = component_doc["id"].as_str().unwrap_or_default().to_string();
+                let component_id = component_doc["_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
 
                 // B. Appel Outil MCP
                 let gen_path = ctx.paths.domain_root.join("src-gen");
@@ -309,7 +312,7 @@ mod tests {
         ).await;
 
         let comp_doc = json!({
-            "id": "fpga-001",
+            "_id": "fpga-001",
             "name": "FPGA Controller",
             "layer": "PA",
             "type": "PhysicalNode",
@@ -389,7 +392,7 @@ mod tests {
         ).await;
 
         let comp_doc = json!({
-            "id": "fpga-video-proc",
+            "_id": "fpga-video-proc",
             "name": "Video Processor FPGA",
             "layer": "PA",
             "type": "PhysicalNode",

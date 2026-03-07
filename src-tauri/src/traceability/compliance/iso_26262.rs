@@ -69,7 +69,7 @@ mod tests {
         docs.insert(
             "Brakes_01".to_string(),
             json!({
-                "id": "Brakes_01",
+                "_id": "Brakes_01",
                 "name": "Electronic Braking System",
                 "safety_critical": true,
                 "asil": "D"
@@ -80,7 +80,7 @@ mod tests {
         docs.insert(
             "Steering_02".to_string(),
             json!({
-                "id": "Steering_02",
+                "_id": "Steering_02",
                 "name": "Power Steering Controller",
                 "safety_critical": true
             }),
@@ -90,7 +90,7 @@ mod tests {
         docs.insert(
             "Radio_03".to_string(),
             json!({
-                "id": "Radio_03",
+                "_id": "Radio_03",
                 "name": "Infotainment",
                 "safety_critical": false
             }),
@@ -115,7 +115,7 @@ mod tests {
         let mut docs: HashMap<String, Value> = HashMap::new();
         docs.insert(
             "Lamp".to_string(),
-            json!({ "id": "Lamp", "safety_critical": false }),
+            json!({ "_id": "Lamp", "safety_critical": false }),
         );
 
         let tracer = Tracer::from_json_list(docs.values().cloned().collect());

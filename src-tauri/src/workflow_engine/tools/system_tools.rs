@@ -103,9 +103,9 @@ mod tests {
 
         // 2. Injection manuelle d'une valeur critique pour tester le grounding de l'IA
         let sensor_doc = serde_json::json!({
-            "id": "vibration_z",
+            "_id": "vibration_z",
             "value": 15.5,
-            "updatedAt": chrono::Utc::now().to_rfc3339()
+            "updatedAt": Utc::now().to_rfc3339()
         });
         manager
             .create_collection(

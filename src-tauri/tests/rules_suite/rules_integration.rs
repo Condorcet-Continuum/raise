@@ -83,7 +83,7 @@ async fn test_end_to_end_rules_execution() {
 
     // 4. EXECUTION
     let invoice_input = json!({
-        "id": "inv_001",
+        "_id": "inv_001",
         "user_id": "u_dev",
         "qty": 2,
         "price": 50

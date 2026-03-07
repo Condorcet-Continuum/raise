@@ -92,15 +92,15 @@ mod tests {
         // Setup : Modèle IA + Ses deux preuves
         docs.insert(
             "AI_1".to_string(),
-            json!({ "id": "AI_1", "nature": "AI_Model", "name": "Boreas" }),
+            json!({ "_id": "AI_1", "nature": "AI_Model", "name": "Boreas" }),
         );
         docs.insert(
             "QR_1".to_string(),
-            json!({ "id": "QR_1", "kind": "QualityReport", "model_id": "AI_1" }),
+            json!({ "_id": "QR_1", "kind": "QualityReport", "model_id": "AI_1" }),
         );
         docs.insert(
             "XAI_1".to_string(),
-            json!({ "id": "XAI_1", "kind": "XaiFrame", "model_id": "AI_1" }),
+            json!({ "_id": "XAI_1", "kind": "XaiFrame", "model_id": "AI_1" }),
         );
 
         let tracer = Tracer::from_json_list(docs.values().cloned().collect());
@@ -119,7 +119,7 @@ mod tests {
         // Setup : Modèle IA tout seul
         docs.insert(
             "AI_EMPTY".to_string(),
-            json!({ "id": "AI_EMPTY", "nature": "AI_Model" }),
+            json!({ "_id": "AI_EMPTY", "nature": "AI_Model" }),
         );
 
         let tracer = Tracer::from_json_list(docs.values().cloned().collect());

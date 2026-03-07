@@ -26,7 +26,7 @@ impl SchemaValidator {
                     "hint": "Vérifiez que l'ontologie a été correctement chargée."
                 })
             ); // La macro fait un 'return', donc on ne sort jamais du 'else' ici.
-        }; // <--- L'accolade manquante était ici !
+        };
 
         // 2. Chemin nominal (Happy Path)
         Ok(Self {
@@ -44,6 +44,32 @@ impl SchemaValidator {
     pub fn validate(&self, instance: &Value) -> RaiseResult<()> {
         validate_node(instance, &self.schema, &self.reg, &self.root_uri)
     }
+}
+
+fn resolve_schema_node<'a>(
+    schema: &'a Value,
+    reg: &'a SchemaRegistry,
+    current_uri: &str,
+) -> &'a Value {
+    if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
+        let (file_uri, fragment) = if ref_str.starts_with('#') {
+            (current_uri.to_string(), Some(ref_str.to_string()))
+        } else {
+            let resolved = resolve_path_uri(current_uri, ref_str);
+            let (f, frag) = split_uri_fragment(&resolved);
+            (f.to_string(), frag.map(|s| s.to_string()))
+        };
+
+        if let Some(target_root) = reg.get_by_uri(&file_uri) {
+            if let Some(frag) = fragment {
+                return target_root
+                    .pointer(&frag.replace('#', ""))
+                    .unwrap_or(schema);
+            }
+            return target_root;
+        }
+    }
+    schema
 }
 
 /// 🎯 Hydratation récursive des valeurs par défaut
@@ -75,17 +101,77 @@ fn apply_defaults(
         }
     }
 
+    // 🎯 NOUVEAU : Traitement du mot-clé 'allOf' (Héritage)
+    // C'est ce qui permet d'importer _id et _created_at depuis base.schema.json
+    if let Some(all_of) = schema.get("allOf").and_then(|v| v.as_array()) {
+        for sub_schema in all_of {
+            apply_defaults(instance, sub_schema, reg, current_uri)?;
+        }
+    }
+
     // 2. Injection dans les Objets
     if let Some(obj) = instance.as_object_mut() {
         if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
             for (key, sub_schema) in props {
-                // Si la clé manque et qu'un 'default' existe
-                if !obj.contains_key(key) {
-                    if let Some(default_val) = sub_schema.get("default") {
-                        obj.insert(key.clone(), default_val.clone());
+                // 🎯 On résout le $ref pour lire les vraies instructions
+                let resolved_schema = resolve_schema_node(sub_schema, reg, current_uri);
+
+                // Petite optimisation idiomatique Rust (évite le unwrap)
+                let is_missing = obj.get(key).is_none_or(|v| v.is_null());
+
+                // A. Application du 'default' standard
+                if is_missing {
+                    // ✅ Priorité au default local avant le distant !
+                    let default_val = sub_schema
+                        .get("default")
+                        .or_else(|| resolved_schema.get("default"));
+
+                    if let Some(val) = default_val {
+                        obj.insert(key.clone(), val.clone());
                     }
                 }
-                // Récursion sur la valeur (qu'elle soit pré-existante ou injectée)
+
+                // B. EXÉCUTION DE 'x_compute'
+                // ✅ Priorité au x_compute local
+                let compute_node = sub_schema
+                    .get("x_compute")
+                    .or_else(|| resolved_schema.get("x_compute"))
+                    .and_then(|v| v.as_object());
+
+                if let Some(compute) = compute_node {
+                    let update_strategy = compute
+                        .get("update")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("if_missing");
+
+                    // On recalcule 'is_missing' au cas où le 'default' juste au-dessus aurait injecté une valeur
+                    let is_currently_missing = obj.get(key).is_none_or(|v| v.is_null());
+
+                    let should_compute = match update_strategy {
+                        "always" => true,
+                        "if_missing" => is_currently_missing,
+                        _ => false,
+                    };
+
+                    if should_compute {
+                        if let Some(plan) = compute.get("plan").and_then(|v| v.as_object()) {
+                            if let Some(op) = plan.get("op").and_then(|v| v.as_str()) {
+                                let computed_val = match op {
+                                    "uuid_v4" => Value::String(Uuid::new_v4().to_string()),
+                                    "now_rfc3339" => Value::String(Utc::now().to_rfc3339()),
+                                    "const" => plan.get("value").cloned().unwrap_or(Value::Null),
+                                    _ => Value::Null,
+                                };
+
+                                if !computed_val.is_null() {
+                                    obj.insert(key.clone(), computed_val);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Récursion sur la valeur (pré-existante ou fraîchement calculée)
                 if let Some(val) = obj.get_mut(key) {
                     apply_defaults(val, sub_schema, reg, current_uri)?;
                 }

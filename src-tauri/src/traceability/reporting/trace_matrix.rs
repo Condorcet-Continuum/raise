@@ -86,19 +86,19 @@ mod tests {
         docs.insert(
             "F1".to_string(),
             json!({
-                "id": "F1", "kind": "Function", "name": "Engine Control", "allocatedTo": "C1"
+                "_id": "F1", "kind": "Function", "name": "Engine Control", "allocatedTo": "C1"
             }),
         );
         docs.insert(
             "F2".to_string(),
             json!({
-                "id": "F2", "kind": "Function", "name": "Radio Control"
+                "_id": "F2", "kind": "Function", "name": "Radio Control"
             }),
         );
         docs.insert(
             "C1".to_string(),
             json!({
-                "id": "C1", "kind": "Component", "name": "ECU"
+                "_id": "C1", "kind": "Component", "name": "ECU"
             }),
         );
 

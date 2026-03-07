@@ -107,9 +107,9 @@ mod tests {
     fn test_checker_logic_with_injected_graph() {
         let mut docs: HashMap<String, Value> = HashMap::new();
         // A est lié à B. C est seul.
-        docs.insert("A".to_string(), json!({ "id": "A", "allocatedTo": "B" }));
-        docs.insert("B".to_string(), json!({ "id": "B" }));
-        docs.insert("C".to_string(), json!({ "id": "C" }));
+        docs.insert("A".to_string(), json!({ "_id": "A", "allocatedTo": "B" }));
+        docs.insert("B".to_string(), json!({ "_id": "B" }));
+        docs.insert("C".to_string(), json!({ "_id": "C" }));
 
         // 🎯 On construit le Tracer en mémoire uniquement pour ce test
         let tracer = Tracer::from_json_list(docs.values().cloned().collect());

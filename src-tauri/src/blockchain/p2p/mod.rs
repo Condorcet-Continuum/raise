@@ -13,3 +13,5 @@ pub mod vpn;
 
 // Réexportation pour simplifier l'accès
 pub use protocol::{ArcadiaNetMessage, ArcadiaResponse};
+
+pub mod service;

@@ -64,6 +64,7 @@ pub struct WorkflowEdge {
 /// Définition statique du Workflow (le "Plan" compilé)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDefinition {
+    #[serde(rename = "_id")]
     pub id: String,
     pub nodes: Vec<WorkflowNode>,
     pub edges: Vec<WorkflowEdge>,
@@ -74,6 +75,7 @@ pub struct WorkflowDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowInstance {
+    #[serde(rename = "_id")]
     pub id: String,
     pub workflow_id: String,
     pub status: ExecutionStatus,

@@ -62,7 +62,7 @@ impl Tracer {
         let registry = VocabularyRegistry::global();
 
         for doc in documents {
-            let id = match doc.get("id").and_then(|v| v.as_str()) {
+            let id = match doc.get("_id").and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
                 None => continue,
             };

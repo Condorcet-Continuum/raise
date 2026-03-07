@@ -346,7 +346,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
 
             // 2. Création de l'entité Jumeau Numérique
             let sensor_doc = serde_json::json!({
-                "id": "vibration_z", // Identifiant unique du capteur
+                "_id": "vibration_z", // Identifiant unique du capteur
                 "value": value,
                 "updatedAt": Utc::now().to_rfc3339()
             });
@@ -450,7 +450,7 @@ mod tests {
         };
 
         let valid_mandate = serde_json::json!({
-            "id": "mandate_cli_test_123",
+            "_id": "mandate_cli_test_123",
             "name": { "fr": "Mandat de Test" },
             "meta": { "author": "CLI_Tester", "version": "1.0.0", "status": "ACTIVE" },
             "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": { "sec": 1.0 } },

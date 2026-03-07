@@ -11,6 +11,7 @@ use crate::utils::{Future, Pin};
 use super::collection;
 use super::data_provider::CachedDataProvider;
 
+use crate::utils::async_recursion;
 use crate::utils::config::AppConfig;
 use crate::utils::data::{self, HashSet};
 use crate::utils::io;
@@ -58,25 +59,35 @@ impl<'a> CollectionsManager<'a> {
                 "$schema": expected_uri,
                 "name": format!("{}_{}", self.space, self.db),
                 "space": self.space,
-                "database": self.db
+                "database": self.db,
+                "version": 1,
+                "collections": {},
+                "rules": {},
+                "schemas": { "v1": {} }
             })
         });
-
+        // 🎯 2. On compile le validateur avec le registre AMORCÉ
         let validator = SchemaValidator::compile_with_registry(expected_uri, &reg)?;
-        if let Err(e) = validator.compute_then_validate(&mut system_doc) {
-            raise_error!(
-                "ERR_DB_INDEX_VALIDATION_FAILED",
-                error = e,
-                context = json!({ "action": "init_db_instantiation" })
-            );
-        }
 
-        // 🎯 L'APPEL UNIQUE ET MAGIQUE : create_db s'occupe de tout le volet physique
+        // 🎯 3. Cette fois, le validateur TROUVE le schéma et injecte les 'default'
+        validator.compute_then_validate(&mut system_doc)?;
+
+        // 🎯 4. On crée physiquement les dossiers basés sur le document hydraté
         let created =
             file_storage::create_db(&self.storage.config, &self.space, &self.db, &system_doc)
                 .await?;
 
         if is_new || created {
+            let schemas_dir = self
+                .storage
+                .config
+                .db_schemas_root(&self.space, &self.db)
+                .join("v1");
+            if !schemas_dir.exists() {
+                let _ = io::ensure_dir(&schemas_dir).await;
+            }
+
+            // 🎯 5. On sauvegarde l'index avec toutes les collections système injectées
             file_storage::write_system_index(
                 &self.storage.config,
                 &self.space,
@@ -126,127 +137,30 @@ impl<'a> CollectionsManager<'a> {
 
         io::read_json(&sys_path).await
     }
-    // --- HELPER DE RÉSOLUTION D'URI (HIÉRARCHIQUE) ---
-    fn resolve_best_schema_uri(&self, input_path_or_uri: &str) -> String {
-        let relative_path = if let Some(idx) = input_path_or_uri.find("/schemas/v1/") {
-            &input_path_or_uri[idx + "/schemas/v1/".len()..]
-        } else {
-            input_path_or_uri
-        };
-
-        let local_path = self
-            .storage
-            .config
-            .db_schemas_root(&self.space, &self.db)
-            .join("v1")
-            .join(relative_path);
-
-        if local_path.exists() {
-            return format!(
-                "db://{}/{}/schemas/v1/{}",
-                self.space, self.db, relative_path
-            );
-        }
-
-        let app_config = AppConfig::get();
-        if let Some(user_cfg) = &app_config.user {
-            if let (Some(u_domain), Some(u_db)) = (&user_cfg.default_domain, &user_cfg.default_db) {
-                let user_path = self
-                    .storage
-                    .config
-                    .db_schemas_root(u_domain, u_db)
-                    .join("v1")
-                    .join(relative_path);
-
-                if user_path.exists() {
-                    return format!("db://{}/{}/schemas/v1/{}", u_domain, u_db, relative_path);
-                }
-            }
-        }
-
-        if let Some(ws_cfg) = &app_config.workstation {
-            if let (Some(w_domain), Some(w_db)) = (&ws_cfg.default_domain, &ws_cfg.default_db) {
-                let ws_path = self
-                    .storage
-                    .config
-                    .db_schemas_root(w_domain, w_db)
-                    .join("v1")
-                    .join(relative_path);
-
-                if ws_path.exists() {
-                    return format!("db://{}/{}/schemas/v1/{}", w_domain, w_db, relative_path);
-                }
-            }
-        }
-
-        let sys_domain = &app_config.system_domain;
-        let sys_db = &app_config.system_db;
-
-        let sys_path = self
-            .storage
-            .config
-            .db_schemas_root(sys_domain, sys_db)
-            .join("v1")
-            .join(relative_path);
-
-        if sys_path.exists() {
-            return format!(
-                "db://{}/{}/schemas/v1/{}",
-                sys_domain, sys_db, relative_path
-            );
-        }
-
-        if sys_domain != "_system" || sys_db != "_system" {
-            let hard_sys_path = self
-                .storage
-                .config
-                .db_schemas_root("_system", "_system")
-                .join("v1")
-                .join(relative_path);
-
-            if hard_sys_path.exists() {
-                return format!("db://_system/_system/schemas/v1/{}", relative_path);
-            }
-        }
-
-        format!(
-            "db://{}/{}/schemas/v1/{}",
-            self.space, self.db, relative_path
-        )
-    }
-
-    async fn get_registry_for_uri(&self, uri: &str) -> RaiseResult<SchemaRegistry> {
-        let app_config = AppConfig::get();
-        let sys_domain = &app_config.system_domain;
-        let sys_db = &app_config.system_db;
-
-        let sys_prefix_config = format!("db://{}/{}/", sys_domain, sys_db);
-        let sys_prefix_hard = "db://_system/_system/";
-
-        if uri.starts_with(&sys_prefix_config) {
-            SchemaRegistry::from_db(&self.storage.config, sys_domain, sys_db).await
-        } else if uri.starts_with(sys_prefix_hard) {
-            SchemaRegistry::from_db(&self.storage.config, "_system", "_system").await
-        } else {
-            SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await
-        }
-    }
 
     // ============================================================================
     // GESTION DES SCHÉMAS (DDL)
     // ============================================================================
+    async fn get_registry_for_uri(&self, _uri: &str) -> RaiseResult<SchemaRegistry> {
+        // Le registre charge désormais toute la hiérarchie par lui-même
+        SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await
+    }
 
     /// Construit l'URI standardisée en utilisant le space et la db du manager
-    fn build_schema_uri(&self, schema_name: &str) -> String {
-        if schema_name.starts_with("db://") {
-            return schema_name.to_string();
-        }
-        let clean_path = schema_name
-            .trim_start_matches('/')
-            .trim_start_matches("schemas/")
-            .trim_start_matches("v1/")
-            .trim_start_matches('/');
-        format!("db://{}/{}/schemas/v1/{}", self.space, self.db, clean_path)
+    pub fn build_schema_uri(&self, schema_name: &str) -> String {
+        let relative_path = if let Some(idx) = schema_name.find("/schemas/v1/") {
+            &schema_name[idx + "/schemas/v1/".len()..]
+        } else {
+            schema_name
+                .trim_start_matches('/')
+                .trim_start_matches("schemas/")
+                .trim_start_matches("v1/")
+                .trim_start_matches('/')
+        };
+        format!(
+            "db://{}/{}/schemas/v1/{}",
+            self.space, self.db, relative_path
+        )
     }
 
     pub async fn create_schema_def(&self, schema_name: &str, schema: Value) -> RaiseResult<()> {
@@ -317,15 +231,15 @@ impl<'a> CollectionsManager<'a> {
 
     pub async fn read_many(&self, collection: &str, ids: &[String]) -> RaiseResult<Vec<Value>> {
         let mut docs = Vec::with_capacity(ids.len());
-        for id in ids {
-            let doc_opt = match self.get_document(collection, id).await {
+        for _id in ids {
+            let doc_opt = match self.get_document(collection, _id).await {
                 Ok(doc) => doc,
                 Err(e) => raise_error!(
                     "ERR_DB_DOCUMENT_READ",
                     error = e,
                     context = json!({
                         "collection": collection,
-                        "document_id": id
+                        "document_id": _id
                     })
                 ),
             };
@@ -333,7 +247,7 @@ impl<'a> CollectionsManager<'a> {
                 raise_error!(
                     "ERR_DB_CORRUPTION_INDEX_MISMATCH",
                     error = "Document indexé mais introuvable physiquement",
-                    context = json!({ "id": id, "coll": collection })
+                    context = json!({ "_id": _id, "coll": collection })
                 );
             };
             docs.push(doc);
@@ -354,19 +268,8 @@ impl<'a> CollectionsManager<'a> {
 
     async fn save_system_index(&self, doc: &mut Value) -> RaiseResult<()> {
         let expected_uri = "db://_system/_system/schemas/v1/db/index.schema.json".to_string();
-
         if let Some(obj) = doc.as_object_mut() {
             obj.insert("$schema".to_string(), Value::String(expected_uri.clone()));
-            if !obj.contains_key("id") {
-                obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
-            }
-            let now = Utc::now().to_rfc3339();
-            if !obj.contains_key("createdAt") {
-                obj.insert("createdAt".to_string(), Value::String(now.clone()));
-            }
-            if !obj.contains_key("updatedAt") {
-                obj.insert("updatedAt".to_string(), Value::String(now));
-            }
         }
 
         let reg = self.get_registry_for_uri(&expected_uri).await?;
@@ -381,6 +284,14 @@ impl<'a> CollectionsManager<'a> {
                 })
             );
         }
+        // ✅ 1. Le Rules Engine a la priorité
+        if let Err(e) =
+            apply_business_rules(self, "_system_index", doc, None, &reg, &expected_uri).await
+        {
+            warn!("⚠️ Erreur règles système sur l'index (non bloquant): {}", e);
+        }
+
+        // ✅ 2. Le Validator (avec x_compute) calcule ce qui manque (_id, dates)
         if let Ok(validator) = SchemaValidator::compile_with_registry(&expected_uri, &reg) {
             if let Err(e) = validator.compute_then_validate(doc) {
                 warn!("⚠️ Index système invalide (sauvegarde forcée): {}", e);
@@ -396,8 +307,7 @@ impl<'a> CollectionsManager<'a> {
         if !self.storage.config.db_root(&self.space, &self.db).exists() {
             self.init_db().await?;
         }
-
-        let final_schema_uri = self.resolve_best_schema_uri(schema_uri);
+        let final_schema_uri = self.build_schema_uri(schema_uri);
         let col_path = self
             .storage
             .config
@@ -480,7 +390,7 @@ impl<'a> CollectionsManager<'a> {
         }
 
         // 3. Résolution de l'URI finale (db://...)
-        Ok(self.resolve_best_schema_uri(path))
+        Ok(self.build_schema_uri(path))
     }
 
     async fn update_system_index_collection(
@@ -605,12 +515,12 @@ impl<'a> CollectionsManager<'a> {
 
     // --- ÉCRITURE ET MISE À JOUR ---
     pub async fn insert_raw(&self, collection: &str, doc: &Value) -> RaiseResult<()> {
-        let Some(id) = doc.get("id").and_then(|v| v.as_str()) else {
+        let Some(_id) = doc.get("_id").and_then(|v| v.as_str()) else {
             raise_error!(
                 "ERR_DB_DOCUMENT_ID_MISSING",
                 error = "Attribut 'id' manquant ou format invalide dans le document",
                 context = json!({
-                    "expected_field": "id",
+                    "expected_field": "_id",
                     "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>())
                 })
             );
@@ -635,9 +545,9 @@ impl<'a> CollectionsManager<'a> {
         }
 
         self.storage
-            .write_document(&self.space, &self.db, collection, id, doc)
+            .write_document(&self.space, &self.db, collection, _id, doc)
             .await?;
-        self.add_item_to_index(collection, id).await?;
+        self.add_item_to_index(collection, _id).await?;
 
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         if let Err(_e) = idx_mgr.index_document(collection, doc).await {
@@ -647,6 +557,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
+    #[async_recursion]
     pub async fn insert_with_schema(&self, collection: &str, mut doc: Value) -> RaiseResult<Value> {
         doc = self.resolve_document_references(doc).await?;
         self.prepare_document(collection, &mut doc).await?;
@@ -672,9 +583,14 @@ impl<'a> CollectionsManager<'a> {
         json_merge(&mut doc, resolved_patch);
 
         if let Some(obj) = doc.as_object_mut() {
-            obj.insert("id".to_string(), Value::String(id.to_string()));
-            let now = Utc::now().to_rfc3339();
-            obj.insert("updatedAt".to_string(), Value::String(now));
+            // 1. SÉCURITÉ : On verrouille la clé primaire pour empêcher la mutation de l'ID
+            obj.insert("_id".to_string(), Value::String(id.to_string()));
+            // 2. LOGIQUE D'ÉTAT P2P : On incrémente la révision (seul le code DB connaît l'ancien état)
+            if let Some(p2p) = obj.get_mut("_p2p").and_then(|v| v.as_object_mut()) {
+                if let Some(rev) = p2p.get("revision").and_then(|v| v.as_i64()) {
+                    p2p.insert("revision".to_string(), json!(rev + 1));
+                }
+            }
         }
 
         self.prepare_document(collection, &mut doc).await?;
@@ -689,11 +605,12 @@ impl<'a> CollectionsManager<'a> {
         Ok(doc)
     }
 
+    #[async_recursion]
     pub async fn upsert_document(&self, collection: &str, mut data: Value) -> RaiseResult<String> {
         data = self.resolve_document_references(data).await?;
 
         let id_opt = data
-            .get("id")
+            .get("_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let name_opt = data.get("name").cloned();
@@ -734,7 +651,7 @@ impl<'a> CollectionsManager<'a> {
                 let result = QueryEngine::new(self).execute_query(query).await?;
 
                 if let Some(existing_doc) = result.documents.first() {
-                    if let Some(found_id) = existing_doc.get("id").and_then(|v| v.as_str()) {
+                    if let Some(found_id) = existing_doc.get("_id").and_then(|v| v.as_str()) {
                         target_id = Some(found_id.to_string());
                     }
                 }
@@ -747,7 +664,7 @@ impl<'a> CollectionsManager<'a> {
             }
             None => {
                 let doc = self.insert_with_schema(collection, data).await?;
-                let new_id = doc.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+                let new_id = doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string();
                 Ok(format!("Created: {}", new_id))
             }
         }
@@ -766,19 +683,10 @@ impl<'a> CollectionsManager<'a> {
         Ok(true)
     }
 
+    #[async_recursion]
     pub async fn prepare_document(&self, collection: &str, doc: &mut Value) -> RaiseResult<()> {
-        if let Some(obj) = doc.as_object_mut() {
-            if !obj.contains_key("id") {
-                obj.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
-            }
-            let now = Utc::now().to_rfc3339();
-            if !obj.contains_key("createdAt") {
-                obj.insert("createdAt".to_string(), Value::String(now.clone()));
-            }
-            if !obj.contains_key("updatedAt") {
-                obj.insert("updatedAt".to_string(), Value::String(now));
-            }
-        }
+        // 1. DÉTERMINATION DU SCHÉMA
+        let mut resolved_uri: Option<String> = None;
 
         let meta_path = self
             .storage
@@ -786,14 +694,12 @@ impl<'a> CollectionsManager<'a> {
             .db_collection_path(&self.space, &self.db, collection)
             .join("_meta.json");
 
-        let mut resolved_uri = None;
-
         if meta_path.exists() {
             if let Ok(content) = io::read_to_string(&meta_path).await {
                 if let Ok(meta) = data::parse::<Value>(&content) {
                     if let Some(s) = meta.get("schema").and_then(|v| v.as_str()) {
                         if !s.is_empty() {
-                            resolved_uri = Some(self.resolve_best_schema_uri(s));
+                            resolved_uri = Some(self.build_schema_uri(s));
                         }
                     }
                 }
@@ -808,12 +714,7 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        #[cfg(debug_assertions)]
-        println!(
-            "🔧 Prepare Doc [{}]: Schema URI résolu = {:?}",
-            collection, resolved_uri
-        );
-
+        // 2. INJECTION, CALCULS & VALIDATION (SSOT via Validator)
         if let Some(uri) = &resolved_uri {
             if let Some(obj) = doc.as_object_mut() {
                 obj.insert("$schema".to_string(), Value::String(uri.clone()));
@@ -827,28 +728,47 @@ impl<'a> CollectionsManager<'a> {
 
             let validator = SchemaValidator::compile_with_registry(uri, &reg)?;
             validator.compute_then_validate(doc)?;
+
+            // 3. 🛡️ CALCUL DU CHECKSUM P2P & ORIGIN_NODE
+            if let Some(obj) = doc.as_object_mut() {
+                let ws_id = AppConfig::get()
+                    .workstation
+                    .as_ref()
+                    .map(|ws| ws.id.as_str())
+                    .unwrap_or("unknown");
+
+                let mut doc_for_hash = obj.clone();
+                doc_for_hash.remove("_p2p");
+                let hash = self.compute_document_checksum(&Value::Object(doc_for_hash));
+
+                if let Some(p2p) = obj.get_mut("_p2p").and_then(|v| v.as_object_mut()) {
+                    p2p.insert("checksum".to_string(), json!(hash));
+                    p2p.insert("origin_node".to_string(), json!(ws_id));
+                    p2p.insert("last_sync_at".to_string(), json!(Utc::now().to_rfc3339()));
+                }
+            }
         } else {
-            // 🎯 FIN DU SCHEMALESS : On bloque purement et simplement l'insertion !
             raise_error!(
                 "ERR_DB_STRICT_SCHEMA_REQUIRED",
                 error = "Insertion refusée : Aucun schéma de validation n'est défini pour cette collection.",
-                context = json!({
-                    "collection": collection,
-                    "action": "prepare_document",
-                    "hint": "RAISE fonctionne désormais en mode 'Schéma Strict'. Vous devez créer un fichier 'schema' dans le dossier de la collection."
-                })
+                context = json!({ "collection": collection, "action": "prepare_document" })
             );
         }
+
+        // 4. 🎯 LOGIQUE SÉMANTIQUE JSON-LD (AVEC raise_error!)
         if let Err(e) = self.apply_semantic_logic(doc, resolved_uri.as_deref()) {
             raise_error!(
                 "ERR_AI_SEMANTIC_VALIDATION_FAIL",
-                error = e,
+                error = e.to_string(),
                 context = json!({
-                    "uri": resolved_uri,
-                    "action": "semantic_integrity_check"
+                    "action": "semantic_integrity_check",
+                    "collection": collection,
+                    "resolved_uri": resolved_uri,
+                    "hint": "Le document n'a pas pu être aligné avec l'ontologie JSON-LD."
                 })
             );
         }
+
         Ok(())
     }
 
@@ -946,7 +866,7 @@ impl<'a> CollectionsManager<'a> {
                 let res = qe.execute_query(query).await?;
 
                 match res.documents.first() {
-                    Some(doc) => doc.get("id").and_then(|v| v.as_str()).unwrap().to_string(),
+                    Some(doc) => doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string(),
                     None => {
                         raise_error!(
                             "ERR_DB_ENTITY_NOT_FOUND",
@@ -968,6 +888,15 @@ impl<'a> CollectionsManager<'a> {
     pub async fn resolve_document_references(&self, document: Value) -> RaiseResult<Value> {
         resolve_refs_recursive(document, self).await
     }
+
+    fn compute_document_checksum(&self, doc: &Value) -> String {
+        use sha2::{Digest, Sha256};
+        // Sérialisation du JSON en vecteur d'octets
+        let content = serde_json::to_vec(doc).unwrap_or_default();
+        let mut hasher = Sha256::new();
+        hasher.update(content);
+        hex::encode(hasher.finalize())
+    }
 }
 
 fn json_merge(a: &mut Value, b: Value) {
@@ -982,6 +911,7 @@ fn json_merge(a: &mut Value, b: Value) {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[async_recursion]
 pub async fn apply_business_rules(
     manager: &CollectionsManager<'_>,
     collection_name: &str,
@@ -1170,7 +1100,7 @@ fn resolve_refs_recursive<'a>(
                     let result = QueryEngine::new(col_mgr).execute_query(query).await?;
                     if let Some(doc) = result.documents.first() {
                         let id = doc
-                            .get("id")
+                            .get("_id")
                             .or_else(|| doc.get("_id"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
@@ -1200,6 +1130,7 @@ fn resolve_refs_recursive<'a>(
         }
     })
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1207,10 +1138,71 @@ mod tests {
     use crate::utils::mock::DbSandbox;
 
     #[tokio::test]
-    async fn test_manager_get_document_integration() {
-        // 1. Initialisation en une ligne
+    async fn test_manager_init_db_completeness() {
+        // 1. Setup de l'environnement isolé
         let sandbox = DbSandbox::new().await;
-        // 2. On passe la référence au storage de la sandbox
+        let manager = CollectionsManager::new(&sandbox.storage, "system_test", "db_test");
+
+        // 2. Exécution de l'initialisation
+        let created = manager.init_db().await.expect("L'initialisation a échoué");
+        assert!(created, "La DB aurait dû être créée pour la première fois");
+
+        // 3. Lecture directe de l'index système généré (_system.json)
+        let index =
+            file_storage::read_system_index(&sandbox.storage.config, "system_test", "db_test")
+                .await
+                .unwrap()
+                .expect("Le fichier _system.json est introuvable");
+
+        // --- ASSERTIONS SUR LE CONTENU DU JSON ---
+
+        // Vérification de l'ID auto-généré (x_compute)
+        assert!(
+            index.get("_id").is_some(),
+            "L'index devrait avoir un '_id' généré"
+        );
+        assert!(index["_id"].is_string());
+
+        // Vérification de l'hydratation des collections par défaut
+        // (Vérifie que le validator a bien injecté _migrations depuis le schéma)
+        assert!(
+            index["collections"].get("_migrations").is_some(),
+            "La collection '_migrations' aurait dû être injectée par défaut"
+        );
+
+        assert_eq!(
+            index["collections"]["_migrations"]["schema"],
+            "db://_system/_system/schemas/v1/db/migration.schema.json"
+        );
+
+        // Vérification des règles système
+        assert!(
+            index["rules"].get("_system_rules").is_some(),
+            "La règle '_system_rules' aurait dû être injectée par défaut"
+        );
+
+        // --- ASSERTIONS SUR LE SYSTÈME DE FICHIERS ---
+
+        let db_root = sandbox.storage.config.db_root("system_test", "db_test");
+
+        // Vérifie que le dossier physique de la collection _migrations existe
+        let migration_path = db_root.join("collections/_migrations");
+        assert!(
+            migration_path.exists(),
+            "Le dossier physique de _migrations est manquant"
+        );
+
+        // Vérifie que le dossier des schémas locaux a été créé
+        let schema_path = db_root.join("schemas/v1");
+        assert!(
+            schema_path.exists(),
+            "L'arborescence des schémas n'a pas été initialisée"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_manager_get_document_integration() {
+        let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         manager.init_db().await.unwrap();
         manager
@@ -1221,7 +1213,8 @@ mod tests {
             .await
             .unwrap();
 
-        let doc = json!({ "id": "user_123", "name": "Test User" });
+        // ✅ CORRECTION : Utilisation de _id
+        let doc = json!({ "_id": "user_123", "name": "Test User" });
         manager.insert_raw("users", &doc).await.unwrap();
 
         let result = manager.get_document("users", "user_123").await.unwrap();
@@ -1246,7 +1239,8 @@ mod tests {
             .unwrap();
 
         for i in 0..100 {
-            let doc = json!({ "id": i.to_string(), "val": i });
+            // ✅ CORRECTION : Utilisation de _id
+            let doc = json!({ "_id": i.to_string(), "val": i });
             manager.insert_raw("items", &doc).await.unwrap();
         }
 
@@ -1258,7 +1252,8 @@ mod tests {
 
         assert_eq!(results.len(), 5);
         for res in results {
-            let id = res["id"].as_str().unwrap();
+            // ✅ CORRECTION : Vérification sur _id
+            let id = res["_id"].as_str().unwrap();
             assert!(ids.contains(&id.to_string()));
         }
     }
@@ -1275,8 +1270,10 @@ mod tests {
             )
             .await
             .unwrap();
+
+        // ✅ CORRECTION : Utilisation de _id
         manager
-            .insert_raw("items", &json!({ "id": "1", "val": "A" }))
+            .insert_raw("items", &json!({ "_id": "1", "val": "A" }))
             .await
             .unwrap();
 
@@ -1302,9 +1299,10 @@ mod tests {
         .unwrap();
 
         // 1. CREATE (Insert)
+        // L'insertion via le schéma va auto-générer le _id grâce à validator.rs
         let doc = json!({ "name": "Item 1", "price": 100 });
         let created_doc = mgr.insert_with_schema("items", doc).await.unwrap();
-        let id = created_doc["id"].as_str().unwrap().to_string();
+        let id = created_doc["_id"].as_str().unwrap().to_string();
 
         let fetched = mgr.get_document("items", &id).await.unwrap();
         assert!(fetched.is_some());
@@ -1340,11 +1338,13 @@ mod tests {
         .await
         .unwrap();
 
-        let data1 = json!({ "id": "config-01", "val": "A" });
+        // ✅ CORRECTION : Utilisation de _id
+        let data1 = json!({ "_id": "config-01", "val": "A" });
         let res1 = mgr.upsert_document("configs", data1).await.unwrap();
         assert!(res1.contains("Created"));
 
-        let data2 = json!({ "id": "config-01", "val": "B" });
+        // ✅ CORRECTION : Utilisation de _id
+        let data2 = json!({ "_id": "config-01", "val": "B" });
         let res2 = mgr.upsert_document("configs", data2).await.unwrap();
         assert!(res2.contains("Updated"));
 
@@ -1355,10 +1355,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(final_doc["val"], "B");
-        assert_eq!(final_doc["id"], "config-01");
+        // ✅ CORRECTION : Vérification sur _id
+        assert_eq!(final_doc["_id"], "config-01");
     }
 
-    // 🎯 Note: Les tests synchrones restent tels quels car ils ne touchent pas à la DB physique !
     #[test]
     fn test_parse_smart_link_valid() {
         let input = "ref:oa_actors:name:Sécurité";
@@ -1395,7 +1395,6 @@ mod tests {
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         manager.init_db().await.unwrap();
 
-        // On s'assure que la collection existe
         manager
             .create_collection(
                 "users",
@@ -1404,14 +1403,13 @@ mod tests {
             .await
             .unwrap();
 
-        // 1. On prépare deux documents de test
-        let doc_alice = json!({ "id": "u_100", "name": "Alice" });
-        let doc_bob = json!({ "id": "u_200", "name": "Bob" });
+        // ✅ CORRECTION : Remplacement du doublon "name" par "_id"
+        let doc_alice = json!({ "_id": "u_100", "name": "Alice" });
+        let doc_bob = json!({ "_id": "u_200", "name": "Bob" });
 
         manager.insert_raw("users", &doc_alice).await.unwrap();
         manager.insert_raw("users", &doc_bob).await.unwrap();
 
-        // Vérification de base : les documents sont bien là
         assert!(manager
             .get_document("users", "u_100")
             .await
@@ -1460,13 +1458,11 @@ mod tests {
         assert!(err_str.contains("ERR_DB_ENTITY_NOT_FOUND"));
     }
 
-    // 🎯 NOUVEAU TEST 1 : La Tolérance Zéro (Fail-Fast)
     #[tokio::test]
     async fn test_manager_fail_fast_on_missing_index() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_fail", "db_fail");
 
-        // 1. Initialisation normale
         manager.init_db().await.unwrap();
         manager
             .create_collection(
@@ -1475,7 +1471,7 @@ mod tests {
             )
             .await
             .unwrap();
-        // 2. 🚨 SIMULATION DE CORRUPTION : On supprime physiquement l'index de la base
+
         let sys_path = manager
             .storage
             .config
@@ -1483,8 +1479,8 @@ mod tests {
             .join("_system.json");
         io::remove_file(&sys_path).await.unwrap();
 
-        // 3. On tente une insertion : le système DOIT bloquer immédiatement
-        let doc = json!({ "id": "1", "name": "Test Fail Fast" });
+        // ✅ CORRECTION : Utilisation de _id au lieu de handle
+        let doc = json!({ "_id": "1", "name": "Test Fail Fast" });
         let res = manager.insert_raw("users", &doc).await;
 
         assert!(
@@ -1499,7 +1495,6 @@ mod tests {
         );
     }
 
-    // 🎯 NOUVEAU TEST 2 : Nettoyage de l'index lors de la suppression d'un item
     #[tokio::test]
     async fn test_manager_remove_item_from_index() {
         let sandbox = DbSandbox::new().await;
@@ -1514,20 +1509,17 @@ mod tests {
             .await
             .unwrap();
 
-        // 1. On insère un document (ce qui appelle add_item_to_index)
-        let doc = json!({ "id": "u1", "name": "Alice" });
+        // ✅ CORRECTION : Utilisation de _id au lieu de handle
+        let doc = json!({ "_id": "u1", "name": "Alice" });
         manager.insert_raw("users", &doc).await.unwrap();
 
-        // Vérification que le document est bien inscrit dans _system.json
         let index = manager.load_index().await.unwrap();
         let items = index["collections"]["users"]["items"].as_array().unwrap();
         assert_eq!(items.len(), 1, "Le document devrait être dans l'index");
         assert_eq!(items[0]["file"], "u1.json");
 
-        // 2. On supprime le document (ce qui appelle remove_item_from_index)
         manager.delete_document("users", "u1").await.unwrap();
 
-        // 3. Vérification que l'index a bien été purgé
         let index_after = manager.load_index().await.unwrap();
         let items_after = index_after["collections"]["users"]["items"]
             .as_array()
@@ -1538,7 +1530,6 @@ mod tests {
         );
     }
 
-    // 🎯 NOUVEAU TEST 3 : Nettoyage de l'index lors du drop d'une collection
     #[tokio::test]
     async fn test_manager_remove_collection_from_index() {
         let sandbox = DbSandbox::new().await;
@@ -1546,7 +1537,6 @@ mod tests {
 
         manager.init_db().await.unwrap();
 
-        // 1. On crée une collection dynamique
         manager
             .create_collection(
                 "temporary",
@@ -1561,10 +1551,8 @@ mod tests {
             "La collection devrait exister dans l'index"
         );
 
-        // 2. On supprime la collection (ce qui appelle remove_collection_from_system_index)
         manager.drop_collection("temporary").await.unwrap();
 
-        // 3. On vérifie la disparition totale dans l'index
         let index_after = manager.load_index().await.unwrap();
         assert!(
             index_after["collections"].get("temporary").is_none(),

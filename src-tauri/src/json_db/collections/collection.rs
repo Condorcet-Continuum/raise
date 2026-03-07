@@ -50,7 +50,7 @@ pub async fn read_document(
                 "space": space,
                 "db": db,
                 "collection": collection,
-                "id": id,
+                "_id": id,
                 "action": "read_document_with_cache"
             })
         ),

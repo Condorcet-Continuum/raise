@@ -33,6 +33,7 @@ async fn test_full_stack_integration() {
 
     // Élément A : VALIDE (Possède une description)
     let valid_json = json!({
+        "_id": "UUID_VALID_1",
         arcadia::PROP_ID: "UUID_VALID_1",
         arcadia::PROP_NAME: "ValidComponent",
         "@type": "LogicalComponent", // Sera résolu en arcadia::KIND_LA_COMPONENT
@@ -41,6 +42,7 @@ async fn test_full_stack_integration() {
 
     // Élément B : INVALIDE (Pas de description)
     let invalid_json = json!({
+        "_id": "UUID_INVALID_1",
         arcadia::PROP_ID: "UUID_INVALID_1",
         arcadia::PROP_NAME: "UndocumentedThing",
         "@type": "LogicalComponent"

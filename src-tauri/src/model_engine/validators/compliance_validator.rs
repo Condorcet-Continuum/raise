@@ -198,6 +198,7 @@ mod tests {
 
         // Insertion d'un Requirement mal nommé
         let req = serde_json::json!({
+            "_id": "REQ-BAD",
             "id": "REQ-BAD",
             "name": "Copy of Req 1", // Trigger RULE_NAMING
             "type": "Requirement"

@@ -10,7 +10,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Mandate {
-    #[serde(default)]
+    #[serde(default, rename = "_id")]
     pub id: String,
     pub meta: MandateMeta,
     pub governance: Governance,
@@ -172,7 +172,7 @@ mod tests {
         manager.init_db().await.unwrap();
 
         let full_json = json!({
-            "id": "man_01",
+            "_id": "man_01",
             "meta": { "author": "System", "version": "1.0", "status": "ACTIVE" },
             "governance": {
                 "strategy": "SAFETY_FIRST",
@@ -213,7 +213,7 @@ mod tests {
         });
 
         let full_json = json!({
-            "id": "man_ast",
+            "_id": "man_ast",
             "meta": { "author": "System", "version": "2.0", "status": "ACTIVE" },
             "governance": {
                 "strategy": "PERFORMANCE",
@@ -252,7 +252,7 @@ mod tests {
         manager.init_db().await.unwrap();
 
         let bad_json = json!({
-            "id": "man_broken",
+            "_id": "man_broken",
             "meta": { "author": "Hacker", "version": "0.0", "status": "DRAFT" },
             "governance": { "strategy": "PERFORMANCE" }
         });

@@ -317,6 +317,7 @@ mod tests {
 
         // Insertion d'une Exigence SANS NOM (doit déclencher SYS_002)
         let invalid_req = json!({
+            "_id": "REQ-BAD",
             "id": "REQ-BAD",
             "name": "", // Nom vide -> Erreur
             "type": "https://raise.io/ontology/arcadia/transverse#Requirement"

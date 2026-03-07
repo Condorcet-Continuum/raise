@@ -48,7 +48,7 @@ impl<'a> Migrator<'a> {
         let applied_ids: HashSet<String> = applied_docs
             .iter()
             .filter_map(|doc| {
-                doc.get("id")
+                doc.get("_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             })
@@ -86,10 +86,10 @@ impl<'a> Migrator<'a> {
 
         // Enregistrement du succès
         let record = json!({
-            "id": migration.id,
+            "_id": migration.id,
             "version": migration.version,
             "description": migration.description,
-            "appliedAt": Utc::now().to_rfc3339()
+            "applied_at": Utc::now().to_rfc3339()
         });
 
         self.manager.insert_raw("_migrations", &record).await?;
@@ -216,16 +216,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_migration_lifecycle() {
-        // 1. Initialisation en une ligne
         let sandbox = DbSandbox::new().await;
 
-        // 2. On instancie le Migrator avec la sandbox
         let migrator = Migrator::new(
             &sandbox.storage,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
         migrator.manager.init_db().await.unwrap();
+
         let m1 = Migration {
             id: "m1".to_string(),
             version: "1.0.0".to_string(),
@@ -249,7 +248,8 @@ mod tests {
         let mig_docs = migrator.manager.list_all("_migrations").await;
         assert!(mig_docs.is_ok());
 
-        let user_doc = json!({ "id": "user_1", "name": "Alice" });
+        // ✅ CORRECTION : Utilisation de _id
+        let user_doc = json!({ "_id": "user_1", "name": "Alice" });
         migrator
             .manager
             .insert_raw("users", &user_doc)
@@ -280,6 +280,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+
         assert_eq!(updated_doc["active"], true);
         assert_eq!(updated_doc["name"], "Alice");
 
@@ -289,17 +290,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_field() {
-        // 1. Initialisation en une ligne
         let sandbox = DbSandbox::new().await;
 
-        // 2. On instancie le Migrator avec la sandbox
         let migrator = Migrator::new(
             &sandbox.storage,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
 
-        // Init DB requis pour les fonctions internes
         migrator.manager.init_db().await.unwrap();
 
         migrator
@@ -311,9 +309,10 @@ mod tests {
             .await
             .unwrap();
 
+        // ✅ CORRECTION : Utilisation de _id
         migrator
             .manager
-            .insert_raw("products", &json!({"id": "p1", "cost": 100}))
+            .insert_raw("products", &json!({"_id": "p1", "cost": 100}))
             .await
             .unwrap();
 

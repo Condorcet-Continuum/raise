@@ -98,7 +98,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         .unwrap_or_else(|| "cli_user".to_string());
     let session_id = current_session
         .as_ref()
-        .map(|s| s.id.clone())
+        .map(|s| s._id.clone())
         .unwrap_or_else(|| "cli_session".to_string());
 
     // Instanciation asynchrone du Contexte Agent avec les vraies IDs

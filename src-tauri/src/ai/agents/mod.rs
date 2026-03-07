@@ -82,6 +82,7 @@ impl AgentMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSession {
+    #[serde(rename = "_id")]
     pub id: String,
     pub agent_id: String,
     pub created_at: DateTime<Utc>,
@@ -151,7 +152,11 @@ pub mod tools {
         collection: &str,
         doc: &Value,
     ) -> RaiseResult<CreatedArtifact> {
-        let Some(doc_id_ref) = doc["id"].as_str() else {
+        let Some(doc_id_ref) = doc
+            .get("_id")
+            .or_else(|| doc.get("id"))
+            .and_then(|v| v.as_str())
+        else {
             raise_error!(
                 "ERR_ARTIFACT_ID_INVALID",
                 error = "L'artefact n'a pas d'ID valide",

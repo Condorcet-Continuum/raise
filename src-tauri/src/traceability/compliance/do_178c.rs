@@ -71,7 +71,7 @@ mod tests {
         docs.insert(
             "F1".to_string(),
             json!({
-                "id": "F1",
+                "_id": "F1",
                 "kind": "Function",
                 "allocatedTo": "C1"
             }),
@@ -81,13 +81,16 @@ mod tests {
         docs.insert(
             "F2".to_string(),
             json!({
-                "id": "F2",
+                "_id": "F2",
                 "kind": "Function"
             }),
         );
 
         // 3. Cible du lien
-        docs.insert("C1".to_string(), json!({ "id": "C1", "kind": "Component" }));
+        docs.insert(
+            "C1".to_string(),
+            json!({ "_id": "C1", "kind": "Component" }),
+        );
 
         // 🎯 Injection du graphe via from_json_list (Zéro dépendance ProjectModel)
         let tracer = Tracer::from_json_list(docs.values().cloned().collect());

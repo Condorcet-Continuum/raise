@@ -55,7 +55,7 @@ pub async fn session_login(
     // Le SessionManager gère la création en mémoire ET la persistance dans json_db
     let session = state.start_session(&user_id).await?;
 
-    tracing::info!("✅ Session démarrée : {}", session.id);
+    tracing::info!("✅ Session démarrée : {}", session._id);
     Ok(session)
 }
 

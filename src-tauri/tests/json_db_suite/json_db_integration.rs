@@ -33,7 +33,7 @@ async fn query_get_article_by_id() {
         .expect("❌ L'insertion de l'article a échoué");
 
     let id = inserted
-        .get("id")
+        .get("_id")
         .and_then(|v| v.as_str())
         .expect("❌ L'ID est manquant dans le document inséré");
 

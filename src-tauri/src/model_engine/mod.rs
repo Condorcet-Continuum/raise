@@ -61,7 +61,7 @@ mod tests {
 
         // 2. Vérifie l'accès à la Factory Transformer
         let transformer = get_transformer(TransformationDomain::Software);
-        let dummy = json!({ "id": "TEST", "name": "TestElement" });
+        let dummy = json!({ "_id": "TEST", "name": "TestElement" });
         assert!(transformer.transform(&dummy).is_ok());
 
         // 3. Vérifie l'accès à l'enum Sémantique

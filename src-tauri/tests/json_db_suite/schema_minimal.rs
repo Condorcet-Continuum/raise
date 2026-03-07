@@ -16,11 +16,7 @@ async fn schema_instantiate_validate_minimal() {
         .expect("❌ Impossible de charger le registre des schémas depuis la DB");
 
     // Construction de l'URI du schéma (Format SSOT)
-    let schema_rel_path = "actors/actor.schema.json";
-    let root_uri = format!(
-        "db://{}/{}/schemas/v1/{}",
-        env.space, env.db, schema_rel_path
-    );
+    let root_uri = "db://_system/_system/schemas/v1/mock/actors.schema.json".to_string();
 
     // Vérification de présence dans le registre
     if reg.get_by_uri(&root_uri).is_none() {
@@ -38,7 +34,7 @@ async fn schema_instantiate_validate_minimal() {
     // On simule un document qui possède les champs système requis par base.schema.json
     let mut doc = json!({
       "$schema": root_uri,
-      "id": uuid::Uuid::new_v4().to_string(),
+      "_id": uuid::Uuid::new_v4().to_string(),
       "createdAt": chrono::Utc::now().to_rfc3339(),
       "updatedAt": chrono::Utc::now().to_rfc3339(),
 
@@ -57,7 +53,7 @@ async fn schema_instantiate_validate_minimal() {
 
     // 5. Vérifications finales de persistance des métadonnées
     assert!(
-        doc.get("id").is_some(),
+        doc.get("_id").is_some(),
         "❌ L'ID a disparu après validation"
     );
     assert!(

@@ -2,7 +2,9 @@
 #![cfg(any(test, debug_assertions))]
 
 // 🎯 100% FAÇADE UTILS : On respecte le contrat de mod.rs
-use crate::utils::io::{create_dir_all, exists, tempdir, write, Path, PathBuf, TempDir};
+use crate::utils::io::{self, create_dir_all, tempdir, PathBuf, TempDir};
+use tokio::fs::write;
+
 use crate::utils::prelude::*;
 use crate::utils::Arc;
 
@@ -46,7 +48,7 @@ pub async fn inject_mock_component(
         .await;
 
     let doc = json!({
-        "id": format!("mock-{}", comp_id),
+        "_id": format!("mock-{}", comp_id),
         "identity": { "component_id": comp_id },
         "settings": settings,
         "$schema": "db://_system/_system/schemas/v1/db/generic.schema.json"
@@ -61,52 +63,102 @@ pub async fn inject_mock_component(
 /// Injecte le schéma racine index.schema.json et les passe-partouts
 pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
     let schema_dir = db_cfg.db_schemas_root("_system", "_system").join("v1/db");
-    let schema_file = schema_dir.join("index.schema.json");
+    let _ = io::create_dir_all(&schema_dir).await;
 
-    if !exists(&schema_file).await {
-        let _ = create_dir_all(&schema_dir).await;
+    // 1. Schéma de migration
+    let migration_schema = json!({
+        "$id": "db://_system/_system/schemas/v1/db/migration.schema.json",
+        "type": "object",
+        "properties": {
+            "_id": { "type": "string" },
+            "version": { "type": "string" }
+        },
+        "required": ["_id", "version"]
+    });
+    let _ =
+        io::write_json_atomic(&schema_dir.join("migration.schema.json"), &migration_schema).await;
 
-        let core_schema = json!({
-            "$id": "db://_system/_system/schemas/v1/db/index.schema.json",
-            "type": "object",
-            "properties": {
-                "name": { "type": "string" },
-                "version": { "type": "integer", "default": 1 },
-                "space": { "type": "string" },
-                "database": { "type": "string" },
-                "collections": { "type": "object", "default": {} },
-                "rules": { "type": "object", "default": {} },
-                "schemas": { "type": "object", "default": { "v1": {} } }
+    // 2. Schéma d'index avec 'properties' explicites pour l'hydratation
+    let core_schema = json!({
+        "$id": "db://_system/_system/schemas/v1/db/index.schema.json",
+        "type": "object",
+        "properties": {
+            "_id": {
+                "type": "string",
+                "x_compute": { "plan": { "op": "uuid_v4" }, "update": "if_missing" }
             },
-            "required": ["name", "version", "space", "database", "collections", "rules", "schemas"]
-        });
+            "name": { "type": "string" },
+            "space": { "type": "string" },
+            "database": { "type": "string" },
+            "version": { "type": "integer", "default": 1 },
+            "collections": {
+                "type": "object",
+                "properties": {
+                    "_migrations": {
+                        "type": "object",
+                        "default": {
+                            "schema": "db://_system/_system/schemas/v1/db/migration.schema.json",
+                            "items": []
+                        }
+                    }
+                },
+                "default": {}
+            },
+            // 🎯 AJOUT ICI : On définit _system_rules pour que le validateur l'injecte
+            "rules": {
+                "type": "object",
+                "properties": {
+                    "_system_rules": {
+                        "type": "object",
+                        "default": {
+                            "schema": "db://_system/_system/schemas/v1/db/rule.schema.json",
+                            "items": []
+                        }
+                    }
+                },
+                "default": {}
+            },
+            "schemas": { "type": "object", "default": { "v1": {} } }
+        },
+        "required": ["_id", "name", "space", "database"]
+    });
+    let _ = io::write_json_atomic(&schema_dir.join("index.schema.json"), &core_schema).await;
 
-        let _ = write(&schema_file, core_schema.to_string().as_bytes()).await;
-
-        // Schéma générique (permissif pour débloquer les tests)
-        let generic_schema = json!({
-            "$id": "db://_system/_system/schemas/v1/db/generic.schema.json",
-            "type": "object",
-            "additionalProperties": true
-        });
-        let _ = write(
-            &schema_dir.join("generic.schema.json"),
-            generic_schema.to_string().as_bytes(),
-        )
-        .await;
-
-        // Schéma interne des migrations
-        let migration_schema = json!({
-            "$id": "db://_system/_system/schemas/v1/db/migration.schema.json",
-            "type": "object",
-            "additionalProperties": true
-        });
-        let _ = write(
-            &schema_dir.join("migration.schema.json"),
-            migration_schema.to_string().as_bytes(),
-        )
-        .await;
-    }
+    // Schéma générique (inchangé)
+    let generic_schema = json!({
+        "$id": "db://_system/_system/schemas/v1/db/generic.schema.json",
+        "type": "object",
+        "properties": {
+            "_id": {
+                "type": "string",
+                "x_compute": { "plan": { "op": "uuid_v4" }, "update": "if_missing" }
+            },
+            "_created_at": {
+                "type": "string",
+                "x_compute": { "plan": { "op": "now_rfc3339" }, "update": "if_missing" }
+            },
+            "_updated_at": {
+                "type": "string",
+                "x_compute": { "plan": { "op": "now_rfc3339" }, "update": "always" }
+            },
+            "_p2p": {
+                "type": "object",
+                "properties": {
+                    "revision": {
+                        "type": "integer",
+                        "default": 1
+                        // Note: L'incrémentation se fait manuellement dans manager.rs update_document
+                    },
+                    "origin_node": { "type": "string" },
+                    "checksum": { "type": "string" }
+                },
+                "default": { "revision": 1 }
+            }
+        },
+        "required": ["_id"],
+        "additionalProperties": true
+    });
+    let _ = io::write_json_atomic(&schema_dir.join("generic.schema.json"), &generic_schema).await;
 }
 
 pub async fn inject_collection_schema(domain_root: &Path, collection_name: &str, content: &str) {
@@ -254,7 +306,7 @@ impl GlobalDbSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::io::read_to_string;
+    use crate::utils::io::{exists, read_to_string};
 
     #[tokio::test]
     async fn test_inject_schema_to_path_creates_valid_file() {

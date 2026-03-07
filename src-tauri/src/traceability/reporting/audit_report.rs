@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn test_audit_generate_full_report() {
         let mut docs = HashMap::new();
-        docs.insert("F1".into(), json!({ "id": "F1", "kind": "Function" }));
+        docs.insert("F1".into(), json!({ "_id": "F1", "kind": "Function" }));
 
         let tracer = Tracer::from_json_list(vec![]);
         let report = AuditGenerator::generate(&tracer, &docs, "Test Project");

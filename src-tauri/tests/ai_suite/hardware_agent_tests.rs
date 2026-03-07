@@ -1,9 +1,8 @@
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{hardware_agent::HardwareAgent, Agent, AgentContext};
-use raise::utils::Arc;
-// 👇 N'oublie pas l'import du manager
 use raise::json_db::collections::manager::CollectionsManager;
+use raise::utils::Arc;
 
 #[tokio::test]
 #[serial_test::serial]

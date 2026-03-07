@@ -39,8 +39,8 @@ async fn debug_import_exchange_item() {
 
     match mgr.insert_with_schema("exchange-items", json_doc).await {
         Ok(res) => {
-            assert!(res.get("id").is_some());
-            println!("✅ Insertion réussie avec l'ID : {}", res["id"]);
+            assert!(res.get("_id").is_some());
+            println!("✅ Insertion réussie avec l'ID : {}", res["_id"]);
         }
         Err(e) => panic!("❌ ÉCHEC INSERTION : {}", e),
     }

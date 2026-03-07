@@ -1,12 +1,11 @@
 // FICHIER : src-tauri/src/json_db/schema/registry.rs
 
 use crate::json_db::storage::JsonDbConfig;
-
 use crate::utils::async_recursion;
+use crate::utils::config::AppConfig;
 use crate::utils::data::HashMap;
 use crate::utils::io::{self, PathBuf};
 use crate::utils::json::json;
-
 use crate::utils::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -41,27 +40,54 @@ impl SchemaRegistry {
             schemas_root: Some(schemas_root.clone()),
         };
 
-        // 🎯 1. CHARGEMENT DU FALLBACK SYSTÈME GLOBAL (_system/_system)
-        if space != "_system" || db != "_system" {
-            let sys_prefix = "db://_system/_system/schemas/v1/";
-            let sys_root = config.db_schemas_root("_system", "_system").join("v1");
-            if io::exists(&sys_root).await {
-                // On scanne le système global en lui appliquant son préfixe spécifique
-                registry
-                    .scan_directory(&sys_root, &sys_root, sys_prefix)
-                    .await?;
-            }
-        }
+        let app_config = AppConfig::get();
 
-        // 🎯 2. CHARGEMENT DU DOMAINE COURANT (space/db)
-        if io::exists(&schemas_root).await {
-            // On scanne le domaine courant, qui viendra s'ajouter à la HashMap
+        // 🎯 LECTURE ASCENDANTE : On charge toutes les strates dans la mémoire (HashMap)
+        // 1. Noyau système dur (_system/_system)
+        registry
+            .load_domain_schemas(config, "_system", "_system")
+            .await?;
+
+        // 2. Système configuré
+        if app_config.system_domain != "_system" || app_config.system_db != "_system" {
             registry
-                .scan_directory(&schemas_root, &schemas_root, &base_prefix)
+                .load_domain_schemas(config, &app_config.system_domain, &app_config.system_db)
                 .await?;
         }
 
+        // 3. Workstation
+        if let Some(ws) = &app_config.workstation {
+            if let (Some(d), Some(b)) = (&ws.default_domain, &ws.default_db) {
+                registry.load_domain_schemas(config, d, b).await?;
+            }
+        }
+
+        // 4. Utilisateur
+        if let Some(user) = &app_config.user {
+            if let (Some(d), Some(b)) = (&user.default_domain, &user.default_db) {
+                registry.load_domain_schemas(config, d, b).await?;
+            }
+        }
+
+        // 5. Domaine courant (space/db)
+        registry.load_domain_schemas(config, space, db).await?;
+
         Ok(registry)
+    }
+
+    /// Helper privé pour charger un domaine spécifique dans le registre
+    async fn load_domain_schemas(
+        &mut self,
+        config: &JsonDbConfig,
+        space: &str,
+        db: &str,
+    ) -> RaiseResult<()> {
+        let prefix = format!("db://{}/{}/schemas/v1/", space, db);
+        let root = config.db_schemas_root(space, db).join("v1");
+        if io::exists(&root).await {
+            self.scan_directory(&root, &root, &prefix).await?;
+        }
+        Ok(())
     }
 
     #[async_recursion] // Adapte le chemin de la macro selon tes imports
@@ -115,7 +141,53 @@ impl SchemaRegistry {
     }
 
     pub fn get_by_uri(&self, uri: &str) -> Option<&Value> {
-        self.by_uri.get(uri)
+        // 1. Recherche stricte (Priorité absolue)
+        if let Some(schema) = self.by_uri.get(uri) {
+            return Some(schema);
+        }
+
+        // 2. 🎯 FALLBACK INTELLIGENT (Virtualisation en mémoire)
+        if let Some(idx) = uri.find("/schemas/v1/") {
+            let relative_path = &uri[idx + "/schemas/v1/".len()..];
+            let app_config = AppConfig::get();
+
+            // A. Domaine Utilisateur
+            if let Some(user) = &app_config.user {
+                if let (Some(d), Some(b)) = (&user.default_domain, &user.default_db) {
+                    let user_uri = format!("db://{}/{}/schemas/v1/{}", d, b, relative_path);
+                    if let Some(schema) = self.by_uri.get(&user_uri) {
+                        return Some(schema);
+                    }
+                }
+            }
+
+            // B. Domaine Workstation
+            if let Some(ws) = &app_config.workstation {
+                if let (Some(d), Some(b)) = (&ws.default_domain, &ws.default_db) {
+                    let ws_uri = format!("db://{}/{}/schemas/v1/{}", d, b, relative_path);
+                    if let Some(schema) = self.by_uri.get(&ws_uri) {
+                        return Some(schema);
+                    }
+                }
+            }
+
+            // C. Domaine Système Configuré
+            let sys_uri = format!(
+                "db://{}/{}/schemas/v1/{}",
+                app_config.system_domain, app_config.system_db, relative_path
+            );
+            if let Some(schema) = self.by_uri.get(&sys_uri) {
+                return Some(schema);
+            }
+
+            // D. Noyau Dur (_system/_system)
+            let hard_sys_uri = format!("db://_system/_system/schemas/v1/{}", relative_path);
+            if let Some(schema) = self.by_uri.get(&hard_sys_uri) {
+                return Some(schema);
+            }
+        }
+
+        None
     }
 
     pub fn list_uris(&self) -> Vec<String> {

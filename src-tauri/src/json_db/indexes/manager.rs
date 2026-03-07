@@ -191,8 +191,16 @@ impl<'a> IndexManager<'a> {
     }
 
     pub async fn index_document(&mut self, collection: &str, new_doc: &Value) -> RaiseResult<()> {
-        let Some(doc_id) = new_doc.get("id").and_then(|v| v.as_str()) else {
-            return Ok(()); // Ignorer silencieusement si pas d'ID (ou propager une erreur si préféré)
+        let Some(doc_id) = new_doc.get("_id").and_then(|v| v.as_str()) else {
+            raise_error!(
+                "ERR_DB_DOCUMENT_ID_MISSING",
+                error = "Impossible d'indexer le document : attribut '_id' manquant ou invalide.",
+                context = json!({
+                    "collection": collection,
+                    "action": "index_document",
+                    "hint": "Assurez-vous que le document est passé par le SchemaValidator (qui génère l'_id) avant d'atteindre le moteur d'indexation."
+                })
+            );
         };
         let indexes = self.load_indexes(collection).await?;
 
@@ -213,7 +221,7 @@ impl<'a> IndexManager<'a> {
     }
 
     pub async fn remove_document(&mut self, collection: &str, old_doc: &Value) -> RaiseResult<()> {
-        let doc_id = old_doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let doc_id = old_doc.get("_id").and_then(|v| v.as_str()).unwrap_or("");
         if doc_id.is_empty() {
             return Ok(());
         }
@@ -322,7 +330,6 @@ pub async fn add_index_definition(
     Ok(())
 }
 
-// Les tests restent identiques (ils utilisent déjà StorageEngine dans ton code)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,7 +350,8 @@ mod tests {
         mgr.create_index("users", "email", "hash").await.unwrap();
         assert!(col_path.join("_meta.json").exists());
 
-        let doc = json!({ "id": "u1", "email": "a@a.com" });
+        // ✅ CORRECTION : Utilisation de "_id"
+        let doc = json!({ "_id": "u1", "email": "a@a.com" });
         mgr.index_document("users", &doc).await.unwrap();
 
         let idx_path = col_path.join("_indexes/email.hash.idx");
@@ -367,8 +375,9 @@ mod tests {
             .await
             .unwrap();
 
-        let p1 = json!({ "id": "p1", "category": "book" });
-        let p2 = json!({ "id": "p2", "category": "food" });
+        // ✅ CORRECTION : Utilisation de "_id"
+        let p1 = json!({ "_id": "p1", "category": "book" });
+        let p2 = json!({ "_id": "p2", "category": "food" });
 
         mgr.index_document("products", &p1).await.unwrap();
         mgr.index_document("products", &p2).await.unwrap();
@@ -390,19 +399,15 @@ mod tests {
         let storage = StorageEngine::new(config);
         let mut mgr = IndexManager::new(&storage, "s", "d");
 
-        // 1. Préparation de la collection
         let col_path = dir.path().join("s/d/collections/users");
         io::create_dir_all(&col_path).await.unwrap();
 
-        // 2. Création de deux index distincts
         mgr.create_index("users", "email", "hash").await.unwrap();
         mgr.create_index("users", "age", "btree").await.unwrap();
 
-        // --- Test A : Lister tous les index (Sans filtre) ---
         let all_indexes = mgr.list_indexes("users", None).await.unwrap();
         assert_eq!(all_indexes.len(), 2, "Il devrait y avoir 2 index au total");
 
-        // --- Test B : Filtrer sur un index spécifique ---
         let email_index = mgr.list_indexes("users", Some("email")).await.unwrap();
         assert_eq!(
             email_index.len(),
@@ -415,7 +420,6 @@ mod tests {
         assert_eq!(age_index.len(), 1);
         assert_eq!(age_index[0].name, "age");
 
-        // --- Test C : Filtrer sur un index inexistant ---
         let unknown_index = mgr.list_indexes("users", Some("not_found")).await.unwrap();
         assert!(
             unknown_index.is_empty(),

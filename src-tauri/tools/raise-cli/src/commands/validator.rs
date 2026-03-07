@@ -140,8 +140,8 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Conformité JSON stricte
             user_success!("VALIDATOR_SUCCESS", json!({"status": "validation_passed"}));
 
-            if let Some(id) = doc.get("id") {
-                user_info!("VALIDATOR_ID_GENERATED", json!({ "id": id }));
+            if let Some(id) = doc.get("_id") {
+                user_info!("VALIDATOR_ID_GENERATED", json!({ "_id": id }));
             }
             Ok(())
         }
