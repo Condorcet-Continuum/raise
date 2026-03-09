@@ -1,23 +1,23 @@
 // src-tauri/src/blockchain/consensus/pending.rs
 
 use crate::blockchain::storage::commit::ArcadiaCommit;
-use crate::utils::{DateTime, HashMap, Utc};
+use crate::utils::prelude::*;
 /// Représente un commit en attente avec sa date de réception pour gérer l'expiration.
 pub struct PendingEntry {
     pub commit: ArcadiaCommit,
-    pub received_at: DateTime<Utc>,
+    pub received_at: UtcTimestamp,
 }
 
 /// Gestionnaire des commits en attente de validation par quorum.
 pub struct PendingCommits {
-    entries: HashMap<String, PendingEntry>,
+    entries: UnorderedMap<String, PendingEntry>,
 }
 
 impl PendingCommits {
     /// Crée un nouveau gestionnaire de commits en attente.
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: UnorderedMap::new(),
         }
     }
 
@@ -28,7 +28,7 @@ impl PendingCommits {
             id,
             PendingEntry {
                 commit,
-                received_at: Utc::now(),
+                received_at: UtcClock::now(),
             },
         );
     }
@@ -45,7 +45,7 @@ impl PendingCommits {
 
     /// Nettoie les commits trop vieux pour libérer la mémoire.
     pub fn garbage_collect(&mut self, max_age_minutes: i64) {
-        let now = Utc::now();
+        let now = UtcClock::now();
         self.entries
             .retain(|_, entry| (now - entry.received_at).num_minutes() < max_age_minutes);
     }
@@ -63,14 +63,13 @@ impl Default for PendingCommits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
 
     fn mock_commit(id: &str) -> ArcadiaCommit {
         ArcadiaCommit {
             id: id.into(),
             parent_hash: None,
             author: "key".into(),
-            timestamp: Utc::now(),
+            timestamp: UtcClock::now(),
             mutations: vec![],
             merkle_root: "root".into(),
             signature: vec![],
@@ -100,7 +99,7 @@ mod tests {
             id.into(),
             PendingEntry {
                 commit: mock_commit(id),
-                received_at: Utc::now() - Duration::minutes(40),
+                received_at: UtcClock::now() - TimeDuration::from_secs(40 * 60),
             },
         );
 

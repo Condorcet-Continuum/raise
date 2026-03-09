@@ -1,12 +1,12 @@
 // FICHIER : src-tauri/src/ai/agents/intent_classifier.rs
 
 use crate::ai::llm::client::{LlmBackend, LlmClient};
-use crate::utils::{data, prelude::*};
+use crate::utils::prelude::*;
 
 // Import de la Toolbox pour le parsing JSON robuste
 use super::tools::extract_json_from_llm;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 #[serde(tag = "intent")]
 pub enum EngineeringIntent {
     #[serde(rename = "define_business_use_case")]
@@ -203,7 +203,8 @@ impl IntentClassifier {
 
         // UTILISATION DE LA TOOLBOX ICI (Plus de code dupliqué)
         let clean_json = extract_json_from_llm(&response);
-        let mut json_value: Value = data::parse(&clean_json).unwrap_or(json!({}));
+        let mut json_value: JsonValue =
+            json::deserialize_from_str(&clean_json).unwrap_or(json_value!({}));
 
         // --- MODE SECOURS (HEURISTIQUE) ---
         // Si le LLM échoue à produire un JSON valide avec un "intent"
@@ -217,41 +218,42 @@ impl IntentClassifier {
         if let Some(intent) = json_value["intent"].as_str() {
             if intent == "create_element" || intent == "create_system" {
                 if lower_input.contains("exigence") || lower_input.contains("requirement") {
-                    json_value["layer"] = json!("TRANSVERSE");
-                    json_value["element_type"] = json!("Requirement");
+                    json_value["layer"] = json_value!("TRANSVERSE");
+                    json_value["element_type"] = json_value!("Requirement");
                 } else if lower_input.contains("classe")
                     || lower_input.contains("donnée")
                     || lower_input.contains("datatype")
                 {
-                    json_value["layer"] = json!("DATA");
-                    json_value["element_type"] = json!("Class");
+                    json_value["layer"] = json_value!("DATA");
+                    json_value["element_type"] = json_value!("Class");
                 } else if lower_input.contains("acteur") || lower_input.contains("rôle") {
-                    json_value["layer"] = json!("OA");
-                    json_value["element_type"] = json!("OperationalActor");
+                    json_value["layer"] = json_value!("OA");
+                    json_value["element_type"] = json_value!("OperationalActor");
                 } else if lower_input.contains("configuration") || lower_input.contains("article") {
-                    json_value["layer"] = json!("EPBS");
-                    json_value["element_type"] = json!("ConfigurationItem");
+                    json_value["layer"] = json_value!("EPBS");
+                    json_value["element_type"] = json_value!("ConfigurationItem");
                 }
             }
         }
 
         // Fix legacy intents
         if json_value["intent"] == "create_system" {
-            json_value["intent"] = json!("create_element");
+            json_value["intent"] = json_value!("create_element");
             if json_value.get("layer").is_none() {
-                json_value["layer"] = json!("SA");
+                json_value["layer"] = json_value!("SA");
             }
             if json_value.get("element_type").is_none() {
-                json_value["element_type"] = json!("System");
+                json_value["element_type"] = json_value!("System");
             }
         }
 
         // Nom par défaut si manquant
         if json_value["intent"] == "create_element" && json_value.get("name").is_none() {
-            json_value["name"] = json!(user_input.replace("Crée ", "").replace("le ", "").trim());
+            json_value["name"] =
+                json_value!(user_input.replace("Crée ", "").replace("le ", "").trim());
         }
 
-        match data::from_value::<EngineeringIntent>(json_value) {
+        match json::deserialize_from_value::<EngineeringIntent>(json_value) {
             Ok(intent) => intent,
             Err(_) => EngineeringIntent::Unknown,
         }
@@ -296,12 +298,12 @@ fn extract_target_heuristics(input: &str) -> String {
     input.to_string()
 }
 
-fn heuristic_fallback(input: &str) -> Value {
+fn heuristic_fallback(input: &str) -> JsonValue {
     let lower = input.to_lowercase();
 
     // AJOUT : Fallback Qualité
     if lower.contains("vérif") || lower.contains("check") {
-        return json!({
+        return json_value!({
             "intent": "verify_quality",
             "scope": "code",
             "target": input
@@ -309,7 +311,7 @@ fn heuristic_fallback(input: &str) -> Value {
     }
 
     if lower.contains("code") || lower.contains("génère") || lower.contains("generate") {
-        return json!({
+        return json_value!({
             "intent": "generate_code",
             "language": "rust",
             "filename": "generated_component.rs",
@@ -333,7 +335,7 @@ fn heuristic_fallback(input: &str) -> Value {
         ("SA", "Function")
     };
 
-    json!({ "intent": "create_element", "layer": layer, "element_type": etype, "name": input })
+    json_value!({ "intent": "create_element", "layer": layer, "element_type": etype, "name": input })
 }
 
 // --- TESTS UNITAIRES ---

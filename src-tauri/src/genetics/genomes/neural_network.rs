@@ -3,7 +3,7 @@ use crate::genetics::traits::Genome;
 use crate::utils::prelude::*;
 use rand::prelude::*;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serializable, Deserializable)]
 pub struct NeuralNetworkGenome {
     pub weights: Vec<f32>,
     pub layer_sizes: Vec<usize>,

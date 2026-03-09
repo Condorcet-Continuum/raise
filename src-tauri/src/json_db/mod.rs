@@ -16,12 +16,10 @@ pub mod transactions;
 pub mod test_utils {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::JsonDbConfig;
-    use crate::utils::io;
-    use crate::utils::mock::DbSandbox;
-    use crate::utils::Once;
-    use std::path::PathBuf;
+    use crate::utils::prelude::*;
+    use crate::utils::testing::DbSandbox;
 
-    static INIT: Once = Once::new();
+    static TEST_LOGGER_INIT: StaticCell<()> = StaticCell::new();
 
     pub const TEST_SPACE: &str = "test_space";
     pub const TEST_DB: &str = "test_db";
@@ -37,11 +35,12 @@ pub mod test_utils {
     /// Initialise un environnement de test complet et isolé
     pub async fn init_test_env() -> TestEnv {
         // 1. Initialisation unique du Logger (plus besoin de thread complexe !)
-        INIT.call_once(|| {
+        TEST_LOGGER_INIT.get_or_init(|| {
             let _ = tracing_subscriber::fmt()
                 .with_env_filter("info")
                 .with_test_writer()
                 .try_init();
+            ()
         });
 
         // 2. 🎯 LA MAGIE : La Sandbox gère l'isolation, la DB, et le schéma maître (_system)
@@ -69,16 +68,16 @@ pub mod test_utils {
 
     async fn create_mock_dataset(data_root: &PathBuf) {
         let dataset_root = data_root.join("dataset");
-        let _ = io::create_dir_all(&dataset_root).await;
+        let _ = fs::create_dir_all_async(&dataset_root).await;
 
         // Mock Article
         let article_path = dataset_root.join("arcadia/v1/data/articles/article.json");
         if let Some(p) = article_path.parent() {
-            let _ = io::create_dir_all(p).await;
+            let _ = fs::create_dir_all_async(p).await;
         }
 
         // ✅ CORRECTION : snake_case + _id
-        let mock_article = serde_json::json!({
+        let mock_article = json_value!({
             "_id": "mock-article-001",
             "handle": "mock-handle",
             "display_name": "Mock Article",
@@ -87,18 +86,18 @@ pub mod test_utils {
             "status": "draft",
             "author_id": "00000000-0000-0000-0000-000000000000"
         });
-        let _ = io::write_json_atomic(&article_path, &mock_article).await;
+        let _ = fs::write_json_atomic_async(&article_path, &mock_article).await;
 
         // Mock Exchange Item
         let ex_path = dataset_root.join("arcadia/v1/data/exchange-items/position_gps.json");
         if let Some(p) = ex_path.parent() {
-            let _ = io::create_dir_all(p).await;
+            let _ = fs::create_dir_all_async(p).await;
         }
 
         // ✅ CORRECTION : Ajout de _id
-        let _ = io::write_json_atomic(
+        let _ = fs::write_json_atomic_async(
             &ex_path,
-            &serde_json::json!({ "_id": "mock-gps-001", "name": "GPS Position", "mechanism": "Flow" }),
+            &json_value!({ "_id": "mock-gps-001", "name": "GPS Position", "mechanism": "Flow" }),
         )
         .await;
 
@@ -106,12 +105,12 @@ pub mod test_utils {
 
         let dapp_id = "mock-dapp-id";
         let dapp_path = system_collections.join("dapps");
-        let _ = io::create_dir_all(&dapp_path).await;
+        let _ = fs::create_dir_all_async(&dapp_path).await;
 
         // ✅ CORRECTION : _id + snake_case pour plugin_config
-        let _ = io::write_json_atomic(
+        let _ = fs::write_json_atomic_async(
             &dapp_path.join(format!("{}.json", dapp_id)),
-            &serde_json::json!({
+            &json_value!({
                 "_id": dapp_id,
                 "handle": "raise-core",
                 "name": "raise_core",
@@ -122,12 +121,12 @@ pub mod test_utils {
 
         let service_id = "mock-ai-service-id";
         let services_path = system_collections.join(format!("dapps/{}/services", dapp_id));
-        let _ = io::create_dir_all(&services_path).await;
+        let _ = fs::create_dir_all_async(&services_path).await;
 
         // ✅ CORRECTION : _id
-        let _ = io::write_json_atomic(
+        let _ = fs::write_json_atomic_async(
             &services_path.join(format!("{}.json", service_id)),
-            &serde_json::json!({
+            &json_value!({
                 "_id": service_id,
                 "identity": { "service_id": "AI", "status": "enabled" }
             }),
@@ -138,12 +137,12 @@ pub mod test_utils {
             "dapps/{}/services/{}/components",
             dapp_id, service_id
         ));
-        let _ = io::create_dir_all(&components_path).await;
+        let _ = fs::create_dir_all_async(&components_path).await;
 
         // ✅ CORRECTION : _id
-        let _ = io::write_json_atomic(
+        let _ = fs::write_json_atomic_async(
             &components_path.join("mock-llm-comp.json"),
-            &serde_json::json!({
+            &json_value!({
                 "_id": "mock-llm-comp",
                 "identity": { "component_id": "llm", "version": "1.0.0" },
                 "settings": {
@@ -156,9 +155,9 @@ pub mod test_utils {
         .await;
 
         // ✅ CORRECTION : _id
-        let _ = io::write_json_atomic(
+        let _ = fs::write_json_atomic_async(
             &components_path.join("mock-mem-comp.json"),
-            &serde_json::json!({
+            &json_value!({
                 "_id": "mock-mem-comp",
                 "identity": { "component_id": "memory", "version": "1.0.0" },
                 "settings": {
@@ -173,7 +172,7 @@ pub mod test_utils {
     pub async fn ensure_db_exists(cfg: &JsonDbConfig, space: &str, db: &str) {
         let db_path = cfg.db_root(space, db);
         if !db_path.exists() {
-            let _ = io::create_dir_all(&db_path).await;
+            let _ = fs::create_dir_all_async(&db_path).await;
         }
     }
 }
@@ -181,8 +180,8 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::test_utils::*;
-
-    #[tokio::test]
+    use crate::utils::prelude::*;
+    #[async_test]
     async fn test_env_initialization() {
         let env = init_test_env().await;
 

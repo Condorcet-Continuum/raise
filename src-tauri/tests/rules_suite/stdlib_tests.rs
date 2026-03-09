@@ -3,14 +3,14 @@
 use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider};
 use raise::utils::prelude::*;
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone
+#[async_test] // CORRECTION : Passage en test asynchrone
 #[allow(clippy::approx_constant)]
 async fn test_math_extensions() {
     let provider = NoOpDataProvider;
-    let ctx = json!({});
+    let ctx = json_value!({});
 
     // Abs
-    let abs = Expr::Abs(Box::new(Expr::Val(json!(-42))));
+    let abs = Expr::Abs(Box::new(Expr::Val(json_value!(-42))));
     assert_eq!(
         // CORRECTION : Ajout de .await car l'évaluateur est asynchrone
         Evaluator::evaluate(&abs, &ctx, &provider)
@@ -22,8 +22,8 @@ async fn test_math_extensions() {
 
     // Round
     let r1 = Expr::Round {
-        value: Box::new(Expr::Val(json!(std::f64::consts::PI))),
-        precision: Box::new(Expr::Val(json!(2))),
+        value: Box::new(Expr::Val(json_value!(std::f64::consts::PI))),
+        precision: Box::new(Expr::Val(json_value!(2))),
     };
     assert_eq!(
         Evaluator::evaluate(&r1, &ctx, &provider)
@@ -34,10 +34,10 @@ async fn test_math_extensions() {
     );
 }
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone
+#[async_test] // CORRECTION : Passage en test asynchrone
 async fn test_string_extensions() {
     let provider = NoOpDataProvider;
-    let ctx = json!({ "msg": "  Bonjour Monde  " });
+    let ctx = json_value!({ "msg": "  Bonjour Monde  " });
 
     // Trim + Lower
     let expr = Expr::Lower(Box::new(Expr::Trim(Box::new(Expr::Var("msg".into())))));
@@ -53,8 +53,8 @@ async fn test_string_extensions() {
     // Replace
     let repl = Expr::Replace {
         value: Box::new(Expr::Var("msg".into())),
-        pattern: Box::new(Expr::Val(json!("Monde"))),
-        replacement: Box::new(Expr::Val(json!("Raise"))),
+        pattern: Box::new(Expr::Val(json_value!("Monde"))),
+        replacement: Box::new(Expr::Val(json_value!("Raise"))),
     };
     assert_eq!(
         // CORRECTION : Ajout de .await
@@ -66,10 +66,10 @@ async fn test_string_extensions() {
     );
 }
 
-#[tokio::test] // CORRECTION : Passage en test asynchrone
+#[async_test] // CORRECTION : Passage en test asynchrone
 async fn test_list_aggregations() {
     let provider = NoOpDataProvider;
-    let ctx = json!({ "values": [10, 2, 50, 5] });
+    let ctx = json_value!({ "values": [10, 2, 50, 5] });
 
     let min = Expr::Min(Box::new(Expr::Var("values".into())));
     let max = Expr::Max(Box::new(Expr::Var("values".into())));

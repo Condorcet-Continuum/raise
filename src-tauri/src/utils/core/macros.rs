@@ -1,10 +1,26 @@
-// FICHIER : src-tauri/src/utils/macros.rs
+// FICHIER : src-tauri/src/utils/core/macros.rs
+
+#[macro_export]
+macro_rules! async_test {
+    ($($item:item)*) => {
+        #[tokio::test]
+        $($item)*
+    };
+}
+
+#[macro_export]
+macro_rules! async_interface {
+    ($($item:item)*) => {
+        #[::async_trait::async_trait]
+        $($item)*
+    };
+}
 
 /// Affiche une info à l'utilisateur (traduite) et logue l'événement
 #[macro_export]
 macro_rules! user_info {
     ($key:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::info!(
             target: "user_notification",
             event_id = $key,
@@ -12,7 +28,7 @@ macro_rules! user_info {
         );
     }};
     ($key:expr, $context:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::info!(
             target: "user_notification",
             event_id = $key,
@@ -26,7 +42,7 @@ macro_rules! user_info {
 #[macro_export]
 macro_rules! user_success {
     ($key:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::info!(
             target: "user_notification",
             event_id = $key,
@@ -35,7 +51,7 @@ macro_rules! user_success {
         );
     }};
     ($key:expr, $context:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::info!(
             target: "user_notification",
             event_id = $key,
@@ -50,7 +66,7 @@ macro_rules! user_success {
 #[macro_export]
 macro_rules! user_warn {
     ($key:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::warn!(
             target: "user_notification",
             event_id = $key,
@@ -59,7 +75,7 @@ macro_rules! user_warn {
         );
     }};
     ($key:expr, $context:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::warn!(
             target: "user_notification",
             event_id = $key,
@@ -74,7 +90,7 @@ macro_rules! user_warn {
 #[macro_export]
 macro_rules! user_debug {
     ($key:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::debug!(
             target: "user_notification",
             event_id = $key,
@@ -83,7 +99,7 @@ macro_rules! user_debug {
         );
     }};
     ($key:expr, $context:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::debug!(
             target: "user_notification",
             event_id = $key,
@@ -97,7 +113,7 @@ macro_rules! user_debug {
 #[macro_export]
 macro_rules! user_error {
     ($key:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::error!(
             target: "user_notification",
             event_id = $key,
@@ -106,7 +122,7 @@ macro_rules! user_error {
         );
     }};
     ($key:expr, $context:expr) => {{
-        let msg = $crate::utils::i18n::t($key);
+        let msg = $crate::utils::context::i18n::t($key);
         tracing::error!(
             target: "user_notification",
             event_id = $key,
@@ -127,13 +143,13 @@ macro_rules! build_error {
         $crate::build_error!(@internal $key, Some($err.to_string()), $ctx, None::<String>, None::<String>)
     };
     ($key:expr, error = $err:expr) => {
-        $crate::build_error!(@internal $key, Some($err.to_string()), serde_json::json!({}), None::<String>, None::<String>)
+        $crate::build_error!(@internal $key, Some($err.to_string()), $crate::utils::data::json::json_value!({}), None::<String>, None::<String>)
     };
     ($key:expr, context = $ctx:expr) => {
         $crate::build_error!(@internal $key, None::<String>, $ctx, None::<String>, None::<String>)
     };
     ($key:expr) => {
-        $crate::build_error!(@internal $key, None::<String>, serde_json::json!({}), None::<String>, None::<String>)
+        $crate::build_error!(@internal $key, None::<String>, $crate::utils::data::json::json_value!({}), None::<String>, None::<String>)
     };
 
     // =========================================================================
@@ -153,28 +169,30 @@ macro_rules! build_error {
             _ => (parts[1], parts[2], parts[3]),
         };
 
-        let mut ctx_map = serde_json::Map::new();
-        ctx_map.insert("action".to_string(), serde_json::json!(action_name));
+        // 🎯 Utilisation de notre alias JsonObject
+        let mut ctx_map = $crate::utils::data::json::JsonObject::new();
+        ctx_map.insert("action".to_string(), $crate::utils::data::json::json_value!(action_name));
 
-        if let Some(cid) = $corr_id { ctx_map.insert("correlationId".to_string(), serde_json::json!(cid)); }
-        if let Some(uid) = $usr_id { ctx_map.insert("userId".to_string(), serde_json::json!(uid)); }
+        if let Some(cid) = $corr_id { ctx_map.insert("correlationId".to_string(), $crate::utils::data::json::json_value!(cid)); }
+        if let Some(uid) = $usr_id { ctx_map.insert("userId".to_string(), $crate::utils::data::json::json_value!(uid)); }
 
         // CORRECTION : On injecte l'erreur technique pour ne pas la perdre !
         if let Some(ref e) = $err {
-            ctx_map.insert("technical_error".to_string(), serde_json::json!(e));
+            ctx_map.insert("technical_error".to_string(), $crate::utils::data::json::json_value!(e));
         }
 
         // On fusionne le contexte utilisateur
         let context_value = $ctx;
-        if let serde_json::Value::Object(user_map) = context_value {
+        // 🎯 Utilisation de notre alias JsonValue
+        if let $crate::utils::data::json::JsonValue::Object(user_map) = context_value {
             for (k, v) in user_map { ctx_map.insert(k, v); }
         } else {
             // Si le contexte n'est pas un objet, on le sauvegarde quand même sous "data"
             ctx_map.insert("data".to_string(), context_value);
         }
 
-        let final_context = serde_json::Value::Object(ctx_map);
-        let reason_msg = $crate::utils::i18n::t($key);
+        let final_context = $crate::utils::data::json::JsonValue::Object(ctx_map);
+        let reason_msg = $crate::utils::context::i18n::t($key);
 
         tracing::error!(
             event = "user_error",
@@ -189,7 +207,7 @@ macro_rules! build_error {
             "❌ [{}] {}", component.to_uppercase(), reason_msg
         );
 
-        $crate::utils::error::AppError::Structured(Box::new($crate::utils::error::StructuredData {
+        $crate::utils::core::error::AppError::Structured(Box::new($crate::utils::core::error::StructuredData {
             service: service.to_string(),
             subdomain: subdomain.to_string(),
             component: component.to_uppercase(),
@@ -222,7 +240,7 @@ macro_rules! require_session {
                 return Err($crate::build_error!(
                     "ERR_UNAUTHORIZED",
                     error = "Accès refusé : aucune session active",
-                    context = serde_json::json!({
+                    context = $crate::utils::data::json::json_value!({
                         "hint": "Vous devez appeler 'session_login' avant d'exécuter cette commande."
                     })
                 ));
@@ -230,13 +248,15 @@ macro_rules! require_session {
         }
     }};
 }
+
 // ============================================================================
 // TESTS UNITAIRES DES MACROS
 // ============================================================================
 #[cfg(test)]
 mod tests {
-    use crate::utils::error::{AppError, RaiseResult};
-    use serde_json::json;
+
+    use crate::utils::core::error::{AppError, RaiseResult};
+    use crate::utils::data::json::json_value;
 
     // Fonction bouchon pour simuler i18n dans les tests (si besoin)
     // On assume que utils::i18n::t(key) retourne au moins la clé si non trouvée.
@@ -274,7 +294,7 @@ mod tests {
         let err = crate::build_error!(
             "ERR_API",
             error = "Timeout",
-            context = json!({"retry": true, "timeout_ms": 5000})
+            context = json_value!({"retry": true, "timeout_ms": 5000}) // 🎯 Remplacé
         );
 
         let AppError::Structured(data) = err;
@@ -299,11 +319,13 @@ mod tests {
         let AppError::Structured(data) = result.unwrap_err();
         assert_eq!(data.code, "ERR_CRITICAL");
     }
+
     #[tokio::test]
     async fn test_require_session_guard() {
-        use crate::utils::mock::AgentDbSandbox;
-        use crate::utils::session::{Session, SessionManager};
-        use crate::utils::Uuid;
+        use crate::utils::context::session::{Session, SessionManager}; // 🎯 Mise à jour du chemin
+        use crate::utils::core::UniqueId;
+        use crate::utils::testing::mock::AgentDbSandbox; // 🎯 Mise à jour du chemin
+
         // Fonction bouchon simulant une commande Tauri
         async fn mock_protected_command(manager: &SessionManager) -> RaiseResult<Session> {
             // L'appel de la macro : c'est ça qu'on teste !
@@ -328,7 +350,7 @@ mod tests {
         );
 
         // 2. Cas de succès : Session active
-        let valid_uuid = Uuid::new_v4().to_string();
+        let valid_uuid = UniqueId::new_v4().to_string();
         let _ = manager.start_session(&valid_uuid).await.unwrap();
 
         let success_result = mock_protected_command(&manager).await;

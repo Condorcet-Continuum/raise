@@ -1,9 +1,10 @@
+use crate::utils::prelude::*;
+
 use crate::genetics::operators::selection::SelectionStrategy;
 use crate::genetics::traits::{Evaluator, Genome};
 use crate::genetics::types::{Fitness, Individual, Population};
 use rand::prelude::*;
 use rayon::prelude::*;
-use std::marker::PhantomData;
 
 /// Configuration du moteur génétique.
 #[derive(Clone, Debug)]
@@ -36,7 +37,7 @@ where
     evaluator: E,
     selection: S,
     config: GeneticConfig,
-    _marker: PhantomData<G>,
+    _marker: TypeMarker<G>,
 }
 
 impl<G, E, S> GeneticEngine<G, E, S>
@@ -50,7 +51,7 @@ where
             evaluator,
             selection,
             config,
-            _marker: PhantomData,
+            _marker: TypeMarker,
         }
     }
 
@@ -211,9 +212,7 @@ where
             sorted_front.sort_by(|&a, &b| {
                 let val_a = population.individuals[a].fitness.as_ref().unwrap().values[m];
                 let val_b = population.individuals[b].fitness.as_ref().unwrap().values[m];
-                val_a
-                    .partial_cmp(&val_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                val_a.partial_cmp(&val_b).unwrap_or(FmtOrdering::Equal)
             });
 
             let first = sorted_front[0];
@@ -274,7 +273,7 @@ mod tests {
     use super::*;
     use crate::genetics::operators::selection::TournamentSelection;
 
-    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, Serializable, Deserializable)]
     struct NumberGenome(f32);
 
     impl Genome for NumberGenome {

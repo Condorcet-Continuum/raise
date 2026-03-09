@@ -2,7 +2,7 @@
 
 use super::{ComplianceChecker, ComplianceReport, Violation};
 use crate::traceability::tracer::Tracer;
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 pub struct Iso26262Checker;
 
@@ -12,7 +12,7 @@ impl ComplianceChecker for Iso26262Checker {
     }
 
     /// 🎯 Version robuste : Vérification des niveaux ASIL pour les composants critiques
-    fn check(&self, _tracer: &Tracer, docs: &HashMap<String, Value>) -> ComplianceReport {
+    fn check(&self, _tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -59,16 +59,15 @@ impl ComplianceChecker for Iso26262Checker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_iso26262_asil_strict_check() {
-        let mut docs: HashMap<String, Value> = HashMap::new();
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // 1. Composant conforme (Critique + ASIL D)
         docs.insert(
             "Brakes_01".to_string(),
-            json!({
+            json_value!({
                 "_id": "Brakes_01",
                 "name": "Electronic Braking System",
                 "safety_critical": true,
@@ -79,7 +78,7 @@ mod tests {
         // 2. Composant non conforme (Critique mais ASIL manquant)
         docs.insert(
             "Steering_02".to_string(),
-            json!({
+            json_value!({
                 "_id": "Steering_02",
                 "name": "Power Steering Controller",
                 "safety_critical": true
@@ -89,7 +88,7 @@ mod tests {
         // 3. Élément ignoré (Non critique)
         docs.insert(
             "Radio_03".to_string(),
-            json!({
+            json_value!({
                 "_id": "Radio_03",
                 "name": "Infotainment",
                 "safety_critical": false
@@ -112,10 +111,10 @@ mod tests {
 
     #[test]
     fn test_iso26262_no_critical_components() {
-        let mut docs: HashMap<String, Value> = HashMap::new();
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
         docs.insert(
             "Lamp".to_string(),
-            json!({ "_id": "Lamp", "safety_critical": false }),
+            json_value!({ "_id": "Lamp", "safety_critical": false }),
         );
 
         let tracer = Tracer::from_json_list(docs.values().cloned().collect());

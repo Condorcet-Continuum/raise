@@ -8,7 +8,7 @@ use crate::model_engine::arcadia; // <-- Vocabulaire
 pub struct SystemTransformer;
 
 impl ModelTransformer for SystemTransformer {
-    fn transform(&self, element: &Value) -> RaiseResult<Value> {
+    fn transform(&self, element: &JsonValue) -> RaiseResult<JsonValue> {
         let name = element
             .get(arcadia::PROP_NAME)
             .and_then(|v| v.as_str())
@@ -24,7 +24,7 @@ impl ModelTransformer for SystemTransformer {
         if let Some(allocated) = element.get("allocatedActors").and_then(|v| v.as_array()) {
             for actor in allocated {
                 if let Some(aname) = actor.get(arcadia::PROP_NAME).and_then(|v| v.as_str()) {
-                    actors.push(json!({ "name": aname, "type": "ExternalActor" }));
+                    actors.push(json_value!({ "name": aname, "type": "ExternalActor" }));
                 }
             }
         }
@@ -42,7 +42,7 @@ impl ModelTransformer for SystemTransformer {
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
 
-                    capabilities.push(json!({
+                    capabilities.push(json_value!({
                         "name": cname,
                         "description": desc
                     }));
@@ -58,18 +58,18 @@ impl ModelTransformer for SystemTransformer {
         {
             for func in funcs {
                 if let Some(fname) = func.get(arcadia::PROP_NAME).and_then(|v| v.as_str()) {
-                    functions.push(json!({ "name": fname }));
+                    functions.push(json_value!({ "name": fname }));
                 }
             }
         }
 
         // Structure optimisée pour Tera
-        Ok(json!({
+        Ok(json_value!({
             "domain": "system",
             "meta": {
                 "uuid": id,
                 "project_name": name,
-                "generated_at": chrono::Utc::now().to_rfc3339()
+                "generated_at": UtcClock::now().to_rfc3339()
             },
             "system_overview": {
                 "name": name,
@@ -90,7 +90,7 @@ mod tests {
     fn test_system_transformation() {
         let transformer = SystemTransformer;
 
-        let system_element = json!({
+        let system_element = json_value!({
             arcadia::PROP_ID: "UUID_SYS_1",
             arcadia::PROP_NAME: "DroneSystem",
             "ownedSystemCapability": [

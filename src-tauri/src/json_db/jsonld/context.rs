@@ -1,13 +1,12 @@
 // FICHIER : src-tauri/src/json_db/jsonld/context.rs
 
-use crate::utils::data::HashMap;
 use crate::utils::prelude::*;
 
-use super::{vocabulary::VocabularyRegistry, ContextValue};
+use super::{vocabulary::VocabularyRegistry, ContextJsonValue};
 
 /// Enumération des couches Arcadia
 /// Mise à jour pour inclure Data et Transverse
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serializable, Deserializable)]
 #[serde(rename_all = "lowercase")]
 pub enum ArcadiaLayer {
     OA,         // Operational Analysis
@@ -34,7 +33,7 @@ impl ArcadiaLayer {
 }
 
 /// Représente un contexte JSON-LD complet avec métadonnées
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct ArcadiaContext {
     #[serde(rename = "@version", skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -43,7 +42,7 @@ pub struct ArcadiaContext {
     pub vocab: Option<String>,
 
     #[serde(flatten)]
-    pub mappings: HashMap<String, ContextValue>,
+    pub mappings: UnorderedMap<String, ContextJsonValue>,
 }
 
 impl Default for ArcadiaContext {
@@ -57,13 +56,13 @@ impl ArcadiaContext {
         Self {
             version: Some("1.1".to_string()),
             vocab: None,
-            mappings: HashMap::new(),
+            mappings: UnorderedMap::new(),
         }
     }
 
     pub fn add_simple_mapping(&mut self, term: &str, iri: &str) {
         self.mappings
-            .insert(term.to_string(), ContextValue::Simple(iri.to_string()));
+            .insert(term.to_string(), ContextJsonValue::Simple(iri.to_string()));
     }
 
     pub fn has_term(&self, term: &str) -> bool {
@@ -75,9 +74,9 @@ impl ArcadiaContext {
 #[derive(Debug, Clone)]
 pub struct ContextManager {
     /// Contextes spécifiques par couche (Legacy support)
-    pub contexts: HashMap<ArcadiaLayer, ArcadiaContext>,
+    pub contexts: UnorderedMap<ArcadiaLayer, ArcadiaContext>,
     /// Table de résolution active (Terme -> IRI)
-    pub active_mappings: HashMap<String, String>,
+    pub active_mappings: UnorderedMap<String, String>,
 }
 
 impl Default for ContextManager {
@@ -89,7 +88,7 @@ impl Default for ContextManager {
 impl ContextManager {
     pub fn new() -> Self {
         Self {
-            contexts: HashMap::new(),
+            contexts: UnorderedMap::new(),
             // Initialisation avec le contexte par défaut (préfixes standards: oa, sa, data, rdf...)
             active_mappings: VocabularyRegistry::global().get_default_context().clone(),
         }
@@ -109,30 +108,30 @@ impl ContextManager {
     }
 
     /// Charge un contexte depuis un document JSON-LD (@context)
-    pub fn load_from_doc(&mut self, doc: &Value) -> RaiseResult<()> {
+    pub fn load_from_doc(&mut self, doc: &JsonValue) -> RaiseResult<()> {
         if let Some(ctx) = doc.get("@context") {
             self.parse_context_block(ctx)?;
         }
         Ok(())
     }
 
-    fn parse_context_block(&mut self, ctx: &Value) -> RaiseResult<()> {
+    fn parse_context_block(&mut self, ctx: &JsonValue) -> RaiseResult<()> {
         match ctx {
-            Value::Object(map) => {
+            JsonValue::Object(map) => {
                 for (key, val) in map {
                     // Cas 1 : "term": "iri"
-                    if let Value::String(uri) = val {
+                    if let JsonValue::String(uri) = val {
                         self.active_mappings.insert(key.clone(), uri.clone());
                     }
                     // Cas 2 : "term": { "@id": "iri" }
-                    else if let Value::Object(def) = val {
-                        if let Some(Value::String(id)) = def.get("@id") {
+                    else if let JsonValue::Object(def) = val {
+                        if let Some(JsonValue::String(id)) = def.get("@id") {
                             self.active_mappings.insert(key.clone(), id.clone());
                         }
                     }
                 }
             }
-            Value::Array(arr) => {
+            JsonValue::Array(arr) => {
                 for item in arr {
                     self.parse_context_block(item)?;
                 }
@@ -197,7 +196,6 @@ impl ContextManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::json::json;
 
     #[test]
     fn test_context_creation() {
@@ -250,7 +248,7 @@ mod tests {
     #[test]
     fn test_load_from_doc() {
         let mut manager = ContextManager::new();
-        let doc = json!({
+        let doc = json_value!({
             "@context": {
                 "my": "http://my-ontology.org/",
                 "Actor": "my:Actor"

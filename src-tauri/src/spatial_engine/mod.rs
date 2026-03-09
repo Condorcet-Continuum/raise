@@ -3,7 +3,7 @@ use std::f32::consts::PI;
 
 // --- DÉFINITION DES TYPES ---
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum LayerType {
     OA = 0,    // Operational Analysis
     SA = 1,    // System Analysis
@@ -12,7 +12,7 @@ pub enum LayerType {
     Chaos = 4, // Zone IA / Non-structurée
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct SpatialNode {
     pub id: String,
     pub label: String,
@@ -22,21 +22,21 @@ pub struct SpatialNode {
     pub stability: f32, // 0.0 (Vibration) -> 1.0 (Stable)
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct SpatialLink {
     pub source: String,
     pub target: String,
     pub strength: f32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct SpatialGraph {
     pub nodes: Vec<SpatialNode>,
     pub links: Vec<SpatialLink>,
     pub meta: GraphMeta,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct GraphMeta {
     pub node_count: usize,
     pub layer_distribution: [usize; 5],

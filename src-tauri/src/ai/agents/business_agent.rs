@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/business_agent.rs
 
-use crate::utils::{async_trait, data, prelude::*, Uuid};
+use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -24,7 +24,7 @@ impl BusinessAgent {
         domain: &str,
         description: &str,
         history_context: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let entities = entity_extractor::extract_entities(description);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -50,11 +50,11 @@ impl BusinessAgent {
             .await?;
 
         let clean = extract_json_from_llm(&response);
-        Ok(data::parse(&clean).unwrap_or(json!({})))
+        Ok(json::deserialize_from_str(&clean).unwrap_or(json_value!({})))
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl Agent for BusinessAgent {
     fn id(&self) -> &'static str {
         "business_analyst"
@@ -98,7 +98,7 @@ impl Agent for BusinessAgent {
             let analysis = self
                 .analyze_business_need(ctx, domain, description, &history_str)
                 .await
-                .unwrap_or(json!({}));
+                .unwrap_or(json_value!({}));
 
             let cap_desc = analysis["capability"]["description"]
                 .as_str()
@@ -106,15 +106,15 @@ impl Agent for BusinessAgent {
                 .to_string();
 
             // 5. CRÉATION ARTEFACTS
-            let cap_id = Uuid::new_v4().to_string();
-            let cap_doc = json!({
+            let cap_id = UniqueId::new_v4().to_string();
+            let cap_doc = json_value!({
                 "id": cap_id,
                 "name": process_name,
                 "description": cap_desc,
                 "layer": "OA",
                 "type": "OperationalCapability",
                 "domain": domain,
-                "createdAt": chrono::Utc::now().to_rfc3339()
+                "createdAt": UtcClock::now().to_rfc3339()
             });
 
             let mut artifacts = vec![];
@@ -123,13 +123,13 @@ impl Agent for BusinessAgent {
             if let Some(actors) = analysis["actors"].as_array() {
                 for actor in actors {
                     let actor_name = actor["name"].as_str().unwrap_or("UnknownActor");
-                    let act_id = Uuid::new_v4().to_string();
-                    let act_doc = json!({
+                    let act_id = UniqueId::new_v4().to_string();
+                    let act_doc = json_value!({
                         "id": act_id,
                         "name": actor_name,
                         "layer": "OA",
                         "type": "OperationalActor",
-                        "createdAt": chrono::Utc::now().to_rfc3339()
+                        "createdAt": UtcClock::now().to_rfc3339()
                     });
 
                     artifacts.push(save_artifact(ctx, "oa", "actors", &act_doc).await?);
@@ -182,7 +182,7 @@ mod tests {
     }
 
     // NOUVEAU TEST : Vérifie le déclenchement de la transition vers SystemAgent
-    #[tokio::test]
+    #[async_test]
     async fn test_business_delegation_trigger() {
         // Préfixe '_' pour éviter les warnings unused variables
         let _agent = BusinessAgent::new();

@@ -1,10 +1,6 @@
-use super::{MemoryRecord, VectorStore};
 use crate::utils::prelude::*;
-use crate::utils::{
-    async_trait,
-    io::{self, PathBuf},
-    AsyncRwLock, HashMap, Ordering,
-};
+
+use super::{MemoryRecord, VectorStore};
 use candle_core::{Device, Tensor};
 
 /// Store vectoriel local RAISE avec filtrage sémantique et persistance Zstd.
@@ -49,7 +45,7 @@ impl CandleLocalStore {
                 raise_error!(
                     "ERR_VECTOR_MATRIX_CREATION_FAILED",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "build_search_index",
                         "vectors_count": n,
                         "dimension": d,
@@ -69,7 +65,7 @@ impl CandleLocalStore {
         let json_path = self.storage_path.join("memory_records.json.zstd");
 
         // Utilisation de la façade io pour l'écriture atomique compressée
-        io::write_json_compressed_atomic(&json_path, &state.records).await?;
+        fs::write_json_compressed_atomic_async(&json_path, &state.records).await?;
 
         if let Some(ref matrix) = state.vector_matrix {
             let tensor_path = self.storage_path.join("memory_vectors.safetensors");
@@ -78,7 +74,7 @@ impl CandleLocalStore {
             let matrix_clone = matrix.clone();
 
             let join_handle = tokio::task::spawn_blocking(move || {
-                let mut map = std::collections::HashMap::new();
+                let mut map = UnorderedMap::new();
                 map.insert("vectors".to_string(), matrix_clone);
                 // On utilise le clone ici
                 candle_core::safetensors::save(&map, thread_path)
@@ -92,7 +88,7 @@ impl CandleLocalStore {
                     raise_error!(
                         "ERR_THREAD_PANIC_DURING_SAVE",
                         error = e,
-                        context = json!({ "action": "spawn_blocking_safetensors" })
+                        context = json_value!({ "action": "spawn_blocking_safetensors" })
                     )
                 }
             };
@@ -102,7 +98,7 @@ impl CandleLocalStore {
                 raise_error!(
                     "ERR_AI_SAFE_TENSORS_SAVE_FAILED",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "persist_vector_memory",
                         "path": tensor_path.to_string_lossy(), // L'original est encore là !
                         "hint": "Vérifiez que le disque n'est pas plein."
@@ -116,11 +112,11 @@ impl CandleLocalStore {
     /// Chargement asynchrone.
     pub async fn load(&self) -> RaiseResult<()> {
         let json_path = self.storage_path.join("memory_records.json.zstd");
-        if !io::exists(&json_path).await {
+        if !fs::exists_async(&json_path).await {
             return Ok(());
         }
 
-        let loaded_records: Vec<MemoryRecord> = io::read_json_compressed(&json_path).await?;
+        let loaded_records: Vec<MemoryRecord> = fs::read_json_compressed_async(&json_path).await?;
         let matrix = Self::compute_matrix(&loaded_records, &self.device)?;
 
         let mut state = self.state.write().await;
@@ -130,10 +126,10 @@ impl CandleLocalStore {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl VectorStore for CandleLocalStore {
     async fn init_collection(&self, _col: &str, _size: u64) -> RaiseResult<()> {
-        io::ensure_dir(&self.storage_path).await
+        fs::ensure_dir_async(&self.storage_path).await
     }
 
     async fn add_documents(&self, _col: &str, mut records: Vec<MemoryRecord>) -> RaiseResult<()> {
@@ -149,7 +145,7 @@ impl VectorStore for CandleLocalStore {
         query_vec: &[f32],
         limit: u64,
         threshold: f32,
-        filter: Option<HashMap<String, String>>, // Utilise utils::HashMap
+        filter: Option<UnorderedMap<String, String>>, // Utilise utils::UnorderedMap
     ) -> RaiseResult<Vec<MemoryRecord>> {
         let state = self.state.read().await;
         let matrix = match &state.vector_matrix {
@@ -176,7 +172,7 @@ impl VectorStore for CandleLocalStore {
             Err(e) => raise_error!(
                 "ERR_VECTOR_MATMUL_FAILED",
                 error = e,
-                context = json!({ "matrix_shape": format!("{:?}", matrix.shape()) })
+                context = json_value!({ "matrix_shape": format!("{:?}", matrix.shape()) })
             ),
         };
 
@@ -228,7 +224,7 @@ impl VectorStore for CandleLocalStore {
             .map(|(i, s)| (s, i))
             .collect();
 
-        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(FmtOrdering::Equal));
 
         Ok(ranked
             .into_iter()
@@ -243,22 +239,22 @@ impl VectorStore for CandleLocalStore {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_full_search_with_metadata_filter() {
-        let dir = io::tempdir().unwrap();
+        let dir = fs::tempdir().unwrap();
         let store = CandleLocalStore::new(dir.path(), &Device::Cpu);
 
         let recs = vec![
             MemoryRecord {
                 id: "1".into(),
                 content: "Doc Hardware".into(),
-                metadata: json!({"category": "hardware", "priority": "high"}),
+                metadata: json_value!({"category": "hardware", "priority": "high"}),
                 vectors: Some(vec![1.0, 0.0]),
             },
             MemoryRecord {
                 id: "2".into(),
                 content: "Doc Software".into(),
-                metadata: json!({"category": "software"}),
+                metadata: json_value!({"category": "software"}),
                 vectors: Some(vec![0.9, 0.1]),
             },
         ];
@@ -272,7 +268,7 @@ mod tests {
         assert_eq!(res_all.len(), 2);
 
         // Test 2: Recherche avec filtre Metadata
-        let mut filter = HashMap::new();
+        let mut filter = UnorderedMap::new();
         filter.insert("category".into(), "hardware".into());
 
         let res_filter = store
@@ -283,9 +279,9 @@ mod tests {
         assert_eq!(res_filter[0].id, "1");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_persistence_integrity() {
-        let dir = io::tempdir().unwrap();
+        let dir = fs::tempdir().unwrap();
         let path = dir.path();
 
         {
@@ -293,7 +289,7 @@ mod tests {
             let rec = MemoryRecord {
                 id: "P1".into(),
                 content: "Persist".into(),
-                metadata: json!({"status": "saved"}),
+                metadata: json_value!({"status": "saved"}),
                 // CORRECTION : Utilisation d'un vecteur normalisé (Norme L2 = 1.0)
                 vectors: Some(vec![1.0, 0.0]),
             };

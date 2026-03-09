@@ -1,6 +1,4 @@
 // FICHIER : src-tauri/src/ai/world_model/dynamics/predictor.rs
-
-use crate::utils::config::WorldModelConfig;
 use crate::utils::prelude::*;
 use candle_core::{Module, Tensor};
 // On garde Activation car on va l'utiliser
@@ -30,7 +28,7 @@ impl WorldModelPredictor {
             Err(e) => raise_error!(
                 "ERR_AI_MODEL_LAYER_INIT_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "layer": "l1",
                     "input_dim": input_dim,
                     "output_dim": config.hidden_dim,
@@ -45,7 +43,7 @@ impl WorldModelPredictor {
             Err(e) => raise_error!(
                 "ERR_AI_MODEL_LAYER_INIT_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "layer": "l2",
                     "input_dim": config.hidden_dim,
                     "output_dim": config.embedding_dim,
@@ -67,7 +65,7 @@ impl WorldModelPredictor {
             Err(e) => raise_error!(
                 "ERR_AI_MODEL_CAT_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "state_shape": format!("{:?}", state.shape()),
                     "action_shape": format!("{:?}", action.shape()),
                     "dim": 1

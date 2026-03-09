@@ -188,8 +188,7 @@ impl SimpleRetriever {
 mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
-    use crate::utils::data::HashMap;
-
+    use crate::utils::prelude::*;
     // Helper pour créer un élément factice
     fn mock_el(name: &str) -> ArcadiaElement {
         ArcadiaElement {
@@ -197,7 +196,7 @@ mod tests {
             name: NameType::String(name.to_string()),
             kind: "test".to_string(),
             description: Some("desc".to_string()),
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         }
     }
 

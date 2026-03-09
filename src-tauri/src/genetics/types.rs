@@ -1,7 +1,7 @@
-use crate::utils::{prelude::*, Ordering};
+use crate::utils::prelude::*;
 /// Structure représentant la performance d'un individu.
 /// Conçue pour l'optimisation multi-objectifs (NSGA-II).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serializable, Deserializable)]
 pub struct Fitness {
     /// Les valeurs des objectifs (ex: [latence, -coût]).
     /// Convention : On cherche toujours à MAXIMISER ces valeurs.
@@ -70,7 +70,7 @@ impl Default for Fitness {
 }
 
 /// Un individu dans la population : un génome + sa performance.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serializable, Deserializable)]
 pub struct Individual<G> {
     pub genome: G,
     pub fitness: Option<Fitness>,
@@ -132,10 +132,10 @@ impl<G> Population<G> {
             let fit_b = self.individuals[b].fitness.as_ref().unwrap();
 
             match fit_a.rank.cmp(&fit_b.rank) {
-                Ordering::Equal => fit_b
+                FmtOrdering::Equal => fit_b
                     .crowding_distance
                     .partial_cmp(&fit_a.crowding_distance)
-                    .unwrap_or(Ordering::Equal),
+                    .unwrap_or(FmtOrdering::Equal),
                 other => other,
             }
         });

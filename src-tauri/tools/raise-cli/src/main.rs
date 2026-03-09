@@ -7,12 +7,11 @@ mod commands;
 
 use raise::{
     raise_error, user_debug, user_error, user_info, user_warn,
-    utils::{context, prelude::*, Arc},
+    utils::{context, prelude::*},
 };
 
 // NOUVEAUX IMPORTS : Moteur de stockage et Session
 use raise::json_db::storage::{JsonDbConfig, StorageEngine};
-use raise::utils::session::SessionManager;
 
 // ============================================================================
 // 🎯 DÉFINITION DU CONTEXTE GLOBAL DU CLI
@@ -20,8 +19,8 @@ use raise::utils::session::SessionManager;
 #[derive(Clone)]
 pub struct CliContext {
     pub config: &'static AppConfig,
-    pub session_mgr: SessionManager,
-    pub storage: Arc<StorageEngine>,
+    pub session_mgr: context::SessionManager,
+    pub storage: SharedRef<StorageEngine>,
 }
 
 // ============================================================================
@@ -58,7 +57,7 @@ async fn main() -> RaiseResult<()> {
         raise_error!(
             "CLI_CRITICAL_INIT_FAILED",
             error = e,
-            context = json!({"step": "AppConfig::init", "hint": "Vérifiez vos fichiers de configuration"})
+            context = json_value!({"step": "AppConfig::init", "hint": "Vérifiez vos fichiers de configuration"})
         );
     }
 
@@ -74,8 +73,8 @@ async fn main() -> RaiseResult<()> {
         .get_path("PATH_RAISE_DOMAIN")
         .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !");
 
-    let storage = Arc::new(StorageEngine::new(JsonDbConfig::new(db_root)));
-    let session_mgr = SessionManager::new(storage.clone());
+    let storage = SharedRef::new(StorageEngine::new(JsonDbConfig::new(db_root)));
+    let session_mgr = context::SessionManager::new(storage.clone());
 
     // 🎯 5. CRÉATION DU CONTEXTE UNIFIÉ
     let ctx = CliContext {
@@ -91,7 +90,7 @@ async fn main() -> RaiseResult<()> {
         None => {
             raise_error!(
                 "CLI_USER_NOT_FOUND",
-                context = json!({
+                context = json_value!({
                     "action": "cli_auto_login",
                     "hint": "Aucun utilisateur n'a été résolu par AppConfig. Assurez-vous que votre compte OS existe dans la collection 'users'."
                 })
@@ -103,7 +102,7 @@ async fn main() -> RaiseResult<()> {
         raise_error!(
             "CLI_SESSION_START_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "user": username,
                 "hint": "Le démarrage de la session a échoué. Vérifiez que la base de données système est accessible."
             })
@@ -112,7 +111,7 @@ async fn main() -> RaiseResult<()> {
 
     user_info!(
         "CLI_START_INITIALIZED",
-        json!({
+        json_value!({
             "version": env!("CARGO_PKG_VERSION"),
             "mode": if cfg!(debug_assertions) { "debug" } else { "release" },
             "component": "cli_engine",
@@ -129,7 +128,7 @@ async fn main() -> RaiseResult<()> {
                 raise_error!(
                     "CLI_COMMAND_EXECUTION_FAILED",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "command": format!("{:?}", cmd),
                         "trace": "critical_failure"
                     })
@@ -162,7 +161,7 @@ async fn run_global_shell(ctx: CliContext) -> RaiseResult<()> {
             raise_error!(
                 "CLI_EDITOR_INIT_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "component": "Rustyline",
                     "terminal_check": "failed"
                 })
@@ -214,7 +213,7 @@ async fn run_global_shell(ctx: CliContext) -> RaiseResult<()> {
                                     {
                                         user_error!(
                                             "CLI_COMMAND_EXECUTION_FAILED",
-                                            json!({
+                                            json_value!({
                                                 "command": format!("{:?}", cmd),
                                                 "error_detail": format!("{:?}", e),
                                                 "context": "interactive_repl_execution"
@@ -235,7 +234,7 @@ async fn run_global_shell(ctx: CliContext) -> RaiseResult<()> {
             Err(err) => {
                 user_error!(
                     "CLI_SHELL_FATAL_ERROR",
-                    json!({
+                    json_value!({
                         "error": format!("{:?}", err),
                         "termination": "loop_break",
                         "context": "interactive_shell_session"
@@ -249,7 +248,7 @@ async fn run_global_shell(ctx: CliContext) -> RaiseResult<()> {
     if let Err(e) = rl.save_history(&history_path) {
         user_warn!(
             "CLI_HISTORY_SAVE_FAILED",
-            json!({
+            json_value!({
                 "error": e.to_string(),
                 "path": history_path
             })

@@ -18,8 +18,8 @@ pub mod genetics;
 pub mod spatial_engine;
 
 use crate::model_engine::types::ProjectModel;
-use std::sync::Mutex;
+use crate::utils::prelude::*;
 
 pub struct AppState {
-    pub model: Mutex<ProjectModel>,
+    pub model: SharedRef<AsyncMutex<ProjectModel>>,
 }

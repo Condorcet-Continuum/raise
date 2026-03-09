@@ -2,12 +2,10 @@
 
 use super::AgentTool;
 use crate::utils::prelude::*;
-use async_trait::async_trait;
 
 // Imports pour le Jumeau Numérique via JSON-DB
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-use crate::utils::config::AppConfig;
 
 /// Outil permettant à l'IA et au Workflow de lire l'état du Jumeau Numérique.
 /// Cet outil est désormais "Stateless" et lit la source de vérité en base de données.
@@ -21,7 +19,7 @@ impl SystemMonitorTool {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl AgentTool for SystemMonitorTool {
     fn name(&self) -> &str {
         "read_system_metrics"
@@ -31,8 +29,8 @@ impl AgentTool for SystemMonitorTool {
         "Lit les valeurs temps réel des capteurs du système physique (Jumeau Numérique). Retourne un objet JSON avec les métriques."
     }
 
-    fn parameters_schema(&self) -> Value {
-        serde_json::json!({
+    fn parameters_schema(&self) -> JsonValue {
+        json_value!({
             "type": "object",
             "properties": {},
             "required": []
@@ -40,7 +38,7 @@ impl AgentTool for SystemMonitorTool {
     }
 
     /// Exécute la lecture des métriques en interrogeant la persistance du Jumeau Numérique.
-    async fn execute(&self, _params: &Value) -> RaiseResult<Value> {
+    async fn execute(&self, _params: &JsonValue) -> RaiseResult<JsonValue> {
         tracing::info!("🔍 [SystemMonitorTool] Lecture du Jumeau Numérique via JSON-DB...");
 
         // 1. Accès à la configuration et initialisation du moteur de stockage
@@ -64,12 +62,12 @@ impl AgentTool for SystemMonitorTool {
         };
 
         // 3. Agrégation des métriques pour le contexte de l'Agent
-        let metrics = serde_json::json!({
+        let metrics = json_value!({
             "vibration_z": vibration_z,
             "temp_core": 45.0,
             "cpu_load": 12.5,
             "status": "ONLINE",
-            "timestamp": chrono::Utc::now().to_rfc3339()
+            "timestamp": UtcClock::now().to_rfc3339()
         });
 
         tracing::info!("📊 [SystemMonitorTool] Métriques extraites avec succès.");
@@ -86,9 +84,9 @@ mod tests {
     // 🎯 IMPORT UNIQUE : On utilise la GlobalDbSandbox car l'outil s'appuie
     // sur le Singleton global AppConfig, et le test est séquentiel (#[serial]).
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::mock::GlobalDbSandbox;
+    use crate::utils::testing::GlobalDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     async fn test_system_tool_persistence_integration() {
         // 1. 🎯 MAGIE : La GlobalDbSandbox configure le mock, purge l'ancienne base,
@@ -102,10 +100,10 @@ mod tests {
         );
 
         // 2. Injection manuelle d'une valeur critique pour tester le grounding de l'IA
-        let sensor_doc = serde_json::json!({
+        let sensor_doc = json_value!({
             "_id": "vibration_z",
             "value": 15.5,
-            "updatedAt": Utc::now().to_rfc3339()
+            "updatedAt": UtcClock::now().to_rfc3339()
         });
         manager
             .create_collection(
@@ -122,7 +120,7 @@ mod tests {
 
         // 3. Exécution de l'outil
         let tool = SystemMonitorTool::new();
-        let result = tool.execute(&serde_json::json!({})).await.unwrap();
+        let result = tool.execute(&json_value!({})).await.unwrap();
 
         // 4. Vérifications
         assert_eq!(result["vibration_z"], 15.5);

@@ -2,11 +2,7 @@
 
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use crate::utils::{
-    data::Value, // 🗑️ Suppression de ContextBuilder
-    io::PathBuf,
-    prelude::*, // 🎯 Importe nativement json! et RaiseResult
-};
+use crate::utils::prelude::*;
 use heck::ToPascalCase;
 
 #[derive(Default)]
@@ -21,7 +17,7 @@ impl TypeScriptGenerator {
 impl LanguageGenerator for TypeScriptGenerator {
     fn generate(
         &self,
-        element: &Value,
+        element: &JsonValue,
         template_engine: &TemplateEngine,
     ) -> RaiseResult<Vec<GeneratedFile>> {
         let name = element
@@ -35,7 +31,7 @@ impl LanguageGenerator for TypeScriptGenerator {
             .unwrap_or("");
 
         // 🎯 MIGRATION V1.3 : Création du contexte directe et lisible via json!
-        let context = json!({
+        let context = json_value!({
             "name": name,
             "id": id,
             "description": desc
@@ -73,7 +69,7 @@ mod tests {
         let gen = TypeScriptGenerator::new();
         let engine = setup_engine(); // ✅ On utilise l'engine configuré
 
-        let element = json!({
+        let element = json_value!({
             "name": "UserInterface",
             "id": "UI_001",
             "description": "Main View"

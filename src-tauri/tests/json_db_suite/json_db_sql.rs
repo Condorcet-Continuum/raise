@@ -22,12 +22,12 @@ async fn seed_actors(
     mgr.create_collection(collection, &schema_uri).await.ok();
 
     let actors_data = vec![
-        json!({ "handle": "alice", "displayName": "Alice Admin", "kind": "human", "roles": ["admin"], "tags": ["core", "paris"], "x_age": 30, "x_city": "Paris", "x_active": true }),
-        json!({ "handle": "bob", "displayName": "Bob User", "kind": "human", "roles": ["editor"], "tags": ["lyon"], "x_age": 25, "x_city": "Lyon", "x_active": true }),
-        json!({ "handle": "charlie", "displayName": "Charlie Guest", "kind": "human", "roles": ["guest"], "tags": ["paris"], "x_age": 35, "x_city": "Paris", "x_active": false }),
-        json!({ "handle": "bot-build", "displayName": "Build Bot", "kind": "bot", "tags": ["ci"], "x_age": 1, "x_city": "Cloud", "x_active": true }),
-        json!({ "handle": "eve", "displayName": "Eve Manager", "kind": "human", "roles": ["admin", "manager"], "x_age": 40, "x_city": "Lyon", "x_active": false }),
-        json!({ "handle": "frank", "displayName": "Frank Dev", "kind": "human", "roles": ["dev"], "x_age": 30, "x_city": "Bordeaux", "x_active": true }),
+        json_value!({ "handle": "alice", "displayName": "Alice Admin", "kind": "human", "roles": ["admin"], "tags": ["core", "paris"], "x_age": 30, "x_city": "Paris", "x_active": true }),
+        json_value!({ "handle": "bob", "displayName": "Bob User", "kind": "human", "roles": ["editor"], "tags": ["lyon"], "x_age": 25, "x_city": "Lyon", "x_active": true }),
+        json_value!({ "handle": "charlie", "displayName": "Charlie Guest", "kind": "human", "roles": ["guest"], "tags": ["paris"], "x_age": 35, "x_city": "Paris", "x_active": false }),
+        json_value!({ "handle": "bot-build", "displayName": "Build Bot", "kind": "bot", "tags": ["ci"], "x_age": 1, "x_city": "Cloud", "x_active": true }),
+        json_value!({ "handle": "eve", "displayName": "Eve Manager", "kind": "human", "roles": ["admin", "manager"], "x_age": 40, "x_city": "Lyon", "x_active": false }),
+        json_value!({ "handle": "frank", "displayName": "Frank Dev", "kind": "human", "roles": ["dev"], "x_age": 30, "x_city": "Bordeaux", "x_active": true }),
     ];
 
     for actor in actors_data {
@@ -49,7 +49,7 @@ async fn exec_sql_read(engine: &QueryEngine<'_>, sql: &str) -> raise::json_db::q
     }
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_sql_select_by_kind() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -67,7 +67,7 @@ async fn test_sql_select_by_kind() {
     assert_eq!(result.documents[0]["handle"], "bot-build");
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_sql_numeric_comparison_x_props() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -85,7 +85,7 @@ async fn test_sql_numeric_comparison_x_props() {
     );
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_sql_logical_and_mixed() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -109,7 +109,7 @@ async fn test_sql_logical_and_mixed() {
     );
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_sql_like_display_name() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -127,7 +127,7 @@ async fn test_sql_like_display_name() {
     assert_eq!(result.documents[0]["handle"], "bob");
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_sql_order_by_x_prop() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -158,7 +158,7 @@ async fn test_sql_order_by_x_prop() {
     );
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_sql_json_array_contains() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);

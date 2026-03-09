@@ -2,7 +2,7 @@
 
 use super::{ComplianceChecker, ComplianceReport, Violation};
 use crate::traceability::tracer::Tracer;
-use crate::utils::{prelude::*, HashMap}; // 🎯 FIX : Import explicite de HashMap
+use crate::utils::prelude::*; // 🎯 FIX : Import explicite de UnorderedMap
 
 pub struct AiGovernanceChecker;
 
@@ -11,7 +11,7 @@ impl ComplianceChecker for AiGovernanceChecker {
         "RAISE AI Governance"
     }
 
-    fn check(&self, tracer: &Tracer, docs: &HashMap<String, Value>) -> ComplianceReport {
+    fn check(&self, tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -29,7 +29,7 @@ impl ComplianceChecker for AiGovernanceChecker {
                 // FIX : Type annotation explicite pour aider l'inférence de type
                 let has_quality = evidence_ids.iter().any(|eid: &String| {
                     docs.get(eid)
-                        .map(|d: &Value| {
+                        .map(|d: &JsonValue| {
                             d.get("kind").and_then(|k| k.as_str()) == Some("QualityReport")
                         })
                         .unwrap_or(false)
@@ -37,7 +37,9 @@ impl ComplianceChecker for AiGovernanceChecker {
 
                 let has_xai = evidence_ids.iter().any(|eid: &String| {
                     docs.get(eid)
-                        .map(|d: &Value| d.get("kind").and_then(|k| k.as_str()) == Some("XaiFrame"))
+                        .map(|d: &JsonValue| {
+                            d.get("kind").and_then(|k| k.as_str()) == Some("XaiFrame")
+                        })
                         .unwrap_or(false)
                 });
 
@@ -83,24 +85,23 @@ impl ComplianceChecker for AiGovernanceChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_audit_ai_model_full_compliance() {
-        let mut docs: HashMap<String, Value> = HashMap::new(); // 🎯 FIX : Type explicite
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new(); // 🎯 FIX : Type explicite
 
         // Setup : Modèle IA + Ses deux preuves
         docs.insert(
             "AI_1".to_string(),
-            json!({ "_id": "AI_1", "nature": "AI_Model", "name": "Boreas" }),
+            json_value!({ "_id": "AI_1", "nature": "AI_Model", "name": "Boreas" }),
         );
         docs.insert(
             "QR_1".to_string(),
-            json!({ "_id": "QR_1", "kind": "QualityReport", "model_id": "AI_1" }),
+            json_value!({ "_id": "QR_1", "kind": "QualityReport", "model_id": "AI_1" }),
         );
         docs.insert(
             "XAI_1".to_string(),
-            json!({ "_id": "XAI_1", "kind": "XaiFrame", "model_id": "AI_1" }),
+            json_value!({ "_id": "XAI_1", "kind": "XaiFrame", "model_id": "AI_1" }),
         );
 
         let tracer = Tracer::from_json_list(docs.values().cloned().collect());
@@ -115,11 +116,11 @@ mod tests {
 
     #[test]
     fn test_audit_ai_model_missing_everything() {
-        let mut docs: HashMap<String, Value> = HashMap::new();
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
         // Setup : Modèle IA tout seul
         docs.insert(
             "AI_EMPTY".to_string(),
-            json!({ "_id": "AI_EMPTY", "nature": "AI_Model" }),
+            json_value!({ "_id": "AI_EMPTY", "nature": "AI_Model" }),
         );
 
         let tracer = Tracer::from_json_list(docs.values().cloned().collect());

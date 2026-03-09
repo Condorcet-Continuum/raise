@@ -8,7 +8,7 @@ pub mod data_provider;
 pub mod manager;
 
 // FAÇADE UNIQUE
-use crate::utils::io::PathBuf;
+
 use crate::utils::prelude::*;
 
 use crate::json_db::{
@@ -54,8 +54,8 @@ pub async fn insert_with_schema(
     space: &str,
     db: &str,
     schema_rel: &str,
-    mut doc: Value,
-) -> RaiseResult<Value> {
+    mut doc: JsonValue,
+) -> RaiseResult<JsonValue> {
     let reg = SchemaRegistry::from_db(&storage.config, space, db).await?;
     let root_uri = reg.uri(schema_rel);
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)?;
@@ -72,7 +72,7 @@ pub async fn insert_with_schema(
         raise_error!(
             "ERR_DB_BUSINESS_RULES_EXEC",
             error = e,
-            context = json!({
+            context = json_value!({
                 "collection": collection_name,
                 "root_uri": root_uri,
                 "action": "execute_business_rules_logic"
@@ -85,7 +85,7 @@ pub async fn insert_with_schema(
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
             error = "Identifiant '_id' manquant ou n'est pas une chaîne de caractères",
-            context = json!({
+            context = json_value!({
                 "expected_field": "_id",
                 "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
                 "action": "extract_document_id"
@@ -101,13 +101,13 @@ pub async fn insert_raw(
     space: &str,
     db: &str,
     collection_name: &str,
-    doc: &Value,
+    doc: &JsonValue,
 ) -> RaiseResult<()> {
     let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
             error = "Document invalide : le champ '_id' est manquant ou n'est pas une chaîne de caractères.",
-            context = json!({
+            context = json_value!({
                 "expected_field": "_id",
                 "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
                 "action": "document_identity_check"
@@ -122,8 +122,8 @@ pub async fn update_with_schema(
     space: &str,
     db: &str,
     schema_rel: &str,
-    mut doc: Value,
-) -> RaiseResult<Value> {
+    mut doc: JsonValue,
+) -> RaiseResult<JsonValue> {
     let reg = SchemaRegistry::from_db(&storage.config, space, db).await?;
     let root_uri = reg.uri(schema_rel);
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)?;
@@ -135,7 +135,7 @@ pub async fn update_with_schema(
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
             error = "Document invalide : le champ '_id' est manquant ou n'est pas une chaîne de caractères.",
-            context = json!({
+            context = json_value!({
                 "expected_field": "_id",
                 "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
                 "action": "verify_document_identity"
@@ -151,13 +151,13 @@ pub async fn update_raw(
     space: &str,
     db: &str,
     collection_name: &str,
-    doc: &Value,
+    doc: &JsonValue,
 ) -> RaiseResult<()> {
     let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
             error = "Document invalide : le champ '_id' est manquant ou n'est pas une chaîne de caractères.",
-            context = json!({
+            context = json_value!({
                 "expected_field": "_id",
                 "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
                 "action": "verify_document_identity"
@@ -173,7 +173,7 @@ pub async fn get(
     db: &str,
     collection_name: &str,
     id: &str,
-) -> RaiseResult<Value> {
+) -> RaiseResult<JsonValue> {
     collection::read_document(storage, space, db, collection_name, id).await
 }
 
@@ -201,7 +201,7 @@ pub async fn list_all(
     space: &str,
     db: &str,
     collection_name: &str,
-) -> RaiseResult<Vec<Value>> {
+) -> RaiseResult<Vec<JsonValue>> {
     collection::list_documents(storage, space, db, collection_name).await
 }
 

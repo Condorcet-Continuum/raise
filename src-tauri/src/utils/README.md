@@ -1,90 +1,99 @@
-# 📚 Référentiel Raise Foundation (v1.2)
+# 📚 Référentiel RAISE Foundation (v2.1 - Architecture Isolée & Sémantique)
 
-Ce document définit la nomenclature réelle, les constantes et les directives de développement du socle technique (`src-tauri/src/utils`).
-
-## 1. Le Type de Retour Unique : `RaiseResult<T>`
-
-Pour lever toute ambiguïté avec le `Result` standard de Rust ou celui de bibliothèques tierces, toutes les fonctions de la fondation retournent un `RaiseResult`.
-
-* **Définition** : `pub type RaiseResult<T> = std::result::Result<T, AppError>;`.
-* **Objectif** : Garantir que l'erreur retournée est toujours une `AppError` sérialisable et contextualisée.
+Ce document définit la constitution technique, la nomenclature et les protocoles de développement du socle `src-tauri/src/utils`. L'architecture RAISE repose sur un principe de **Souveraineté de la Fondation** : aucun module métier ne doit dépendre d'une bibliothèque tierce. Tout passe par nos façades.
 
 ---
 
-## 2. Nomenclature des Fonctions (Noms Réels)
+## 🏛️ 1. Structure des Sous-Domaines (La Forteresse)
 
-L'utilisation de `std::fs` ou `tokio::fs` directement dans les couches supérieures est interdite. Utilisez les fonctions réelles suivantes :
+Le module `utils` est segmenté en six forteresses autonomes. Chaque domaine possède son propre `README.md` détaillé.
 
-### A. I/O Physiques & Sécurité (`io::`)
-
-Les fonctions I/O sont asynchrones par défaut et intègrent des vérifications de sécurité.
-
-| Fonction Réelle | Description | Source |
-| --- | --- | --- |
-| `async_path_exists(path)` | Vérifie l'existence d'un fichier/dossier sans paniquer. | `fs.rs` |
-| `async_file_read_json<T>(path)` | Lit et désérialise un JSON avec diagnostic `NotFound` précis. | `fs.rs` |
-| `async_file_write_atomic(path, data)` | Écrit des octets via un fichier `.tmp` pour éviter la corruption. | `fs.rs` |
-| `async_file_write_json_atomic(path, data)` | Sérialise et écrit un objet JSON de manière atomique. | `fs.rs` |
-| `async_dir_create_all(path)` | Crée récursivement un répertoire (équivalent `mkdir -p`). | `fs.rs` |
-| `async_write_safe(rel_path, data)` | Écrit uniquement à l'intérieur du `ProjectScope` (Sandbox). | `fs.rs` |
-
-### B. Manipulation de Données (`data::`)
-
-Manipulation mémoire du JSON et formats binaires.
-
-| Fonction Réelle | Description | Source |
-| --- | --- | --- |
-| `json_parse<T>(str)` | Transforme une chaîne en structure typée. | `json.rs` |
-| `json_serialize_pretty(data)` | Sérialise en JSON lisible (standard pour les fichiers de config). | `json.rs` |
-| `json_serialize_compact(data)` | Sérialise en JSON condensé (standard pour le réseau/stockage). | `json.rs` |
-| `json_deep_merge(a, b)` | Fusion récursive de deux `serde_json::Value`. | `json.rs` |
-| `bin_serialize<T>(data)` | Sérialise en format binaire compact via Bincode. | `json.rs` |
-
-### C. Système & Exécution (`sys::`)
-
-Interaction avec l'OS de manière non-bloquante.
-
-| Fonction Réelle | Description | Source |
-| --- | --- | --- |
-| `sys_exec_wait(cmd, args)` | Lance une commande et attend la fin pour capturer stdout/stderr. | `os.rs` |
-| `sys_pipe_to_tool(cmd, input)` | Envoie une chaîne dans le stdin d'un outil (ex: `rustfmt`). | `os.rs` |
+| Domaine | Responsabilité Critique |
+| --- | --- |
+| **`core/`** | **Le Cœur** : Gestion des erreurs `RaiseResult`, concurrence (`SharedRef`), attributs `#[async_interface]`, `#[async_test]` et macros système. |
+| **`data/`** | **La Matière** : Manipulation JSON AI-Ready, alias de collections (`UnorderedMap`), et le singleton `AppConfig`. |
+| **`io/`** | **Le Physique** : Système de fichiers asynchrone, écriture atomique, gestion des chemins (`PathBuf`) et accès OS. |
+| **`net/`** | **Les Flux** : Client HTTP avec retry, serveur local REST, et nœuds P2P décentralisés. |
+| **`context/`** | **L'Esprit** : Gestion des sessions utilisateurs, internationalisation (i18n) en RAM, et logging structuré JSONL. |
+| **`testing/`** | **Le Miroir** : Sandboxes isolées (`AgentDbSandbox`) et mocks pour garantir des tests sans effets de bord. |
 
 ---
 
-## 3. Constantes Système (SSoT)
+## 🎭 2. Le Prélude : L'Unique Point d'Entrée
 
-Les constantes sont définies dans `config.rs` et ne doivent jamais être écrites en dur.
+L'importation de `serde`, `tokio`, `anyhow`, `reqwest` ou `libp2p` est **formellement interdite** dans les services métiers.
 
-* **`SYSTEM_DOMAIN`** : Nom du domaine racine (`_system`).
-* **`SYSTEM_DB`** : Nom de la base de données centrale (`_system`).
-* **`PATH_RAISE_DOMAIN`** : Clé de configuration pour le stockage physique principal.
-* **`PATH_LOGS`** : Emplacement des journaux d'audit et de debug.
+👉 **Règle d'Or** : Tout fichier métier (Services, Blockchain, UI-Commands) doit utiliser exclusivement :
 
----
+```rust
+use crate::utils::prelude::*;
 
-## 4. Directives et Exceptions
+```
 
-### Gestion des Erreurs Bas Niveau
-
-Chaque erreur doit être porteuse d'un contexte pour permettre à l'IA de s'auto-corriger.
-
- 
-### Directives pour les Agents IA
-
-1. **Usage du Prelude** : Tout module doit commencer par `use crate::utils::prelude::*;` pour accéder aux types `RaiseResult`, `AppError`, et aux fonctions `async_`.
-2. **Atomicité par défaut** : Toute écriture de fichier JSON **doit** passer par `async_file_write_json_atomic`.
-3. **Pas de chemins relatifs "purs"** : Utilisez toujours `AppConfig::get().get_path("...")` pour construire des chemins absolus sécurisés.
+Le prélude expose les alias sémantiques (ex: `SharedRef` au lieu de `Arc`) pour masquer la complexité technique derrière une intention métier.
 
 ---
 
-## 5. Plan de Migration des Fichiers
+## 🚨 3. Le Système d'Erreur "AI-Ready"
 
-| Fichier | Statut | Action à entreprendre |
+Toutes les fonctions de la fondation retournent un **`RaiseResult<T>`**.
+
+* **`AppError::Structured`** : Capture automatiquement le `service`, le `subdomain`, le `component` et l' `action` via les macros `build_error!` ou `raise_error!`.
+* **Observabilité** : En cas d'échec de parsing JSON, le système capture un `snippet` du texte malformé pour faciliter le diagnostic automatique par l'IA.
+
+---
+
+## 🛠️ 4. Nomenclature des Façades (API Publique)
+
+### A. I/O & Système de Fichiers (`fs::`)
+
+| Fonction | Usage |
+| --- | --- |
+| `exists_async(path)` | Vérification non-bloquante de l'existence. |
+| `write_json_atomic_async(path, data)` | Sérialisation et écriture sécurisée (anti-corruption). |
+| `read_json_async<T>(path)` | Lecture avec typage fort et diagnostic d'erreur intégré. |
+
+### B. Données & JSON (`json::`)
+
+| Fonction | Usage |
+| --- | --- |
+| `deserialize_from_str<T>(s)` | Parsing ultra-sécurisé avec contexte d'erreur. |
+| `serialize_to_string_pretty(v)` | Génération de JSON lisible pour la configuration. |
+| `deep_merge_values(a, b)` | Fusion récursive de deux objets `JsonValue`. |
+
+### C. Réseau & Connectivité (`net::`)
+
+| Fonction | Usage |
+| --- | --- |
+| `get_client()` | Récupère le singleton `HttpClient` (pool de connexions). |
+| `post_authenticated_async(...)` | Requête sécurisée avec retry exponentiel automatique. |
+| `build_p2p_node_async(...)` | Initialisation d'un nœud P2P sécurisé (libp2p). |
+
+---
+
+## 🧩 5. Dictionnaire des Macros & Attributs
+
+Pour l'Agent IA, ces macros sont les primitives de base du langage RAISE :
+
+* **`#[async_interface]`** : À placer sur tout `trait` contenant des méthodes `async`.
+* **`#[async_test]`** : À placer sur toute fonction de test `async`.
+* **`raise_error!(code, error, context)`** : Interrompt l'exécution proprement (Divergence).
+* **`user_info!` / `user_error!**` : Notifie l'utilisateur via l'UI et logue l'événement en JSONL.
+
+---
+
+## 📈 6. État de la Migration (V2.1)
+
+| Phase | Statut | Action Requise |
 | --- | --- | --- |
-| `error.rs` | 🛠️ En cours | Renommer `Result` ➔ `RaiseResult`. |
-| `fs.rs` | 🛠️ En cours | Implémenter les fonctions réelles `async_*`. |
-| `json.rs` | 🛠️ En cours | Renommer `parse` ➔ `json_parse`, etc. |
-| `file_storage.rs` | ⏳ Attente | Remplacer les appels `io::read_json` par `io::async_file_read_json`. |
+| **Isolation `utils**` | ✅ 100% | Les sous-domaines sont hermétiques et auto-documentés. |
+| **Zéro Prelude Interne** | ✅ 100% | Les fichiers de `utils` n'utilisent plus le prélude (évite les cycles). |
+| **Services Métiers** | 🛠️ 40% | En cours de nettoyage pour supprimer les imports `serde`/`tokio` directs. |
+| **Bannissement `anyhow**` | 🛠️ 20% | Remplacer `AnyResult` par `RaiseResult` dans les commandes Tauri. |
+
+---
+
+**Directives finales pour l'IA** : Si vous devez ajouter une dépendance, ajoutez-la d'abord dans une façade de `utils`, créez un alias sémantique, et exposez-le via le prélude. **Ne polluez jamais le domaine métier.**.
 
 ---
  

@@ -1,16 +1,7 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/workflow.rs
 
 use clap::{Args, Subcommand};
-
-use raise::{
-    raise_error, user_error, user_info, user_success,
-    utils::{
-        io::{self},
-        prelude::*,
-        Arc, AsyncMutex, Utc,
-    },
-};
-
+use raise::utils::prelude::*;
 // Imports Cœur Raise
 use raise::ai::orchestrator::AiOrchestrator;
 use raise::json_db::collections::manager::CollectionsManager;
@@ -75,7 +66,7 @@ async fn init_cli_engine(ctx: &CliContext) -> RaiseResult<(WorkflowScheduler, St
         Err(e) => raise_error!(
             "ERR_AI_ORCHESTRATOR_INIT",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "startup_ai_engine",
                 "model_type": "ProjectModel::default",
                 "hint": "Vérifiez la présence des fichiers de poids du modèle et la disponibilité de la VRAM."
@@ -84,9 +75,9 @@ async fn init_cli_engine(ctx: &CliContext) -> RaiseResult<(WorkflowScheduler, St
     };
 
     // 🎯 Utilisation du storage global partagé
-    let pm = Arc::new(PluginManager::new(&ctx.storage, None));
+    let pm = SharedRef::new(PluginManager::new(&ctx.storage, None));
 
-    let executor = WorkflowExecutor::new(Arc::new(AsyncMutex::new(orch)), pm);
+    let executor = WorkflowExecutor::new(SharedRef::new(AsyncMutex::new(orch)), pm);
     let scheduler = WorkflowScheduler::new(executor);
 
     Ok((scheduler, domain, db))
@@ -102,15 +93,15 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
         WorkflowCommands::SubmitMandate { path } => {
             user_info!(
                 "MANDATE_LOAD_START",
-                json!({ "path": path, "type": "config_source" })
+                json_value!({ "path": path, "type": "config_source" })
             );
-            let path_ref = io::Path::new(&path);
+            let path_ref = Path::new(&path);
 
-            if !io::exists(path_ref).await {
+            if !fs::exists_async(path_ref).await {
                 raise_error!(
                     "FS_MANDATE_NOT_FOUND",
                     error = "File does not exist on disk",
-                    context = json!({
+                    context = json_value!({
                         "path": path,
                         "operation": "mandate_initialization",
                         "critical": true
@@ -123,7 +114,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 Err(e) => raise_error!(
                     "ERR_FS_READ_CONTENT",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "read_file_to_string",
                         "path": path_ref.to_string_lossy(),
                         "hint": "Le fichier a peut-être été supprimé ou est utilisé par un autre processus."
@@ -131,15 +122,14 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 ),
             };
 
-            let mandate: Mandate = match serde_json::from_str(&content) {
+            let mandate: Mandate = match json::deserialize_from_str(&content) {
                 Ok(m) => m,
                 Err(e) => raise_error!(
                     "ERR_JSON_DESERIALIZE_MANDATE",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "parse_mandate_json",
-                        "line": e.line(),
-                        "column": e.column(),
+                        "error_details": e.to_string(),
                         "hint": "Le format du mandat ne correspond pas à la structure attendue. Vérifiez les types et les champs obligatoires."
                     })
                 ),
@@ -161,7 +151,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
 
             user_success!(
                 "MANDATE_COMPILE_SUCCESS",
-                json!({
+                json_value!({
                     "author": mandate.meta.author,
                     "version": mandate.meta.version,
                     "graph_id": definition.id,
@@ -173,10 +163,10 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
         WorkflowCommands::Start { workflow_id } => {
             user_info!(
                 "ENGINE_WORKFLOW_START",
-                json!({
+                json_value!({
                     "workflow_id": workflow_id,
                     "mode": "initialization",
-                    "timestamp": Utc::now().to_rfc3339()
+                    "timestamp": UtcClock::now().to_rfc3339()
                 })
             );
 
@@ -191,10 +181,10 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             let instance = scheduler.create_instance(&workflow_id, &manager).await?;
             user_success!(
                 "INSTANCE_CREATION_SUCCESS",
-                json!({
+                json_value!({
                     "instance_id": instance.id,
                     "status": "initialized",
-                    "timestamp": Utc::now().to_rfc3339()
+                    "timestamp": UtcClock::now().to_rfc3339()
                 })
             );
             let final_status = scheduler
@@ -204,12 +194,12 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             match final_status {
                 ExecutionStatus::Completed => {
                     // 🎯 Mise en conformité stricte JSON
-                    user_success!("WORKFLOW_COMPLETED", json!({"status": "finished"}));
+                    user_success!("WORKFLOW_COMPLETED", json_value!({"status": "finished"}));
                 }
                 ExecutionStatus::Paused => {
                     user_info!(
                         "WORKFLOW_PAUSED_HITL",
-                        json!({
+                        json_value!({
                             "reason": "manual_validation_required",
                             "instance_id": instance.id
                         })
@@ -218,13 +208,13 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 ExecutionStatus::Failed => {
                     user_error!(
                         "WORKFLOW_FAILED",
-                        json!({ "final_status": format!("{:?}", final_status) })
+                        json_value!({ "final_status": format!("{:?}", final_status) })
                     );
                 }
                 _ => {
                     user_info!(
                         "WORKFLOW_STATUS_UPDATE",
-                        json!({ "status": format!("{:?}", final_status) })
+                        json_value!({ "status": format!("{:?}", final_status) })
                     );
                 }
             }
@@ -237,11 +227,11 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
         } => {
             user_info!(
                 "WORKFLOW_HITL_RESUME",
-                json!({
+                json_value!({
                     "instance_id": instance_id,
                     "node_id": node_id,
                     "decision": if approved { "approved" } else { "rejected" },
-                    "timestamp": Utc::now().to_rfc3339()
+                    "timestamp": UtcClock::now().to_rfc3339()
                 })
             );
 
@@ -255,7 +245,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 .await
                 .unwrap()
                 .unwrap();
-            let instance: WorkflowInstance = serde_json::from_value(doc).unwrap();
+            let instance: WorkflowInstance = json::deserialize_from_value(doc).unwrap();
             let mandate_id = instance.workflow_id.replace("wf_", "");
 
             scheduler.load_mission(&mandate_id, &manager).await?;
@@ -268,18 +258,21 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             // Relance de la machine
             user_info!(
                 "ENGINE",
-                json!({"action": "Relance de la boucle d'exécution..."})
+                json_value!({"action": "Relance de la boucle d'exécution..."})
             );
             let final_status = scheduler
                 .execute_instance_loop(&instance_id, &manager)
                 .await?;
 
             if final_status == ExecutionStatus::Completed {
-                user_success!("DONE", json!({"status": "Workflow terminé avec succès !"}));
+                user_success!(
+                    "DONE",
+                    json_value!({"status": "Workflow terminé avec succès !"})
+                );
             } else {
                 user_info!(
                     "WORKFLOW_STATUS_CHANGED",
-                    json!({
+                    json_value!({
                         "new_status": format!("{:?}", final_status),
                         "instance_id": instance_id,
                         "is_terminal": matches!(final_status, ExecutionStatus::Completed | ExecutionStatus::Failed)
@@ -301,11 +294,11 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 .await
             {
                 Ok(Some(doc)) => {
-                    let instance: WorkflowInstance = serde_json::from_value(doc).unwrap();
+                    let instance: WorkflowInstance = json::deserialize_from_value(doc).unwrap();
                     // 1. Suivi du statut de la machine à états
                     user_info!(
                         "INSTANCE_STATE_SYNC",
-                        json!({
+                        json_value!({
                             "status": format!("{:?}", instance.status),
                             "instance_id": instance.id
                         })
@@ -314,7 +307,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                     // 2. Monitoring de la topologie active
                     user_info!(
                         "INSTANCE_NODES_SNAPSHOT",
-                        json!({
+                        json_value!({
                             "nodes": instance.node_states,
                             "count": instance.node_states.len()
                         })
@@ -322,12 +315,12 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
 
                     // 3. Récupération du dernier événement de trace
                     if let Some(last_log) = instance.logs.last() {
-                        user_info!("INSTANCE_LAST_EVENT", json!({ "log": last_log }));
+                        user_info!("INSTANCE_LAST_EVENT", json_value!({ "log": last_log }));
                     }
                 }
                 _ => user_error!(
                     "INSTANCE_NOT_FOUND",
-                    json!({
+                    json_value!({
                         "instance_id": instance_id,
                         "action": "lookup_failure",
                         "severity": "medium"
@@ -345,10 +338,10 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             );
 
             // 2. Création de l'entité Jumeau Numérique
-            let sensor_doc = serde_json::json!({
+            let sensor_doc = json_value!({
                 "_id": "vibration_z", // Identifiant unique du capteur
                 "value": value,
-                "updatedAt": Utc::now().to_rfc3339()
+                "updatedAt": UtcClock::now().to_rfc3339()
             });
 
             // 3. Persistance dans la collection 'digital_twin' (IPC par la donnée)
@@ -356,7 +349,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
 
             user_success!(
                 "SENSOR_UPDATED",
-                json!({
+                json_value!({
                     "sensor_type": "vibration_z",
                     "value": value,
                     "collection": "digital_twin",
@@ -374,10 +367,12 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raise::utils::mock::GlobalDbSandbox;
-    use raise::utils::session::SessionManager;
+    use raise::utils::context::SessionManager;
 
-    #[tokio::test]
+    #[cfg(test)]
+    use raise::utils::testing::GlobalDbSandbox;
+
+    #[async_test]
     #[serial_test::serial]
     async fn test_cli_set_sensor_writes_to_db() {
         let sandbox = GlobalDbSandbox::new().await;
@@ -425,7 +420,7 @@ mod tests {
         assert_eq!(doc["value"], 42.5, "La valeur en base ne correspond pas");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     async fn test_cli_submit_mandate_compiles_and_persists() {
         let sandbox = GlobalDbSandbox::new().await;
@@ -449,7 +444,7 @@ mod tests {
             storage: sandbox.db.clone(),
         };
 
-        let valid_mandate = serde_json::json!({
+        let valid_mandate = json_value!({
             "_id": "mandate_cli_test_123",
             "name": { "fr": "Mandat de Test" },
             "meta": { "author": "CLI_Tester", "version": "1.0.0", "status": "ACTIVE" },
@@ -457,7 +452,7 @@ mod tests {
             "hardLogic": { "vetos": [] },
             "observability": { "heartbeatMs": 100 }
         });
-        io::write(&mandate_path, valid_mandate.to_string())
+        fs::write_async(&mandate_path, valid_mandate.to_string())
             .await
             .unwrap();
 
@@ -494,7 +489,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     async fn test_cli_submit_mandate_invalid_path_fails_safely() {
         let sandbox = GlobalDbSandbox::new().await;

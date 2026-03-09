@@ -1,10 +1,6 @@
 // FICHIER : src-tauri/src/code_generator/templates/template_engine.rs
 
-use crate::utils::{
-    data::{HashMap, Value},
-    io::{Path, ProjectScope},
-    prelude::*, // Importe RaiseResult et json!
-};
+use crate::utils::prelude::*;
 use tera::{try_get_value, Tera};
 
 pub struct TemplateEngine {
@@ -33,7 +29,7 @@ impl TemplateEngine {
         Self { tera }
     }
 
-    pub fn render(&self, template_name: &str, context: &Value) -> RaiseResult<String> {
+    pub fn render(&self, template_name: &str, context: &JsonValue) -> RaiseResult<String> {
         // 🎯 Magie du `?` : tera::Error est automatiquement converti en AppError
         // via les implémentations From dans utils/error.rs
         let tera_ctx = tera::Context::from_value(context.clone())?;
@@ -45,21 +41,22 @@ impl TemplateEngine {
     /// 🚀 GÉNÉRATION PHYSIQUE SÉCURISÉE
     pub async fn generate(
         &self,
-        scope: &ProjectScope,
+        scope: &fs::ProjectScope,
         template_name: &str,
-        context: &Value,
+        context: &JsonValue,
         relative_path: impl AsRef<Path>,
     ) -> RaiseResult<()> {
         let content = self.render(template_name, context)?;
         scope
-            .write(relative_path.as_ref(), content.as_bytes())
+            .write_async(relative_path.as_ref(), content.as_bytes())
             .await?;
 
-        info!(
-            target: "codegen",
-            "📝 Généré : {:?} (via {})",
-            relative_path.as_ref(),
-            template_name
+        user_info!(
+            "MSG_CODEGEN_SUCCESS",
+            json_value!({
+                "path": relative_path.as_ref(),
+                "template": template_name
+            })
         );
         Ok(())
     }
@@ -76,24 +73,33 @@ mod filters {
     use heck::{ToLowerCamelCase, ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
     use tera::{to_value, Value};
 
-    pub fn pascal_case_filter(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
+    pub fn pascal_case_filter(
+        value: &Value,
+        _: &UnorderedMap<String, Value>,
+    ) -> tera::Result<Value> {
         let s = try_get_value!("pascal_case", "value", String, value);
         Ok(to_value(s.to_pascal_case()).unwrap())
     }
 
-    pub fn snake_case_filter(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
+    pub fn snake_case_filter(
+        value: &JsonValue,
+        _: &UnorderedMap<String, Value>,
+    ) -> tera::Result<Value> {
         let s = try_get_value!("snake_case", "value", String, value);
         Ok(to_value(s.to_snake_case()).unwrap())
     }
 
-    pub fn camel_case_filter(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
+    pub fn camel_case_filter(
+        value: &Value,
+        _: &UnorderedMap<String, JsonValue>,
+    ) -> tera::Result<Value> {
         let s = try_get_value!("camel_case", "value", String, value);
         Ok(to_value(s.to_lower_camel_case()).unwrap())
     }
 
     pub fn screaming_snake_case_filter(
         value: &Value,
-        _: &HashMap<String, Value>,
+        _: &UnorderedMap<String, JsonValue>,
     ) -> tera::Result<Value> {
         let s = try_get_value!("screaming_snake_case", "value", String, value);
         Ok(to_value(s.to_shouty_snake_case()).unwrap())
@@ -113,16 +119,15 @@ fn register_default_templates(tera: &mut Tera) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::io::tempdir;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_secure_generation() {
         let engine = TemplateEngine::new();
         let dir = tempdir().unwrap();
-        let scope = ProjectScope::new(dir.path()).unwrap();
+        let scope = fs::ProjectScope::new_sync(dir.path()).unwrap();
 
         // 🎯 MIGRATION V1.3 : Utilisation de json! au lieu de ContextBuilder
-        let ctx = json!({
+        let ctx = json_value!({
             "name": "SecureActor",
             "id": "SA_007"
         });

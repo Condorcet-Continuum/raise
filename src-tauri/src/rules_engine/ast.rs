@@ -3,7 +3,7 @@
 use crate::utils::prelude::*;
 
 /// Représentation en mémoire d'une règle définie dans 'quality-rule.schema.json'.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct Rule {
     #[serde(rename = "_id", alias = "id")]
     pub id: String,
@@ -17,11 +17,11 @@ pub struct Rule {
 
 /// Arbre Syntaxique Abstrait (AST) complet.
 /// Union des fonctionnalités Legacy (Analyzer) et Modernes (Validator).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Expr {
     // --- 1. Primitives & Variables ---
-    Val(Value),
+    Val(JsonValue),
     Var(String),
     Now,
 
@@ -111,12 +111,11 @@ pub enum Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::data::json;
 
     #[test]
     fn test_ast_serialization_primitive() {
-        let expr = Expr::Val(json!(42));
-        let json = serde_json::to_string(&expr).unwrap();
+        let expr = Expr::Val(json_value!(42));
+        let json = json::serialize_to_string(&expr).unwrap();
         assert_eq!(json, r#"{"val":42}"#);
     }
 
@@ -129,7 +128,7 @@ mod tests {
                 "else_branch": { "val": "OK" }
             }
         }"#;
-        let expr: Expr = serde_json::from_str(json_str).expect("Désérialisation échouée");
+        let expr: Expr = json::deserialize_from_str(json_str).expect("Désérialisation échouée");
         match expr {
             Expr::If { .. } => assert!(true),
             _ => panic!("Structure incorrecte"),
@@ -144,7 +143,7 @@ mod tests {
             "description": "Check",
             "expr": { "len": { "var": "name" } }
         }"#;
-        let rule: Rule = serde_json::from_str(json_rule).unwrap();
+        let rule: Rule = json::deserialize_from_str(json_rule).unwrap();
         assert_eq!(rule.id, "RULE_001");
     }
 
@@ -161,7 +160,7 @@ mod tests {
                 "expr": { "mul": [{ "var": "item.price" }, { "val": 1.2 }] }
             }
         }"#;
-        let map_expr: Expr = serde_json::from_str(map_json).unwrap();
+        let map_expr: Expr = json::deserialize_from_str(map_json).unwrap();
         if let Expr::Map { alias, .. } = map_expr {
             assert_eq!(alias, "item");
         } else {
@@ -175,7 +174,7 @@ mod tests {
                 "pattern": { "val": "^[A-Z]{3}-\\d{3}$" }
             }
         }"#;
-        let regex_expr: Expr = serde_json::from_str(regex_json).unwrap();
+        let regex_expr: Expr = json::deserialize_from_str(regex_json).unwrap();
         match regex_expr {
             Expr::RegexMatch { .. } => assert!(true),
             _ => panic!("RegexMatch non reconnu"),

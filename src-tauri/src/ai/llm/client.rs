@@ -1,6 +1,6 @@
 use crate::ai::llm::candle_engine::CandleLlmEngine;
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::{prelude::*, Arc, AsyncMutex};
+use crate::utils::prelude::*;
 
 // On garde l'énumération pour la rétrocompatibilité avec tes agents existants,
 // mais elle n'a plus d'impact réel sous le capot !
@@ -14,7 +14,7 @@ pub enum LlmBackend {
 
 #[derive(Clone)]
 pub struct LlmClient {
-    engine: Arc<AsyncMutex<CandleLlmEngine>>,
+    engine: SharedRef<AsyncMutex<CandleLlmEngine>>,
 }
 
 impl LlmClient {
@@ -22,7 +22,7 @@ impl LlmClient {
         // Initialisation directe du moteur IA local
         let engine = CandleLlmEngine::new(manager).await?;
         Ok(Self {
-            engine: Arc::new(AsyncMutex::new(engine)),
+            engine: SharedRef::new(AsyncMutex::new(engine)),
         })
     }
 

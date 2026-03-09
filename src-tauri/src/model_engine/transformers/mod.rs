@@ -17,7 +17,7 @@ pub enum TransformationDomain {
 /// Il prend un élément brut Arcadia (JSON hydraté) et retourne une structure JSON
 /// sémantique optimisée pour le moteur de template.
 pub trait ModelTransformer {
-    fn transform(&self, element: &Value) -> RaiseResult<Value>;
+    fn transform(&self, element: &JsonValue) -> RaiseResult<JsonValue>;
 }
 
 /// Factory pour instancier le bon transformateur
@@ -38,14 +38,14 @@ mod tests {
         // Test Software
         let soft = get_transformer(TransformationDomain::Software);
         // On vérifie juste que ça ne panic pas et retourne un trait object
-        assert!(soft.transform(&serde_json::json!({})).is_ok());
+        assert!(soft.transform(&json_value!({})).is_ok());
 
         // Test Hardware
         let hard = get_transformer(TransformationDomain::Hardware);
-        assert!(hard.transform(&serde_json::json!({})).is_ok());
+        assert!(hard.transform(&json_value!({})).is_ok());
 
         // Test System
         let sys = get_transformer(TransformationDomain::System);
-        assert!(sys.transform(&serde_json::json!({})).is_ok());
+        assert!(sys.transform(&json_value!({})).is_ok());
     }
 }

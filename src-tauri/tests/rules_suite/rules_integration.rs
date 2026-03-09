@@ -6,7 +6,7 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::prelude::*;
 use std::fs;
 
-#[tokio::test]
+#[async_test]
 async fn test_end_to_end_rules_execution() {
     // 1. SETUP ROBUSTE
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -37,7 +37,7 @@ async fn test_end_to_end_rules_execution() {
         .await
         .unwrap();
     // 2. CRÉATION DU SCHÉMA
-    let schema_content = json!({
+    let schema_content = json_value!({
         "type": "object",
         "properties": {
             "qty": { "type": "number" },
@@ -82,7 +82,7 @@ async fn test_end_to_end_rules_execution() {
         .unwrap();
 
     // 4. EXECUTION
-    let invoice_input = json!({
+    let invoice_input = json_value!({
         "_id": "inv_001",
         "user_id": "u_dev",
         "qty": 2,

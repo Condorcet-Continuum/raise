@@ -1,11 +1,7 @@
 // FICHIER : src-tauri/src/ai/tools/file_system.rs
 
 use crate::ai::protocols::mcp::{McpTool, McpToolCall, McpToolResult, ToolDefinition};
-use crate::utils::{
-    async_trait,
-    io::{self, PathBuf},
-    prelude::*,
-};
+use crate::utils::prelude::*;
 
 /// Outil permettant à l'IA d'écrire un fichier sur le disque.
 pub struct FileWriteTool {
@@ -18,7 +14,7 @@ impl FileWriteTool {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl McpTool for FileWriteTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
@@ -26,7 +22,7 @@ impl McpTool for FileWriteTool {
             description:
                 "Écrit du contenu texte dans un fichier. Crée les dossiers parents si nécessaire."
                     .to_string(),
-            input_schema: json!({
+            input_schema: json_value!({
                 "type": "object",
                 "required": ["path", "content"],
                 "properties": {
@@ -72,7 +68,7 @@ impl McpTool for FileWriteTool {
 
         // 3. Création des dossiers parents
         if let Some(parent) = full_path.parent() {
-            if let Err(e) = io::create_dir_all(parent).await {
+            if let Err(e) = fs::create_dir_all_async(parent).await {
                 return McpToolResult::error(
                     call.id,
                     &format!("Impossible de créer le dossier parent: {}", e),
@@ -81,10 +77,11 @@ impl McpTool for FileWriteTool {
         }
 
         // 4. Écriture du fichier
-        match io::write(&full_path, content).await {
-            Ok(_) => {
-                McpToolResult::success(call.id, json!({ "status": "success", "path": full_path }))
-            }
+        match fs::write_async(&full_path, content).await {
+            Ok(_) => McpToolResult::success(
+                call.id,
+                json_value!({ "status": "success", "path": full_path }),
+            ),
             Err(e) => McpToolResult::error(call.id, &format!("Erreur d'écriture: {}", e)),
         }
     }
@@ -97,19 +94,18 @@ impl McpTool for FileWriteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::io::tempdir;
 
     fn make_call(path: &str, content: &str) -> McpToolCall {
         McpToolCall::new(
             "fs_write",
-            json!({
+            json_value!({
                 "path": path,
                 "content": content
             }),
         )
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_write_file_simple() {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
@@ -118,11 +114,11 @@ mod tests {
         assert!(!result.is_error);
         let file_path = dir.path().join("hello.txt");
         assert!(file_path.exists());
-        let saved_content = io::read_to_string(&file_path).await.unwrap();
+        let saved_content = fs::read_to_string_async(&file_path).await.unwrap();
         assert_eq!(saved_content, "Hello World");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_write_nested_directories() {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
@@ -133,7 +129,7 @@ mod tests {
         assert!(file_path.exists());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_security_prevent_path_traversal() {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
@@ -142,7 +138,7 @@ mod tests {
         assert!(result.is_error);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_security_prevent_absolute_path() {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
@@ -151,11 +147,11 @@ mod tests {
         assert!(result.is_error);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_missing_arguments() {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
-        let call = McpToolCall::new("fs_write", json!({ "path": "test.txt" }));
+        let call = McpToolCall::new("fs_write", json_value!({ "path": "test.txt" }));
         let result = tool.execute(call).await;
         assert!(result.is_error);
     }

@@ -3,7 +3,7 @@
 use crate::blockchain::crypto::hashing::calculate_hash;
 use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct MerkleTree {
     pub root_hash: String,
     pub leaf_hashes: Vec<String>,
@@ -15,7 +15,7 @@ impl MerkleTree {
     pub fn new(leaves: Vec<String>) -> Self {
         if leaves.is_empty() {
             return Self {
-                root_hash: calculate_hash(&json!("empty_tree")),
+                root_hash: calculate_hash(&json_value!("empty_tree")),
                 leaf_hashes: leaves,
             };
         }
@@ -39,12 +39,12 @@ impl MerkleTree {
                 [h1, h2] => {
                     // On combine les deux hashs
                     let combined = format!("{}{}", h1, h2);
-                    next_level.push(calculate_hash(&json!(combined)));
+                    next_level.push(calculate_hash(&json_value!(combined)));
                 }
                 [h1] => {
                     // Si le nombre de feuilles est impair, on duplique le dernier pour équilibrer
                     let combined = format!("{}{}", h1, h1);
-                    next_level.push(calculate_hash(&json!(combined)));
+                    next_level.push(calculate_hash(&json_value!(combined)));
                 }
                 _ => unreachable!(),
             }

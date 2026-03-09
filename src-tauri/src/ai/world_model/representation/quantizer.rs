@@ -24,7 +24,7 @@ impl VectorQuantizer {
                 raise_error!(
                     "ERR_AI_QUANTIZER_INIT_FAILED",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "num_embeddings": num_embeddings,
                         "embedding_dim": embedding_dim,
                         "hint": "Échec de l'initialisation du dictionnaire d'embeddings. Vérifiez que la taille du vocabulaire et la dimension correspondent aux poids fournis."
@@ -77,7 +77,7 @@ impl VectorQuantizer {
             Err(e) => raise_error!(
                 "ERR_AI_QUANT_BROADCAST_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "z_shape": format!("{:?}", z.shape()),
                     "w_shape": format!("{:?}", w.shape())
                 })
@@ -101,7 +101,7 @@ impl VectorQuantizer {
             Err(e) => raise_error!(
                 "ERR_AI_QUANT_DECODE_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "codebook_lookup",
                     "indices_shape": format!("{:?}", indices.shape()),
                     "hint": "Échec de la récupération des vecteurs. Vérifiez que les indices ne dépassent pas la taille du vocabulaire (num_embeddings)."

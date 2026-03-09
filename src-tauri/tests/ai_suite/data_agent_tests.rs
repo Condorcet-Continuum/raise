@@ -1,13 +1,15 @@
 // FICHIER : src-tauri/tests/ai_suite/data_agent_tests.rs
 
+use raise::utils::prelude::*;
+
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{data_agent::DataAgent, Agent, AgentContext};
-use raise::utils::Arc;
+
 // 👇 Import indispensable du manager
 use raise::json_db::collections::manager::CollectionsManager;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_data_agent_creates_class_and_enum() {
@@ -42,7 +44,7 @@ async fn test_data_agent_creates_class_and_enum() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.sandbox.storage.clone()),
+        SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),
@@ -82,7 +84,7 @@ async fn test_data_agent_creates_class_and_enum() {
     }
 
     // --- VÉRIFICATION PHYSIQUE ---
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tokio::time::sleep(TimeDuration::from_millis(1500)).await;
 
     // Check Class
     let classes_dir = test_root.join("un2/data/collections/classes");

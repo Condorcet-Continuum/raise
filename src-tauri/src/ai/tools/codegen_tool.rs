@@ -4,12 +4,12 @@ use crate::ai::protocols::mcp::{McpTool, McpToolCall, McpToolResult, ToolDefinit
 use crate::code_generator::{CodeGeneratorService, TargetLanguage};
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
-use crate::utils::{async_trait, io::PathBuf, prelude::*, Arc};
+use crate::utils::prelude::*;
 
 /// Outil MCP qui fait le pont entre l'IA, la Base de Données et le Générateur de Code.
 pub struct CodeGenTool {
     service: CodeGeneratorService,
-    db: Arc<StorageEngine>,
+    db: SharedRef<StorageEngine>,
     space: String,
     db_name: String,
 }
@@ -19,7 +19,12 @@ impl CodeGenTool {
     /// - domain_root : Où écrire les fichiers générés
     /// - db : Le moteur de stockage pour lire le modèle
     /// - space/db_name : Les coordonnées de la base (ex: "mbse2"/"drones")
-    pub fn new(domain_root: PathBuf, db: Arc<StorageEngine>, space: &str, db_name: &str) -> Self {
+    pub fn new(
+        domain_root: PathBuf,
+        db: SharedRef<StorageEngine>,
+        space: &str,
+        db_name: &str,
+    ) -> Self {
         Self {
             service: CodeGeneratorService::new(domain_root),
             db,
@@ -30,7 +35,7 @@ impl CodeGenTool {
 
     /// Récupère le document complet depuis la base de données via son ID interne.
     /// Parcourt les collections probables car l'ID est unique globalement.
-    async fn fetch_component(&self, id: &str) -> RaiseResult<Value> {
+    async fn fetch_component(&self, id: &str) -> RaiseResult<JsonValue> {
         let manager = CollectionsManager::new(&self.db, &self.space, &self.db_name);
         let collections = ["pa_components", "la_components", "sa_components"];
 
@@ -45,7 +50,7 @@ impl CodeGenTool {
         // ✅ PLUS de Err(), PLUS de point-virgule nécessaire après la macro
         raise_error!(
             "ERR_DB_COMPONENT_NOT_FOUND",
-            context = json!({
+            context = json_value!({
                 "component_id": id,
                 "searched_collections": collections,
                 "space": self.space,
@@ -60,7 +65,7 @@ impl CodeGenTool {
     }
 
     /// Détermine le langage cible depuis le JSON du composant
-    fn determine_language(&self, component: &Value) -> RaiseResult<TargetLanguage> {
+    fn determine_language(&self, component: &JsonValue) -> RaiseResult<TargetLanguage> {
         let tech = component
             .get("implementation")
             .and_then(|i| i.get("technology"))
@@ -78,7 +83,7 @@ impl CodeGenTool {
                 // 🛠️ Alerte de support technologique
                 raise_error!(
                     "ERR_CODEGEN_UNSUPPORTED_TECH",
-                    context = json!({
+                    context = json_value!({
                         "received_tech": tech,
                         "action": "resolve_target_language",
                         "supported_languages": [
@@ -92,13 +97,13 @@ impl CodeGenTool {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl McpTool for CodeGenTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "generate_component_code".into(),
             description: "Génère le code source pour un composant stocké en base.".into(),
-            input_schema: json!({
+            input_schema: json_value!({
                 "type": "object",
                 "properties": {
                     "component_id": { "type": "string" },
@@ -143,13 +148,13 @@ impl McpTool for CodeGenTool {
                 let message = format!(
                     "Génération réussie pour '{}' ({}). {} fichiers écrits.",
                     component_doc["name"].as_str().unwrap_or("?"),
-                    json!(lang).as_str().unwrap_or("Code"),
+                    json_value!(lang).as_str().unwrap_or("Code"),
                     file_list.len()
                 );
 
                 McpToolResult::success(
                     call.id,
-                    json!({
+                    json_value!({
                         "message": message,
                         "files": file_list
                     }),
@@ -163,9 +168,9 @@ impl McpTool for CodeGenTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_codegen_tool_full_integration() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -185,7 +190,7 @@ mod tests {
         manager
             .upsert_document(
                 "pa_components",
-                json!({
+                json_value!({
                     "_id": comp_id,
                     "name": "MyRustComponent",
                     "implementation": { "technology": "rust" }
@@ -202,7 +207,7 @@ mod tests {
         );
         let call = McpToolCall::new(
             "generate_component_code",
-            json!({ "component_id": comp_id }),
+            json_value!({ "component_id": comp_id }),
         );
 
         let result = tool.execute(call).await;
@@ -217,7 +222,7 @@ mod tests {
             .map_or(false, |a| !a.is_empty()));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_codegen_tool_not_found() {
         let sandbox = AgentDbSandbox::new().await;
         let tool = CodeGenTool::new(
@@ -228,7 +233,7 @@ mod tests {
         );
         let call = McpToolCall::new(
             "generate_component_code",
-            json!({ "component_id": "unknown_id" }),
+            json_value!({ "component_id": "unknown_id" }),
         );
 
         let result = tool.execute(call).await;

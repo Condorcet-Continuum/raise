@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/ai/training/mod.rs
 
 use crate::json_db::storage::StorageEngine;
-use crate::utils::{config::AppConfig, io, prelude::*};
+use crate::utils::prelude::*;
 use candle_core::{Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarMap};
 use tokenizers::Tokenizer;
@@ -39,7 +39,7 @@ pub async fn ai_train_domain_native(
         raise_error!(
             "ERR_OS_HOME_NOT_FOUND",
             error = "Impossible de localiser le répertoire personnel de l'utilisateur (home).",
-            context = json!({ "method": "dirs::home_dir" })
+            context = json_value!({ "method": "dirs::home_dir" })
         );
     };
     // On pointe vers notre dossier de modèles locaux
@@ -52,7 +52,7 @@ pub async fn ai_train_domain_native(
         raise_error!(
             "ERR_AI_TOKENIZER_FILE_NOT_FOUND",
             error = format!("Fichier Tokenizer introuvable : {:?}", tokenizer_path),
-            context = json!({ "path": tokenizer_path.to_string_lossy() })
+            context = json_value!({ "path": tokenizer_path.to_string_lossy() })
         );
     }
 
@@ -61,7 +61,7 @@ pub async fn ai_train_domain_native(
         Err(e) => raise_error!(
             "ERR_AI_TOKENIZER_LOAD",
             error = e,
-            context = json!({
+            context = json_value!({
                 "path": tokenizer_path.to_string_lossy(),
                 "action": "load_tokenizer_from_file"
             })
@@ -78,7 +78,7 @@ pub async fn ai_train_domain_native(
         raise_error!(
             "ERR_DATA_DOMAIN_EMPTY",
             error = "EMPTY_COLLECTION", // Étiquette statique pour l'erreur
-            context = json!({
+            context = json_value!({
                 "action": "load_domain_examples",
                 "domain": domain,
                 "hint": "Vérifiez que le fichier de données JSON n'est pas vide ou que le chemin du domaine est correct."
@@ -98,7 +98,7 @@ pub async fn ai_train_domain_native(
         Err(e) => raise_error!(
             "ERR_MODEL_OPTIMIZER_INIT",
             error = e, // On préserve l'erreur native de Candle/AdamW
-            context = json!({
+            context = json_value!({
                 "action": "initialize_adamw",
                 "learning_rate": lr,
                 "variable_count": varmap.all_vars().len(),
@@ -131,7 +131,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_AI_TOKENIZATION_FAIL",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "prompt_len": prompt_len, // On utilise la variable locale, pas prompt.len()
                         "add_special_tokens": true
                     })
@@ -148,7 +148,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_TENSOR_CREATE",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "create_labels_tensor",
                         "token_count": tokens.len(),
                         "device": format!("{:?}", _device)
@@ -162,7 +162,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_TENSOR_SHAPE_UNSQUEEZE",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "unsqueeze_labels",
                         "current_shape": format!("{:?}", labels_base.shape()),
                         "dim": 0
@@ -177,7 +177,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_TENSOR_RANDN_INIT",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "create_dummy_logits",
                         "shape": [1, seq_len, vocab_size],
                         "device": format!("{:?}", _device),
@@ -193,7 +193,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_MODEL_FLATTEN_LOGITS",
                     error = e,
-                    context = json!({ "shape": format!("{:?}", dummy_logits.shape()) })
+                    context = json_value!({ "shape": format!("{:?}", dummy_logits.shape()) })
                 ),
             };
 
@@ -203,7 +203,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_MODEL_FLATTEN_LABELS",
                     error = e,
-                    context = json!({ "shape": format!("{:?}", labels.shape()) })
+                    context = json_value!({ "shape": format!("{:?}", labels.shape()) })
                 ),
             };
 
@@ -213,7 +213,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_MODEL_CROSS_ENTROPY",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "compute_loss",
                         "logits_shape": format!("{:?}", flat_logits.shape()),
                         "labels_shape": format!("{:?}", flat_labels.shape())
@@ -227,7 +227,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_MODEL_BACKPROP",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "backward_step",
                         "phase": "model_optimization",
                         // Info utile pour l'IA : on sait exactement quelle étape mathématique a échoué
@@ -240,7 +240,7 @@ pub async fn ai_train_domain_native(
                 Err(e) => raise_error!(
                     "ERR_MODEL_LOSS_CONVERSION",
                     error = e, // 🚀 Fini le e.to_string() ! On passe l'erreur native.
-                    context = json!({
+                    context = json_value!({
                         "action": "extract_loss_value",
                         "phase": "epoch_accumulation",
                         "expected_type": "f32 scalar",
@@ -259,7 +259,7 @@ pub async fn ai_train_domain_native(
         raise_error!(
             "ERR_SYSTEM_HOME_NOT_FOUND",
             error = "OS_ENV_ERROR", // On définit une erreur statique puisque dirs ne renvoie pas d'objet Error
-            context = json!({
+            context = json_value!({
                 "action": "resolve_home_directory",
                 "hint": "Vérifiez les variables d'environnement HOME ou USERPROFILE."
             })
@@ -268,12 +268,12 @@ pub async fn ai_train_domain_native(
     let lora_dir = home
         .join("raise_domain/_system/ai-assets/lora")
         .join(format!("raise-{}-adapter", domain));
-    match io::create_dir_all(&lora_dir).await {
+    match fs::create_dir_all_async(&lora_dir).await {
         Ok(_) => (), // Le dossier existe ou a été créé, tout va bien
         Err(e) => raise_error!(
             "ERR_FS_LORA_DIR_CREATE",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "create_lora_directory",
                 "path": lora_dir.to_string_lossy(),
                 "hint": "Vérifiez les permissions d'écriture dans le dossier parent."
@@ -285,7 +285,7 @@ pub async fn ai_train_domain_native(
         raise_error!(
             "ERR_MODEL_SAVE_WEIGHTS",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "save_varmap_to_disk",
                 "path": save_path.to_string_lossy(),
                 "hint": "Assurez-vous qu'il reste de l'espace disque et que le chemin est accessible."
@@ -304,9 +304,9 @@ pub async fn ai_train_domain_native(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     // On garde l'ignore si CUDA n'est pas là car Device::new_cuda(0) est "hardcoded" dans ta fonction
     #[cfg_attr(not(feature = "cuda"), ignore)]
@@ -321,7 +321,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm",
-            json!({ "rust_tokenizer_file": "tokenizer.json" }),
+            json_value!({ "rust_tokenizer_file": "tokenizer.json" }),
         )
         .await;
 

@@ -1,16 +1,11 @@
 // FICHIER : src-tauri/src/json_db/schema/registry.rs
 
 use crate::json_db::storage::JsonDbConfig;
-use crate::utils::async_recursion;
-use crate::utils::config::AppConfig;
-use crate::utils::data::HashMap;
-use crate::utils::io::{self, PathBuf};
-use crate::utils::json::json;
 use crate::utils::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct SchemaRegistry {
-    pub(crate) by_uri: HashMap<String, Value>,
+    pub(crate) by_uri: UnorderedMap<String, JsonValue>,
     pub base_prefix: String,
     pub(crate) schemas_root: Option<PathBuf>,
 }
@@ -24,7 +19,7 @@ impl Default for SchemaRegistry {
 impl SchemaRegistry {
     pub fn new() -> Self {
         Self {
-            by_uri: HashMap::new(),
+            by_uri: UnorderedMap::new(),
             base_prefix: "db://unknown/unknown/schemas/v1/".to_string(),
             schemas_root: None,
         }
@@ -35,14 +30,14 @@ impl SchemaRegistry {
         let schemas_root = config.db_schemas_root(space, db).join("v1");
 
         let mut registry = Self {
-            by_uri: HashMap::new(),
+            by_uri: UnorderedMap::new(),
             base_prefix: base_prefix.clone(),
             schemas_root: Some(schemas_root.clone()),
         };
 
         let app_config = AppConfig::get();
 
-        // 🎯 LECTURE ASCENDANTE : On charge toutes les strates dans la mémoire (HashMap)
+        // 🎯 LECTURE ASCENDANTE : On charge toutes les strates dans la mémoire (UnorderedMap)
         // 1. Noyau système dur (_system/_system)
         registry
             .load_domain_schemas(config, "_system", "_system")
@@ -84,27 +79,27 @@ impl SchemaRegistry {
     ) -> RaiseResult<()> {
         let prefix = format!("db://{}/{}/schemas/v1/", space, db);
         let root = config.db_schemas_root(space, db).join("v1");
-        if io::exists(&root).await {
+        if fs::exists_async(&root).await {
             self.scan_directory(&root, &root, &prefix).await?;
         }
         Ok(())
     }
 
-    #[async_recursion] // Adapte le chemin de la macro selon tes imports
+    #[async_recursive] // Adapte le chemin de la macro selon tes imports
     async fn scan_directory(
         &mut self,
         root: &Path,
         current_dir: &Path,
         prefix: &str,
     ) -> RaiseResult<()> {
-        let mut entries = io::read_dir(current_dir).await?;
+        let mut entries = fs::read_dir_async(current_dir).await?;
 
         while let Some(entry) = match entries.next_entry().await {
             Ok(e) => e,
             Err(e) => raise_error!(
                 "ERR_FS_SCAN_NEXT_ENTRY",
                 error = e,
-                context = json!({ "dir": current_dir, "action": "scan_directory_recursion" })
+                context = json_value!({ "dir": current_dir, "action": "scan_directory_recursion" })
             ),
         } {
             let path = entry.path();
@@ -113,7 +108,7 @@ impl SchemaRegistry {
                 Err(e) => raise_error!(
                     "ERR_FS_GET_FILE_TYPE",
                     error = e,
-                    context = json!({ "path": path })
+                    context = json_value!({ "path": path })
                 ),
             };
 
@@ -121,8 +116,8 @@ impl SchemaRegistry {
                 // 🎯 On passe le préfixe à la récursion
                 self.scan_directory(root, &path, prefix).await?;
             } else if file_type.is_file() && path.extension().is_some_and(|e| e == "json") {
-                if let Ok(content) = io::read_to_string(&path).await {
-                    if let Ok(schema) = crate::utils::json::parse(&content) {
+                if let Ok(content) = fs::read_to_string_async(&path).await {
+                    if let Ok(schema) = json::deserialize_from_str(&content) {
                         if let Ok(rel_path) = path.strip_prefix(root) {
                             let rel_str = rel_path.to_string_lossy().replace("\\", "/");
                             // 🎯 L'URI utilise le préfixe du contexte chargé, pas forcément celui de la base
@@ -136,11 +131,11 @@ impl SchemaRegistry {
         Ok(())
     }
 
-    pub fn register(&mut self, uri: String, schema: Value) {
+    pub fn register(&mut self, uri: String, schema: JsonValue) {
         self.by_uri.insert(uri, schema);
     }
 
-    pub fn get_by_uri(&self, uri: &str) -> Option<&Value> {
+    pub fn get_by_uri(&self, uri: &str) -> Option<&JsonValue> {
         // 1. Recherche stricte (Priorité absolue)
         if let Some(schema) = self.by_uri.get(uri) {
             return Some(schema);
@@ -222,12 +217,12 @@ impl SchemaRegistry {
     }
 
     /// Sauvegarde physique et en mémoire
-    async fn save_schema(&mut self, uri: &str, schema: Value) -> RaiseResult<()> {
+    async fn save_schema(&mut self, uri: &str, schema: JsonValue) -> RaiseResult<()> {
         let path = self.get_physical_path(uri)?;
         if let Some(parent) = path.parent() {
-            io::ensure_dir(parent).await?;
+            fs::ensure_dir_async(parent).await?;
         }
-        io::write_json_atomic(&path, &schema).await?;
+        fs::write_json_atomic_async(&path, &schema).await?;
         self.by_uri.insert(uri.to_string(), schema);
         Ok(())
     }
@@ -237,7 +232,7 @@ impl SchemaRegistry {
     pub(in crate::json_db) async fn create_schema(
         &mut self,
         uri: &str,
-        schema: Value,
+        schema: JsonValue,
     ) -> RaiseResult<()> {
         if self.by_uri.contains_key(uri) {
             // 🎯 Appel direct (la macro fait le return Err toute seule)
@@ -254,8 +249,8 @@ impl SchemaRegistry {
             raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
         }
         let path = self.get_physical_path(uri)?;
-        if io::exists(&path).await {
-            io::remove_file(&path).await?;
+        if fs::exists_async(&path).await {
+            fs::remove_file_async(&path).await?;
         }
         self.by_uri.remove(uri);
         Ok(())
@@ -265,7 +260,7 @@ impl SchemaRegistry {
         &mut self,
         uri: &str,
         prop_name: &str,
-        prop_def: Value,
+        prop_def: JsonValue,
     ) -> RaiseResult<()> {
         let Some(mut schema) = self.by_uri.get(uri).cloned() else {
             raise_error!(
@@ -276,7 +271,7 @@ impl SchemaRegistry {
 
         if schema.get("properties").is_none() {
             if let Some(obj) = schema.as_object_mut() {
-                obj.insert("properties".to_string(), json!({}));
+                obj.insert("properties".to_string(), json_value!({}));
             }
         }
 
@@ -297,7 +292,7 @@ impl SchemaRegistry {
         &mut self,
         uri: &str,
         prop_name: &str,
-        prop_def: Value,
+        prop_def: JsonValue,
     ) -> RaiseResult<()> {
         let Some(mut schema) = self.by_uri.get(uri).cloned() else {
             raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
@@ -346,9 +341,8 @@ impl SchemaRegistry {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{io::tempdir, json::json};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_registry_loading() -> RaiseResult<()> {
         // 1. Setup environnement
         let dir = tempdir().unwrap();
@@ -360,15 +354,15 @@ mod tests {
 
         // Création structure : schemas/v1/users/user.schema.json
         let schema_dir = config.db_schemas_root(space, db).join("v1/users");
-        io::ensure_dir(&schema_dir)
+        fs::ensure_dir_async(&schema_dir)
             .await
             .expect("Échec création dossier");
 
-        let schema_content = json!({
+        let schema_content = json_value!({
             "type": "object",
             "properties": { "name": { "type": "string" } }
         });
-        io::write_json_atomic(&schema_dir.join("user.schema.json"), &schema_content)
+        fs::write_json_atomic_async(&schema_dir.join("user.schema.json"), &schema_content)
             .await
             .expect("Échec écriture schéma");
 
@@ -382,7 +376,7 @@ mod tests {
 
         Ok(())
     }
-    #[tokio::test]
+    #[async_test]
     async fn test_schema_ddl_operations() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -393,7 +387,7 @@ mod tests {
         let uri = reg.uri("products/product.schema.json");
 
         // 1. CREATE SCHEMA
-        let initial_schema = json!({
+        let initial_schema = json_value!({
             "type": "object",
             "properties": { "name": { "type": "string" } }
         });
@@ -401,14 +395,18 @@ mod tests {
         assert!(reg.get_by_uri(&uri).is_some());
 
         // 2. ADD PROPERTY
-        reg.add_property(&uri, "price", json!({ "type": "number" }))
+        reg.add_property(&uri, "price", json_value!({ "type": "number" }))
             .await?;
         let schema_after_add = reg.get_by_uri(&uri).unwrap();
         assert!(schema_after_add["properties"]["price"].is_object());
 
         // 3. ALTER PROPERTY
-        reg.alter_property(&uri, "price", json!({ "type": "number", "minimum": 0 }))
-            .await?;
+        reg.alter_property(
+            &uri,
+            "price",
+            json_value!({ "type": "number", "minimum": 0 }),
+        )
+        .await?;
         let schema_after_alter = reg.get_by_uri(&uri).unwrap();
         assert_eq!(schema_after_alter["properties"]["price"]["minimum"], 0);
 
@@ -424,7 +422,7 @@ mod tests {
         // 5. DROP SCHEMA
         reg.drop_schema(&uri).await?;
         assert!(reg.get_by_uri(&uri).is_none());
-        assert!(!io::exists(&reg.get_physical_path(&uri).unwrap()).await);
+        assert!(!fs::exists_async(&reg.get_physical_path(&uri).unwrap()).await);
 
         Ok(())
     }

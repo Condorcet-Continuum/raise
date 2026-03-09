@@ -1,4 +1,5 @@
 // FICHIER : src-tauri/tests/ai_suite/deep_learning_tests.rs
+use raise::utils::prelude::*;
 
 use candle_core::{DType, Tensor};
 use candle_nn::{VarBuilder, VarMap};
@@ -6,12 +7,10 @@ use raise::ai::deep_learning::models::sequence_net::SequenceNet;
 use raise::ai::deep_learning::serialization;
 use raise::ai::deep_learning::trainer::Trainer;
 use raise::commands::ai_commands::DlState;
-use raise::utils::config::AppConfig;
-use raise::utils::mock;
-use std::fs;
+use raise::utils::testing::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[tokio::test]
+#[async_test]
 async fn test_dl_e2e_integration() -> anyhow::Result<()> {
     // --- 1. CONFIGURATION ROBUSTE & ISOLÉE ---
     // 🎯 Inject the mock configuration to guarantee a stable testing environment
@@ -116,7 +115,7 @@ async fn test_dl_e2e_integration() -> anyhow::Result<()> {
     }
 
     if save_path.exists() {
-        let _ = fs::remove_file(&save_path);
+        let _ = fs::remove_file_sync(&save_path);
         println!("🗑️ Fichier temporaire nettoyé.");
     }
 

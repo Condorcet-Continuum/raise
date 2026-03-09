@@ -7,7 +7,7 @@ use crate::model_engine::arcadia; // <-- Accès au vocabulaire
 pub struct HardwareTransformer;
 
 impl ModelTransformer for HardwareTransformer {
-    fn transform(&self, element: &Value) -> RaiseResult<Value> {
+    fn transform(&self, element: &JsonValue) -> RaiseResult<JsonValue> {
         // Utilisation des constantes pour les champs standards
         let name = element
             .get(arcadia::PROP_NAME)
@@ -22,8 +22,8 @@ impl ModelTransformer for HardwareTransformer {
         let mut ports = Vec::new();
 
         // 1. Ports Standards (Clock & Reset)
-        ports.push(json!({ "name": "clk", "dir": "in", "type": "std_logic", "description": "System Clock" }));
-        ports.push(json!({ "name": "rst_n", "dir": "in", "type": "std_logic", "description": "Active Low Reset" }));
+        ports.push(json_value!({ "name": "clk", "dir": "in", "type": "std_logic", "description": "System Clock" }));
+        ports.push(json_value!({ "name": "rst_n", "dir": "in", "type": "std_logic", "description": "Active Low Reset" }));
 
         // 2. Transformation des Échanges Entrants -> Input Ports
         if let Some(incoming) = element
@@ -40,7 +40,7 @@ impl ModelTransformer for HardwareTransformer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                ports.push(json!({
+                ports.push(json_value!({
                     "name": port_name.to_lowercase(),
                     "dir": "in",
                     "type": "std_logic_vector(31 downto 0)",
@@ -64,7 +64,7 @@ impl ModelTransformer for HardwareTransformer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                ports.push(json!({
+                ports.push(json_value!({
                     "name": port_name.to_lowercase(),
                     "dir": "out",
                     "type": "std_logic_vector(31 downto 0)",
@@ -82,7 +82,7 @@ impl ModelTransformer for HardwareTransformer {
         if let Some(funcs) = element.get(alloc_key).and_then(|v| v.as_array()) {
             for func in funcs {
                 if let Some(fname) = func.get(arcadia::PROP_NAME).and_then(|v| v.as_str()) {
-                    processes.push(json!({
+                    processes.push(json_value!({
                         "name": fname,
                         "description": "Logique séquentielle pour cette fonction"
                     }));
@@ -91,12 +91,12 @@ impl ModelTransformer for HardwareTransformer {
         }
 
         // Structure optimisée pour Tera (VHDL/Verilog)
-        Ok(json!({
+        Ok(json_value!({
             "domain": "hardware",
             "meta": {
                 "uuid": id,
                 "source_element": name,
-                "generated_at": chrono::Utc::now().to_rfc3339()
+                "generated_at": UtcClock::now().to_rfc3339()
             },
             "module": {
                 "name": name, // Sera utilisé comme Entity Name
@@ -116,7 +116,7 @@ mod tests {
     fn test_hardware_transformation_ports_generation() {
         let transformer = HardwareTransformer;
 
-        let component = json!({
+        let component = json_value!({
             arcadia::PROP_ID: "UUID_FPGA_1",
             arcadia::PROP_NAME: "VideoProcessor",
             arcadia::PROP_INCOMING_EXCHANGES: [

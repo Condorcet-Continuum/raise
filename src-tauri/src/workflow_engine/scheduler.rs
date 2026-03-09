@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/workflow_engine/scheduler.rs
-
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::{prelude::*, HashMap, Utc};
+use crate::utils::prelude::*;
+
 use crate::workflow_engine::{
     executor::WorkflowExecutor, state_machine::WorkflowStateMachine, ExecutionStatus,
     WorkflowDefinition, WorkflowInstance,
@@ -11,7 +11,7 @@ use crate::workflow_engine::{
 /// Il est responsable de la persistance en base de données et du routage vers l'Exécuteur.
 pub struct WorkflowScheduler {
     pub executor: WorkflowExecutor,
-    pub definitions: HashMap<String, WorkflowDefinition>,
+    pub definitions: UnorderedMap<String, WorkflowDefinition>,
 }
 
 impl WorkflowScheduler {
@@ -19,7 +19,7 @@ impl WorkflowScheduler {
     pub fn new(executor: WorkflowExecutor) -> Self {
         Self {
             executor,
-            definitions: HashMap::new(),
+            definitions: UnorderedMap::new(),
         }
     }
 
@@ -46,7 +46,7 @@ impl WorkflowScheduler {
             Some(definition) => definition,
             None => raise_error!(
                 "ERR_WF_DEFINITION_NOT_FOUND",
-                context = json!({
+                context = json_value!({
                     "workflow_id": workflow_id,
                     "action": "resolve_workflow_definition",
                     "hint": "La définition est absente du registre. Vérifiez le chargement des fichiers YAML/JSON au démarrage."
@@ -58,18 +58,18 @@ impl WorkflowScheduler {
             id: format!(
                 "inst_{}_{}",
                 workflow_id,
-                chrono::Utc::now().timestamp_millis()
+                UtcClock::now().timestamp_millis()
             ),
             workflow_id: def.id.clone(),
             status: ExecutionStatus::Pending,
-            node_states: HashMap::new(),
-            context: HashMap::new(),
+            node_states: UnorderedMap::new(),
+            context: UnorderedMap::new(),
             logs: vec![format!(
                 "Création de l'instance pour le workflow {}",
                 def.id
             )],
-            created_at: chrono::Utc::now().timestamp(),
-            updated_at: chrono::Utc::now().timestamp(),
+            created_at: UtcClock::now().timestamp(),
+            updated_at: UtcClock::now().timestamp(),
         };
 
         // Persistance initiale
@@ -90,7 +90,7 @@ impl WorkflowScheduler {
             Some(d) => d,
             None => raise_error!(
                 "ERR_WF_INSTANCE_ORPHAN",
-                context = json!({
+                context = json_value!({
                     "instance_id": instance.id,
                     "workflow_id": instance.workflow_id,
                     "action": "lookup_active_definition",
@@ -128,7 +128,7 @@ impl WorkflowScheduler {
                 if let Err(e) = sm.transition(instance, &node_id, status) {
                     raise_error!(
                         "ERR_WF_STATE_TRANSITION_FAILED",
-                        context = json!({
+                        context = json_value!({
                             "instance_id": instance.id,
                             "node_id": node_id,
                             "target_status": status,
@@ -187,7 +187,7 @@ impl WorkflowScheduler {
             Ok(Some(document)) => document,
             Ok(None) => raise_error!(
                 "ERR_WF_INSTANCE_NOT_FOUND",
-                context = json!({
+                context = json_value!({
                     "instance_id": instance_id,
                     "action": "resolve_instance_id",
                     "hint": "L'ID ne correspond à aucune instance active dans la collection 'workflow_instances'."
@@ -195,7 +195,7 @@ impl WorkflowScheduler {
             ),
             Err(e) => raise_error!(
                 "ERR_WF_INSTANCE_DB_ACCESS",
-                context = json!({
+                context = json_value!({
                     "instance_id": instance_id,
                     "db_error": e.to_string(),
                     "action": "load_instance_from_db",
@@ -205,15 +205,13 @@ impl WorkflowScheduler {
         };
 
         // Désérialisation précise de l'instance de workflow
-        let mut instance: WorkflowInstance = match serde_json::from_value(doc) {
+        let mut instance: WorkflowInstance = match json::deserialize_from_value(doc) {
             Ok(inst) => inst,
             Err(e) => raise_error!(
                 "ERR_WF_INSTANCE_DESERIALIZATION",
-                context = json!({
+                context = json_value!({
                     "instance_id": instance_id, // L'ID utilisé pour le fetch juste avant
                     "error_details": e.to_string(),
-                    "line": e.line(),
-                    "column": e.column(),
                     "action": "hydrate_instance_from_db",
                     "hint": "Le JSON stocké en base ne correspond plus à la structure WorkflowInstance. Vérifiez si une mise à jour du code a modifié les champs requis (status, node_states, etc.)."
                 })
@@ -250,7 +248,7 @@ impl WorkflowScheduler {
             Ok(Some(document)) => document,
             Ok(None) => raise_error!(
                 "ERR_WF_INSTANCE_NOT_FOUND",
-                context = json!({
+                context = json_value!({
                     "instance_id": instance_id,
                     "action": "resolve_instance_id",
                     "hint": "L'ID ne correspond à aucune instance active dans la collection 'workflow_instances'."
@@ -258,7 +256,7 @@ impl WorkflowScheduler {
             ),
             Err(e) => raise_error!(
                 "ERR_WF_INSTANCE_DB_ACCESS",
-                context = json!({
+                context = json_value!({
                     "instance_id": instance_id,
                     "db_error": e.to_string(),
                     "action": "load_instance_from_db",
@@ -268,15 +266,13 @@ impl WorkflowScheduler {
         };
 
         // Désérialisation précise de l'instance de workflow
-        let mut instance: WorkflowInstance = match serde_json::from_value(doc) {
+        let mut instance: WorkflowInstance = match json::deserialize_from_value(doc) {
             Ok(inst) => inst,
             Err(e) => raise_error!(
                 "ERR_WF_INSTANCE_DESERIALIZATION",
-                context = json!({
+                context = json_value!({
                     "instance_id": instance_id,
                     "error_details": e.to_string(),
-                    "line": e.line(),
-                    "column": e.column(),
                     "action": "hydrate_instance_from_db",
                     "hint": "Le JSON stocké en base ne correspond plus à la structure WorkflowInstance. Vérifiez les champs requis (status, node_states, context)."
                 })
@@ -308,13 +304,13 @@ impl WorkflowScheduler {
         instance: &mut WorkflowInstance,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<()> {
-        instance.updated_at = Utc::now().timestamp();
+        instance.updated_at = UtcClock::now().timestamp();
         // Transformation de l'instance en valeur JSON pour le stockage
         let json_val = match serde_json::to_value(&instance) {
             Ok(v) => v,
             Err(e) => raise_error!(
                 "ERR_WF_INSTANCE_SERIALIZATION",
-                context = json!({
+                context = json_value!({
                     "instance_id": instance.id,
                     "error_details": e.to_string(),
                     "action": "serialize_instance_for_db",
@@ -326,7 +322,7 @@ impl WorkflowScheduler {
         if let Err(e) = manager.insert_raw("workflow_instances", &json_val).await {
             raise_error!(
                 "ERR_WF_INSTANCE_PERSIST_FAIL",
-                context = json!({
+                context = json_value!({
                     "collection": "workflow_instances",
                     "action": "insert_workflow_instance",
                     "db_error": e.to_string(),
@@ -350,17 +346,13 @@ mod tests {
     use crate::ai::orchestrator::AiOrchestrator;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::{Arc, AsyncMutex};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::{NodeType, WorkflowEdge, WorkflowNode};
-
-    // 🎯 IMPORT DES OUTILS DE TEST MODERNES
-    use crate::utils::data::json;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     /// Prépare un environnement complet pour les tests du Scheduler (Orchestrator, Executor)
     async fn setup_test_environment(
-        storage: Arc<crate::json_db::storage::StorageEngine>,
-        config: &crate::utils::config::AppConfig,
+        storage: SharedRef<crate::json_db::storage::StorageEngine>,
+        config: &AppConfig,
     ) -> WorkflowScheduler {
         let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
@@ -376,18 +368,18 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm",
-            json!({ "provider": "mock", "model": "test" }),
+            json_value!({ "provider": "mock", "model": "test" }),
         )
         .await;
-        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
         // 2. Création du Moteur
         let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage.clone()))
             .await
             .unwrap();
 
-        let pm = Arc::new(PluginManager::new(&storage, None));
-        let executor = WorkflowExecutor::new(Arc::new(AsyncMutex::new(orch)), pm);
+        let pm = SharedRef::new(PluginManager::new(&storage, None));
+        let executor = WorkflowExecutor::new(SharedRef::new(AsyncMutex::new(orch)), pm);
 
         WorkflowScheduler::new(executor)
     }
@@ -407,7 +399,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_create_instance_and_persistence() {
@@ -443,7 +435,7 @@ mod tests {
         assert_eq!(doc["status"], "PENDING", "Le statut doit être persisté");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_missing_definition_fails_safely() {
@@ -468,12 +460,12 @@ mod tests {
             "Le code d'erreur devrait être ERR_WF_DEFINITION_NOT_FOUND."
         );
 
-        let crate::utils::error::AppError::Structured(data) = err;
+        let AppError::Structured(data) = err;
         assert_eq!(data.code, "ERR_WF_DEFINITION_NOT_FOUND");
         assert_eq!(data.context["workflow_id"], "wf_ghost");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_step_by_step_execution() {
@@ -489,7 +481,7 @@ mod tests {
             id: "n1".into(),
             r#type: NodeType::End,
             name: "Start".into(),
-            params: Value::Null,
+            params: JsonValue::Null,
         };
         let def = create_mock_workflow("wf_mini", vec![n_start], vec![]);
         scheduler.definitions.insert("wf_mini".to_string(), def);
@@ -511,7 +503,7 @@ mod tests {
         assert_eq!(instance.status, ExecutionStatus::Completed);
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_hitl_lifecycle_approved() {
@@ -527,13 +519,13 @@ mod tests {
             id: "hitl_1".into(),
             r#type: NodeType::GateHitl,
             name: "Validation".into(),
-            params: Value::Null,
+            params: JsonValue::Null,
         };
         let n_end = WorkflowNode {
             id: "end_1".into(),
             r#type: NodeType::End,
             name: "Fin".into(),
-            params: Value::Null,
+            params: JsonValue::Null,
         };
 
         let edge = WorkflowEdge {
@@ -581,7 +573,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_hitl_lifecycle_rejected() {
@@ -597,13 +589,13 @@ mod tests {
             id: "hitl_2".into(),
             r#type: NodeType::GateHitl,
             name: "Validation".into(),
-            params: Value::Null,
+            params: JsonValue::Null,
         };
         let n_end = WorkflowNode {
             id: "end_2".into(),
             r#type: NodeType::End,
             name: "Fin".into(),
-            params: Value::Null,
+            params: JsonValue::Null,
         };
 
         let edge = WorkflowEdge {
@@ -638,7 +630,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let saved_instance: WorkflowInstance = serde_json::from_value(doc).unwrap();
+        let saved_instance: WorkflowInstance = json::deserialize_from_value(doc).unwrap();
 
         assert_eq!(
             saved_instance.node_states.get("hitl_2").unwrap(),

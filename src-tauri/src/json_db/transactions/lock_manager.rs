@@ -1,7 +1,6 @@
 // FICHIER : src-tauri/src/json_db/transactions/lock_manager.rs
 
-use crate::utils::data::HashMap;
-use crate::utils::{Arc, AsyncRwLock, RwLock};
+use crate::utils::prelude::*;
 
 /// Gestionnaire de verrous simple (granularité : Collection)
 /// Utilise des verrous ASYNCHRONES (Tokio) pour être compatible avec .await
@@ -10,25 +9,30 @@ pub struct LockManager {
     // Clé = "space/db/collection"
     // Le RwLock EXTERNE (Std) protège la Map (accès rapide mémoire)
     // Le RwLock INTERNE (Tokio) protège la Collection (attente longue async)
-    locks: Arc<RwLock<HashMap<String, Arc<AsyncRwLock<()>>>>>,
+    locks: SharedRef<SyncRwLock<UnorderedMap<String, SharedRef<AsyncRwLock<()>>>>>,
 }
 
 impl LockManager {
     pub fn new() -> Self {
         Self {
-            locks: Arc::new(RwLock::new(HashMap::new())),
+            locks: SharedRef::new(SyncRwLock::new(UnorderedMap::new())),
         }
     }
 
     /// Récupère un verrou d'écriture ASYNC pour une collection
-    pub fn get_write_lock(&self, space: &str, db: &str, collection: &str) -> Arc<AsyncRwLock<()>> {
+    pub fn get_write_lock(
+        &self,
+        space: &str,
+        db: &str,
+        collection: &str,
+    ) -> SharedRef<AsyncRwLock<()>> {
         let key = format!("{}/{}/{}", space, db, collection);
 
         // 1. On verrouille la map juste le temps de récupérer/créer l'entrée
         let mut map = self.locks.write().unwrap();
 
         map.entry(key)
-            .or_insert_with(|| Arc::new(AsyncRwLock::new(())))
+            .or_insert_with(|| SharedRef::new(AsyncRwLock::new(())))
             .clone()
     }
 }
@@ -40,19 +44,18 @@ impl LockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{mpsc, sleep, Duration};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_lock_concurrency() {
         let manager = LockManager::new();
         let lock1 = manager.get_write_lock("s", "d", "users");
         let lock2 = manager.get_write_lock("s", "d", "users");
 
         // Canal pour signaler que la tâche 1 a bien acquis le verrou
-        let (tx, mut rx) = mpsc::channel(1);
+        let (tx, mut rx) = AsyncChannel::channel::<()>(1);
 
         // Simulation : Tâche 1 prend le verrou
-        let handle = tokio::spawn(async move {
+        let handle = spawn_async_task(async move {
             // Ici on utilise .write().await
             let _guard = lock1.write().await;
 
@@ -60,7 +63,7 @@ mod tests {
             tx.send(()).await.unwrap();
 
             // On garde le verrou 50ms
-            sleep(Duration::from_millis(50)).await;
+            sleep_async(TimeDuration::from_millis(50)).await;
         });
 
         // Le main thread attend que la tâche 1 ait le verrou
@@ -75,6 +78,6 @@ mod tests {
         handle.await.unwrap();
 
         // Le verrou fonctionne si on a dû attendre au moins ~50ms
-        assert!(duration >= Duration::from_millis(50));
+        assert!(duration >= TimeDuration::from_millis(50));
     }
 }

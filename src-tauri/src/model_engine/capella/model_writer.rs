@@ -1,5 +1,5 @@
 use crate::model_engine::types::ProjectModel;
-use crate::utils::{data, io, prelude::*};
+use crate::utils::prelude::*;
 
 pub struct CapellaWriter;
 
@@ -7,10 +7,10 @@ impl CapellaWriter {
     /// Sauvegarde le modèle au format JSON (RAISE native format) de manière asynchrone et atomique.
     pub async fn save_as_json(model: &ProjectModel, path: &Path) -> RaiseResult<()> {
         // 1. Sérialisation JSON (déjà asynchrone/RaiseResult via nos utils)
-        let json_data = data::stringify_pretty(model)?;
+        let json_data = json::serialize_to_string_pretty(model)?;
 
-        // 2. Écriture atomique (via utils::io::write_atomic)
-        io::write_atomic(path, json_data.as_bytes()).await?;
+        // 2. Écriture atomique
+        fs::write_atomic_async(path, json_data.as_bytes()).await?;
 
         Ok(())
     }
@@ -19,9 +19,8 @@ impl CapellaWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::io::tempdir;
 
-    #[tokio::test] // On passe le test en tokio::test pour l'async
+    #[async_test]
     async fn test_save_json() {
         let dir = tempdir().unwrap(); // tempdir() est aussi async
         let file_path = dir.path().join("model.json");

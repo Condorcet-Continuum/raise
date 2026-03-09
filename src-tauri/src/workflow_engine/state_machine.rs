@@ -173,19 +173,19 @@ impl<'a> WorkflowStateMachine<'a> {
     async fn evaluate_condition(
         &self,
         script: &str,
-        context: &std::collections::HashMap<String, Value>,
+        context: &UnorderedMap<String, JsonValue>,
     ) -> bool {
-        let context_value = serde_json::to_value(context).unwrap_or(json!({}));
+        let context_value = serde_json::to_value(context).unwrap_or(json_value!({}));
         let provider = NoOpDataProvider;
 
         // 1. Tente de lire le script comme un AST JSON pour le rules_engine
-        // OPTIMISATION ROBUSTE : On passe par une Value intermédiaire (comme dans l'Executor)
-        match serde_json::from_str::<Value>(script) {
-            Ok(val) => match serde_json::from_value::<Expr>(val) {
+        // OPTIMISATION ROBUSTE : On passe par une JsonValue intermédiaire (comme dans l'Executor)
+        match json::deserialize_from_str::<JsonValue>(script) {
+            Ok(val) => match json::deserialize_from_value::<Expr>(val) {
                 Ok(expr) => match Evaluator::evaluate(&expr, &context_value, &provider).await {
                     Ok(res_cow) => {
                         return match res_cow.as_ref() {
-                            Value::Bool(b) => *b,
+                            JsonValue::Bool(b) => *b,
                             _ => false,
                         };
                     }
@@ -242,8 +242,6 @@ impl<'a> WorkflowStateMachine<'a> {
 mod tests {
     use super::*;
     use crate::workflow_engine::{NodeType, WorkflowEdge, WorkflowNode};
-    use serde_json::json;
-    use std::collections::HashMap;
 
     fn create_sequential_def() -> WorkflowDefinition {
         WorkflowDefinition {
@@ -254,19 +252,19 @@ mod tests {
                     id: "start".into(),
                     r#type: NodeType::Task,
                     name: "S".into(),
-                    params: json!({}),
+                    params: json_value!({}),
                 },
                 WorkflowNode {
                     id: "mid".into(),
                     r#type: NodeType::Task,
                     name: "M".into(),
-                    params: json!({}),
+                    params: json_value!({}),
                 },
                 WorkflowNode {
                     id: "end".into(),
                     r#type: NodeType::End,
                     name: "E".into(),
-                    params: json!({}),
+                    params: json_value!({}),
                 },
             ],
             edges: vec![
@@ -284,11 +282,11 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_sequential_flow() {
         let def = create_sequential_def();
         let sm = WorkflowStateMachine::new(&def);
-        let mut instance = WorkflowInstance::new("wf_seq", HashMap::new());
+        let mut instance = WorkflowInstance::new("wf_seq", UnorderedMap::new());
 
         // 1. Initial : Start doit être runnable
         let next = sm.next_runnable_nodes(&instance).await;
@@ -311,11 +309,11 @@ mod tests {
         assert_eq!(next, vec!["end"]);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_end_node_completes_workflow() {
         let def = create_sequential_def();
         let sm = WorkflowStateMachine::new(&def);
-        let mut instance = WorkflowInstance::new("wf_seq", HashMap::new());
+        let mut instance = WorkflowInstance::new("wf_seq", UnorderedMap::new());
 
         // L'exécution du nœud "end" (de type End) doit marquer l'instance comme Completed
         sm.transition(&mut instance, "end", ExecutionStatus::Completed)
@@ -324,7 +322,7 @@ mod tests {
         assert_eq!(instance.status, ExecutionStatus::Completed);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_legacy_conditional_branching() {
         let def = WorkflowDefinition {
             id: "wf_branch".into(),
@@ -334,13 +332,13 @@ mod tests {
                     id: "start".into(),
                     r#type: NodeType::Task,
                     name: "S".into(),
-                    params: json!({}),
+                    params: json_value!({}),
                 },
                 WorkflowNode {
                     id: "path_a".into(),
                     r#type: NodeType::Task,
                     name: "A".into(),
-                    params: json!({}),
+                    params: json_value!({}),
                 },
             ],
             edges: vec![WorkflowEdge {
@@ -352,8 +350,8 @@ mod tests {
         let sm = WorkflowStateMachine::new(&def);
 
         // Cas A : Condition remplie
-        let mut ctx_ok = HashMap::new();
-        ctx_ok.insert("status".into(), json!("ok"));
+        let mut ctx_ok = UnorderedMap::new();
+        ctx_ok.insert("status".into(), json_value!("ok"));
         let mut inst_ok = WorkflowInstance::new("wf_branch", ctx_ok);
         inst_ok
             .node_states
@@ -362,8 +360,8 @@ mod tests {
         assert_eq!(sm.next_runnable_nodes(&inst_ok).await, vec!["path_a"]);
 
         // Cas B : Condition non remplie
-        let mut ctx_ko = HashMap::new();
-        ctx_ko.insert("status".into(), json!("error"));
+        let mut ctx_ko = UnorderedMap::new();
+        ctx_ko.insert("status".into(), json_value!("error"));
         let mut inst_ko = WorkflowInstance::new("wf_branch", ctx_ko);
         inst_ko
             .node_states
@@ -375,10 +373,10 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_ast_conditional_branching() {
         // CORRECTION : Syntaxe strictement en minuscules comme exigé par rules_engine::ast::Expr
-        let ast_condition = json!({ "gt": [{"var": "score"}, {"val": 8.0}] }).to_string();
+        let ast_condition = json_value!({ "gt": [{"var": "score"}, {"val": 8.0}] }).to_string();
 
         let def = WorkflowDefinition {
             id: "wf_ast".into(),
@@ -388,13 +386,13 @@ mod tests {
                     id: "start".into(),
                     r#type: NodeType::Task,
                     name: "S".into(),
-                    params: json!({}),
+                    params: json_value!({}),
                 },
                 WorkflowNode {
                     id: "path_ast".into(),
                     r#type: NodeType::Task,
                     name: "AST".into(),
-                    params: json!({}),
+                    params: json_value!({}),
                 },
             ],
             edges: vec![WorkflowEdge {
@@ -406,8 +404,8 @@ mod tests {
         let sm = WorkflowStateMachine::new(&def);
 
         // Cas A : Condition remplie (10.0 > 8.0)
-        let mut ctx_ok = HashMap::new();
-        ctx_ok.insert("score".into(), json!(10.0));
+        let mut ctx_ok = UnorderedMap::new();
+        ctx_ok.insert("score".into(), json_value!(10.0));
         let mut inst_ok = WorkflowInstance::new("wf_ast", ctx_ok);
         inst_ok
             .node_states
@@ -416,8 +414,8 @@ mod tests {
         assert_eq!(sm.next_runnable_nodes(&inst_ok).await, vec!["path_ast"]);
 
         // Cas B : Condition non remplie (5.0 n'est pas > 8.0)
-        let mut ctx_ko = HashMap::new();
-        ctx_ko.insert("score".into(), json!(5.0));
+        let mut ctx_ko = UnorderedMap::new();
+        ctx_ko.insert("score".into(), json_value!(5.0));
         let mut inst_ko = WorkflowInstance::new("wf_ast", ctx_ko);
         inst_ko
             .node_states
@@ -426,11 +424,11 @@ mod tests {
         assert!(sm.next_runnable_nodes(&inst_ko).await.is_empty());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_parent_failure_blocks_execution() {
         let def = create_sequential_def();
         let sm = WorkflowStateMachine::new(&def);
-        let mut instance = WorkflowInstance::new("wf_seq", HashMap::new());
+        let mut instance = WorkflowInstance::new("wf_seq", UnorderedMap::new());
 
         // Si start échoue
         sm.transition(&mut instance, "start", ExecutionStatus::Failed)
@@ -443,11 +441,11 @@ mod tests {
         assert!(sm.next_runnable_nodes(&instance).await.is_empty());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_instance_status_respected() {
         let def = create_sequential_def();
         let sm = WorkflowStateMachine::new(&def);
-        let mut instance = WorkflowInstance::new("wf_seq", HashMap::new());
+        let mut instance = WorkflowInstance::new("wf_seq", UnorderedMap::new());
 
         // On bloque manuellement l'instance
         instance.status = ExecutionStatus::Paused;

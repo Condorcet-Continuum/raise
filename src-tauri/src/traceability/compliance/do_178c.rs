@@ -2,7 +2,7 @@
 
 use super::{ComplianceChecker, ComplianceReport, Violation};
 use crate::traceability::tracer::Tracer;
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 pub struct Do178cChecker;
 
@@ -12,7 +12,7 @@ impl ComplianceChecker for Do178cChecker {
     }
 
     /// 🎯 Version robuste : Audit de la traçabilité SA -> LA
-    fn check(&self, tracer: &Tracer, docs: &HashMap<String, Value>) -> ComplianceReport {
+    fn check(&self, tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -61,16 +61,15 @@ impl ComplianceChecker for Do178cChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_do178_traceability_logic() {
-        let mut docs: HashMap<String, Value> = HashMap::new();
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // 1. F1 est conforme : allouée à C1 (lien aval)
         docs.insert(
             "F1".to_string(),
-            json!({
+            json_value!({
                 "_id": "F1",
                 "kind": "Function",
                 "allocatedTo": "C1"
@@ -80,7 +79,7 @@ mod tests {
         // 2. F2 est en violation : aucune allocation
         docs.insert(
             "F2".to_string(),
-            json!({
+            json_value!({
                 "_id": "F2",
                 "kind": "Function"
             }),
@@ -89,7 +88,7 @@ mod tests {
         // 3. Cible du lien
         docs.insert(
             "C1".to_string(),
-            json!({ "_id": "C1", "kind": "Component" }),
+            json_value!({ "_id": "C1", "kind": "Component" }),
         );
 
         // 🎯 Injection du graphe via from_json_list (Zéro dépendance ProjectModel)
@@ -106,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_do178_empty_model() {
-        let docs = HashMap::new();
+        let docs = UnorderedMap::new();
         let tracer = Tracer::from_json_list(vec![]);
         let checker = Do178cChecker;
 

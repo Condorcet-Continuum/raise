@@ -9,7 +9,6 @@ use crate::rules_engine::ast::Rule;
 use crate::rules_engine::store::RuleStore;
 
 use futures::executor::block_on;
-use serde_json::{json, Value};
 use wasmtime::{Caller, Extern, Linker};
 
 /// Enregistre les fonctions du Pont Cognitif dans le linker WASM.
@@ -20,14 +19,14 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
     if let Err(e) = linker.func_wrap(
         "env",
         "plugin_log",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> anyhow::Result<i32> {
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
             let mut execute_log = || -> RaiseResult<i32> {
                 let mem = match get_memory(&mut caller) {
                     Some(m) => m,
                     None => raise_error!(
                         "ERR_WASM_MEMORY",
                         error = "Accès mémoire refusé",
-                        context = json!({"ptr": ptr})
+                        context = json_value!({"ptr": ptr})
                     ),
                 };
                 let msg = match read_string_from_wasm(&mut caller, &mem, ptr, len) {
@@ -35,19 +34,19 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     Err(e) => raise_error!(
                         "ERR_WASM_STRING",
                         error = format!("Chaîne corrompue: {}", e),
-                        context = json!({"ptr": ptr})
+                        context = json_value!({"ptr": ptr})
                     ),
                 };
                 println!("🤖 [PLUGIN LOG]: {}", msg);
                 Ok(0)
             };
-            execute_log().map_err(|e| anyhow::anyhow!(e))
+            execute_log().map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     ) {
         raise_error!(
             "ERR_WASM_BINDING",
             error = e.to_string(),
-            context = json!({"func": "plugin_log"})
+            context = json_value!({"func": "plugin_log"})
         );
     }
 
@@ -58,7 +57,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
     if let Err(e) = linker.func_wrap(
         "env",
         "host_fetch_result",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, max_len: i32| -> anyhow::Result<i32> {
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, max_len: i32| -> wasmtime::Result<i32> {
             let mut execute_fetch = || -> RaiseResult<i32> {
                 let data = caller.data().output_buffer.clone();
                 let data_len = data.len();
@@ -70,7 +69,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     None => raise_error!(
                         "ERR_WASM_MEMORY",
                         error = "Accès mémoire refusé",
-                        context = json!({"ptr": ptr})
+                        context = json_value!({"ptr": ptr})
                     ),
                 };
                 let write_len = std::cmp::min(data_len, max_len as usize);
@@ -79,43 +78,43 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     Err(write_err) => raise_error!(
                         "ERR_WASM_WRITE",
                         error = write_err.to_string(),
-                        context = json!({"ptr": ptr, "len": write_len})
+                        context = json_value!({"ptr": ptr, "len": write_len})
                     ),
                 }
             };
-            execute_fetch().map_err(|e| anyhow::anyhow!(e))
+            execute_fetch().map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     ) {
         raise_error!(
             "ERR_WASM_BINDING",
             error = e.to_string(),
-            context = json!({"func": "host_fetch_result"})
+            context = json_value!({"func": "host_fetch_result"})
         );
     }
 
     if let Err(e) = linker.func_wrap(
         "env",
         "host_signal_event",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> anyhow::Result<i32> {
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
             let mut execute_signal = || -> RaiseResult<i32> {
                 let req = match read_json_request(&mut caller, ptr, len) {
                     Ok(v) => v,
                     Err(err) => raise_error!(
                         "ERR_WASM_SIGNAL",
                         error = err.to_string(),
-                        context = json!({"ptr": ptr})
+                        context = json_value!({"ptr": ptr})
                     ),
                 };
                 caller.data_mut().signals.push(req);
                 Ok(1)
             };
-            execute_signal().map_err(|e| anyhow::anyhow!(e))
+            execute_signal().map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     ) {
         raise_error!(
             "ERR_WASM_BINDING",
             error = e.to_string(),
-            context = json!({"func": "host_signal_event"})
+            context = json_value!({"func": "host_signal_event"})
         );
     }
 
@@ -126,7 +125,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
     if let Err(e) = linker.func_wrap(
         "env",
         "host_db_read",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> anyhow::Result<i32> {
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
             let mut execute_db_read = || -> RaiseResult<i32> {
                 let req = match read_json_request(&mut caller, ptr, len) {
                     Ok(v) => v,
@@ -144,24 +143,24 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                 });
                 match result {
                     Ok(Some(doc)) => Ok(success_to_buffer(&mut caller, doc)),
-                    Ok(None) => Ok(success_to_buffer(&mut caller, Value::Null)),
+                    Ok(None) => Ok(success_to_buffer(&mut caller, JsonValue::Null)),
                     Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_db_read().map_err(|e| anyhow::anyhow!(e))
+            execute_db_read().map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     ) {
         raise_error!(
             "ERR_WASM_BINDING",
             error = e.to_string(),
-            context = json!({"func": "host_db_read"})
+            context = json_value!({"func": "host_db_read"})
         );
     }
 
     if let Err(e) = linker.func_wrap(
         "env",
         "host_db_write",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> anyhow::Result<i32> {
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
             let mut execute_db_write = || -> RaiseResult<i32> {
                 let req = match read_json_request(&mut caller, ptr, len) {
                     Ok(v) => v,
@@ -192,17 +191,20 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     mgr.insert_raw(&col, &data).await
                 });
                 match result {
-                    Ok(id) => Ok(success_to_buffer(&mut caller, json!({ "inserted_id": id }))),
+                    Ok(id) => Ok(success_to_buffer(
+                        &mut caller,
+                        json_value!({ "inserted_id": id }),
+                    )),
                     Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_db_write().map_err(|e| anyhow::anyhow!(e))
+            execute_db_write().map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     ) {
         raise_error!(
             "ERR_WASM_BINDING",
             error = e.to_string(),
-            context = json!({"func": "host_db_write"})
+            context = json_value!({"func": "host_db_write"})
         );
     }
 
@@ -213,7 +215,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
     if let Err(e) = linker.func_wrap(
         "env",
         "host_llm_inference",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> anyhow::Result<i32> {
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
             let mut execute_llm = || -> RaiseResult<i32> {
                 let req = match read_json_request(&mut caller, ptr, len) {
                     Ok(v) => v,
@@ -229,13 +231,13 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                 let ai_opt = caller.data().ai_orchestrator.clone();
 
                 let response_result = match ai_opt {
-                    Some(orch_arc) => {
-                        let mut orch = orch_arc.lock().unwrap();
-                        block_on(orch.ask(&prompt))
-                    }
+                    Some(orch_arc) => block_on(async move {
+                        let mut orch = orch_arc.lock().await;
+                        orch.ask(&prompt).await
+                    }),
                     None => Err(crate::build_error!(
                         "ERR_COGNITIVE_PLUGIN_AUTH",
-                        context = json!({
+                        context = json_value!({
                             "action": "validate_session",
                             "hint": "L'orchestrateur IA est absent."
                         })
@@ -245,7 +247,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                 match response_result {
                     Ok(response) => Ok(success_to_buffer(
                         &mut caller,
-                        json!({ "response": response }),
+                        json_value!({ "response": response }),
                     )),
                     Err(err) => {
                         eprintln!("[Plugin Error] {}", err);
@@ -253,20 +255,20 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     }
                 }
             };
-            execute_llm().map_err(|e| anyhow::anyhow!(e))
+            execute_llm().map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     ) {
         raise_error!(
             "ERR_WASM_BINDING",
             error = e.to_string(),
-            context = json!({"func": "host_llm_inference"})
+            context = json_value!({"func": "host_llm_inference"})
         );
     }
 
     if let Err(e) = linker.func_wrap(
         "env",
         "host_model_query",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> anyhow::Result<i32> {
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
             let mut execute_model_query = || -> RaiseResult<i32> {
                 let req = match read_json_request(&mut caller, ptr, len) {
                     Ok(v) => v,
@@ -288,24 +290,24 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     loader.get_element(&target_id).await
                 });
                 match result {
-                    Ok(el) => Ok(success_to_buffer(&mut caller, json!(el))),
+                    Ok(el) => Ok(success_to_buffer(&mut caller, json_value!(el))),
                     Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_model_query().map_err(|e| anyhow::anyhow!(e))
+            execute_model_query().map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     ) {
         raise_error!(
             "ERR_WASM_BINDING",
             error = e.to_string(),
-            context = json!({"func": "host_model_query"})
+            context = json_value!({"func": "host_model_query"})
         );
     }
 
     if let Err(e) = linker.func_wrap(
         "env",
         "host_rule_validate",
-        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> anyhow::Result<i32> {
+        |mut caller: Caller<'_, PluginContext>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
             let mut execute_rule_validate = || -> RaiseResult<i32> {
                 let req = match read_json_request(&mut caller, ptr, len) {
                     Ok(v) => v,
@@ -331,7 +333,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                         Err(sync_err) => raise_error!(
                             "ERR_RULE_SYNC_FAILED",
                             error = sync_err.to_string(),
-                            context = json!({"target": target_filter})
+                            context = json_value!({"target": target_filter})
                         ),
                     };
 
@@ -343,17 +345,17 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     Ok(rules)
                 });
                 match result {
-                    Ok(rules) => Ok(success_to_buffer(&mut caller, json!(rules))),
+                    Ok(rules) => Ok(success_to_buffer(&mut caller, json_value!(rules))),
                     Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_rule_validate().map_err(|e| anyhow::anyhow!(e))
+            execute_rule_validate().map_err(|e| wasmtime::Error::msg(e.to_string()))
         },
     ) {
         raise_error!(
             "ERR_WASM_BINDING",
             error = e.to_string(),
-            context = json!({"func": "host_rule_validate"})
+            context = json_value!({"func": "host_rule_validate"})
         );
     }
 
@@ -381,7 +383,7 @@ fn read_string_from_wasm(
             raise_error!(
                 "ERR_WASM_MEMORY_OUT_OF_BOUNDS",
                 error = "Accès mémoire hors limites dans le module Wasm.",
-                context = json!({
+                context = json_value!({
                     "ptr": ptr,
                     "len": len
                 })
@@ -395,7 +397,7 @@ fn read_string_from_wasm(
             raise_error!(
                 "ERR_WASM_UTF8_DECODE_FAILED",
                 error = e.to_string(),
-                context = json!({
+                context = json_value!({
                     "ptr": ptr,
                     "len": len,
                     "hint": "Données corrompues envoyées par le plugin."
@@ -409,13 +411,13 @@ fn read_json_request(
     caller: &mut Caller<'_, PluginContext>,
     ptr: i32,
     len: i32,
-) -> RaiseResult<Value> {
+) -> RaiseResult<JsonValue> {
     let mem = match get_memory(caller) {
         Some(m) => m,
         None => raise_error!(
             "ERR_WASM_NO_MEMORY",
             error = "Aucune mémoire exportée par le module Wasm.",
-            context = json!({"ptr": ptr, "len": len})
+            context = json_value!({"ptr": ptr, "len": len})
         ),
     };
 
@@ -425,22 +427,22 @@ fn read_json_request(
         Err(e) => raise_error!(
             "ERR_WASM_JSON_READ",
             error = e.to_string(),
-            context = json!({"ptr": ptr})
+            context = json_value!({"ptr": ptr})
         ),
     };
 
     // Plus de `?` ici non plus !
-    match serde_json::from_str(&json_str) {
+    match json::deserialize_from_str(&json_str) {
         Ok(v) => Ok(v),
         Err(e) => raise_error!(
             "ERR_JSON_PARSE_FAILED",
             error = e.to_string(),
-            context = json!({"action": "read_json_request"})
+            context = json_value!({"action": "read_json_request"})
         ),
     }
 }
 
-fn success_to_buffer(caller: &mut Caller<'_, PluginContext>, data: Value) -> i32 {
+fn success_to_buffer(caller: &mut Caller<'_, PluginContext>, data: JsonValue) -> i32 {
     let json_bytes = data.to_string().into_bytes();
     let len = json_bytes.len() as i32;
     caller.data_mut().output_buffer = json_bytes;
@@ -448,7 +450,7 @@ fn success_to_buffer(caller: &mut Caller<'_, PluginContext>, data: Value) -> i32
 }
 
 fn error_to_buffer(caller: &mut Caller<'_, PluginContext>, msg: &str) -> i32 {
-    let json_bytes = json!({ "error": msg }).to_string().into_bytes();
+    let json_bytes = json_value!({ "error": msg }).to_string().into_bytes();
     let len = json_bytes.len() as i32;
     caller.data_mut().output_buffer = json_bytes;
     len

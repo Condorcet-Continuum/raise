@@ -1,5 +1,5 @@
 // FICHIER : src-tauri/src/model_engine/validators/compliance_validator.rs
-use crate::utils::async_trait;
+use crate::utils::prelude::*;
 
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
@@ -61,7 +61,7 @@ impl ComplianceValidator {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl ModelValidator for ComplianceValidator {
     async fn validate_element(
         &self,
@@ -161,10 +161,9 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::data::HashMap;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_naming_validation_unit() {
         let sandbox = AgentDbSandbox::new().await;
         let loader = ModelLoader::new_with_manager(CollectionsManager::new(
@@ -179,7 +178,7 @@ mod tests {
             // CORRECTION : Utilisation d'une chaîne directe pour éviter l'import inutilisé arcadia::KIND_...
             kind: "LogicalComponent".into(),
             description: Some("Desc".into()),
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         };
         let issues = validator.validate_element(&bad_el, &loader).await;
 
@@ -187,7 +186,7 @@ mod tests {
         assert_eq!(issues[0].rule_id, "RULE_NAMING");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_compliance_transverse_naming() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -197,7 +196,7 @@ mod tests {
         );
 
         // Insertion d'un Requirement mal nommé
-        let req = serde_json::json!({
+        let req = json_value!({
             "_id": "REQ-BAD",
             "id": "REQ-BAD",
             "name": "Copy of Req 1", // Trigger RULE_NAMING

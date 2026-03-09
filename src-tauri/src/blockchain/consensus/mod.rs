@@ -2,7 +2,7 @@
 
 use crate::blockchain::storage::commit::ArcadiaCommit;
 use crate::blockchain::vpn::innernet_client::Peer;
-use crate::utils::{prelude::*, HashSet};
+use crate::utils::prelude::*;
 // Déclaration des sous-modules
 pub mod leader;
 pub mod pending;
@@ -16,9 +16,9 @@ pub use vote::{Vote, VoteCollector};
 /// Alias de compatibilité pour le reste du projet
 pub type ArcadiaConsensus = ConsensusEngine;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct ConsensusConfig {
-    pub authorized_validators: HashSet<String>,
+    pub authorized_validators: UniqueSet<String>,
     pub required_quorum: usize,
 }
 
@@ -31,7 +31,7 @@ pub struct ConsensusEngine {
 
 impl ConsensusEngine {
     pub fn new(peers: &[Peer], quorum_ratio: f32) -> Self {
-        let validators: HashSet<String> = peers.iter().map(|p| p.public_key.clone()).collect();
+        let validators: UniqueSet<String> = peers.iter().map(|p| p.public_key.clone()).collect();
         let threshold = ((validators.len() as f32) * quorum_ratio).ceil() as usize;
         let quorum = threshold.max(1);
 
@@ -59,7 +59,7 @@ impl ConsensusEngine {
                     "Commit rejeté : l'auteur '{}' n'est pas autorisé à valider des transactions.",
                     commit.author
                 ),
-                context = serde_json::json!({
+                context = json_value!({
                     "unauthorized_author": commit.author,
                     "action": "verify_commit_authorization",
                     "hint": "Vérifiez que la clé ou l'identifiant de cet auteur est bien présent dans la liste 'authorized_validators' de la configuration du réseau."
@@ -82,7 +82,7 @@ impl ConsensusEngine {
             crate::raise_error!(
                 "ERR_CONSENSUS_UNAUTHORIZED_VOTE",
                 error = format!("Vote rejeté : le validateur '{}' n'est pas autorisé à participer au consensus.", vote.validator_key),
-                context = serde_json::json!({
+                context = json_value!({
                     "unauthorized_validator": vote.validator_key,
                     "action": "verify_vote_authorization",
                     "hint": "Vérifiez que la clé publique (ou l'ID) de ce validateur est bien enregistrée dans les paramètres du réseau (authorized_validators)."
@@ -117,7 +117,6 @@ impl ConsensusEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::Utc;
 
     fn mock_peer(key: &str) -> Peer {
         Peer {
@@ -140,7 +139,7 @@ mod tests {
             id: "tx1".into(),
             parent_hash: None,
             author: "key1".into(),
-            timestamp: Utc::now(),
+            timestamp: UtcClock::now(),
             mutations: vec![],
             merkle_root: "root".into(),
             signature: vec![],

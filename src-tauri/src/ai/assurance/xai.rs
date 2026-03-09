@@ -1,12 +1,12 @@
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum ExplanationScope {
     Local,
     Global,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum XaiMethod {
     Shap { variant: String },
     Lime,
@@ -18,7 +18,7 @@ pub enum XaiMethod {
     Manual,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct FeatureImportance {
     pub feature_id: String,
     pub raw_value: String,
@@ -27,7 +27,7 @@ pub struct FeatureImportance {
     pub confidence_interval: Option<(f32, f32)>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct VisualArtifact {
     pub artifact_type: String,
     pub mime_type: String,
@@ -35,7 +35,7 @@ pub struct VisualArtifact {
     pub description: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct XaiFrame {
     #[serde(rename = "_id")]
     pub id: String,
@@ -49,15 +49,15 @@ pub struct XaiFrame {
     pub visual_artifacts: Vec<VisualArtifact>,
     pub fidelity_score: Option<f32>,
     pub computation_time_ms: u64,
-    pub meta: HashMap<String, String>,
+    pub meta: UnorderedMap<String, String>,
 }
 
 impl XaiFrame {
     pub fn new(model_id: &str, method: XaiMethod, scope: ExplanationScope) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: UniqueId::new_v4().to_string(),
             model_id: model_id.to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
+            timestamp: UtcClock::now().timestamp(),
             method,
             scope,
             input_snapshot: String::new(),
@@ -66,7 +66,7 @@ impl XaiFrame {
             visual_artifacts: Vec::new(),
             fidelity_score: None,
             computation_time_ms: 0,
-            meta: HashMap::new(),
+            meta: UnorderedMap::new(),
         }
     }
 

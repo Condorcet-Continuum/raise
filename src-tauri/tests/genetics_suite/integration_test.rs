@@ -12,7 +12,7 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_genetics_integration_with_json_db() {
@@ -33,14 +33,14 @@ async fn test_genetics_integration_with_json_db() {
         .await
         .unwrap();
 
-    manager.insert_raw("la", &json!({
+    manager.insert_raw("la", &json_value!({
         "_id": "f_ctrl", "name": "Control", "type": lf_schema, "properties": { "complexity": 50.0 }
     })).await.unwrap();
 
     manager
         .insert_raw(
             "la",
-            &json!({
+            &json_value!({
                 "_id": "c_cpu", "name": "CPU", "type": lc_schema, "properties": { "capacity": 100.0 }
             }),
         )

@@ -3,7 +3,6 @@
 //! Primitives collections : gestion des dossiers et fichiers JSON d’une collection.
 //! 🚀 V2 : Refactorisé pour s'interfacer avec le StorageEngine (et bénéficier du Cache LRU).
 
-use crate::utils::io::{self, PathBuf};
 use crate::utils::prelude::*;
 
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
@@ -21,7 +20,7 @@ pub async fn create_collection_if_missing(
     collection: &str,
 ) -> RaiseResult<()> {
     let root = collection_root(cfg, space, db, collection);
-    io::ensure_dir(&root).await?;
+    fs::ensure_dir_async(&root).await?;
     Ok(())
 }
 
@@ -34,7 +33,7 @@ pub async fn read_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> RaiseResult<Value> {
+) -> RaiseResult<JsonValue> {
     // On tape dans le cache/disque via le StorageEngine
     let doc_opt = storage.read_document(space, db, collection, id).await?;
 
@@ -46,7 +45,7 @@ pub async fn read_document(
                 "Document '{}' introuvable dans la collection '{}'",
                 id, collection
             ),
-            context = json!({
+            context = json_value!({
                 "space": space,
                 "db": db,
                 "collection": collection,
@@ -63,7 +62,7 @@ pub async fn create_document(
     db: &str,
     collection: &str,
     id: &str,
-    document: &Value,
+    document: &JsonValue,
 ) -> RaiseResult<()> {
     create_collection_if_missing(&storage.config, space, db, collection).await?;
     storage
@@ -78,7 +77,7 @@ pub async fn update_document(
     db: &str,
     collection: &str,
     id: &str,
-    document: &Value,
+    document: &JsonValue,
 ) -> RaiseResult<()> {
     // La logique d'écriture est identique pour une création ou une mise à jour au niveau I/O
     create_document(storage, space, db, collection, id, document).await
@@ -104,7 +103,7 @@ pub async fn drop_collection(
     collection: &str,
 ) -> RaiseResult<()> {
     let root = collection_root(cfg, space, db, collection);
-    io::remove_dir_all(&root).await?;
+    fs::remove_dir_all_async(&root).await?;
     Ok(())
 }
 
@@ -116,16 +115,16 @@ pub async fn list_document_ids(
 ) -> RaiseResult<Vec<String>> {
     let root = collection_root(cfg, space, db, collection);
     let mut out = Vec::new();
-    if !io::exists(&root).await {
+    if !fs::exists_async(&root).await {
         return Ok(out);
     }
-    let mut entries = io::read_dir(&root).await?;
+    let mut entries = fs::read_dir_async(&root).await?;
     while let Some(e) = match entries.next_entry().await {
         Ok(entry) => entry,
         Err(err) => raise_error!(
             "ERR_FS_READ_DIR_ENTRY",
             error = err,
-            context = json!({
+            context = json_value!({
                 "root_path": root,
                 "action": "scan_directory_for_json"
             })
@@ -149,7 +148,7 @@ pub async fn list_documents(
     space: &str,
     db: &str,
     collection: &str,
-) -> RaiseResult<Vec<Value>> {
+) -> RaiseResult<Vec<JsonValue>> {
     let ids = list_document_ids(&storage.config, space, db, collection).await?;
     let mut docs = Vec::with_capacity(ids.len());
 
@@ -170,16 +169,16 @@ pub async fn list_collection_names_fs(
 ) -> RaiseResult<Vec<String>> {
     let root = cfg.db_root(space, db).join("collections");
     let mut out = Vec::new();
-    if !io::exists(&root).await {
+    if !fs::exists_async(&root).await {
         return Ok(out);
     }
-    let mut entries = io::read_dir(&root).await?;
+    let mut entries = fs::read_dir_async(&root).await?;
     while let Some(e) = match entries.next_entry().await {
         Ok(entry) => entry,
         Err(err) => raise_error!(
             "ERR_FS_ITERATION_FAIL",
             error = err,
-            context = json!({ "root": root, "action": "list_next_entry" })
+            context = json_value!({ "root": root, "action": "list_next_entry" })
         ),
     } {
         let ty = match e.file_type().await {
@@ -187,7 +186,7 @@ pub async fn list_collection_names_fs(
             Err(err) => raise_error!(
                 "ERR_FS_METADATA_FAIL",
                 error = err,
-                context = json!({ "path": e.path(), "action": "get_file_type" })
+                context = json_value!({ "path": e.path(), "action": "get_file_type" })
             ),
         };
 
@@ -204,9 +203,8 @@ pub async fn list_collection_names_fs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{io::tempdir, json::json};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_collection_crud_async_with_storage() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -215,7 +213,7 @@ mod tests {
         let storage = StorageEngine::new(config);
         let (s, d, c) = ("space", "db", "col");
 
-        let doc = json!({"id": "1", "data": "test"});
+        let doc = json_value!({"id": "1", "data": "test"});
 
         // Create
         create_document(&storage, s, d, c, "1", &doc).await.unwrap();

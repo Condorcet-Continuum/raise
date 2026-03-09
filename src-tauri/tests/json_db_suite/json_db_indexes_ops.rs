@@ -2,10 +2,9 @@
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::io;
 use raise::utils::prelude::*;
 
-#[tokio::test]
+#[async_test]
 async fn test_create_and_drop_index_lifecycle() {
     // 1. SETUP ENVIRONNEMENT (Isolé et unifié)
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -23,7 +22,7 @@ async fn test_create_and_drop_index_lifecycle() {
     .await
     .expect("❌ Impossible de créer la collection de test");
 
-    let doc = json!({
+    let doc = json_value!({
         "handle": "test-handle",
         "slug": "test-handle",
         "displayName": "Test Item",
@@ -48,7 +47,7 @@ async fn test_create_and_drop_index_lifecycle() {
         .db_collection_path(&env.space, &env.db, collection)
         .join("_meta.json");
 
-    let meta_content = io::read_to_string(&meta_path)
+    let meta_content = fs::read_to_string_async(&meta_path)
         .await
         .expect("❌ Lecture du fichier _meta.json impossible après indexation");
 
@@ -67,7 +66,7 @@ async fn test_create_and_drop_index_lifecycle() {
         .join("handle.hash.idx");
 
     assert!(
-        io::exists(&index_path).await,
+        fs::exists_async(&index_path).await,
         "ERREUR : Le fichier physique de l'index ({:?}) est introuvable sur le disque",
         index_path
     );
@@ -79,7 +78,7 @@ async fn test_create_and_drop_index_lifecycle() {
         .expect("❌ La suppression de l'index (drop_index) a échoué");
 
     // 7. VÉRIFICATION FINALE : Nettoyage
-    let meta_content_after = io::read_to_string(&meta_path)
+    let meta_content_after = fs::read_to_string_async(&meta_path)
         .await
         .expect("❌ Lecture du fichier _meta.json impossible après suppression");
 
@@ -89,7 +88,7 @@ async fn test_create_and_drop_index_lifecycle() {
     );
 
     assert!(
-        !io::exists(&index_path).await,
+        !fs::exists_async(&index_path).await,
         "ERREUR : Le fichier physique de l'index n'a pas été supprimé du disque"
     );
 

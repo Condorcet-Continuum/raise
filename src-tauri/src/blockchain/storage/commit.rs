@@ -2,16 +2,16 @@
 
 use crate::blockchain::crypto::hashing::calculate_hash;
 use crate::blockchain::crypto::signing::{verify_signature, KeyPair};
-use crate::utils::{data::Value, prelude::*, DateTime};
+use crate::utils::prelude::*;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serializable, Deserializable, Debug, Clone, PartialEq)]
 pub enum MutationOp {
     Create,
     Update,
     Delete,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serializable, Deserializable, Debug, Clone, PartialEq)]
 pub struct Mutation {
     /// Identifiant unique de l'élément (URI JSON-LD).
     #[serde(rename = "@id")]
@@ -19,15 +19,15 @@ pub struct Mutation {
     /// Type d'opération (Create, Update, Delete).
     pub operation: MutationOp,
     /// Données de l'élément (Compatible ArcadiaElement).
-    pub payload: Value,
+    pub payload: JsonValue,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serializable, Deserializable, Debug, Clone)]
 pub struct ArcadiaCommit {
     pub id: String,
     pub parent_hash: Option<String>,
     pub author: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: UtcTimestamp,
     pub mutations: Vec<Mutation>,
     pub merkle_root: String,
     pub signature: Vec<u8>,
@@ -45,7 +45,7 @@ impl ArcadiaCommit {
             id: String::new(),
             parent_hash,
             author: keys.public_key_hex(),
-            timestamp: Utc::now(),
+            timestamp: UtcClock::now(),
             mutations,
             merkle_root,
             signature: vec![],
@@ -59,7 +59,7 @@ impl ArcadiaCommit {
 
     /// Génère le hash déterministe du contenu du commit pour la signature.
     pub fn compute_content_hash(&self) -> String {
-        let content = json!({
+        let content = json_value!({
             "parent_hash": self.parent_hash,
             "author": self.author,
             "timestamp": self.timestamp,
@@ -86,10 +86,10 @@ mod tests {
         let muta = Mutation {
             element_id: "urn:pa:test".to_string(),
             operation: MutationOp::Create,
-            payload: json!({"name": "TestComponent"}),
+            payload: json_value!({"name": "TestComponent"}),
         };
 
-        let serialized = serde_json::to_string(&muta).unwrap();
+        let serialized = json::serialize_to_string(&muta).unwrap();
         assert!(serialized.contains("\"@id\":\"urn:pa:test\""));
     }
 
@@ -99,7 +99,7 @@ mod tests {
         let mutations = vec![Mutation {
             element_id: "node:1".to_string(),
             operation: MutationOp::Create,
-            payload: json!({
+            payload: json_value!({
                 "@type": "LogicalComponent",
                 "name": "NavigationSystem"
             }),

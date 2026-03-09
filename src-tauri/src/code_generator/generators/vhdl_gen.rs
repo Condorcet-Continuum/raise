@@ -2,7 +2,7 @@
 
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use crate::utils::{data::Value, io::PathBuf, prelude::*};
+use crate::utils::prelude::*;
 use heck::ToSnakeCase;
 
 #[derive(Default)]
@@ -17,7 +17,7 @@ impl VhdlGenerator {
 impl LanguageGenerator for VhdlGenerator {
     fn generate(
         &self,
-        element: &Value,
+        element: &JsonValue,
         template_engine: &TemplateEngine,
     ) -> RaiseResult<Vec<GeneratedFile>> {
         let name = element
@@ -31,7 +31,7 @@ impl LanguageGenerator for VhdlGenerator {
             .unwrap_or("No description");
 
         // 🎯 MIGRATION V1.3 : Création du contexte directe via json!
-        let context = json!({
+        let context = json_value!({
             "name": name,
             "id": id,
             "description": desc
@@ -65,7 +65,7 @@ mod tests {
     fn test_vhdl_gen() {
         let gen = VhdlGenerator::new();
         let engine = setup_engine();
-        let element = json!({ "name": "DisplayController" }); // La valeur importe peu ici
+        let element = json_value!({ "name": "DisplayController" }); // La valeur importe peu ici
 
         let files = gen.generate(&element, &engine).unwrap();
         let content = files[0].content.clone();

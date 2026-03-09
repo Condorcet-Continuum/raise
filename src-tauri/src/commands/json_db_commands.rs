@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/commands/json_db_commands.rs
 
-use crate::utils::{io, prelude::*};
+use crate::utils::prelude::*;
 
 use crate::json_db::collections::manager::{self, CollectionsManager};
 use crate::json_db::query::{sql::SqlRequest, Query, QueryEngine, QueryResult};
@@ -35,7 +35,7 @@ pub async fn jsondb_create_db(
         Err(e) => raise_error!(
             "ERR_DB_CREATION_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "create_and_initialize_db",
                 "space": space,
                 "db": db,
@@ -60,7 +60,7 @@ pub async fn jsondb_drop_db(
         Err(e) => raise_error!(
             "ERR_DB_DROP_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "drop_database",
                 "space": space,
                 "db": db,
@@ -92,7 +92,7 @@ pub async fn jsondb_create_collection(
         Err(e) => raise_error!(
             "ERR_DB_COLLECTION_CREATION_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "create_collection",
                 "collection": coll_name,
                 "schema_uri": uri_info,
@@ -117,7 +117,7 @@ pub async fn jsondb_list_collections(
         Err(e) => raise_error!(
             "ERR_DB_LIST_COLLECTIONS_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "list_collections",
                 "space": space,
                 "db": db,
@@ -145,7 +145,7 @@ pub async fn jsondb_drop_collection(
         Err(e) => raise_error!(
             "ERR_DB_COLLECTION_DROP_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "drop_collection",
                 "collection": coll_name,
                 "db": db,
@@ -177,7 +177,7 @@ pub async fn jsondb_create_index(
         Err(e) => raise_error!(
             "ERR_DB_INDEX_CREATION_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "create_index",
                 "collection": coll_name,
                 "field": field,
@@ -208,7 +208,7 @@ pub async fn jsondb_drop_index(
         Err(e) => raise_error!(
             "ERR_DB_INDEX_DROP_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "drop_index",
                 "collection": coll_name,
                 "field": field_name,
@@ -227,8 +227,8 @@ pub async fn jsondb_evaluate_draft(
     space: String,
     db: String,
     collection: String,
-    mut doc: Value,
-) -> RaiseResult<Value> {
+    mut doc: JsonValue,
+) -> RaiseResult<JsonValue> {
     // 1. Registry Init
     let registry = match SchemaRegistry::from_db(&storage.config, &space, &db).await {
         Ok(reg) => reg,
@@ -236,7 +236,7 @@ pub async fn jsondb_evaluate_draft(
             raise_error!(
                 "ERR_SCHEMA_REGISTRY_INIT_FAILED",
                 error = e,
-                context = json!({ "space": space, "db": db })
+                context = json_value!({ "space": space, "db": db })
             );
         }
     };
@@ -254,17 +254,17 @@ pub async fn jsondb_evaluate_draft(
             Err(e) => raise_error!(
                 "ERR_DB_META_READ_FAIL",
                 error = e,
-                context = json!({ "path": meta_path, "collection": collection })
+                context = json_value!({ "path": meta_path, "collection": collection })
             ),
         };
 
         // 2. Parsing JSON sans map_err
-        let meta: Value = match serde_json::from_str(&content) {
+        let meta: JsonValue = match json::deserialize_from_str(&content) {
             Ok(m) => m,
             Err(e) => raise_error!(
                 "ERR_DB_META_PARSE_FAIL",
                 error = e,
-                context = json!({ "content": content, "collection": collection })
+                context = json_value!({ "content": content, "collection": collection })
             ),
         };
 
@@ -276,7 +276,7 @@ pub async fn jsondb_evaluate_draft(
     } else {
         raise_error!(
             "ERR_DB_COLLECTION_NOT_INITIALIZED",
-            context = json!({
+            context = json_value!({
                 "collection": collection,
                 "hint": "La collection n'a pas de fichier .meta.json. Elle doit être initialisée avant toute opération."
             })
@@ -306,7 +306,7 @@ pub async fn jsondb_evaluate_draft(
         Err(e) => raise_error!(
             "ERR_BUSINESS_RULES_VIOLATION",
             error = e,
-            context = json!({ "collection": collection, "schema": schema_uri })
+            context = json_value!({ "collection": collection, "schema": schema_uri })
         ),
     }
 }
@@ -319,8 +319,8 @@ pub async fn jsondb_insert_document(
     space: String,
     db: String,
     collection: String,
-    document: Value,
-) -> RaiseResult<Value> {
+    document: JsonValue,
+) -> RaiseResult<JsonValue> {
     let manager = mgr(&storage, &space, &db)?;
     // 1. On capture le nom de la collection pour le contexte
     let collection_name = collection.clone();
@@ -329,7 +329,7 @@ pub async fn jsondb_insert_document(
         Err(e) => raise_error!(
             "ERR_DB_INSERT_VALIDATION_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "insert_document",
                 "collection": collection_name,
                 "hint": "Le document ne respecte pas le schéma défini pour cette collection ou le stockage est verrouillé."
@@ -345,23 +345,23 @@ pub async fn jsondb_update_document(
     db: String,
     collection: String,
     id: String,
-    document: Value,
-) -> RaiseResult<Value> {
+    document: JsonValue,
+) -> RaiseResult<JsonValue> {
     let manager = mgr(&storage, &space, &db)?;
     // 1. Capture du contexte pour le diagnostic
     let coll_name = collection.clone();
     let doc_id = id.clone();
 
     match manager.update_document(&collection, &id, document).await {
-        // On transforme le () en une Value de succès
-        Ok(_) => Ok(json!({
+        // On transforme le () en une JsonValue de succès
+        Ok(_) => Ok(json_value!({
             "status": "success",
             "message": format!("Document {} mis à jour dans {}", doc_id, coll_name)
         })),
         Err(e) => raise_error!(
             "ERR_DB_UPDATE_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "update_document",
                 "collection": coll_name,
                 "document_id": doc_id
@@ -377,7 +377,7 @@ pub async fn jsondb_get_document(
     db: String,
     collection: String,
     id: String,
-) -> RaiseResult<Option<Value>> {
+) -> RaiseResult<Option<JsonValue>> {
     let manager = mgr(&storage, &space, &db)?;
     // 1. Capture du contexte pour le diagnostic
     let coll_name = collection.clone();
@@ -388,7 +388,7 @@ pub async fn jsondb_get_document(
         Err(e) => raise_error!(
             "ERR_DB_DOCUMENT_NOT_FOUND",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "fetch_document",
                 "collection": coll_name,
                 "document_id": doc_id,
@@ -419,7 +419,7 @@ pub async fn jsondb_delete_document(
         Err(e) => raise_error!(
             "ERR_DB_DELETE_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "delete_document",
                 "collection": coll_name,
                 "document_id": doc_id,
@@ -435,7 +435,7 @@ pub async fn jsondb_list_all(
     space: String,
     db: String,
     collection: String,
-) -> RaiseResult<Vec<Value>> {
+) -> RaiseResult<Vec<JsonValue>> {
     let manager = mgr(&storage, &space, &db)?;
 
     let documents = match manager.list_all(&collection).await {
@@ -443,7 +443,7 @@ pub async fn jsondb_list_all(
         Err(e) => raise_error!(
             "ERR_DB_LIST_ALL_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "collection": collection,
                 "action": "list_all_documents",
                 "hint": "Échec de lecture de la base de données. Vérifiez l'existence du dossier de collection et les permissions système."
@@ -472,7 +472,7 @@ pub async fn jsondb_execute_query(
         Err(e) => raise_error!(
             "ERR_DB_QUERY_EXECUTION_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "execute_query",
                 "query_preview": query_context,
                 "hint": "La requête a échoué. Vérifiez la syntaxe des filtres et assurez-vous que les index sont à jour."
@@ -496,7 +496,7 @@ pub async fn jsondb_execute_sql(
         Err(e) => raise_error!(
             "ERR_SQL_PARSE_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "parse_sql_query",
                 "query_preview": sql,
                 "hint": "La syntaxe SQL est incorrecte ou n'est pas supportée par le parseur Arcadia."
@@ -513,7 +513,7 @@ pub async fn jsondb_execute_sql(
                 Err(e) => raise_error!(
                     "ERR_SQL_READ_EXECUTION",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "execute_sql_read",
                         "space": space,
                         "db": db
@@ -529,7 +529,7 @@ pub async fn jsondb_execute_sql(
                 raise_error!(
                     "ERR_SQL_WRITE_TRANSACTION",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "execute_sql_write",
                         "hint": "L'écriture SQL a échoué. Vérifiez les contraintes de schéma ou les verrous de base de données."
                     })
@@ -561,7 +561,7 @@ pub async fn jsondb_init_demo_rules(
         raise_error!(
             "ERR_DB_INIT_FAIL",
             error = e,
-            context = json!({ "space": space, "db": db, "action": "init_db" })
+            context = json_value!({ "space": space, "db": db, "action": "init_db" })
         );
     }
 
@@ -576,24 +576,24 @@ pub async fn jsondb_init_demo_rules(
         raise_error!(
             "ERR_DB_CREATE_COLLECTION_FAIL",
             error = e,
-            context = json!({ "collection": "users", "action": "setup_dev_env" })
+            context = json_value!({ "collection": "users", "action": "setup_dev_env" })
         );
     }
 
     // 3. Insertion du document de test
-    let user_doc = json!({ "id": "u_dev", "name": "Alice Dev", "tjm": 500.0 });
+    let user_doc = json_value!({ "id": "u_dev", "name": "Alice Dev", "tjm": 500.0 });
     if let Err(e) = mgr.insert_raw("users", &user_doc).await {
         raise_error!(
             "ERR_DB_INSERT_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "collection": "users",
                 "doc_id": "u_dev",
                 "hint": "L'insertion du profil dev a échoué. Vérifiez si l'ID existe déjà ou si le schéma est respecté."
             })
         );
     }
-    let schema_content = json!({
+    let schema_content = json_value!({
         "type": "object",
         "properties": {
             "user_id": { "type": "string" },
@@ -640,11 +640,11 @@ pub async fn jsondb_init_demo_rules(
         .join("v1/invoices/default.json");
     if let Some(parent) = schema_path.parent() {
         // On remplace le map_err par un match ou un if let Err explicite
-        if let Err(e) = io::create_dir_all(parent).await {
+        if let Err(e) = fs::create_dir_all_async(parent).await {
             raise_error!(
                 "ERR_FS_DIR_CREATION_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "path": parent,
                     "action": "create_schema_directory",
                     "hint": "Impossible de créer le dossier parent pour le schéma. Vérifiez les permissions d'écriture sur le disque."
@@ -658,7 +658,7 @@ pub async fn jsondb_init_demo_rules(
         Err(e) => raise_error!(
             "ERR_SERIALIZATION_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "target": "schema_content",
                 "action": "pretty_print_json",
                 "hint": "Le contenu du schéma contient des types de données non sérialisables par Serde."
@@ -671,7 +671,7 @@ pub async fn jsondb_init_demo_rules(
         raise_error!(
             "ERR_FS_WRITE_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "path": schema_path,
                 "action": "write_schema_file",
                 "hint": "L'écriture du fichier de schéma a échoué. Vérifiez l'espace disque ou les verrous de fichiers."
@@ -684,7 +684,7 @@ pub async fn jsondb_init_demo_rules(
         raise_error!(
             "ERR_DB_COLLECTION_CREATION_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "collection": "invoices",
                 "action": "initialize_invoices_storage",
                 "hint": "Échec de création de la collection. Vérifiez si le schéma URI est accessible ou si la collection existe déjà avec des paramètres différents."
@@ -707,14 +707,14 @@ pub async fn jsondb_init_model_rules(
         raise_error!(
             "ERR_DB_INIT_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "initialize_storage_engine",
                 "hint": "Le moteur de base de données n'a pas pu démarrer. Vérifiez les permissions du dossier de stockage et l'espace disque disponible."
             })
         );
     }
 
-    let schema_content = json!({
+    let schema_content = json_value!({
         "type": "object",
         "properties": {
             "name": { "type": "string" },
@@ -760,11 +760,11 @@ pub async fn jsondb_init_model_rules(
         .join("v1/la/functions.json");
     // 1. Création sécurisée du répertoire parent
     if let Some(parent) = schema_path.parent() {
-        if let Err(e) = io::create_dir_all(parent).await {
+        if let Err(e) = fs::create_dir_all_async(parent).await {
             raise_error!(
                 "ERR_FS_DIR_CREATION_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "path": parent,
                     "action": "ensure_schema_directory",
                     "hint": "Vérifiez les permissions d'écriture sur le disque pour le dossier parent."
@@ -779,7 +779,7 @@ pub async fn jsondb_init_model_rules(
         Err(e) => raise_error!(
             "ERR_SERIALIZATION_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "target": "schema_content",
                 "hint": "Le contenu du schéma contient des types incompatibles avec la sérialisation JSON."
             })
@@ -791,7 +791,7 @@ pub async fn jsondb_init_model_rules(
         raise_error!(
             "ERR_FS_WRITE_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "path": schema_path,
                 "action": "persist_schema_file",
                 "hint": "Échec de l'écriture. Vérifiez l'espace disque ou si le fichier est déjà ouvert par un autre processus."

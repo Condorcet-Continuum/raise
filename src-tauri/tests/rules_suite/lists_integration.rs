@@ -4,11 +4,11 @@ use raise::rules_engine::{Evaluator, Expr, NoOpDataProvider};
 use raise::utils::prelude::*;
 
 /// Teste la fonction Len() sur des tableaux et chaînes
-#[tokio::test]
+#[async_test]
 async fn test_len_operator() {
     let provider = NoOpDataProvider;
 
-    let ctx = json!({
+    let ctx = json_value!({
         "tags": ["a", "b", "c"],
         "title": "Hello World"
     });
@@ -16,13 +16,13 @@ async fn test_len_operator() {
     // Len(tags) -> 3
     let rule_arr = Expr::Len(Box::new(Expr::Var("tags".into())));
 
-    // CORRECTIF : .into_owned() transforme le Cow<Value> en Value pour matcher json!(3)
+    // CORRECTIF : .into_owned() transforme le Cow<JsonValue> en JsonValue pour matcher json_value!(3)
     let res_arr = Evaluator::evaluate(&rule_arr, &ctx, &provider)
         .await
         .expect("Evaluation failed for tags")
         .into_owned();
 
-    assert_eq!(res_arr, json!(3), "Len(tags) devrait valoir 3");
+    assert_eq!(res_arr, json_value!(3), "Len(tags) devrait valoir 3");
 
     // Len(title) -> 11
     let rule_str = Expr::Len(Box::new(Expr::Var("title".into())));
@@ -33,15 +33,15 @@ async fn test_len_operator() {
         .expect("Evaluation failed for title")
         .into_owned();
 
-    assert_eq!(res_str, json!(11), "Len(title) devrait valoir 11");
+    assert_eq!(res_str, json_value!(11), "Len(title) devrait valoir 11");
 }
 
 /// Teste Map() : Transformation d'un tableau d'objets
-#[tokio::test]
+#[async_test]
 async fn test_map_transformation() {
     let provider = NoOpDataProvider;
 
-    let ctx = json!({
+    let ctx = json_value!({
         "order_lines": [
             { "price": 10, "qty": 2 },
             { "price": 20, "qty": 1 }
@@ -63,15 +63,15 @@ async fn test_map_transformation() {
 
     assert_eq!(arr.len(), 2);
     // Comparaison avec référence pour éviter tout souci de type
-    assert_eq!(&arr[0], &json!(20));
-    assert_eq!(&arr[1], &json!(20));
+    assert_eq!(&arr[0], &json_value!(20));
+    assert_eq!(&arr[1], &json_value!(20));
 }
 
 /// Teste Filter() avec contexte global
-#[tokio::test]
+#[async_test]
 async fn test_filter_context() {
     let provider = NoOpDataProvider;
-    let ctx = json!({
+    let ctx = json_value!({
         "limit": 50,
         "values": [10, 60, 20, 90, 50]
     });
@@ -91,7 +91,7 @@ async fn test_filter_context() {
 
     // 60, 90, 50 (>= 50)
     assert_eq!(arr.len(), 3);
-    assert!(arr.contains(&json!(60)));
-    assert!(arr.contains(&json!(90)));
-    assert!(arr.contains(&json!(50)));
+    assert!(arr.contains(&json_value!(60)));
+    assert!(arr.contains(&json_value!(90)));
+    assert!(arr.contains(&json_value!(50)));
 }

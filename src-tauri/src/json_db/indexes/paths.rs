@@ -1,10 +1,9 @@
 // FICHIER : src-tauri/src/json_db/indexes/paths.rs
+use crate::utils::prelude::*;
 
 use crate::json_db::collections::collection::collection_root;
 use crate::json_db::indexes::IndexType;
 use crate::json_db::storage::JsonDbConfig;
-
-use crate::utils::io::PathBuf;
 
 /// Racine des index : {collection_root}/_indexes
 pub fn indexes_root(cfg: &JsonDbConfig, space: &str, db: &str, collection: &str) -> PathBuf {
@@ -31,7 +30,6 @@ pub fn index_path(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::io::PathBuf;
 
     #[test]
     fn test_paths_structure() {

@@ -1,6 +1,7 @@
 use crate::code_generator::templates::template_engine::TemplateEngine;
 
-use crate::utils::{data::Value, io::PathBuf, prelude::*};
+use crate::utils::prelude::*;
+
 // Liste complète des générateurs
 pub mod cpp_gen; // NOUVEAU
 pub mod rust_gen;
@@ -17,7 +18,7 @@ pub struct GeneratedFile {
 pub trait LanguageGenerator: Send + Sync {
     fn generate(
         &self,
-        element: &Value,
+        element: &JsonValue,
         template_engine: &TemplateEngine,
     ) -> RaiseResult<Vec<GeneratedFile>>;
 }
@@ -26,11 +27,10 @@ pub trait LanguageGenerator: Send + Sync {
 mod tests {
     // Les tests du trait ne changent pas
     use super::*;
-    use crate::utils::data::json;
 
     struct MockGenerator;
     impl LanguageGenerator for MockGenerator {
-        fn generate(&self, _: &Value, _: &TemplateEngine) -> RaiseResult<Vec<GeneratedFile>> {
+        fn generate(&self, _: &JsonValue, _: &TemplateEngine) -> RaiseResult<Vec<GeneratedFile>> {
             Ok(vec![])
         }
     }
@@ -39,6 +39,6 @@ mod tests {
     fn test_mock() {
         let gen = MockGenerator;
         let eng = TemplateEngine::new();
-        assert!(gen.generate(&json!({}), &eng).is_ok());
+        assert!(gen.generate(&json_value!({}), &eng).is_ok());
     }
 }

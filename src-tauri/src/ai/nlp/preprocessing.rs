@@ -1,5 +1,5 @@
 // FICHIER : src-tauri/src/ai/nlp/preprocessing.rs
-use crate::utils::HashSet;
+use crate::utils::prelude::*;
 
 /// Normalise le texte :
 /// 1. Minuscule & Sans accents.
@@ -48,8 +48,8 @@ fn remove_accents(s: &str) -> String {
         .collect()
 }
 
-fn get_french_stopwords() -> HashSet<&'static str> {
-    let mut set = HashSet::new();
+fn get_french_stopwords() -> UniqueSet<&'static str> {
+    let mut set = UniqueSet::new();
     let list = [
         "le", "la", "les", "l", "un", "une", "des", "du", "de", "d", "ce", "cet", "cette", "ces",
         "mon", "ton", "son", "et", "ou", "mais", "donc", "car", "ni", "à", "en", "dans", "par",

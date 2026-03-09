@@ -2,7 +2,6 @@
 
 use futures::StreamExt;
 use libp2p::swarm::SwarmEvent;
-use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 
@@ -15,7 +14,7 @@ use crate::blockchain::p2p::swarm::create_swarm;
 use crate::blockchain::storage::chain::Ledger;
 use crate::blockchain::sync::engine::SyncEngine;
 use crate::json_db::storage::StorageEngine; // 🎯 Import du Stockage
-use crate::utils::AsyncMutex;
+use crate::utils::prelude::*;
 use crate::AppState;
 
 /// Point d'entrée unique pour initialiser et démarrer tout le réseau P2P d'Arcadia.
@@ -34,13 +33,15 @@ pub fn init_arcadia_network(app_handle: AppHandle) {
 
         // 4. Injection des états dans Tauri
         app_handle.manage(swarm_tx);
-        app_handle.manage(Mutex::new(Ledger::new()));
-        app_handle.manage(Mutex::new(SyncEngine::new()));
+        app_handle.manage(AsyncMutex::new(Ledger::new()));
+        app_handle.manage(AsyncMutex::new(SyncEngine::new()));
 
         // 5. Récupération des pairs VPN
         let innernet = crate::blockchain::innernet_state(&app_handle);
-        let peers_res =
-            tauri::async_runtime::block_on(async { innernet.lock().unwrap().list_peers().await });
+        let peers_res = tauri::async_runtime::block_on(async {
+            // 🎯 Remplacement de .unwrap() par .await pour l'AsyncMutex !
+            innernet.lock().await.list_peers().await
+        });
 
         // 6. Configuration du Consensus et lancement du service
         if let Ok(peers) = peers_res {
@@ -70,7 +71,7 @@ pub fn spawn_p2p_service(
         // On récupère les états partagés depuis Tauri
         let consensus_state = app_handle.state::<AsyncMutex<ConsensusEngine>>();
         let storage_state = app_handle.state::<StorageEngine>();
-        let app_state = app_handle.state::<std::sync::Arc<AppState>>();
+        let app_state = app_handle.state::<SharedRef<AppState>>();
 
         loop {
             tokio::select! {
@@ -137,13 +138,12 @@ pub fn spawn_p2p_service(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::blockchain::consensus::Vote;
     use crate::blockchain::p2p::protocol::ArcadiaNetMessage;
     use crate::blockchain::storage::commit::ArcadiaCommit;
-    use crate::utils::Utc;
-    use tokio::sync::mpsc;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_p2p_channel_communication() {
         // Test du canal MPSC utilisé pour la communication Tauri -> Service P2P
         let (tx, mut rx) = mpsc::channel::<ArcadiaNetMessage>(100);
@@ -153,7 +153,7 @@ mod tests {
             id: "test_commit_123".to_string(),
             parent_hash: None,
             author: "local_peer".to_string(),
-            timestamp: Utc::now(),
+            timestamp: UtcClock::now(),
             mutations: vec![],
             merkle_root: "root_hash".to_string(),
             signature: vec![],

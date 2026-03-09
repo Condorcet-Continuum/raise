@@ -35,7 +35,7 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "SPATIAL_START",
-                json!({"action": "Génération procédurale de la topologie Arcadia..."})
+                json_value!({"action": "Génération procédurale de la topologie Arcadia..."})
             );
 
             // Récupération du graphe spatial
@@ -43,7 +43,7 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
 
             user_info!(
                 "GRAPH_STATS_NODES",
-                json!({
+                json_value!({
                     "count": graph.meta.node_count,
                     "complexity": if graph.meta.node_count > 1000 { "high" } else { "standard" }
                 })
@@ -52,7 +52,7 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
             // Accès aux statistiques par couche (OA, SA, LA, PA, Chaos)
             user_info!(
                 "GRAPH_LAYERS_DISTRIBUTION",
-                json!({
+                json_value!({
                     "oa": graph.meta.layer_distribution[0],
                     "sa": graph.meta.layer_distribution[1],
                     "la": graph.meta.layer_distribution[2],
@@ -65,7 +65,7 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Payload JSON pour le succès
             user_success!(
                 "GEN_OK",
-                json!({"status": "Topologie 3D extraite avec succès."})
+                json_value!({"status": "Topologie 3D extraite avec succès."})
             );
         }
 
@@ -73,7 +73,7 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "HEALTH_START",
-                json!({"action": "Analyse de la stabilité des nœuds..."})
+                json_value!({"action": "Analyse de la stabilité des nœuds..."})
             );
 
             let graph = get_spatial_topology();
@@ -85,13 +85,13 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
                 // 🎯 Payload JSON pour le succès
                 user_success!(
                     "HEALTH_OK",
-                    json!({"status": "Stabilité nominale sur tous les nœuds."})
+                    json_value!({"status": "Stabilité nominale sur tous les nœuds."})
                 );
             } else {
                 for node in unstable_nodes {
                     user_info!(
                         "GRAPH_VIBRATION_ALERT",
-                        json!({
+                        json_value!({
                             "node_id": node.label,
                             "stability": node.stability,
                             "is_critical": node.stability < 0.5,
@@ -110,15 +110,16 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::mock::DbSandbox;
-    use raise::utils::session::SessionManager;
-    use raise::utils::Arc;
+    use raise::utils::context::SessionManager;
 
-    #[tokio::test]
+    #[cfg(test)]
+    use raise::utils::testing::DbSandbox;
+
+    #[async_test]
     async fn test_spatial_health_check() {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {

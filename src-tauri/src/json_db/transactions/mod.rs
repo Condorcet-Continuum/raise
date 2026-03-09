@@ -1,31 +1,31 @@
 // FICHIER : src-tauri/src/json_db/transactions/mod.rs
 
-use crate::utils::data::{Deserialize, Serialize, Value};
+use crate::utils::prelude::*;
 
 pub mod lock_manager;
 pub mod manager;
 pub mod wal;
 
 // --- API PUBLIQUE (Haut Niveau) ---
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TransactionRequest {
     Insert {
         collection: String,
         id: Option<String>,
-        document: Value,
+        document: JsonValue,
     },
     Update {
         collection: String,
         id: Option<String>,
         handle: Option<String>,
-        document: Value,
+        document: JsonValue,
     },
     Upsert {
         collection: String,
         id: Option<String>,
         handle: Option<String>,
-        document: Value,
+        document: JsonValue,
     },
     Delete {
         collection: String,
@@ -46,7 +46,7 @@ pub enum TransactionRequest {
 }
 
 // --- INTERNE (Bas Niveau / ACID) ---
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct Transaction {
     pub id: String,
     pub operations: Vec<Operation>,
@@ -55,12 +55,12 @@ pub struct Transaction {
 impl Transaction {
     pub fn new() -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: UniqueId::new_v4().to_string(),
             operations: Vec::new(),
         }
     }
 
-    pub fn add_insert(&mut self, collection: &str, id: &str, doc: Value) {
+    pub fn add_insert(&mut self, collection: &str, id: &str, doc: JsonValue) {
         self.operations.push(Operation::Insert {
             collection: collection.to_string(),
             id: id.to_string(),
@@ -75,17 +75,17 @@ impl Default for Transaction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub enum Operation {
     Insert {
         collection: String,
         id: String,
-        document: Value,
+        document: JsonValue,
     },
     Update {
         collection: String,
         id: String,
-        document: Value,
+        document: JsonValue,
     },
     Delete {
         collection: String,
@@ -93,14 +93,14 @@ pub enum Operation {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub enum TransactionStatus {
     Pending,
     Committed,
     Rollback,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct TransactionLog {
     pub id: String,
     pub status: TransactionStatus,
@@ -111,16 +111,15 @@ pub struct TransactionLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::json::{self, json};
 
     #[test]
     fn test_serialization() {
         let req = TransactionRequest::Insert {
             collection: "users".into(),
             id: None,
-            document: json!({"a": 1}),
+            document: json_value!({"a": 1}),
         };
-        let s = json::stringify(&req).unwrap();
+        let s = json::serialize_to_string(&req).unwrap();
         assert!(s.contains("\"type\":\"insert\""));
     }
 }

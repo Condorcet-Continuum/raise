@@ -1,21 +1,24 @@
-use crate::utils::{data, prelude::*};
+use crate::utils::prelude::*;
 
 /// Tente d'extraire et de parser un objet JSON depuis une réponse brute de LLM.
 /// Gère les blocs Markdown (```json ... ```) et le texte superflu.
-pub fn extract_json(raw_text: &str) -> RaiseResult<Value> {
+pub fn extract_json(raw_text: &str) -> RaiseResult<JsonValue> {
     let clean_text = extract_code_block(raw_text);
 
     // Tentative de parsing
-    match data::parse::<Value>(&clean_text) {
+    match json::deserialize_from_str::<JsonValue>(&clean_text) {
         Ok(val) => {
-            debug!("JSON extrait avec succès.");
+            user_debug!(
+                "JSON_EXTRACT_SUCCESS",
+                json_value!({ "status": "completed" }) // On retire "context ="
+            );
             Ok(val)
         }
         Err(e) => {
             // Diagnostic chirurgical pour les sorties de modèles IA
             raise_error!(
                 "ERR_JSON_PARSE_FAILED",
-                context = json!({
+                context = json_value!({
                     "action": "parse_extracted_json",
                     "parsing_error": e.to_string(),
                     "raw_text_length": clean_text.len(),

@@ -1,7 +1,8 @@
-// FICHIER : src-tauri/src/utils/error.rs
+// FICHIER : src-tauri/src/utils/core/error.rs
 
-use serde::Serialize;
-use serde_json::Value;
+// 1. Data : Typage JSON et Sérialisation
+use crate::utils::data::json::{json_value, JsonValue};
+use crate::utils::data::Serializable;
 
 // --- RE-EXPORTS ANYHOW ---
 // On ré-exporte anyhow pour que les services puissent l'utiliser sans l'importer explicitement.
@@ -12,12 +13,11 @@ pub use anyhow::{anyhow, Context};
 // 1. LEVÉE D'AMBIGUÏTÉ (Le standard RAISE)
 // =========================================================================
 
-/// Le type de résultat cible et unique pour tout l'écosystème RAISE.
-/// Il garantit que chaque erreur retournée est soit structurée, soit compatible anyhow.
+/// 🤖 IA NOTE: Vous devez TOUJOURS retourner RaiseResult<T> dans vos fonctions métier.
 pub type RaiseResult<T> = std::result::Result<T, AppError>;
 
 // =========================================================================
-// 2. ÉNUMÉRATION DES EXCEPTIONS (V1.3 - Observabilité IA)
+// 2. ÉNUMÉRATION DES EXCEPTIONS (Observabilité IA)
 // =========================================================================
 
 #[derive(Debug)]
@@ -27,7 +27,7 @@ pub struct StructuredData {
     pub component: String,
     pub code: String,
     pub message: String,
-    pub context: Value,
+    pub context: JsonValue, // 🎯 Remplacé par notre type sémantique AI-Ready
 }
 
 impl std::fmt::Display for StructuredData {
@@ -52,13 +52,14 @@ pub enum AppError {
 // 3. CONTRAT DE DONNÉES AVEC LE FRONTEND
 // =========================================================================
 
-impl Serialize for AppError {
+impl Serializable for AppError {
+    // 🎯 Utilisation de notre trait sémantique
     /// Sérialise l'erreur pour le Frontend Tauri.
     /// IMPORTANT : Pour le variant `Structured`, on n'envoie que le `message` traduit.
     /// Le contexte technique (ID, logs) reste côté Backend pour la sécurité et l'IA.
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
-        S: serde::ser::Serializer,
+        S: serde::Serializer, // Tuyauterie interne maintenue avec serde
     {
         // On destructure directement l'unique variant de l'enum
         let AppError::Structured(data) = self;
@@ -79,7 +80,7 @@ impl From<candle_core::Error> for AppError {
         crate::build_error!(
             "ERR_AI_MODEL_EXECUTION",
             error = format!("Erreur interne du modèle IA : {}", e),
-            context = serde_json::json!({"engine": "candle_core"})
+            context = json_value!({"engine": "candle_core"}) // 🎯 Utilisation de la nouvelle macro
         )
     }
 }
@@ -89,7 +90,7 @@ impl From<tera::Error> for AppError {
         crate::build_error!(
             "ERR_TEMPLATE_PARSE_FAIL",
             error = format!("Erreur de Templating Tera : {}", e),
-            context = serde_json::json!({"engine": "tera"})
+            context = json_value!({"engine": "tera"}) // 🎯 Utilisation de la nouvelle macro
         )
     }
 }
@@ -99,7 +100,7 @@ impl From<std::io::Error> for AppError {
         crate::build_error!(
             "ERR_SYSTEM_IO",
             error = format!("Erreur d'accès fichier ou réseau (IO) : {}", e),
-            context = serde_json::json!({
+            context = json_value!({
                 "os_error": e.to_string(),
                 "error_kind": format!("{:?}", e.kind())
             })
@@ -115,7 +116,8 @@ impl From<std::io::Error> for AppError {
 mod tests {
     use super::*;
     use crate::raise_error;
-    use serde_json::json;
+    use crate::utils::data::json;
+    use crate::utils::data::json::json_value;
 
     #[test]
     fn test_structured_error_frontend_serialization() {
@@ -126,10 +128,11 @@ mod tests {
             component: "PARSER".to_string(),
             code: "ERR_TEST_01".to_string(),
             message: "Message lisible par l'utilisateur".to_string(),
-            context: json!({ "action": "TEST_ACTION" }),
+            context: json_value!({ "action": "TEST_ACTION" }), // 🎯 Remplacé
         }));
 
-        let serialized = serde_json::to_string(&err).expect("Doit être sérialisable");
+        // 🎯 Utilisation de notre fonction de façade "serialize_to_string"
+        let serialized = json::serialize_to_string(&err).expect("Doit être sérialisable");
         // Le Frontend ne doit recevoir QUE le message texte
         assert_eq!(serialized, "\"Message lisible par l'utilisateur\"");
     }
@@ -141,11 +144,11 @@ mod tests {
             let action = "READ";
 
             // Note : raise_error utilise i18n::t pour le champ 'message'.
-            // L'argument 'error =' va maintenant dans 'context.technical_error' (grâce au fix macros.rs)
+            // L'argument 'error =' va maintenant dans 'context.technical_error'
             raise_error!(
                 "ERR_FS_READ",
                 error = format!("Erreur lors de l'action {} sur {}", action, path),
-                context = json!({
+                context = json_value!({ // 🎯 Remplacé
                     "path": path,
                     "action": action
                 })
@@ -186,7 +189,7 @@ mod tests {
                     raise_error!(
                         "ERR_EXTERNAL_SYSTEM",
                         error = e.to_string(),
-                        context = json!({ "source": "anyhow_task" })
+                        context = json_value!({ "source": "anyhow_task" }) // 🎯 Remplacé
                     );
                     #[allow(unreachable_code)]
                     Ok(())
@@ -198,9 +201,7 @@ mod tests {
         assert!(result.is_err());
         let AppError::Structured(data) = result.unwrap_err();
 
-        // ✅ Correction de l'inversion : on compare code avec code
         assert_eq!(data.code, "ERR_EXTERNAL_SYSTEM");
-        // ✅ Et message technique avec message technique
         assert_eq!(data.context["technical_error"], "Test crash");
     }
 }

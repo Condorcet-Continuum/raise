@@ -7,7 +7,7 @@ pub use quality::{QualityReport, QualityStatus};
 pub use xai::{XaiFrame, XaiMethod};
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::{data, prelude::*};
+use crate::utils::prelude::*;
 
 // --- PERSISTANCE (Assurance Store via JsonDB) ---
 pub mod persistence {
@@ -26,7 +26,7 @@ pub mod persistence {
             )
             .await;
 
-        let doc = data::to_value(report)?;
+        let doc = json::serialize_to_value(report)?;
 
         // L'Upsert gère automatiquement l'indexation et la validation du schéma
         manager.upsert_document("quality_reports", doc).await?;
@@ -46,7 +46,7 @@ pub mod persistence {
             )
             .await;
 
-        let doc = data::to_value(frame)?;
+        let doc = json::serialize_to_value(frame)?;
 
         manager.upsert_document("xai_frames", doc).await?;
 
@@ -60,9 +60,9 @@ mod tests {
     use super::*;
     use crate::ai::assurance::quality::MetricCategory;
     use crate::ai::assurance::xai::ExplanationScope;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_save_assurance_artifacts_with_json_db() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(

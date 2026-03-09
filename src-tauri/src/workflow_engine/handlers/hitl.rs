@@ -1,11 +1,10 @@
 use super::{HandlerContext, NodeHandler};
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 use crate::workflow_engine::{ExecutionStatus, NodeType, WorkflowNode};
-use async_trait::async_trait;
 
 pub struct GateHitlHandler;
 
-#[async_trait]
+#[async_interface]
 impl NodeHandler for GateHitlHandler {
     fn node_type(&self) -> NodeType {
         NodeType::GateHitl
@@ -14,7 +13,7 @@ impl NodeHandler for GateHitlHandler {
     async fn execute(
         &self,
         node: &WorkflowNode,
-        _context: &mut HashMap<String, Value>,
+        _context: &mut UnorderedMap<String, JsonValue>,
         _shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
         tracing::warn!(

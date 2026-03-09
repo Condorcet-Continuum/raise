@@ -1,17 +1,15 @@
-// FICHIER : src-tauri/src/utils/mock.rs
+// FICHIER : src-tauri/src/utils/testing/mock.rs
 #![cfg(any(test, debug_assertions))]
 
-// 🎯 100% FAÇADE UTILS : On respecte le contrat de mod.rs
-use crate::utils::io::{self, create_dir_all, tempdir, PathBuf, TempDir};
-use tokio::fs::write;
+// 1. Core : Concurrence, Mémoire et Identifiants
+use crate::utils::core::SharedRef;
+use crate::utils::io::fs::{self, tempdir, Path, PathBuf, TempDir};
 
-use crate::utils::prelude::*;
-use crate::utils::Arc;
+// 2. Data : Configuration, JSON et Traits
+use crate::utils::data::config::{AppConfig, CONFIG};
+use crate::utils::data::json::{self, json_value, JsonValue};
 
-// Accès au Singleton pour l'injection
-use crate::utils::config::CONFIG;
-
-// Dépendances métier (hors utils)
+// 4. Dépendances métier (Base de données JSON)
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
@@ -38,7 +36,7 @@ pub const SESSION_SCHEMA_MOCK: &str = r#"{
 pub async fn inject_mock_component(
     manager: &CollectionsManager<'_>,
     comp_id: &str,
-    settings: Value,
+    settings: JsonValue, // 🎯 JsonValue au lieu de Value
 ) {
     let _ = manager
         .create_collection(
@@ -47,7 +45,8 @@ pub async fn inject_mock_component(
         )
         .await;
 
-    let doc = json!({
+    // 🎯 json_value! au lieu de json!
+    let doc = json_value!({
         "_id": format!("mock-{}", comp_id),
         "identity": { "component_id": comp_id },
         "settings": settings,
@@ -63,10 +62,12 @@ pub async fn inject_mock_component(
 /// Injecte le schéma racine index.schema.json et les passe-partouts
 pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
     let schema_dir = db_cfg.db_schemas_root("_system", "_system").join("v1/db");
-    let _ = io::create_dir_all(&schema_dir).await;
 
-    // 1. Schéma de migration
-    let migration_schema = json!({
+    // 🎯 Utilisation de notre façade asynchrone FS
+    let _ = fs::create_dir_all_async(&schema_dir).await;
+
+    // 1. Schéma de migration (🎯 json_value!)
+    let migration_schema = json_value!({
         "$id": "db://_system/_system/schemas/v1/db/migration.schema.json",
         "type": "object",
         "properties": {
@@ -75,12 +76,16 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
         },
         "required": ["_id", "version"]
     });
+
+    // 🎯 Façade fs
     let _ =
-        io::write_json_atomic(&schema_dir.join("migration.schema.json"), &migration_schema).await;
+        fs::write_json_atomic_async(&schema_dir.join("migration.schema.json"), &migration_schema)
+            .await;
 
     // 2. Schéma d'index avec 'properties' explicites pour l'hydratation
-    let core_schema = json!({
+    let core_schema = json_value!({
         "$id": "db://_system/_system/schemas/v1/db/index.schema.json",
+        // ... (Reste de la définition du schéma inchangée mais formatée proprement) ...
         "type": "object",
         "properties": {
             "_id": {
@@ -104,7 +109,6 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
                 },
                 "default": {}
             },
-            // 🎯 AJOUT ICI : On définit _system_rules pour que le validateur l'injecte
             "rules": {
                 "type": "object",
                 "properties": {
@@ -122,10 +126,10 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
         },
         "required": ["_id", "name", "space", "database"]
     });
-    let _ = io::write_json_atomic(&schema_dir.join("index.schema.json"), &core_schema).await;
+    let _ = fs::write_json_atomic_async(&schema_dir.join("index.schema.json"), &core_schema).await;
 
-    // Schéma générique (inchangé)
-    let generic_schema = json!({
+    // Schéma générique
+    let generic_schema = json_value!({
         "$id": "db://_system/_system/schemas/v1/db/generic.schema.json",
         "type": "object",
         "properties": {
@@ -144,11 +148,7 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
             "_p2p": {
                 "type": "object",
                 "properties": {
-                    "revision": {
-                        "type": "integer",
-                        "default": 1
-                        // Note: L'incrémentation se fait manuellement dans manager.rs update_document
-                    },
+                    "revision": { "type": "integer", "default": 1 },
                     "origin_node": { "type": "string" },
                     "checksum": { "type": "string" }
                 },
@@ -158,12 +158,13 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
         "required": ["_id"],
         "additionalProperties": true
     });
-    let _ = io::write_json_atomic(&schema_dir.join("generic.schema.json"), &generic_schema).await;
+    let _ =
+        fs::write_json_atomic_async(&schema_dir.join("generic.schema.json"), &generic_schema).await;
 }
 
 pub async fn inject_collection_schema(domain_root: &Path, collection_name: &str, content: &str) {
     let schemas_dir = domain_root.join("_system/_system/schemas/v1/mock");
-    let _ = create_dir_all(&schemas_dir).await;
+    let _ = fs::create_dir_all_async(&schemas_dir).await;
 
     let schema_uri = format!(
         "db://_system/_system/schemas/v1/mock/{}.schema.json",
@@ -171,25 +172,28 @@ pub async fn inject_collection_schema(domain_root: &Path, collection_name: &str,
     );
     let schema_file = schemas_dir.join(format!("{}.schema.json", collection_name));
 
-    // On s'assure que le contenu JSON a bien le bon $id
-    let mut json_val: Value = serde_json::from_str(content).unwrap_or(json!({}));
+    // 🎯 Remplacement de serde_json par json::from_str (Façade data)
+    let mut json_val: JsonValue = json::deserialize_from_str(content).unwrap_or(json_value!({}));
+
     if let Some(obj) = json_val.as_object_mut() {
-        obj.insert("$id".to_string(), Value::String(schema_uri.clone()));
+        obj.insert("$id".to_string(), JsonValue::String(schema_uri.clone())); // 🎯 JsonValue::String
     }
-    let _ = write(&schema_file, json_val.to_string().as_bytes()).await;
+
+    // 🎯 Remplacement de tokio::fs::write par notre façade fs
+    let _ = fs::write_async(&schema_file, json_val.to_string().as_bytes()).await;
 
     // 2. Créer le dossier de la collection ET son _meta.json indispensable !
     let col_dir = domain_root
         .join("_system/_system/collections")
         .join(collection_name);
-    let _ = create_dir_all(&col_dir).await;
+    let _ = fs::create_dir_all_async(&col_dir).await;
 
-    let meta_content = json!({
+    let meta_content = json_value!({
         "schema": schema_uri,
         "indexes": []
     });
 
-    let _ = write(
+    let _ = fs::write_async(
         &col_dir.join("_meta.json"),
         meta_content.to_string().as_bytes(),
     )
@@ -239,7 +243,7 @@ impl DbSandbox {
 
 pub struct AgentDbSandbox {
     _dir: TempDir,
-    pub db: Arc<StorageEngine>,
+    pub db: SharedRef<StorageEngine>, // 🎯 SharedRef remplace Arc
     pub config: AppConfig,
     pub domain_root: PathBuf,
 }
@@ -247,7 +251,7 @@ pub struct AgentDbSandbox {
 impl AgentDbSandbox {
     pub async fn new() -> Self {
         let base = DbSandbox::new().await;
-        let db = Arc::new(base.storage);
+        let db = SharedRef::new(base.storage); // 🎯 SharedRef
         let domain_root = base.config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
         let temp_manager =
@@ -267,7 +271,7 @@ impl AgentDbSandbox {
 }
 
 pub struct GlobalDbSandbox {
-    pub db: Arc<StorageEngine>,
+    pub db: SharedRef<StorageEngine>, // 🎯 SharedRef
     pub config: &'static AppConfig,
     pub domain_root: PathBuf,
 }
@@ -292,7 +296,7 @@ impl GlobalDbSandbox {
             .expect("Impossible d'initialiser la GlobalDbSandbox");
 
         Self {
-            db: Arc::new(storage),
+            db: SharedRef::new(storage), // 🎯 SharedRef
             config,
             domain_root: db_root,
         }
@@ -306,7 +310,7 @@ impl GlobalDbSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::io::{exists, read_to_string};
+    // 🎯 Plus besoin d'importer explicitement exists ou read_to_string,
 
     #[tokio::test]
     async fn test_inject_schema_to_path_creates_valid_file() {
@@ -318,8 +322,10 @@ mod tests {
         let schema_file = db_cfg
             .db_schemas_root("_system", "_system")
             .join("v1/db/index.schema.json");
+
+        // 🎯 Façade FS
         assert!(
-            exists(&schema_file).await,
+            fs::exists_async(&schema_file).await,
             "Le fichier index.schema.json n'a pas été créé"
         );
     }
@@ -332,15 +338,18 @@ mod tests {
         let mock_schema = r#"{"type": "object"}"#;
         inject_collection_schema(&root_path, "test_collection", mock_schema).await;
 
-        // 🎯 Vérification du _meta.json vital
         let meta_file = root_path.join("_system/_system/collections/test_collection/_meta.json");
-        assert!(exists(&meta_file).await, "_meta.json n'a pas été créé");
+        // 🎯 Façade FS
+        assert!(
+            fs::exists_async(&meta_file).await,
+            "_meta.json n'a pas été créé"
+        );
 
-        // 🎯 Vérification du placement officiel du schéma
         let schema_file =
             root_path.join("_system/_system/schemas/v1/mock/test_collection.schema.json");
+        // 🎯 Façade FS
         assert!(
-            exists(&schema_file).await,
+            fs::exists_async(&schema_file).await,
             "Le schéma n'a pas été placé dans le registre"
         );
     }
@@ -349,16 +358,18 @@ mod tests {
     async fn test_agent_db_sandbox_initializes_and_injects_sessions() {
         let sandbox = AgentDbSandbox::new().await;
 
-        // La collection session doit avoir son fichier _meta.json !
         let session_meta_path = sandbox
             .domain_root
             .join("_system/_system/collections/sessions/_meta.json");
+
+        // 🎯 Façade FS
         assert!(
-            exists(&session_meta_path).await,
+            fs::exists_async(&session_meta_path).await,
             "Le _meta.json de session manque dans la sandbox !"
         );
 
-        let content = read_to_string(&session_meta_path).await.unwrap();
+        // 🎯 Façade FS
+        let content = fs::read_to_string_async(&session_meta_path).await.unwrap();
         assert!(
             content.contains("db://_system/_system/schemas/v1/mock/sessions.schema.json"),
             "Le lien URI vers le mock de session est cassé"

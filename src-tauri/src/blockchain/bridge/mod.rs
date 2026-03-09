@@ -36,7 +36,7 @@ impl<'a> ArcadiaBridge<'a> {
             raise_error!(
                 "ERR_BRIDGE_DB_PERSISTENCE_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "commit_id": commit.id,
                     "adapter": "JsonDbAdapter",
                     "hint": "Le commit n'a pas pu être écrit sur le disque. Vérifiez l'espace disque ou les permissions du dossier storage."
@@ -45,11 +45,11 @@ impl<'a> ArcadiaBridge<'a> {
         }
 
         // 2. Synchronisation logique dans le ProjectModel
-        if let Err(e) = self.model_sync.sync_commit(commit) {
+        if let Err(e) = self.model_sync.sync_commit(commit).await {
             raise_error!(
                 "ERR_BRIDGE_MODEL_SYNC_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "commit_id": commit.id,
                     "sync_module": "ModelSync",
                     "hint": "Incohérence détectée lors de la mise à jour du modèle en mémoire. Un rollback manuel de la DB pourrait être nécessaire."
@@ -75,10 +75,9 @@ mod tests {
     use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
-    use crate::utils::mock::AgentDbSandbox;
-    use crate::utils::Mutex;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_bridge_full_cycle_logic() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -111,7 +110,7 @@ mod tests {
             .unwrap();
 
         let app_state = AppState {
-            model: Mutex::new(ProjectModel::default()),
+            model: SharedRef::new(AsyncMutex::new(ProjectModel::default())), // 🎯 Uses SharedRef and AsyncMutex
         };
 
         let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);
@@ -121,7 +120,7 @@ mod tests {
             element_id: "urn:sa:radar-01".into(),
             operation: MutationOp::Create,
             // Payload "Shotgun" pour garantir la détection du type par ModelSync
-            payload: json!({
+            payload: json_value!({
                 "_id": "urn:sa:radar-01",
                 "@type": "SystemComponent",
                 "type": "SystemComponent",
@@ -134,7 +133,7 @@ mod tests {
             id: "tx_123".into(),
             parent_hash: None,
             author: "dev_key".into(),
-            timestamp: chrono::Utc::now(),
+            timestamp: UtcClock::now(),
             mutations: vec![mutation],
             merkle_root: "root".into(),
             signature: vec![],
@@ -151,7 +150,7 @@ mod tests {
 
         // 1. Vérification Mémoire (ModelSync)
         {
-            let model = app_state.model.lock().unwrap();
+            let model = app_state.model.lock().await;
             assert_eq!(
                 model.sa.components.len(),
                 1,
@@ -185,11 +184,11 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_bridge_is_ready() {
         let sandbox = AgentDbSandbox::new().await;
         let app_state = AppState {
-            model: Mutex::new(ProjectModel::default()),
+            model: SharedRef::new(AsyncMutex::new(ProjectModel::default())), // 🎯 Consistent initialization
         };
 
         let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);

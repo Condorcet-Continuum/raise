@@ -17,7 +17,7 @@ impl FastEmbedEngine {
             Err(e) => raise_error!(
                 "ERR_AI_FASTEMBED_INIT",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "provider": "FastEmbed",
                     "action": "initialize_text_embedding"
                 })
@@ -38,7 +38,7 @@ impl FastEmbedEngine {
                 raise_error!(
                     "ERR_AI_EMBEDDINGS_BATCH",
                     error = e.to_string(),
-                    context = serde_json::json!({
+                    context = json_value!({
                         "action": "embed_batch",
                         "batch_size": batch_size,
                         "hint": "Le modèle d'embedding a échoué à traiter ce lot."
@@ -55,7 +55,7 @@ impl FastEmbedEngine {
             Err(e) => raise_error!(
                 "ERR_AI_EMBEDDING_GEN_FAIL",
                 error = e,
-                context = json!({ "text_len": text.len() })
+                context = json_value!({ "text_len": text.len() })
             ),
         };
 
@@ -64,7 +64,7 @@ impl FastEmbedEngine {
             raise_error!(
                 "ERR_AI_EMBEDDING_EMPTY",
                 error = "Le modèle n'a produit aucun vecteur pour cette requête",
-                context = json!({ "text_len": text.len(), "action": "embed_query" })
+                context = json_value!({ "text_len": text.len(), "action": "embed_query" })
             );
         };
 

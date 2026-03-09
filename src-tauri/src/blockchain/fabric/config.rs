@@ -4,37 +4,37 @@
 //! Ce fichier permet de parser le YAML standard (Common Connection Profile - CCP)
 //! utilisé par les SDKs Fabric pour identifier les pairs, les CAs et les MSPs.
 
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 /// Racine du Connection Profile
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct ConnectionProfile {
     pub name: String,
     pub version: String,
     pub client: ClientConfig,
-    pub organizations: HashMap<String, OrganizationConfig>,
-    pub peers: HashMap<String, PeerConfig>,
+    pub organizations: UnorderedMap<String, OrganizationConfig>,
+    pub peers: UnorderedMap<String, PeerConfig>,
     #[serde(rename = "certificateAuthorities")]
-    pub certificate_authorities: HashMap<String, CaConfig>,
+    pub certificate_authorities: UnorderedMap<String, CaConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct ClientConfig {
     pub organization: String,
     #[serde(rename = "connection")]
     pub connection: Option<ConnectionDefaults>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct ConnectionDefaults {
     pub timeout: Option<ConnectionTimeout>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct ConnectionTimeout {
-    pub peer: Option<HashMap<String, String>>,
+    pub peer: Option<UnorderedMap<String, String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct OrganizationConfig {
     pub mspid: String,
     pub peers: Vec<String>,
@@ -42,16 +42,16 @@ pub struct OrganizationConfig {
     pub certificate_authorities: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct PeerConfig {
     pub url: String,
     #[serde(rename = "tlsCACerts")]
     pub tls_ca_certs: TlsConfig,
     #[serde(rename = "grpcOptions")]
-    pub grpc_options: Option<HashMap<String, serde_json::Value>>,
+    pub grpc_options: Option<UnorderedMap<String, JsonValue>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct CaConfig {
     pub url: String,
     #[serde(rename = "caName")]
@@ -60,7 +60,7 @@ pub struct CaConfig {
     pub tls_ca_certs: Option<TlsConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct TlsConfig {
     pub pem: Option<String>,
     pub path: Option<String>,

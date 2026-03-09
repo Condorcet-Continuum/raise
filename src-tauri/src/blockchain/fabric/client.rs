@@ -1,8 +1,8 @@
 // src-tauri/src/blockchain/fabric/client.rs
 //! Client Hyperledger Fabric (Implémentation pour Tonic 0.14.3).
 
-use crate::utils::{io::Path, prelude::*, Duration}; // 🎯 Ajout du prelude RAISE (RaiseResult, json!)
-                                                    // Ces imports sont maintenant disponibles grâce à la feature "tls-ring"
+use crate::utils::prelude::*; // 🎯 Ajout du prelude RAISE (RaiseResult, json!)
+                              // Ces imports sont maintenant disponibles grâce à la feature "tls-ring"
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use super::config::ConnectionProfile;
@@ -32,7 +32,7 @@ impl FabricClient {
                 raise_error!(
                     "ERR_FABRIC_PROFILE_READ",
                     error = e, // On passe l'erreur brute, la macro s'occupe de la conversion
-                    context = json!({
+                    context = json_value!({
                         "file_path": path_str,
                         "action": "load_fabric_connection_profile",
                         "hint": "Vérifiez que le fichier existe et que les droits de lecture sont accordés."
@@ -47,7 +47,7 @@ impl FabricClient {
                 raise_error!(
                     "ERR_FABRIC_PROFILE_PARSE",
                     error = e, // On injecte l'erreur Serde directement
-                    context = json!({
+                    context = json_value!({
                         "file_path": path_str,
                         "action": "parse_fabric_yaml_profile",
                         "hint": "Le fichier YAML est mal formé ou des champs obligatoires sont manquants (ex: 'organizations', 'peers', 'certificateAuthorities')."
@@ -73,7 +73,7 @@ impl FabricClient {
                 raise_error!(
                     "ERR_FABRIC_CRYPTO_CERT_READ",
                     error = e, // On passe l'erreur I/O brute
-                    context = json!({
+                    context = json_value!({
                         "cert_path": cert_str,
                         "action": "load_fabric_certificate",
                         "hint": "Le fichier de certificat (.pem) est introuvable ou illisible. Vérifiez le dossier crypto-config."
@@ -88,7 +88,7 @@ impl FabricClient {
                 raise_error!(
                     "ERR_FABRIC_CRYPTO_KEY_READ",
                     error = e, // On préserve l'erreur IO originale
-                    context = json!({
+                    context = json_value!({
                         "key_path": key_str,
                         "action": "load_fabric_private_key",
                         "hint": "La clé privée est introuvable. Sous Fabric, le nom du fichier finit souvent par '_sk'. Vérifiez le dossier keystore."
@@ -106,7 +106,7 @@ impl FabricClient {
             Some(config) => config,
             None => raise_error!(
                 "ERR_FABRIC_CONFIG_PEER_NOT_FOUND",
-                context = json!({
+                context = json_value!({
                     "peer_name": peer_name,
                     "action": "connect_to_fabric_peer",
                     "hint": "Le nœud demandé n'existe pas dans la configuration YAML. Vérifiez l'orthographe dans la section 'peers'."
@@ -120,7 +120,7 @@ impl FabricClient {
             Err(e) => raise_error!(
                 "ERR_FABRIC_GRPC_ENDPOINT_INVALID",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "peer_name": peer_name,
                     "url": peer_config.url,
                     "action": "create_grpc_channel",
@@ -147,7 +147,7 @@ impl FabricClient {
                 Err(e) => raise_error!(
                     "ERR_FABRIC_TLS_CONFIG_FAIL",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "peer_name": peer_name,
                         "action": "configure_tls_connection",
                         "hint": "Échec de l'application de la configuration TLS. Vérifiez que le certificat CA est valide et que le 'ssl-target-name-override' correspond au domaine du Peer."
@@ -157,7 +157,7 @@ impl FabricClient {
         }
 
         // 3. Connexion (Lazy)
-        let channel = endpoint.timeout(Duration::from_secs(10)).connect_lazy();
+        let channel = endpoint.timeout(TimeDuration::from_secs(10)).connect_lazy();
 
         self.channel = Some(channel);
         tracing::info!("🔗 [Fabric] Canal gRPC configuré pour {}", peer_name);
@@ -175,7 +175,7 @@ impl FabricClient {
             crate::raise_error!(
                 "ERR_FABRIC_GRPC_NOT_CONNECTED",
                 error = "Le canal gRPC n'est pas initialisé.",
-                context = json!({
+                context = json_value!({
                     "chaincode": chaincode,
                     "function": func,
                     "action": "submit_transaction",
@@ -191,7 +191,7 @@ impl FabricClient {
         tracing::debug!("{}", log_msg);
 
         // Simulation réseau
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(TimeDuration::from_millis(100)).await;
 
         Ok(format!("TX_ID_MOCK_12345 ({})", log_msg))
     }
@@ -201,7 +201,7 @@ impl FabricClient {
             crate::raise_error!(
                 "ERR_FABRIC_GRPC_NOT_CONNECTED",
                 error = "Le canal gRPC n'est pas initialisé.",
-                context = json!({
+                context = json_value!({
                     "function": func,
                     "action": "query_transaction",
                     "hint": "Vous devez appeler 'connect()' avant d'effectuer une requête."
@@ -217,7 +217,7 @@ impl FabricClient {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_fabric_client_lifecycle() {
         let mut config = ConnectionProfile {
             name: "test".into(),
@@ -226,9 +226,9 @@ mod tests {
                 organization: "Org1".into(),
                 connection: None,
             },
-            organizations: std::collections::HashMap::new(),
-            peers: std::collections::HashMap::new(),
-            certificate_authorities: std::collections::HashMap::new(),
+            organizations: UnorderedMap::new(),
+            peers: UnorderedMap::new(),
+            certificate_authorities: UnorderedMap::new(),
         };
 
         config.peers.insert(

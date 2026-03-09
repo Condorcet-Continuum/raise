@@ -42,8 +42,7 @@ pub use sysml2::{Sysml2Parser, Sysml2ToArcadiaMapper};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::data::json;
-
+    use crate::utils::prelude::*;
     #[test]
     fn test_integration_facade() {
         // 1. Vérifie l'accès aux types de base
@@ -61,7 +60,7 @@ mod tests {
 
         // 2. Vérifie l'accès à la Factory Transformer
         let transformer = get_transformer(TransformationDomain::Software);
-        let dummy = json!({ "_id": "TEST", "name": "TestElement" });
+        let dummy = json_value!({ "_id": "TEST", "name": "TestElement" });
         assert!(transformer.transform(&dummy).is_ok());
 
         // 3. Vérifie l'accès à l'enum Sémantique

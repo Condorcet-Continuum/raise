@@ -1,14 +1,14 @@
 // FICHIER : src-tauri/src/traceability/reporting/trace_matrix.rs
 
 use crate::traceability::tracer::Tracer;
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, PartialEq)]
 pub struct TraceabilityMatrix {
     pub rows: Vec<TraceRow>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, PartialEq)]
 pub struct TraceRow {
     pub source_id: String,
     pub source_name: String,
@@ -24,7 +24,7 @@ impl MatrixGenerator {
     /// Exemple : source_kind="SystemFunction", target_kind="LogicalComponent"
     pub fn generate_coverage(
         tracer: &Tracer,
-        docs: &HashMap<String, Value>,
+        docs: &UnorderedMap<String, JsonValue>,
         source_kind: &str,
     ) -> TraceabilityMatrix {
         let mut rows = Vec::new();
@@ -76,28 +76,27 @@ impl MatrixGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_matrix_coverage_logic_robustness() {
-        let mut docs: HashMap<String, Value> = HashMap::new();
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // Setup : Une fonction liée et une orpheline
         docs.insert(
             "F1".to_string(),
-            json!({
+            json_value!({
                 "_id": "F1", "kind": "Function", "name": "Engine Control", "allocatedTo": "C1"
             }),
         );
         docs.insert(
             "F2".to_string(),
-            json!({
+            json_value!({
                 "_id": "F2", "kind": "Function", "name": "Radio Control"
             }),
         );
         docs.insert(
             "C1".to_string(),
-            json!({
+            json_value!({
                 "_id": "C1", "kind": "Component", "name": "ECU"
             }),
         );
@@ -131,8 +130,8 @@ mod tests {
                 coverage_status: "Covered".into(),
             }],
         };
-        let serialized = serde_json::to_string(&matrix).unwrap();
-        let deserialized: TraceabilityMatrix = serde_json::from_str(&serialized).unwrap();
+        let serialized = json::serialize_to_string(&matrix).unwrap();
+        let deserialized: TraceabilityMatrix = json::deserialize_from_str(&serialized).unwrap();
         assert_eq!(matrix, deserialized);
     }
 }

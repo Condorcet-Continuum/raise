@@ -4,11 +4,9 @@
 //! Gère la connexion au mesh VPN WireGuard via la CLI `innernet`.
 //! Utilise tokio::process pour ne pas bloquer le runtime Tauri.
 
-use crate::utils::{prelude::*, Arc, AsyncRwLock};
-use std::process::{Command as StdCommand, Output};
-use tokio::process::Command;
+use crate::utils::prelude::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct NetworkConfig {
     pub name: String,
     pub cidr: String,
@@ -27,7 +25,7 @@ impl Default for NetworkConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct Peer {
     pub name: String,
     pub ip: String,
@@ -38,7 +36,7 @@ pub struct Peer {
     pub transfer_tx: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct NetworkStatus {
     pub connected: bool,
     pub interface: String,
@@ -50,7 +48,7 @@ pub struct NetworkStatus {
 #[derive(Clone)]
 pub struct InnernetClient {
     config: NetworkConfig,
-    status: Arc<AsyncRwLock<NetworkStatus>>,
+    status: SharedRef<AsyncRwLock<NetworkStatus>>,
 }
 
 impl InnernetClient {
@@ -66,19 +64,19 @@ impl InnernetClient {
 
         Self {
             config,
-            status: Arc::new(AsyncRwLock::new(status)),
+            status: SharedRef::new(AsyncRwLock::new(status)),
         }
     }
 
     /// Vérifie si Innernet est installé (Appel bloquant acceptable au démarrage)
     // 🎯 MIGRATION : Utilisation de RaiseResult
     pub fn check_installation() -> RaiseResult<String> {
-        let output = match StdCommand::new("innernet").arg("--version").output() {
+        let output = match ProcessCommand::new("innernet").arg("--version").output() {
             Ok(out) => out,
             Err(e) => raise_error!(
                 "ERR_VPN_INNERNET_MISSING",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "check_innernet_installation",
                     "command": "innernet --version",
                     "hint": "Le binaire 'innernet' est introuvable. Assurez-vous qu'il est installé (sudo apt install innernet) et que l'utilisateur courant a les droits d'exécution."
@@ -90,7 +88,7 @@ impl InnernetClient {
             crate::raise_error!(
                 "ERR_VPN_INNERNET_EXEC_FAIL",
                 error = "L'exécution de la commande Innernet a échoué.",
-                context = json!({
+                context = json_value!({
                     "action": "check_innernet_installation",
                     "status_code": output.status.code(),
                     "stderr": String::from_utf8_lossy(&output.stderr).to_string()
@@ -112,7 +110,7 @@ impl InnernetClient {
             let stderr = String::from_utf8_lossy(&output.stderr);
             crate::raise_error!(
                 "ERR_VPN_CONNECTION_FAIL",
-                context = json!({
+                context = json_value!({
                     "network_name": self.config.name,
                     "action": "connect_vpn",
                     "status_code": output.status.code(),
@@ -149,7 +147,7 @@ impl InnernetClient {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             raise_error!(
                 "ERR_VPN_DISCONNECTION_FAIL",
-                context = json!({
+                context = json_value!({
                     "network_name": self.config.name,
                     "action": "disconnect_vpn",
                     "status_code": output.status.code(),
@@ -197,19 +195,19 @@ impl InnernetClient {
     }
 
     /// Exécute une commande Innernet (Async)
-    async fn run_command<I, S>(&self, args: I) -> RaiseResult<Output>
+    async fn run_command<I, S>(&self, args: I) -> RaiseResult<ProcessOutput>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
         // 1. Exécution et capture de l'erreur système
-        let output = match Command::new("innernet").args(args).output().await {
+        let output = match AsyncCommand::new("innernet").args(args).output().await {
             Ok(out) => out,
             Err(e) => {
                 raise_error!(
                     "ERR_VPN_COMMAND_EXEC",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "execute_innernet_cli",
                         "hint": "Le binaire innernet n'a pas pu être lancé. Vérifiez qu'il est dans le PATH."
                     })
@@ -222,7 +220,7 @@ impl InnernetClient {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             raise_error!(
                 "ERR_VPN_COMMAND_FAILED",
-                context = json!({
+                context = json_value!({
                     "exit_code": output.status.code(),
                     "stderr": stderr,
                     "action": "validate_innernet_execution",
@@ -242,7 +240,7 @@ impl InnernetClient {
             crate::raise_error!(
                 "ERR_VPN_INTERFACE_DOWN",
                 error = "Impossible de récupérer les informations de l'interface (Interface probablement inactive).",
-                context = json!({
+                context = json_value!({
                     "network_name": self.config.name,
                     "action": "get_interface_ip"
                 })
@@ -266,7 +264,7 @@ impl InnernetClient {
         crate::raise_error!(
             "ERR_VPN_IP_PARSE_FAIL",
             error = "Impossible d'extraire l'adresse IP de la sortie Innernet.",
-            context = json!({
+            context = json_value!({
                 "network_name": self.config.name,
                 "action": "parse_interface_ip",
                 "raw_output": stdout.to_string()
@@ -276,7 +274,7 @@ impl InnernetClient {
 
     /// Récupère la liste des peers via WireGuard
     async fn fetch_peers(&self) -> RaiseResult<Vec<Peer>> {
-        let output = match Command::new("wg")
+        let output = match AsyncCommand::new("wg")
             .args(["show", &self.config.interface])
             .output()
             .await
@@ -285,7 +283,7 @@ impl InnernetClient {
             Err(e) => raise_error!(
                 "ERR_VPN_WG_COMMAND_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "interface": self.config.interface,
                     "action": "fetch_wireguard_peers",
                     "hint": "La commande 'wg' a échoué. Vérifiez que WireGuard est installé et que l'utilisateur a les droits 'sudo' ou les capacités CAP_NET_ADMIN."
@@ -340,7 +338,7 @@ impl InnernetClient {
                         }
                     }
                 } else if line.starts_with("latest handshake:") {
-                    peer.last_handshake = Some(chrono::Utc::now().timestamp());
+                    peer.last_handshake = Some(UtcClock::now().timestamp());
                 }
             }
         }
@@ -354,7 +352,7 @@ impl InnernetClient {
 
     /// Ping un peer spécifique
     pub async fn ping_peer(&self, peer_ip: &str) -> RaiseResult<bool> {
-        let output = match Command::new("ping")
+        let output = match AsyncCommand::new("ping")
             .args(["-c", "1", "-W", "2", peer_ip])
             .output()
             .await
@@ -363,7 +361,7 @@ impl InnernetClient {
             Err(e) => raise_error!(
                 "ERR_VPN_PING_EXEC_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "target_ip": peer_ip,
                     "action": "ping_vpn_peer",
                     "hint": "Le binaire 'ping' n'a pas pu être exécuté. Vérifiez les permissions d'exécution ou la présence du binaire sur le système hôte."
@@ -386,7 +384,7 @@ mod tests {
         assert_eq!(config.cidr, "10.42.0.0/16");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_innernet_client_creation() {
         let config = NetworkConfig::default();
         let client = InnernetClient::new(config);

@@ -1,9 +1,11 @@
 // FICHIER : src-tauri/tests/ai_suite/llm_tests.rs
 
+use raise::utils::prelude::*;
+
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::llm::client::LlmBackend;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_local_llm_connectivity() {

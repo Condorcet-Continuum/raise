@@ -3,7 +3,7 @@
 use super::{ModelValidator, Severity, ValidationIssue};
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
-use async_trait::async_trait;
+use crate::utils::prelude::*;
 
 #[derive(Default)]
 pub struct OntologicalValidator;
@@ -63,7 +63,7 @@ impl OntologicalValidator {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl ModelValidator for OntologicalValidator {
     // <=== CORRECTION : Remplacement de `validate` par l'implémentation asynchrone attendue
     async fn validate_element(

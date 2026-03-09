@@ -5,7 +5,7 @@ use crate::json_db::storage::StorageEngine;
 use crate::rules_engine::DataProvider;
 
 // FAÇADE UNIQUE
-use crate::utils::{async_trait, json::Value, AsyncRwLock, HashMap};
+use crate::utils::prelude::*;
 
 /// Un DataProvider qui met en cache les documents lus pour la durée de son existence.
 /// Agit comme un "Cache de Niveau 1" (L1) isolé par requête pour garantir la cohérence
@@ -17,7 +17,7 @@ pub struct CachedDataProvider<'a> {
     db: &'a str,
     /// Cache interne L1 : (Collection, ID) -> Document.
     /// RwLock permet des lectures asynchrones concurrentes au sein d'une même évaluation.
-    doc_cache: AsyncRwLock<HashMap<(String, String), Option<Value>>>,
+    doc_cache: AsyncRwLock<UnorderedMap<(String, String), Option<JsonValue>>>,
 }
 
 impl<'a> CachedDataProvider<'a> {
@@ -26,12 +26,12 @@ impl<'a> CachedDataProvider<'a> {
             storage,
             space,
             db,
-            doc_cache: AsyncRwLock::new(HashMap::new()),
+            doc_cache: AsyncRwLock::new(UnorderedMap::new()),
         }
     }
 
     /// Charge un document depuis le cache L1, ou délègue au StorageEngine (Cache L2 / Disque).
-    async fn get_document(&self, collection: &str, id: &str) -> Option<Value> {
+    async fn get_document(&self, collection: &str, id: &str) -> Option<JsonValue> {
         let key = (collection.to_string(), id.to_string());
 
         // 1. Tentative de lecture ultra-rapide et isolée depuis le cache L1
@@ -54,10 +54,10 @@ impl<'a> CachedDataProvider<'a> {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl<'a> DataProvider for CachedDataProvider<'a> {
     /// Récupère une valeur spécifique via un chemin JSON (ex: "profile.email").
-    async fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<Value> {
+    async fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<JsonValue> {
         if let Some(doc) = self.get_document(collection, id).await {
             // Conversion du chemin pointé (a.b) en pointeur JSON (/a/b)
             let ptr = if field.starts_with('/') {
@@ -75,9 +75,8 @@ impl<'a> DataProvider for CachedDataProvider<'a> {
 mod tests {
     use super::*;
     use crate::json_db::storage::JsonDbConfig;
-    use crate::utils::{io::tempdir, json::json};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_cached_provider_memoization() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -94,7 +93,7 @@ mod tests {
 
         // Préparation du document initial via le StorageEngine
         let id = "u1";
-        let initial_json = json!({ "id": id, "score": 100 });
+        let initial_json = json_value!({ "id": id, "score": 100 });
         storage
             .write_document(space, db, "users", id, &initial_json)
             .await
@@ -104,10 +103,10 @@ mod tests {
 
         // Première lecture : doit charger depuis le StorageEngine (et peupler le L1)
         let val = provider.get_value("users", id, "score").await;
-        assert_eq!(val, Some(json!(100)));
+        assert_eq!(val, Some(json_value!(100)));
 
         // Altération du document via le StorageEngine (met à jour le L2 et le disque)
-        let altered_json = json!({ "id": id, "score": 999 });
+        let altered_json = json_value!({ "id": id, "score": 999 });
         storage
             .write_document(space, db, "users", id, &altered_json)
             .await
@@ -116,10 +115,10 @@ mod tests {
         // Deuxième lecture via le Provider : doit renvoyer la valeur du cache L1 (100)
         // et NON 999, prouvant ainsi la "snapshot isolation" durant la vie du Provider !
         let cached_val = provider.get_value("users", id, "score").await;
-        assert_eq!(cached_val, Some(json!(100)));
+        assert_eq!(cached_val, Some(json_value!(100)));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_cached_provider_missing_doc() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());

@@ -1,12 +1,11 @@
 // FICHIER : src-tauri/src/workflow_engine/handlers/mcp.rs
 use super::{HandlerContext, NodeHandler};
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 use crate::workflow_engine::{ExecutionStatus, NodeType, WorkflowNode};
-use async_trait::async_trait;
 
 pub struct McpHandler;
 
-#[async_trait]
+#[async_interface]
 impl NodeHandler for McpHandler {
     fn node_type(&self) -> NodeType {
         NodeType::CallMcp
@@ -15,7 +14,7 @@ impl NodeHandler for McpHandler {
     async fn execute(
         &self,
         node: &WorkflowNode,
-        context: &mut HashMap<String, Value>,
+        context: &mut UnorderedMap<String, JsonValue>,
         shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
         // Extraction sécurisée du nom de l'outil MCP
@@ -24,7 +23,7 @@ impl NodeHandler for McpHandler {
                 Some(s) => s,
                 None => raise_error!(
                     "ERR_MCP_INVALID_PARAM",
-                    context = json!({
+                    context = json_value!({
                         "node_id": node.id,
                         "param": "tool_name",
                         "expected": "string",
@@ -35,7 +34,7 @@ impl NodeHandler for McpHandler {
             },
             None => raise_error!(
                 "ERR_MCP_MISSING_PARAM",
-                context = json!({
+                context = json_value!({
                     "node_id": node.id,
                     "param": "tool_name",
                     "action": "CallMcp",
@@ -44,7 +43,7 @@ impl NodeHandler for McpHandler {
             ),
         };
 
-        let default_args = json!({});
+        let default_args = json_value!({});
         let args = node.params.get("arguments").unwrap_or(&default_args);
         let output_key = node
             .params
@@ -89,23 +88,21 @@ mod tests {
     use crate::ai::orchestrator::AiOrchestrator;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::{Arc, AsyncMutex};
     use crate::workflow_engine::critic::WorkflowCritic;
     use crate::workflow_engine::tools::{AgentTool, SystemMonitorTool};
 
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::data::json;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     // 🎯 FIX : La fonction prend la DB et la config en paramètres
     async fn setup_dummy_context_with_tool(
-        storage: Arc<crate::json_db::storage::StorageEngine>,
-        config: &crate::utils::config::AppConfig,
+        storage: SharedRef<crate::json_db::storage::StorageEngine>,
+        config: &AppConfig,
     ) -> (
-        Arc<AsyncMutex<AiOrchestrator>>,
-        Arc<PluginManager>,
+        SharedRef<AsyncMutex<AiOrchestrator>>,
+        SharedRef<PluginManager>,
         WorkflowCritic,
-        HashMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
+        UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
     ) {
         let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
@@ -113,33 +110,33 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm",
-            json!({ "provider": "mock", "model": "test" }),
+            json_value!({ "provider": "mock", "model": "test" }),
         )
         .await;
-        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
         // 2. 🎯 INITIALISATION : On utilise le StorageEngine de la Sandbox
         let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage.clone()))
             .await
             .unwrap();
 
-        let plugin_manager = Arc::new(PluginManager::new(&storage, None));
+        let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
         let critic = WorkflowCritic::default();
 
-        let mut tools: HashMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>> =
-            HashMap::new();
+        let mut tools: UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>> =
+            UnorderedMap::new();
         let monitor = SystemMonitorTool;
         tools.insert(monitor.name().to_string(), Box::new(monitor));
 
         (
-            Arc::new(AsyncMutex::new(orch)),
+            SharedRef::new(AsyncMutex::new(orch)),
             plugin_manager,
             critic,
             tools,
         )
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mcp_handler_success_and_injection() {
@@ -162,14 +159,14 @@ mod tests {
             id: "tool_1".into(),
             r#type: NodeType::CallMcp,
             name: "Lire Capteur CPU".into(),
-            params: json!({
+            params: json_value!({
                 "tool_name": "read_system_metrics",
                 "arguments": { "sensor_id": "cpu_core" },
                 "output_key": "my_cpu_result"
             }),
         };
 
-        let mut data_ctx = HashMap::new();
+        let mut data_ctx = UnorderedMap::new();
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
         assert_eq!(result, ExecutionStatus::Completed);
@@ -179,7 +176,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mcp_handler_missing_tool_fails_safely() {
@@ -199,10 +196,10 @@ mod tests {
             id: "tool_2".into(),
             r#type: NodeType::CallMcp,
             name: "Outil Inconnu".into(),
-            params: json!({ "tool_name": "outil_magique_qui_n_existe_pas" }),
+            params: json_value!({ "tool_name": "outil_magique_qui_n_existe_pas" }),
         };
 
-        let mut data_ctx = HashMap::new();
+        let mut data_ctx = UnorderedMap::new();
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
         // L'outil n'existe pas, l'exécution doit échouer proprement

@@ -1,9 +1,8 @@
 // FICHIER : src-tauri/src/commands/traceability_commands.rs
 
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
-use crate::utils::{data, prelude::*, HashMap};
+use crate::utils::prelude::*;
 use crate::AppState;
-use tauri::State;
 
 use crate::traceability::{
     impact_analyzer::{ImpactAnalyzer, ImpactReport},
@@ -16,11 +15,11 @@ use crate::traceability::{
 
 /// Helper interne : Convertit le modèle Arcadia en index de documents JSON
 /// 🎯 Indispensable pour alimenter les nouveaux générateurs découplés.
-fn get_model_docs(model: &ProjectModel) -> HashMap<String, Value> {
-    let mut docs = HashMap::new();
+fn get_model_docs(model: &ProjectModel) -> UnorderedMap<String, JsonValue> {
+    let mut docs = UnorderedMap::new();
     let mut collect = |elements: &Vec<ArcadiaElement>| {
         for e in elements {
-            if let Ok(val) = data::to_value(e) {
+            if let Ok(val) = json::serialize_to_value(e) {
                 docs.insert(e.id.clone(), val);
             }
         }
@@ -41,22 +40,12 @@ fn get_model_docs(model: &ProjectModel) -> HashMap<String, Value> {
 }
 
 #[tauri::command]
-pub fn analyze_impact(
-    state: State<AppState>,
+pub async fn analyze_impact(
+    state: tauri::State<'_, AppState>,
     element_id: String,
     depth: usize,
 ) -> RaiseResult<ImpactReport> {
-    let model = match state.model.lock() {
-        Ok(guard) => guard,
-        Err(_) => raise_error!(
-            "ERR_SYS_MUTEX_POISONED",
-            context = json!({
-                "component": "DlState.model",
-                "action": "access_neural_network_instance",
-                "hint": "Le Mutex du modèle est corrompu. Un thread de calcul a probablement paniqué. Redémarrez le moteur IA."
-            })
-        ),
-    };
+    let model = state.model.lock().await;
 
     // 🎯 FIX : Utilisation du constructeur de rétro-compatibilité
     let tracer = Tracer::from_legacy_model(&model);
@@ -68,18 +57,8 @@ pub fn analyze_impact(
 }
 
 #[tauri::command]
-pub fn run_compliance_audit(state: State<AppState>) -> RaiseResult<AuditReport> {
-    let model = match state.model.lock() {
-        Ok(guard) => guard,
-        Err(_) => raise_error!(
-            "ERR_SYS_MUTEX_POISONED",
-            context = json!({
-                "component": "DlState.model",
-                "action": "access_neural_network_instance",
-                "hint": "Le Mutex du modèle est corrompu. Un thread de calcul a probablement paniqué. Redémarrez le moteur IA."
-            })
-        ),
-    };
+pub async fn run_compliance_audit(state: tauri::State<'_, AppState>) -> RaiseResult<AuditReport> {
+    let model = state.model.lock().await;
 
     // 🎯 FIX : Préparation des données pour le générateur universel
     let docs = get_model_docs(&model);
@@ -92,18 +71,10 @@ pub fn run_compliance_audit(state: State<AppState>) -> RaiseResult<AuditReport> 
 }
 
 #[tauri::command]
-pub fn get_traceability_matrix(state: State<AppState>) -> RaiseResult<TraceabilityMatrix> {
-    let model = match state.model.lock() {
-        Ok(guard) => guard,
-        Err(_) => raise_error!(
-            "ERR_SYS_MUTEX_POISONED",
-            context = json!({
-                "component": "DlState.model",
-                "action": "access_neural_network_instance",
-                "hint": "Le Mutex du modèle est corrompu. Un thread de calcul a probablement paniqué. Redémarrez le moteur IA."
-            })
-        ),
-    };
+pub async fn get_traceability_matrix(
+    state: tauri::State<'_, AppState>,
+) -> RaiseResult<TraceabilityMatrix> {
+    let model = state.model.lock().await;
 
     let docs = get_model_docs(&model);
     let tracer = Tracer::from_json_list(docs.values().cloned().collect());
@@ -115,22 +86,12 @@ pub fn get_traceability_matrix(state: State<AppState>) -> RaiseResult<Traceabili
 }
 
 #[tauri::command]
-pub fn get_element_neighbors(
-    state: State<AppState>,
+pub async fn get_element_neighbors(
+    state: tauri::State<'_, AppState>,
     element_id: String,
-) -> RaiseResult<data::Value> {
+) -> RaiseResult<JsonValue> {
     // On utilise un match explicite pour intercepter l'empoisonnement du Mutex
-    let model = match state.model.lock() {
-        Ok(guard) => guard,
-        Err(_) => raise_error!(
-            "ERR_SYS_MUTEX_POISONED",
-            context = json!({
-                "component": "DlState.model",
-                "action": "access_neural_network_instance",
-                "hint": "Le Mutex du modèle est corrompu. Un thread de calcul a probablement paniqué. Redémarrez le moteur IA."
-            })
-        ),
-    };
+    let model = state.model.lock().await;
     let docs = get_model_docs(&model);
 
     // 🎯 FIX : Utilisation du nouveau Tracer
@@ -155,7 +116,7 @@ pub fn get_element_neighbors(
         }
     }
 
-    Ok(serde_json::json!({
+    Ok(json_value!({
         "center_id": element_id,
         "upstream": upstream,
         "downstream": downstream

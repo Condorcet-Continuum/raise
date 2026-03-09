@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/commands/codegen_commands.rs
 
-use crate::utils::{data::Value, prelude::*};
+use crate::utils::prelude::*;
 
 use crate::commands::rules_commands::RuleEngineState;
 use crate::json_db::storage::StorageEngine;
@@ -18,7 +18,7 @@ pub async fn generate_source_code(
     domain: String, // "software", "hardware", "system"
     state: State<'_, RuleEngineState>,
     storage: State<'_, StorageEngine>,
-) -> RaiseResult<Value> {
+) -> RaiseResult<JsonValue> {
     // 1. Parsing du domaine cible
     // On mappe la chaîne reçue du frontend vers l'enum TransformationDomain
     let target_domain = match domain.to_lowercase().as_str() {
@@ -32,7 +32,7 @@ pub async fn generate_source_code(
                     "Le domaine de transformation '{}' n'est pas supporté par le moteur actuel.",
                     domain
                 ),
-                context = json!({
+                context = json_value!({
                     "requested_domain": domain,
                     "action": "resolve_transformation_domain",
                     "hint": "Vérifiez que le plugin de génération pour ce domaine est bien chargé ou que le nom du domaine est correctement orthographié dans le modèle."
@@ -65,7 +65,7 @@ pub async fn generate_source_code(
         Err(e) => raise_error!(
             "ERR_PROJECT_INDEX_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "index_project_files",
                 "source": "model_loader",
                 "hint": "Échec de l'indexation. Vérifiez que le dossier n'est pas verrouillé par un autre processus et que les fichiers .arcadia sont valides."
@@ -82,7 +82,7 @@ pub async fn generate_source_code(
         Err(e) => raise_error!(
             "ERR_DATA_HYDRATION_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "fetch_hydrated_element",
                 "element_id": target_id,
                 "hint": "L'élément est peut-être absent de la base ou sa structure JSON est invalide."
@@ -100,7 +100,7 @@ pub async fn generate_source_code(
         Err(e) => raise_error!(
             "ERR_DATA_TRANSFORMATION_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "transform_json_to_element",
                 "schema_version": "v1.0", // Optionnel: si votre transformer suit une version
                 "hint": "La structure JSON ne correspond pas au modèle ArcadiaElement attendu."
@@ -116,11 +116,11 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::arcadia;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
     /// Test d'intégration complet : DB -> Loader -> Transformer -> Sortie
     /// Vérifie que la logique interne de la commande fonctionne correctement.
-    #[tokio::test]
+    #[async_test]
     async fn test_generate_code_logic() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -130,7 +130,7 @@ mod tests {
         );
         // 2. Injection de données (Un composant logiciel avec une fonction)
         let component_id = "UUID-COMP-1";
-        let component = json!({
+        let component = json_value!({
             "_id": component_id, // 🎯 Pour la base de données stricte
             "id": component_id, // 🎯 Pour le ModelLoader (contournement Serde flatten)
             arcadia::PROP_NAME: "AuthService",
@@ -176,7 +176,7 @@ mod tests {
     }
 
     /// Test de gestion d'erreur : Élément inexistant
-    #[tokio::test]
+    #[async_test]
     async fn test_generate_code_not_found() {
         let sandbox = AgentDbSandbox::new().await;
         let loader = ModelLoader::from_engine(

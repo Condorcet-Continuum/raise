@@ -16,12 +16,10 @@ pub use self::context::AgentContext;
 use self::intent_classifier::EngineeringIntent;
 use crate::ai::protocols::acl::AclMessage;
 
-use crate::utils::{data, io, prelude::*, DateTime, Utc};
-use async_trait::async_trait;
-use std::fmt;
+use crate::utils::prelude::*;
 
 /// Représente un élément créé ou modifié par un agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct CreatedArtifact {
     pub id: String,
     pub name: String,
@@ -30,7 +28,7 @@ pub struct CreatedArtifact {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct AgentResult {
     pub message: String,
     pub artifacts: Vec<CreatedArtifact>,
@@ -56,18 +54,25 @@ impl AgentResult {
     }
 }
 
-impl fmt::Display for AgentResult {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
+#[derive(Debug, Clone, Serializable, Deserializable)]
+pub struct AgentTask {
+    pub id: UniqueId,             // 🎯 Utilise l'alias du prélude
+    pub task_type: String,        // Type de mission (ex: "ANALYSIS")
+    pub created_at: UtcTimestamp, // 🎯 Utilise l'alias du prélude
+}
+
+impl FmtDisplay for AgentTask {
+    fn fmt(&self, f: &mut FmtCursor<'_>) -> FmtResult {
+        write!(f, "AgentTask(id: {}, type: {:?})", self.id, self.task_type)
     }
 }
 
 // --- STRUCTURES DE MÉMOIRE ---
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct AgentMessage {
     pub role: String,
     pub content: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: UtcTimestamp,
 }
 
 impl AgentMessage {
@@ -75,18 +80,18 @@ impl AgentMessage {
         Self {
             role: role.to_string(),
             content: content.to_string(),
-            timestamp: Utc::now(),
+            timestamp: UtcClock::now(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct AgentSession {
     #[serde(rename = "_id")]
     pub id: String,
     pub agent_id: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: UtcTimestamp,
+    pub updated_at: UtcTimestamp,
     pub messages: Vec<AgentMessage>,
     pub summary: Option<String>,
 }
@@ -96,8 +101,8 @@ impl AgentSession {
         Self {
             id: id.to_string(),
             agent_id: agent_id.to_string(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: UtcClock::now(),
+            updated_at: UtcClock::now(),
             messages: Vec::new(),
             summary: None,
         }
@@ -105,11 +110,11 @@ impl AgentSession {
 
     pub fn add_message(&mut self, role: &str, content: &str) {
         self.messages.push(AgentMessage::new(role, content));
-        self.updated_at = Utc::now();
+        self.updated_at = UtcClock::now();
     }
 }
 
-#[async_trait]
+#[async_interface]
 pub trait Agent: Send + Sync {
     fn id(&self) -> &'static str;
     async fn process(
@@ -122,11 +127,9 @@ pub trait Agent: Send + Sync {
 // --- 🛠️ AGENT TOOLBOX (OPTIMISÉE) ---
 pub mod tools {
     use super::*;
-    use serde_json::Value;
     // Imports nécessaires pour le Smart Linking centralisé
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
-    use crate::utils::config::AppConfig;
 
     pub fn extract_json_from_llm(response: &str) -> String {
         let text = response.trim();
@@ -150,7 +153,7 @@ pub mod tools {
         ctx: &AgentContext,
         layer: &str,
         collection: &str,
-        doc: &Value,
+        doc: &JsonValue,
     ) -> RaiseResult<CreatedArtifact> {
         let Some(doc_id_ref) = doc
             .get("_id")
@@ -160,7 +163,7 @@ pub mod tools {
             raise_error!(
                 "ERR_ARTIFACT_ID_INVALID",
                 error = "L'artefact n'a pas d'ID valide",
-                context = serde_json::json!({ "doc_snapshot": doc })
+                context = json_value!({ "doc_snapshot": doc })
             );
         };
         let doc_id = doc_id_ref.to_string();
@@ -182,11 +185,11 @@ pub mod tools {
         let full_path = ctx.paths.domain_root.join(&relative_path);
 
         if let Some(parent) = full_path.parent() {
-            io::create_dir_all(parent).await?;
+            fs::create_dir_all_async(parent).await?;
         }
 
-        let content = data::stringify_pretty(doc)?;
-        io::write(&full_path, content).await?;
+        let content = json::serialize_to_string_pretty(doc)?;
+        fs::write_async(&full_path, content).await?;
 
         Ok(CreatedArtifact {
             id: doc_id,
@@ -201,7 +204,7 @@ pub mod tools {
 
     /// Recherche un élément par son nom dans toutes les couches (SA, LA, PA, EPBS)
     /// Utilise la configuration globale pour cibler la bonne base de données.
-    pub async fn find_element_by_name(ctx: &AgentContext, name: &str) -> Option<Value> {
+    pub async fn find_element_by_name(ctx: &AgentContext, name: &str) -> Option<JsonValue> {
         // 1. Récupération dynamique de la config
         let config = AppConfig::get();
         // ✅ CORRECTION : Utilisation des nouveaux champs system_domain/db
@@ -256,7 +259,7 @@ pub mod tools {
             .await
         {
             Ok(Some(doc_value)) => {
-                let session: AgentSession = data::from_value(doc_value)?;
+                let session: AgentSession = json::deserialize_from_value(doc_value)?;
                 Ok(session)
             }
             _ => {
@@ -269,7 +272,7 @@ pub mod tools {
 
     pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> RaiseResult<()> {
         let manager = CollectionsManager::new(&ctx.db, "un2", "_system");
-        let json_doc = data::to_value(session)?;
+        let json_doc = json::serialize_to_value(session)?;
         manager.upsert_document("agent_sessions", json_doc).await?;
         Ok(())
     }

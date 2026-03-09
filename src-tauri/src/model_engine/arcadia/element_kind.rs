@@ -5,7 +5,7 @@ use crate::model_engine::types::ArcadiaElement;
 use crate::utils::prelude::*;
 
 /// Les couches principales de la méthodologie Arcadia + Data + Transverse
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serializable)]
 pub enum Layer {
     OperationalAnalysis,  // OA
     SystemAnalysis,       // SA
@@ -18,7 +18,7 @@ pub enum Layer {
 }
 
 /// Catégorisation fonctionnelle simplifiée des éléments
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serializable)]
 pub enum ElementCategory {
     Component,  // System, Logical, Physical Component
     Function,   // Activity, System/Logical/Physical Function
@@ -132,7 +132,6 @@ impl ArcadiaSemantics for ArcadiaElement {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::HashMap;
 
     fn make_el(kind: &str) -> ArcadiaElement {
         ArcadiaElement {
@@ -140,7 +139,7 @@ mod tests {
             name: NameType::default(),
             kind: kind.to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         }
     }
 

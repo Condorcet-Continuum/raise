@@ -1,13 +1,14 @@
 // FICHIER : src-tauri/tests/ai_suite/transverse_agent_tests.rs
+use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{transverse_agent::TransverseAgent, Agent, AgentContext};
-use raise::utils::Arc;
+
 // 👇 Ajout de l'import du manager
 use raise::json_db::collections::manager::CollectionsManager;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_transverse_agent_ivvq_cycle() {
@@ -52,7 +53,7 @@ async fn test_transverse_agent_ivvq_cycle() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.sandbox.storage.clone()),
+        SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),
@@ -98,7 +99,7 @@ async fn test_transverse_agent_ivvq_cycle() {
     assert!(res_camp.is_ok());
 
     // VÉRIFICATION PHYSIQUE
-    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    tokio::time::sleep(TimeDuration::from_millis(2000)).await;
 
     // 1. Check Requirement (Critère strict : On s'assure que le moteur IA de base fonctionne)
     let req_dir = test_root.join("un2/transverse/collections/requirements");

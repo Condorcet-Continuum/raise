@@ -8,7 +8,7 @@ use crate::model_engine::arcadia; // <-- Accès au vocabulaire sémantique
 pub struct SoftwareTransformer;
 
 impl ModelTransformer for SoftwareTransformer {
-    fn transform(&self, element: &Value) -> RaiseResult<Value> {
+    fn transform(&self, element: &JsonValue) -> RaiseResult<JsonValue> {
         // 1. Extraction des métadonnées de base via constantes
         let name = element
             .get(arcadia::PROP_NAME)
@@ -33,7 +33,7 @@ impl ModelTransformer for SoftwareTransformer {
                 let fid = func.get(arcadia::PROP_ID).and_then(|v| v.as_str());
 
                 if let (Some(n), Some(i)) = (fname, fid) {
-                    methods.push(json!({
+                    methods.push(json_value!({
                         "name": n,
                         "id": i,
                         "visibility": "pub",
@@ -66,7 +66,7 @@ impl ModelTransformer for SoftwareTransformer {
             let cid = child.get(arcadia::PROP_ID).and_then(|v| v.as_str());
 
             if let (Some(n), Some(i)) = (cname, cid) {
-                fields.push(json!({
+                fields.push(json_value!({
                     "name": n.to_lowercase(),
                     "type": n,
                     "id": i,
@@ -82,12 +82,12 @@ impl ModelTransformer for SoftwareTransformer {
             .and_then(|v| v.as_str());
 
         // 5. Construction de l'objet final
-        Ok(json!({
+        Ok(json_value!({
             "domain": "software",
             "meta": {
                 "uuid": id,
                 "source_element": name,
-                "generated_at": chrono::Utc::now().to_rfc3339()
+                "generated_at": UtcClock::now().to_rfc3339()
             },
             "entity": {
                 "name": name,
@@ -110,7 +110,7 @@ mod tests {
         let transformer = SoftwareTransformer;
 
         // Mock utilisant les constantes pour garantir la synchro
-        let component = json!({
+        let component = json_value!({
             arcadia::PROP_ID: "UUID_COMP_1",
             arcadia::PROP_NAME: "FlightController",
             // Clés spécifiques
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn test_software_transformation_minimal_element() {
         let transformer = SoftwareTransformer;
-        let component = json!({
+        let component = json_value!({
             arcadia::PROP_ID: "UUID_EMPTY",
             arcadia::PROP_NAME: "EmptyBox"
         });

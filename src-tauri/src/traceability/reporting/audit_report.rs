@@ -5,17 +5,17 @@ use crate::traceability::compliance::{
     Iso26262Checker,
 };
 use crate::traceability::tracer::Tracer;
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Debug, Serializable, Deserializable, PartialEq, Clone)]
 pub struct AuditReport {
     pub project_name: String,
     pub date: String,
-    pub compliance_results: Vec<serde_json::Value>,
+    pub compliance_results: Vec<JsonValue>,
     pub model_stats: ModelStats,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default, Clone)]
+#[derive(Debug, Serializable, Deserializable, PartialEq, Default, Clone)]
 pub struct ModelStats {
     pub total_elements: usize,
     pub total_functions: usize,
@@ -32,7 +32,7 @@ impl AuditGenerator {
     /// Orchestre les audits et calcule les statistiques sémantiques.
     pub fn generate(
         tracer: &Tracer,
-        docs: &HashMap<String, Value>,
+        docs: &UnorderedMap<String, JsonValue>,
         project_name: &str,
     ) -> AuditReport {
         // 1. Enregistrement des Checkers (Extensibilité O(1))
@@ -56,14 +56,14 @@ impl AuditGenerator {
 
         AuditReport {
             project_name: project_name.to_string(),
-            date: chrono::Utc::now().to_rfc3339(),
+            date: UtcClock::now().to_rfc3339(),
             compliance_results,
             model_stats,
         }
     }
 
     /// Analyse sémantique des types pour le comptage
-    fn calculate_stats(docs: &HashMap<String, Value>) -> ModelStats {
+    fn calculate_stats(docs: &UnorderedMap<String, JsonValue>) -> ModelStats {
         // 🎯 FIX CLIPPY : Initialisation atomique
         let mut stats = ModelStats {
             total_elements: docs.len(),
@@ -97,13 +97,15 @@ impl AuditGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     /// 🎯 TEST 1 : Vérification de l'intégralité du rapport
     #[test]
     fn test_audit_generate_full_report() {
-        let mut docs = HashMap::new();
-        docs.insert("F1".into(), json!({ "_id": "F1", "kind": "Function" }));
+        let mut docs = UnorderedMap::new();
+        docs.insert(
+            "F1".into(),
+            json_value!({ "_id": "F1", "kind": "Function" }),
+        );
 
         let tracer = Tracer::from_json_list(vec![]);
         let report = AuditGenerator::generate(&tracer, &docs, "Test Project");
@@ -117,14 +119,17 @@ mod tests {
     /// 🎯 TEST 2 : Robustesse du comptage sémantique (Stats)
     #[test]
     fn test_calculate_stats_semantic_mapping() {
-        let mut docs = HashMap::new();
-        docs.insert("1".into(), json!({ "kind": "Function" }));
-        docs.insert("2".into(), json!({ "@type": "raise:SystemComponent" }));
-        docs.insert("3".into(), json!({ "kind": "Requirement" }));
-        docs.insert("4".into(), json!({ "kind": "Scenario" }));
-        docs.insert("5".into(), json!({ "kind": "FunctionalChain" }));
+        let mut docs = UnorderedMap::new();
+        docs.insert("1".into(), json_value!({ "kind": "Function" }));
+        docs.insert(
+            "2".into(),
+            json_value!({ "@type": "raise:SystemComponent" }),
+        );
+        docs.insert("3".into(), json_value!({ "kind": "Requirement" }));
+        docs.insert("4".into(), json_value!({ "kind": "Scenario" }));
+        docs.insert("5".into(), json_value!({ "kind": "FunctionalChain" }));
         // Élément inconnu (ne doit pas fausser les comptes spécifiques)
-        docs.insert("6".into(), json!({ "kind": "Unknown" }));
+        docs.insert("6".into(), json_value!({ "kind": "Unknown" }));
 
         let stats = AuditGenerator::calculate_stats(&docs);
 
@@ -139,10 +144,10 @@ mod tests {
     /// 🎯 TEST 3 : Résilience aux données JSON malformées
     #[test]
     fn test_robustness_malformed_json() {
-        let mut docs = HashMap::new();
+        let mut docs = UnorderedMap::new();
         // Un document vide ou sans les champs attendus ne doit pas faire paniquer le générateur
-        docs.insert("empty".into(), json!({}));
-        docs.insert("null_kind".into(), json!({ "kind": null }));
+        docs.insert("empty".into(), json_value!({}));
+        docs.insert("null_kind".into(), json_value!({ "kind": null }));
 
         let tracer = Tracer::from_json_list(vec![]);
         let report = AuditGenerator::generate(&tracer, &docs, "Robustness Test");
@@ -156,7 +161,7 @@ mod tests {
     #[test]
     fn test_audit_date_format() {
         let tracer = Tracer::from_json_list(vec![]);
-        let report = AuditGenerator::generate(&tracer, &HashMap::new(), "Date Test");
+        let report = AuditGenerator::generate(&tracer, &UnorderedMap::new(), "Date Test");
 
         // Vérifie que la date est au format rfc3339 (contient 'T' et 'Z' ou offset)
         assert!(report.date.contains('T'));

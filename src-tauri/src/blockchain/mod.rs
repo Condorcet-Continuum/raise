@@ -7,7 +7,7 @@
 //! 3. Le client VPN Innernet réel (`vpn`).
 //! 4. La gestion de l'état global (State) pour l'application Tauri.
 
-use crate::utils::{HashMap, Mutex};
+use crate::utils::prelude::*;
 use tauri::{AppHandle, Manager, Runtime, State};
 
 // Exposition publique des sous-modules
@@ -40,9 +40,9 @@ pub use self::vpn::innernet_client::{InnernetClient, NetworkConfig as VpnConfig}
 // =============================================================================
 
 /// Type alias pour le client Fabric partagé
-pub type SharedFabricClient = Mutex<FabricClient>;
+pub type SharedFabricClient = SharedRef<AsyncMutex<FabricClient>>;
 /// Type alias pour le client VPN partagé
-pub type SharedInnernetClient = Mutex<InnernetClient>;
+pub type SharedInnernetClient = SharedRef<AsyncMutex<InnernetClient>>;
 
 // --- HELPERS D'ACCÈS ---
 
@@ -75,7 +75,7 @@ pub fn ensure_innernet_state<R: Runtime>(app: &AppHandle<R>, default_profile: im
             "🔒 [Blockchain] Initialisation State Innernet (profil: {})",
             profile_name
         );
-        app.manage(Mutex::new(client));
+        app.manage(SharedRef::new(AsyncMutex::new(client)));
     }
 }
 
@@ -89,13 +89,13 @@ pub fn ensure_fabric_state<R: Runtime>(app: &AppHandle<R>) {
                 organization: "unknown".into(),
                 connection: None,
             },
-            organizations: HashMap::new(),
-            peers: HashMap::new(),
-            certificate_authorities: HashMap::new(),
+            organizations: UnorderedMap::new(),
+            peers: UnorderedMap::new(),
+            certificate_authorities: UnorderedMap::new(),
         };
 
         let client = FabricClient::from_config(empty_profile);
-        app.manage(Mutex::new(client));
+        app.manage(SharedRef::new(AsyncMutex::new(client)));
     }
 }
 
@@ -122,9 +122,9 @@ mod tests {
                 organization: "Org1".into(),
                 connection: None,
             },
-            organizations: HashMap::new(),
-            peers: HashMap::new(),
-            certificate_authorities: HashMap::new(),
+            organizations: UnorderedMap::new(),
+            peers: UnorderedMap::new(),
+            certificate_authorities: UnorderedMap::new(),
         };
         let _client = FabricClient::from_config(profile);
     }

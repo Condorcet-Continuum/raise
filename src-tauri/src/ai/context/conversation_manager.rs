@@ -1,21 +1,21 @@
-use crate::utils::{prelude::*, DateTime, Utc};
+use crate::utils::prelude::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub enum Role {
     User,
     Assistant,
     System,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: UtcTimestamp,
 }
 
 /// Gère une session de chat active
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct ConversationSession {
     pub id: String,
     pub history: Vec<ChatMessage>,
@@ -46,7 +46,7 @@ impl ConversationSession {
         self.history.push(ChatMessage {
             role,
             content: content.to_string(),
-            timestamp: Utc::now(),
+            timestamp: UtcClock::now(),
         });
         self.enforce_limit();
     }

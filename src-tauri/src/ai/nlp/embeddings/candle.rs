@@ -23,8 +23,7 @@ impl CandleEngine {
         println!("🕯️ [Candle NLP] Moteur initialisé sur : {:?}", device);
 
         // 2. RÉCUPÉRATION DE LA CONFIGURATION DEPUIS LA DB
-        let settings =
-            crate::utils::config::AppConfig::get_component_settings(manager, "nlp").await?;
+        let settings = AppConfig::get_component_settings(manager, "nlp").await?;
 
         // Extraction des noms de fichiers (avec fallbacks)
         let model_dir = settings
@@ -49,7 +48,7 @@ impl CandleEngine {
             raise_error!(
                 "ERR_OS_HOME_NOT_FOUND",
                 error = "Impossible de localiser le répertoire personnel de l'utilisateur (home).",
-                context = json!({ "method": "dirs::home_dir" })
+                context = json_value!({ "method": "dirs::home_dir" })
             );
         };
 
@@ -68,7 +67,7 @@ impl CandleEngine {
             raise_error!(
                 "ERR_AI_EMBEDDING_ASSETS_MISSING",
                 error = format!("Fichiers d'embeddings introuvables dans : {:?}", base_path),
-                context = json!({
+                context = json_value!({
                     "base_path": base_path.to_string_lossy(),
                     "missing_files": {
                         "weights": !weights_path.exists(),
@@ -85,7 +84,7 @@ impl CandleEngine {
             Err(e) => raise_error!(
                 "ERR_CONFIG_READ",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "read_config_file",
                     // Info CRITIQUE : on logue le chemin exact qui a causé l'échec !
                     "path": config_path.to_string_lossy()
@@ -93,13 +92,13 @@ impl CandleEngine {
             ),
         };
 
-        // Utilisation de serde_json (ou data::parse) pour lire la config Bert
-        let config: Config = match serde_json::from_str(&config_str) {
+        // Utilisation de serde_json (ou json::deserialize_from_str) pour lire la config Bert
+        let config: Config = match json::deserialize_from_str(&config_str) {
             Ok(c) => c,
             Err(e) => raise_error!(
                 "ERR_CONFIG_PARSE",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "parse_config_json",
                     // Info Magique : On capture les 100 premiers caractères du fichier pour voir si
                     // le contenu est complètement corrompu ou vide, sans inonder les logs !
@@ -114,7 +113,7 @@ impl CandleEngine {
             Err(e) => raise_error!(
                 "ERR_TOKENIZER_LOAD",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "load_tokenizer_file",
                     // Info Vitale : On enregistre le chemin exact où le moteur IA cherchait le fichier
                     "path": tokenizer_path.to_string_lossy()
@@ -131,7 +130,7 @@ impl CandleEngine {
                     raise_error!(
                         "ERR_AI_WEIGHTS_LOAD_FAILED",
                         error = e,
-                        context = json!({
+                        context = json_value!({
                             "action": "mmap_safetensors",
                             "path": weights_path.to_string_lossy(),
                             "device": format!("{:?}", device),
@@ -149,7 +148,7 @@ impl CandleEngine {
                 raise_error!(
                     "ERR_AI_MODEL_INSTANTIATION_FAILED",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "load_bert_model",
                         "model_type": "BERT",
                         // On utilise format! pour convertir la config en String
@@ -174,7 +173,8 @@ impl CandleEngine {
             Err(e) => raise_error!(
                 "ERR_NLP_TOKENIZATION_FAILED",
                 error = e,
-                context = json!({ "text_preview": text.chars().take(30).collect::<String>() })
+                context =
+                    json_value!({ "text_preview": text.chars().take(30).collect::<String>() })
             ),
         };
 
@@ -198,7 +198,7 @@ impl CandleEngine {
             Err(e) => raise_error!(
                 "ERR_NLP_FORWARD_PASS_FAILED",
                 error = e,
-                context = json!({ "token_count": tokens.get_ids().len() })
+                context = json_value!({ "token_count": tokens.get_ids().len() })
             ),
         };
 
@@ -264,7 +264,7 @@ fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
         Err(e) => raise_error!(
             "ERR_NLP_NORM_SQRT_FAILED",
             error = e,
-            context = json!({ "hint": "Vérifiez si le vecteur d'entrée contient des valeurs négatives invalides avant sqrt." })
+            context = json_value!({ "hint": "Vérifiez si le vecteur d'entrée contient des valeurs négatives invalides avant sqrt." })
         ),
     };
 
@@ -274,7 +274,7 @@ fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
         Err(e) => raise_error!(
             "ERR_NLP_NORM_DIV_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "v_shape": format!("{:?}", v.shape()),
                 "norm_shape": format!("{:?}", norm.shape())
             })
@@ -287,9 +287,9 @@ fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_mini_lm_loading() {
@@ -302,7 +302,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "nlp",
-            json!({
+            json_value!({
                 "model_name": "minilm",
                 "rust_config_file": "config.json",
                 "rust_tokenizer_file": "tokenizer.json",
@@ -318,7 +318,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_dimensions() {
@@ -332,7 +332,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "nlp",
-            crate::utils::json::json!({
+            crate::utils::json::json_value!({
                 "model_name": "minilm",
                 "rust_config_file": "config.json",
                 "rust_tokenizer_file": "tokenizer.json",
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(vec.len(), 384);
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_normalization() {
@@ -361,7 +361,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "nlp",
-            crate::utils::json::json!({
+            crate::utils::json::json_value!({
                 "model_name": "minilm",
                 "rust_config_file": "config.json",
                 "rust_tokenizer_file": "tokenizer.json",

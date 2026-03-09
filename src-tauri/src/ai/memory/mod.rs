@@ -1,16 +1,16 @@
-use crate::utils::{async_trait, data, prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 pub mod candle_store;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct MemoryRecord {
     pub id: String,
     pub content: String,
-    pub metadata: data::Value,
+    pub metadata: JsonValue,
     pub vectors: Option<Vec<f32>>,
 }
 
-#[async_trait]
+#[async_interface]
 pub trait VectorStore: Send + Sync {
     async fn init_collection(&self, collection_name: &str, vector_size: u64) -> RaiseResult<()>;
     async fn add_documents(
@@ -26,7 +26,7 @@ pub trait VectorStore: Send + Sync {
         vector: &[f32],
         limit: u64,
         score_threshold: f32,
-        filter: Option<HashMap<String, String>>,
+        filter: Option<UnorderedMap<String, String>>,
     ) -> RaiseResult<Vec<MemoryRecord>>;
 }
 
@@ -34,10 +34,10 @@ pub trait VectorStore: Send + Sync {
 mod integration_tests {
     use super::{MemoryRecord, VectorStore};
     use crate::ai::memory::candle_store::CandleLocalStore;
-    use crate::utils::{io::tempdir, prelude::*, Uuid};
+    use crate::utils::prelude::*;
     use candle_core::Device;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_candle_lifecycle() {
         // ✅ 1. Création d'un espace isolé et 100% local (plus besoin d'URL ou de port !)
         let dir = tempdir().unwrap();
@@ -50,9 +50,9 @@ mod integration_tests {
         store.init_collection(col, 4).await.expect("Init failed");
 
         let rec = MemoryRecord {
-            id: Uuid::new_v4().to_string(),
+            id: UniqueId::new_v4().to_string(),
             content: "Test d'intégration natif".into(),
-            metadata: json!({"env": "test"}),
+            metadata: json_value!({"env": "test"}),
             vectors: Some(vec![1.0, 0.0, 0.0, 0.0]),
         };
 

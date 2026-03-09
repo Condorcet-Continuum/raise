@@ -7,7 +7,7 @@ pub use predictor::WorldModelPredictor;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::WorldModelConfig;
+    use crate::utils::prelude::*;
     use candle_core::{DType, Device};
     use candle_nn::{VarBuilder, VarMap};
 

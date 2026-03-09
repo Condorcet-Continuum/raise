@@ -1,7 +1,6 @@
 use crate::blockchain::vpn::NetworkStatus;
 use libp2p::Multiaddr;
 
-use crate::utils::FromStr;
 /// Pont entre le statut du VPN Mesh (Innernet) et la configuration réseau P2P.
 pub struct P2PVpnResolver;
 
@@ -16,7 +15,8 @@ impl P2PVpnResolver {
         };
 
         // Construction de la Multiaddr formatée pour libp2p
-        match Multiaddr::from_str(&format!("/ip4/{}/tcp/{}", ip, port)) {
+        let addr_str = format!("/ip4/{}/tcp/{}", ip, port);
+        match addr_str.parse::<Multiaddr>() {
             Ok(addr) => addr,
             Err(_) => "/ip4/127.0.0.1/tcp/0"
                 .parse()

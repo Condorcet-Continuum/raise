@@ -1,5 +1,5 @@
 // FICHIER : src-tauri/src/rules_engine/store.rs
-use crate::utils::{prelude::*, HashMap, HashSet};
+use crate::utils::prelude::*;
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::rules_engine::analyzer::Analyzer;
@@ -11,9 +11,9 @@ pub struct RuleStore<'a> {
     db_manager: &'a CollectionsManager<'a>,
     /// Cache en mémoire pour l'exécution rapide (index inversé)
     /// "collection::champ_modifié" -> Vec<"rule_id">
-    dependency_cache: HashMap<String, Vec<String>>,
+    dependency_cache: UnorderedMap<String, Vec<String>>,
     /// Cache des règles chargées : "rule_id" -> Rule
-    pub rules_cache: HashMap<String, Rule>,
+    pub rules_cache: UnorderedMap<String, Rule>,
 }
 
 impl<'a> RuleStore<'a> {
@@ -21,8 +21,8 @@ impl<'a> RuleStore<'a> {
     pub fn new(db_manager: &'a CollectionsManager<'a>) -> Self {
         Self {
             db_manager,
-            dependency_cache: HashMap::new(),
-            rules_cache: HashMap::new(),
+            dependency_cache: UnorderedMap::new(),
+            rules_cache: UnorderedMap::new(),
         }
     }
 
@@ -38,7 +38,7 @@ impl<'a> RuleStore<'a> {
         self.rules_cache.clear();
 
         for rule_val in stored_rules {
-            if let Ok(rule) = serde_json::from_value::<Rule>(rule_val.clone()) {
+            if let Ok(rule) = json::deserialize_from_value::<Rule>(rule_val.clone()) {
                 // Extraction de la collection cible pour cloisonner le cache
                 let col = rule_val
                     .get("_target_collection")
@@ -65,7 +65,7 @@ impl<'a> RuleStore<'a> {
             Err(e) => raise_error!(
                 "ERR_RULE_SERIALIZATION_FAILED",
                 error = e.to_string(),
-                context = serde_json::json!({
+                context = json_value!({
                     "action": "serialize_rule_for_storage",
                     "rule_id": rule.id,
                     "target_collection": collection
@@ -74,11 +74,8 @@ impl<'a> RuleStore<'a> {
         };
 
         if let Some(obj) = doc.as_object_mut() {
-            obj.insert(
-                "_target_collection".to_string(),
-                serde_json::json!(collection),
-            );
-            obj.insert("_id".to_string(), serde_json::json!(rule.id));
+            obj.insert("_target_collection".to_string(), json_value!(collection));
+            obj.insert("_id".to_string(), json_value!(rule.id));
         }
 
         self.db_manager.insert_raw("_system_rules", &doc).await?;
@@ -106,9 +103,9 @@ impl<'a> RuleStore<'a> {
     pub fn get_impacted_rules(
         &self,
         collection: &str,
-        changed_fields: &HashSet<String>,
+        changed_fields: &UniqueSet<String>,
     ) -> Vec<Rule> {
-        let mut impacted_ids = HashSet::new();
+        let mut impacted_ids = UniqueSet::new();
 
         for field in changed_fields {
             // Recherche de la clé isolée correspondante
@@ -147,9 +144,9 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_store_idempotency_and_retrieval() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -171,7 +168,7 @@ mod tests {
         let rule1 = Rule {
             id: "r1".into(),
             target: "user_age".into(), // Cible spécifique
-            expr: Expr::Val(serde_json::json!(1)),
+            expr: Expr::Val(json_value!(1)),
             description: None,
             severity: None,
         };
@@ -179,7 +176,7 @@ mod tests {
         let rule2 = Rule {
             id: "r2".into(),
             target: "system_status".into(),
-            expr: Expr::Val(serde_json::json!(2)),
+            expr: Expr::Val(json_value!(2)),
             description: None,
             severity: None,
         };

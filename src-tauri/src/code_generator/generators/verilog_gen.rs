@@ -2,7 +2,7 @@
 
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use crate::utils::{data::Value, io::PathBuf, prelude::*};
+use crate::utils::prelude::*;
 use heck::ToSnakeCase;
 
 #[derive(Default)]
@@ -17,7 +17,7 @@ impl VerilogGenerator {
 impl LanguageGenerator for VerilogGenerator {
     fn generate(
         &self,
-        element: &Value,
+        element: &JsonValue,
         template_engine: &TemplateEngine,
     ) -> RaiseResult<Vec<GeneratedFile>> {
         let name = element
@@ -31,7 +31,7 @@ impl LanguageGenerator for VerilogGenerator {
             .unwrap_or("No description");
 
         // 🎯 MIGRATION V1.3 : Création du contexte directe via json!
-        let context = json!({
+        let context = json_value!({
             "name": name,
             "id": id,
             "description": desc
@@ -68,7 +68,7 @@ mod tests {
         let gen = VerilogGenerator::new();
         let engine = setup_engine(); // ✅ Utilisation de l'engine configuré
 
-        let element = json!({
+        let element = json_value!({
             "name": "UartDriver",
             "id": "UART_01",
             "description": "Serial communication"

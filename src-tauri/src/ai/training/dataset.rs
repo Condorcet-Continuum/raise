@@ -4,7 +4,7 @@ use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
 use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub struct TrainingExample {
     pub instruction: String,
     pub input: String,
@@ -28,7 +28,7 @@ pub async fn extract_domain_data(
             raise_error!(
                 "ERR_VECTOR_DB_LIST_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "list_collections",
                     "storage": "qdrant_internal",
                     "hint": "Impossible de récupérer la liste des collections. Vérifiez que le service de base de données vectorielle est bien démarré."
@@ -50,7 +50,7 @@ pub async fn extract_domain_data(
                 raise_error!(
                     "ERR_VECTOR_DB_FETCH_DOCS_FAILED",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "collection": col,
                         "action": "list_all_documents",
                         "hint": "Échec de la récupération des documents. Vérifiez si la collection n'a pas été supprimée ou renommée."
@@ -63,7 +63,7 @@ pub async fn extract_domain_data(
             // Construction de l'exemple d'entraînement structuré
             dataset.push(TrainingExample {
                 instruction: format!("Analyser cet élément technique du domaine {}.", domain),
-                input: serde_json::to_string(&doc).unwrap_or_default(),
+                input: json::serialize_to_string(&doc).unwrap_or_default(),
                 output: format!(
                     "L'entité appartient à la collection '{}' dans l'espace projet '{}'.",
                     col, space
@@ -94,9 +94,9 @@ pub async fn ai_export_dataset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test] // CORRECTION : Utilisation de tokio pour les tests asynchrones
+    #[async_test] // CORRECTION : Utilisation de tokio pour les tests asynchrones
     async fn test_extract_domain_data_filtering() {
         // A. Setup d'une base de données temporaire 100% isolée en UNE seule ligne !
         let sandbox = AgentDbSandbox::new().await;
@@ -123,7 +123,7 @@ mod tests {
             .await
             .unwrap();
 
-        let doc = serde_json::json!({"_id": "1", "content": "test"});
+        let doc = json_value!({"_id": "1", "content": "test"});
         manager.insert_raw("safety_rules", &doc).await.unwrap();
         manager.insert_raw("general_info", &doc).await.unwrap();
 
@@ -151,7 +151,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_extract_empty_domain() {
         let sandbox = AgentDbSandbox::new().await;
 

@@ -58,7 +58,7 @@ pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "GENETICS_START",
-                json!({"action": "Initialisation du moteur NSGA-II..."})
+                json_value!({"action": "Initialisation du moteur NSGA-II..."})
             );
 
             // 1. Création de la configuration réelle du Core
@@ -75,7 +75,7 @@ pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
                 // 🎯 Utilisation de user_warn avec payload structuré
                 user_warn!(
                     "CONFIG_WARN",
-                    json!({
+                    json_value!({
                         "issue": "Mutation rate hors bornes, ajustement requis.",
                         "field": "mutation_rate",
                         "value": config.mutation_rate
@@ -85,7 +85,7 @@ pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
 
             user_info!(
                 "CONFIG_READY",
-                json!({
+                json_value!({
                     "population": config.population_size,
                     "generations": config.max_generations,
                     "mutation": config.mutation_rate,
@@ -100,14 +100,14 @@ pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Payload JSON pour le succès
             user_success!(
                 "GENETICS_DONE",
-                json!({"status": "Simulation prête à être exécutée sur le modèle système."})
+                json_value!({"status": "Simulation prête à être exécutée sur le modèle système."})
             );
         }
         GeneticsCommands::Inspect { id } => {
             let target = id.as_deref().unwrap_or("Meilleur Pareto Front");
             user_info!(
                 "INSPECT_TARGET",
-                json!({ "target": target }) // format!("{:?}", target) n'est plus nécessaire
+                json_value!({ "target": target }) // format!("{:?}", target) n'est plus nécessaire
             );
         }
     }
@@ -119,15 +119,14 @@ pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::mock::DbSandbox;
-    use raise::utils::session::SessionManager;
-    use raise::utils::Arc;
+    use raise::utils::context::SessionManager;
+    use raise::utils::testing::DbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_genetics_config_mapping() {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {

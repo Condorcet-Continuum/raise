@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/hardware_agent.rs
 
-use crate::utils::{async_trait, data, io, prelude::*, Uuid};
+use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
 // ✅ IMPORT OPTIMISÉ : On récupère l'outil de recherche centralisé
@@ -42,7 +42,7 @@ impl HardwareAgent {
         name: &str,
         element_type: &str,
         history_context: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let category = self.determine_category(name, element_type);
         let instruction = if category == "Electronics" {
             "Contexte: Design Électronique (VHDL/Verilog)."
@@ -71,19 +71,20 @@ impl HardwareAgent {
             .await?;
 
         let clean_json = extract_json_from_llm(&response);
-        let mut data: Value = data::parse(&clean_json).unwrap_or(json!({ "name": name }));
+        let mut data: JsonValue =
+            json::deserialize_from_str(&clean_json).unwrap_or(json_value!({ "name": name }));
 
-        data["_id"] = json!(Uuid::new_v4().to_string());
-        data["layer"] = json!("PA");
-        data["type"] = json!("PhysicalNode");
-        data["nature"] = json!(category);
-        data["createdAt"] = json!(Utc::now().to_rfc3339());
+        data["_id"] = json_value!(UniqueId::new_v4().to_string());
+        data["layer"] = json_value!("PA");
+        data["type"] = json_value!("PhysicalNode");
+        data["nature"] = json_value!(category);
+        data["createdAt"] = json_value!(UtcClock::now().to_rfc3339());
 
         Ok(data)
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl Agent for HardwareAgent {
     fn id(&self) -> &'static str {
         "hardware_architect"
@@ -168,7 +169,7 @@ impl Agent for HardwareAgent {
                     raise_error!(
                         "ERR_HW_COMPONENT_NOT_FOUND",
                         error = "Composant matériel introuvable dans le modèle monde",
-                        context = serde_json::json!({ "requested_name": context })
+                        context = json_value!({ "requested_name": context })
                     );
                 };
 
@@ -191,7 +192,7 @@ impl Agent for HardwareAgent {
 
                 let call = McpToolCall::new(
                     "generate_component_code",
-                    json!({
+                    json_value!({
                         "component_id": component_id,
                         "dry_run": false
                     }),
@@ -203,7 +204,7 @@ impl Agent for HardwareAgent {
                     raise_error!(
                         "ERR_HW_CODEGEN",
                         error = "Erreur CodeGen Hardware",
-                        context = serde_json::json!({ "details": result.content })
+                        context = json_value!({ "details": result.content })
                     );
                 }
 
@@ -219,8 +220,8 @@ impl Agent for HardwareAgent {
                 let artifacts: Vec<CreatedArtifact> = file_list
                     .iter()
                     .map(|path| CreatedArtifact {
-                        id: format!("gen_{}", Uuid::new_v4()),
-                        name: io::Path::new(path)
+                        id: format!("gen_{}", UniqueId::new_v4()),
+                        name: Path::new(path)
                             .file_name()
                             .unwrap_or_default()
                             .to_string_lossy()
@@ -270,7 +271,7 @@ mod tests {
     use crate::ai::llm::client::LlmClient;
     use crate::ai::protocols::acl::Performative;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_category_detection() {
@@ -282,7 +283,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_hardware_delegation_trigger() {
         let _agent = HardwareAgent::new();
         let msg = AclMessage::new(
@@ -294,7 +295,7 @@ mod tests {
         assert_eq!(msg.receiver, "configuration_manager");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_hardware_generation_integration() {
@@ -308,10 +309,10 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
-        let comp_doc = json!({
+        let comp_doc = json_value!({
             "_id": "fpga-001",
             "name": "FPGA Controller",
             "layer": "PA",
@@ -373,7 +374,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn generate_hardware_in_user_domain() {
@@ -388,10 +389,10 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
-        let comp_doc = json!({
+        let comp_doc = json_value!({
             "_id": "fpga-video-proc",
             "name": "Video Processor FPGA",
             "layer": "PA",

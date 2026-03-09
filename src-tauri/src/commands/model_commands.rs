@@ -24,7 +24,7 @@ pub async fn load_project_model(
         Err(e) => raise_error!(
             "ERR_MODEL_LOAD_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "load_full_project_model",
                 "source": "model_loader",
                 "hint": "Le chargement a échoué. Vérifiez l'intégrité des JSON et les permissions du dossier racine."
@@ -42,7 +42,7 @@ mod tests {
     use crate::json_db::storage::JsonDbConfig;
     use tempfile::tempdir;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_load_project_model_command() {
         // Simulation de l'environnement
         let dir = tempdir().unwrap();

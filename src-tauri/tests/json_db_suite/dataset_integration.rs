@@ -2,10 +2,9 @@
 
 use crate::common::{seed_mock_datasets, setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::io::{self};
-use raise::utils::prelude::*; // SSOT : Apporte Value, json, Result, etc.
+use raise::utils::prelude::*; // SSOT : Apporte JsonValue, json, Result, etc.
 
-#[tokio::test]
+#[async_test]
 async fn debug_import_exchange_item() {
     // 1. Initialisation de l'environnement isolé
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -17,7 +16,7 @@ async fn debug_import_exchange_item() {
         .unwrap();
 
     // 3. Lecture du fichier via notre SSOT
-    let mut json_doc: Value = io::read_json(&data_path)
+    let mut json_doc: JsonValue = fs::read_json_async(&data_path)
         .await
         .expect("Lecture ou parsing JSON impossible");
 
@@ -29,7 +28,10 @@ async fn debug_import_exchange_item() {
     );
 
     if let Some(obj) = json_doc.as_object_mut() {
-        obj.insert("$schema".to_string(), Value::String(db_schema_uri.clone()));
+        obj.insert(
+            "$schema".to_string(),
+            JsonValue::String(db_schema_uri.clone()),
+        );
     }
 
     // 5. Création et insertion dans la base

@@ -9,7 +9,7 @@ pub mod scheduler;
 pub mod state_machine;
 pub mod tools;
 
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 // --- RE-EXPORTS (L'API Publique du Moteur) ---
 pub use compiler::WorkflowCompiler;
@@ -19,7 +19,7 @@ pub use scheduler::WorkflowScheduler;
 pub use state_machine::WorkflowStateMachine;
 
 /// Type d'un nœud dans le graphe (correspond au schema JSON)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeType {
     Task,       // Tâche standard (Agent IA)
@@ -33,7 +33,7 @@ pub enum NodeType {
 }
 
 /// Statut d'exécution d'une instance ou d'un nœud
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serializable, Deserializable, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExecutionStatus {
     Pending,   // En attente
@@ -45,16 +45,16 @@ pub enum ExecutionStatus {
 }
 
 /// Nœud unitaire du workflow
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct WorkflowNode {
     pub id: String,
     pub r#type: NodeType, // "type" est un mot clé réservé en Rust
     pub name: String,
-    pub params: Value, // Paramètres libres (JSON)
+    pub params: JsonValue, // Paramètres libres (JSON)
 }
 
 /// Lien orienté entre deux nœuds
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct WorkflowEdge {
     pub from: String,
     pub to: String,
@@ -62,7 +62,7 @@ pub struct WorkflowEdge {
 }
 
 /// Définition statique du Workflow (le "Plan" compilé)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct WorkflowDefinition {
     #[serde(rename = "_id")]
     pub id: String,
@@ -72,7 +72,7 @@ pub struct WorkflowDefinition {
 }
 
 /// Instance dynamique (l'Exécution en cours)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowInstance {
     #[serde(rename = "_id")]
@@ -81,10 +81,10 @@ pub struct WorkflowInstance {
     pub status: ExecutionStatus,
 
     /// État de chaque nœud : NodeID -> Status
-    pub node_states: HashMap<String, ExecutionStatus>,
+    pub node_states: UnorderedMap<String, ExecutionStatus>,
 
     /// Mémoire contextuelle du workflow (Variables partagées)
-    pub context: HashMap<String, Value>,
+    pub context: UnorderedMap<String, JsonValue>,
 
     /// Journal d'audit de l'exécution
     pub logs: Vec<String>,
@@ -94,16 +94,16 @@ pub struct WorkflowInstance {
 }
 
 impl WorkflowInstance {
-    pub fn new(workflow_id: &str, context: HashMap<String, Value>) -> Self {
+    pub fn new(workflow_id: &str, context: UnorderedMap<String, JsonValue>) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: UniqueId::new_v4().to_string(),
             workflow_id: workflow_id.to_string(),
             status: ExecutionStatus::Pending,
-            node_states: HashMap::new(),
+            node_states: UnorderedMap::new(),
             context,
             logs: Vec::new(),
-            created_at: chrono::Utc::now().timestamp(),
-            updated_at: chrono::Utc::now().timestamp(),
+            created_at: UtcClock::now().timestamp(),
+            updated_at: UtcClock::now().timestamp(),
         }
     }
 }

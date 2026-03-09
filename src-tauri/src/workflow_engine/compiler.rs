@@ -9,16 +9,16 @@ pub struct WorkflowCompiler;
 impl WorkflowCompiler {
     /// Dictionnaire interne pour résoudre les dépendances techniques d'une règle politique
     /// Retourne : Option<(Nom_de_l_outil, Arguments_JSON, Clé_de_contexte_cible)>
-    fn resolve_tool_dependency(rule_name: &str) -> Option<(&'static str, Value, &'static str)> {
+    fn resolve_tool_dependency(rule_name: &str) -> Option<(&'static str, JsonValue, &'static str)> {
         match rule_name {
             "VIBRATION_MAX" => Some((
                 "read_system_metrics",
-                json!({ "sensor_id": "vibration_z" }),
+                json_value!({ "sensor_id": "vibration_z" }),
                 "sensor_vibration",
             )),
             "TEMP_MAX" => Some((
                 "read_system_metrics",
-                json!({ "sensor_id": "temp_core" }),
+                json_value!({ "sensor_id": "temp_core" }),
                 "sensor_temperature",
             )),
             // Facilement extensible sans modifier le cœur du moteur
@@ -44,7 +44,7 @@ impl WorkflowCompiler {
             id: "start".into(),
             r#type: NodeType::Task,
             name: "Initialisation Mandat".into(),
-            params: json!({
+            params: json_value!({
                 "strategy": mandate.governance.strategy,
                 "observability": mandate.observability
             }),
@@ -63,7 +63,7 @@ impl WorkflowCompiler {
                         id: tool_node_id.clone(),
                         r#type: NodeType::CallMcp,
                         name: format!("Lecture pour {}", veto.rule),
-                        params: json!({
+                        params: json_value!({
                             "tool_name": tool_name,
                             "arguments": args,
                             "output_key": output_key // Instruction pour l'executor de stocker le résultat ici
@@ -81,7 +81,7 @@ impl WorkflowCompiler {
 
                 let node_id = format!("gate_veto_{}", i);
 
-                let mut params = json!({
+                let mut params = json_value!({
                     "rule": veto.rule,
                     "action": veto.action
                 });
@@ -116,7 +116,7 @@ impl WorkflowCompiler {
             id: wasm_node_id.clone(),
             r#type: NodeType::Wasm,
             name: "🛡️ Politique WASM (Hot-Swap)".into(),
-            params: json!({}),
+            params: json_value!({}),
         });
 
         edges.push(WorkflowEdge {
@@ -132,7 +132,7 @@ impl WorkflowCompiler {
             id: task_id.clone(),
             r#type: NodeType::Task,
             name: format!("Exécution Stratégie {:?}", mandate.governance.strategy),
-            params: json!({ "context_fetch": true }),
+            params: json_value!({ "context_fetch": true }),
         });
         edges.push(WorkflowEdge {
             from: previous_node_id.clone(),
@@ -147,7 +147,7 @@ impl WorkflowCompiler {
             id: vote_id.clone(),
             r#type: NodeType::Decision,
             name: "Vote Condorcet Pondéré".into(),
-            params: json!({
+            params: json_value!({
                 "weights": mandate.governance.condorcet_weights,
                 "threshold": 0.5
             }),
@@ -163,7 +163,7 @@ impl WorkflowCompiler {
             id: "end".into(),
             r#type: NodeType::End,
             name: "Fin de Mission".into(),
-            params: json!({}),
+            params: json_value!({}),
         });
         edges.push(WorkflowEdge {
             from: vote_id,
@@ -189,7 +189,6 @@ mod tests {
     use crate::workflow_engine::mandate::{
         Governance, HardLogic, Mandate, MandateMeta, Observability, Strategy, VetoRule,
     };
-    use std::collections::HashMap;
 
     fn build_test_mandate(rules: Vec<VetoRule>) -> Mandate {
         Mandate {
@@ -201,7 +200,7 @@ mod tests {
             },
             governance: Governance {
                 strategy: Strategy::SafetyFirst,
-                condorcet_weights: HashMap::from([("sec".to_string(), 1.0)]),
+                condorcet_weights: UnorderedMap::from([("sec".to_string(), 1.0)]),
             },
             hard_logic: HardLogic { vetos: rules },
             observability: Observability { heartbeat_ms: 100 },
@@ -216,13 +215,13 @@ mod tests {
                 rule: "VIBRATION_MAX".into(), // Doit injecter un outil
                 active: true,
                 action: "STOP".into(),
-                ast: Some(json!({"Gt": [{"Var": "sensor_vibration"}, {"Val": 8.0}]})),
+                ast: Some(json_value!({"Gt": [{"Var": "sensor_vibration"}, {"Val": 8.0}]})),
             },
             VetoRule {
                 rule: "UNKNOWN_RULE".into(), // NE DOIT PAS injecter d'outil
                 active: true,
                 action: "LOG".into(),
-                ast: Some(json!({"Eq": [{"Var": "x"}, {"Val": 1}]})),
+                ast: Some(json_value!({"Eq": [{"Var": "x"}, {"Val": 1}]})),
             },
         ]);
 

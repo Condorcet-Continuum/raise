@@ -1,13 +1,15 @@
 // FICHIER : src-tauri/tests/ai_suite/software_agent_tests.rs
 
+use raise::utils::prelude::*;
+
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{software_agent::SoftwareAgent, Agent, AgentContext};
-use raise::utils::Arc;
+
 // 👇 N'oublions pas l'import du manager
 use raise::json_db::collections::manager::CollectionsManager;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_software_agent_creates_component_end_to_end() {
@@ -35,7 +37,7 @@ async fn test_software_agent_creates_component_end_to_end() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.sandbox.storage.clone()),
+        SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for BusinessAgent tests"),
@@ -67,7 +69,7 @@ async fn test_software_agent_creates_component_end_to_end() {
         .join("collections")
         .join("components");
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tokio::time::sleep(TimeDuration::from_millis(1500)).await;
 
     let mut found = false;
     let mut delegated = false;
@@ -97,7 +99,7 @@ async fn test_software_agent_creates_component_end_to_end() {
     }
 }
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_intent_classification_integration() {

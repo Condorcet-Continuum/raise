@@ -1,12 +1,13 @@
 // FICHIER : src-tauri/tests/ai_suite/system_agent_tests.rs
 
+use raise::utils::prelude::*;
+
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::Arc;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_system_agent_creates_function_end_to_end() {
@@ -33,7 +34,7 @@ async fn test_system_agent_creates_function_end_to_end() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.sandbox.storage.clone()),
+        SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for SystemAgent tests"),
@@ -68,7 +69,7 @@ async fn test_system_agent_creates_function_end_to_end() {
         .join("functions");
 
     // Délai pour écriture disque
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tokio::time::sleep(TimeDuration::from_millis(1500)).await;
 
     println!("📂 Vérification dans : {:?}", functions_dir);
 

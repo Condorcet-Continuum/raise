@@ -1,12 +1,10 @@
 // FICHIER : src-tauri/src/json_db/indexes/driver.rs
 
 use super::{IndexDefinition, IndexRecord};
-use crate::utils::data::{self, BTreeMap, HashMap};
-use crate::utils::io::{self, Path};
 use crate::utils::prelude::*;
 
 /// Trait définissant le comportement d'une structure d'index en mémoire
-pub trait IndexMap: Default + Serialize + DeserializeOwned {
+pub trait IndexMap: Default + Serializable + DeserializableOwned {
     fn insert_record(&mut self, key: String, doc_id: String);
     fn remove_record(&mut self, key: &str, doc_id: &str);
     fn get_doc_ids(&self, key: &str) -> Option<&Vec<String>>;
@@ -14,8 +12,8 @@ pub trait IndexMap: Default + Serialize + DeserializeOwned {
     fn to_records(&self) -> Vec<IndexRecord>;
 }
 
-// --- Implémentation pour Hash Index (HashMap) ---
-impl IndexMap for HashMap<String, Vec<String>> {
+// --- Implémentation pour Hash Index (UnorderedMap) ---
+impl IndexMap for UnorderedMap<String, Vec<String>> {
     fn insert_record(&mut self, key: String, doc_id: String) {
         self.entry(key).or_default().push(doc_id);
     }
@@ -34,7 +32,7 @@ impl IndexMap for HashMap<String, Vec<String>> {
     }
 
     fn from_records(records: Vec<IndexRecord>) -> Self {
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut map: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
         for r in records {
             map.entry(r.key).or_default().push(r.document_id);
         }
@@ -55,8 +53,8 @@ impl IndexMap for HashMap<String, Vec<String>> {
     }
 }
 
-// --- Implémentation pour BTree Index (BTreeMap) ---
-impl IndexMap for BTreeMap<String, Vec<String>> {
+// --- Implémentation pour BTree Index (OrderedMap) ---
+impl IndexMap for OrderedMap<String, Vec<String>> {
     fn insert_record(&mut self, key: String, doc_id: String) {
         self.entry(key).or_default().push(doc_id);
     }
@@ -75,7 +73,7 @@ impl IndexMap for BTreeMap<String, Vec<String>> {
     }
 
     fn from_records(records: Vec<IndexRecord>) -> Self {
-        let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut map: OrderedMap<String, Vec<String>> = OrderedMap::new();
         for r in records {
             map.entry(r.key).or_default().push(r.document_id);
         }
@@ -99,28 +97,28 @@ impl IndexMap for BTreeMap<String, Vec<String>> {
 // --- Logique I/O Générique (Async) ---
 
 pub async fn load<T: IndexMap>(path: &Path) -> RaiseResult<T> {
-    if !io::exists(path).await {
+    if !fs::exists_async(path).await {
         return Ok(T::default());
     }
-    let content = match io::read(path).await {
+    let content = match fs::read_async(path).await {
         Ok(c) => c,
         Err(e) => raise_error!(
             "ERR_DB_INDEX_READ",
             error = e,
-            context = json!({ "path": path.to_string_lossy() })
+            context = json_value!({ "path": path.to_string_lossy() })
         ),
     };
     if content.is_empty() {
         return Ok(T::default());
     }
 
-    let records: Vec<IndexRecord> = crate::utils::io::read_bincode_compressed(path).await?;
+    let records: Vec<IndexRecord> = fs::read_json_compressed_async(path).await?;
     Ok(T::from_records(records))
 }
 
 pub async fn save<T: IndexMap>(path: &Path, index: &T) -> RaiseResult<()> {
     let records = index.to_records();
-    crate::utils::io::write_bincode_compressed_atomic(path, &records).await?;
+    fs::write_json_compressed_atomic_async(path, &records).await?;
     Ok(())
 }
 
@@ -133,8 +131,8 @@ pub async fn update<T: IndexMap>(
     path: &Path,
     def: &IndexDefinition,
     doc_id: &str,
-    old_doc: Option<&data::Value>,
-    new_doc: Option<&data::Value>,
+    old_doc: Option<&JsonValue>,
+    new_doc: Option<&JsonValue>,
 ) -> RaiseResult<()> {
     let mut index: T = load(path).await?;
     let mut changed = false;
@@ -162,7 +160,7 @@ pub async fn update<T: IndexMap>(
                                 "Violation de contrainte unique sur l'index '{}'",
                                 def.name
                             ),
-                            context = json!({
+                            context = json_value!({
                                 "index_name": def.name,
                                 "conflicting_value": key_str,
                                 "existing_ids": ids,
@@ -189,11 +187,10 @@ pub async fn update<T: IndexMap>(
 mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
-    use crate::utils::io::tempdir;
 
     #[test]
     fn test_driver_map_logic() {
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut map: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
         map.insert_record("alice".into(), "1".into());
         map.insert_record("bob".into(), "2".into());
         map.insert_record("alice".into(), "3".into());
@@ -205,34 +202,34 @@ mod tests {
         assert_eq!(map.get_doc_ids("alice").unwrap()[0], "3");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_driver_io_roundtrip_and_search() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("index.bin");
 
         // 1. Save (Async)
-        let mut index: HashMap<String, Vec<String>> = HashMap::new();
+        let mut index: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
         index.insert_record("key1".into(), "doc1".into());
         save(&path, &index).await.unwrap();
 
         // 2. Load (Async)
-        let loaded: HashMap<String, Vec<String>> = load(&path).await.unwrap();
+        let loaded: UnorderedMap<String, Vec<String>> = load(&path).await.unwrap();
         assert_eq!(loaded.get_doc_ids("key1").unwrap()[0], "doc1");
 
         // 3. Search (Async)
-        let results = search::<HashMap<String, Vec<String>>>(&path, "key1")
+        let results = search::<UnorderedMap<String, Vec<String>>>(&path, "key1")
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "doc1");
 
-        let empty = search::<HashMap<String, Vec<String>>>(&path, "missing")
+        let empty = search::<UnorderedMap<String, Vec<String>>>(&path, "missing")
             .await
             .unwrap();
         assert!(empty.is_empty());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_driver_update_logic() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("update_test.bin");
@@ -243,14 +240,14 @@ mod tests {
             unique: true,
         };
 
-        let doc = data::json!({"val": "A"});
+        let doc = json::json_value!({"val": "A"});
 
         // Initial update
-        update::<HashMap<String, Vec<String>>>(&path, &def, "id1", None, Some(&doc))
+        update::<UnorderedMap<String, Vec<String>>>(&path, &def, "id1", None, Some(&doc))
             .await
             .unwrap();
 
-        let results = search::<HashMap<String, Vec<String>>>(&path, "\"A\"")
+        let results = search::<UnorderedMap<String, Vec<String>>>(&path, "\"A\"")
             .await
             .unwrap();
         assert_eq!(results, vec!["id1"]);

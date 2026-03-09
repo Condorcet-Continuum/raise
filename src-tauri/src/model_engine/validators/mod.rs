@@ -5,7 +5,7 @@ pub mod consistency_checker;
 pub mod dynamic_validator;
 pub mod ontological_validator;
 
-use crate::utils::{async_trait, prelude::*};
+use crate::utils::prelude::*;
 
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
@@ -17,7 +17,7 @@ pub use dynamic_validator::DynamicValidator;
 pub use ontological_validator::OntologicalValidator;
 
 /// Niveau de sévérité d'un problème de validation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serializable, Deserializable)]
 pub enum Severity {
     Error,   // Bloquant / Rouge
     Warning, // Avertissement / Jaune
@@ -25,7 +25,7 @@ pub enum Severity {
 }
 
 /// Représente un problème détecté dans le modèle.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct ValidationIssue {
     pub severity: Severity,
     pub rule_id: String,
@@ -35,7 +35,7 @@ pub struct ValidationIssue {
 
 /// Trait commun que tous les validateurs doivent implémenter.
 /// Refactorisé pour le Lazy Loading et la validation incrémentale.
-#[async_trait]
+#[async_interface]
 pub trait ModelValidator: Send + Sync {
     /// Valide un élément unique (Contexte Temps Réel).
     /// Le Loader est fourni pour permettre des vérifications croisées (ex: vérifier l'existence d'une cible).
@@ -58,13 +58,11 @@ mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
     use crate::model_engine::types::NameType;
-    use std::collections::HashMap;
-    use tempfile::tempdir;
 
     // Mock d'un validateur simple pour tester le trait
     struct MockValidator;
 
-    #[async_trait]
+    #[async_interface]
     impl ModelValidator for MockValidator {
         async fn validate_element(
             &self,
@@ -84,7 +82,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_model_validator_trait_integration() {
         // 1. Setup minimal du Loader (nécessaire pour la signature)
         let dir = tempdir().unwrap();
@@ -105,7 +103,7 @@ mod tests {
             name: NameType::String("Invalid".to_string()),
             kind: "Test".to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         };
 
         // 3. Validation

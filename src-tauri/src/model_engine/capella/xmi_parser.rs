@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/model_engine/capella/xmi_parser.rs
 
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 use crate::model_engine::arcadia; // <-- Import du vocabulaire cible
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
@@ -18,7 +18,7 @@ impl CapellaXmiParser {
             Err(e) => raise_error!(
                 "ERR_XMI_READ_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "path": path.display().to_string(), // .display() est plus sûr pour les chemins
                     "format": "XMI/XML",
                     "action": "initialize_reader",
@@ -31,7 +31,7 @@ impl CapellaXmiParser {
     }
 
     /// Logique de parsing XML générique
-    fn parse_xml<B: std::io::BufRead>(
+    fn parse_xml<B: BufferedRead>(
         reader: &mut Reader<B>,
         model: &mut ProjectModel,
     ) -> RaiseResult<()> {
@@ -43,7 +43,7 @@ impl CapellaXmiParser {
                     let mut id = String::new();
                     let mut name = String::new();
                     let mut xsi_type = String::new();
-                    let mut properties = HashMap::new();
+                    let mut properties = UnorderedMap::new();
 
                     for a in e.attributes().flatten() {
                         let key = String::from_utf8_lossy(a.key.into_inner()).to_string();
@@ -54,7 +54,7 @@ impl CapellaXmiParser {
                             "name" => name = value,
                             "xsi:type" => xsi_type = value,
                             _ => {
-                                properties.insert(key, serde_json::Value::String(value));
+                                properties.insert(key, JsonValue::String(value));
                             }
                         }
                     }
@@ -83,7 +83,7 @@ impl CapellaXmiParser {
                     raise_error!(
                         "ERR_XML_PARSE_FAILURE",
                         error = format!("Erreur de syntaxe XML à la position {} : {}", pos, e),
-                        context = json!({
+                        context = json_value!({
                             "buffer_position": pos,
                             "xml_error": format!("{:?}", e),
                             "action": "parse_xml_stream",

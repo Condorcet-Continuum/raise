@@ -1,11 +1,12 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_idempotent.rs
+use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
 use raise::json_db::storage::JsonDbConfig;
-use raise::utils::json::json; // 🎯 Requis pour le plan de construction
+// 🎯 Requis pour le plan de construction
 
-#[tokio::test]
+#[async_test]
 async fn drop_is_idempotent_and_recreate_works() {
     // 1. Initialisation de l'environnement isolé
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -18,7 +19,7 @@ async fn drop_is_idempotent_and_recreate_works() {
     let db = "test_idempotence_db";
 
     // 🎯 On définit un document d'index minimal mais valide pour l'introspection
-    let system_doc = json!({
+    let system_doc = json_value!({
         "collections": { "test_col": { "items": [] } },
         "rules": {},
         "schemas": { "v1": {} }

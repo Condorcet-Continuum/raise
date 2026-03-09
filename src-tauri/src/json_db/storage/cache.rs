@@ -2,30 +2,30 @@
 
 //! Module de gestion de cache LRU (Least Recently Used) thread-safe et asynchrone.
 
-use crate::utils::{Arc, AsyncMutex, Duration, Hash, Instant, LruCache, NonZeroUsize};
+use crate::utils::prelude::*;
 
 #[derive(Debug, Clone)]
 struct CacheEntry<V> {
     value: V,
-    expires_at: Option<Instant>,
+    expires_at: Option<TimeInstant>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Cache<K: Hash + Eq, V> {
+pub struct Cache<K: Hashable + Eq, V> {
     // Le Mutex protège la structure LRU interne qui nécessite une mutation à chaque lecture
-    store: Arc<AsyncMutex<LruCache<K, CacheEntry<V>>>>,
-    default_ttl: Option<Duration>,
+    store: SharedRef<AsyncMutex<MemoryCache<K, CacheEntry<V>>>>,
+    default_ttl: Option<TimeDuration>,
 }
 
 impl<K, V> Cache<K, V>
 where
-    K: Hash + Eq + Clone,
+    K: Hashable + Eq + Clone,
     V: Clone,
 {
-    pub fn new(capacity: usize, default_ttl: Option<Duration>) -> Self {
-        let cap = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(100).unwrap());
+    pub fn new(capacity: usize, default_ttl: Option<TimeDuration>) -> Self {
+        let cap = SafeSize::new(capacity).unwrap_or(SafeSize::new(100).unwrap());
         Self {
-            store: Arc::new(AsyncMutex::new(LruCache::new(cap))),
+            store: SharedRef::new(AsyncMutex::new(MemoryCache::new(cap))),
             default_ttl,
         }
     }
@@ -37,7 +37,7 @@ where
 
         if let Some(entry) = guard.get(key) {
             if let Some(expires_at) = entry.expires_at {
-                if Instant::now() > expires_at {
+                if TimeInstant::now() > expires_at {
                     guard.pop(key);
                     return None;
                 }
@@ -48,7 +48,7 @@ where
     }
 
     pub async fn put(&self, key: K, value: V) {
-        let now = Instant::now();
+        let now = TimeInstant::now();
         let expires_at = self.default_ttl.map(|ttl| now + ttl);
 
         let entry = CacheEntry { value, expires_at };
@@ -80,9 +80,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::sleep; // Remplacement du sleep synchrone
 
-    #[tokio::test] // ✅ Test asynchrone
+    #[async_test] // ✅ Test asynchrone
     async fn test_cache_lru_behavior() {
         let cache = Cache::new(2, None);
         cache.put("k1", 100).await;
@@ -99,13 +98,13 @@ mod tests {
         assert_eq!(cache.get(&"k3").await, Some(300));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_cache_expiration() {
-        let cache = Cache::new(10, Some(Duration::from_millis(50)));
+        let cache = Cache::new(10, Some(TimeDuration::from_millis(50)));
         cache.put("k1", 100).await;
         assert_eq!(cache.get(&"k1").await, Some(100));
 
-        sleep(Duration::from_millis(60)).await; // Pause asynchrone
+        sleep_async(TimeDuration::from_millis(60)).await; // Pause asynchrone
         assert_eq!(cache.get(&"k1").await, None);
     }
 }

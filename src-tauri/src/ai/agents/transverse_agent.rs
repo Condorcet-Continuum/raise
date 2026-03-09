@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/transverse_agent.rs
 
-use crate::utils::{async_trait, data, prelude::*, Uuid};
+use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
 // Import des outils optimisés (plus besoin de CollectionsManager ici)
@@ -26,24 +26,24 @@ impl TransverseAgent {
         user: &str,
         doc_type: &str,
         original_name: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         if original_name == "skip_llm" {
-            return Ok(json!({}));
+            return Ok(json_value!({}));
         }
 
         let response = ctx.llm.ask(LlmBackend::LocalLlama, sys, user).await?;
 
         let clean = extract_json_from_llm(&response);
-        let mut doc: Value = data::parse(&clean).unwrap_or(json!({}));
+        let mut doc: JsonValue = json::deserialize_from_str(&clean).unwrap_or(json_value!({}));
 
-        doc["name"] = json!(original_name);
-        doc["id"] = json!(Uuid::new_v4().to_string());
-        doc["layer"] = json!("TRANSVERSE");
-        doc["type"] = json!(doc_type);
-        doc["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+        doc["name"] = json_value!(original_name);
+        doc["id"] = json_value!(UniqueId::new_v4().to_string());
+        doc["layer"] = json_value!("TRANSVERSE");
+        doc["type"] = json_value!(doc_type);
+        doc["createdAt"] = json_value!(UtcClock::now().to_rfc3339());
 
         if doc_type == "Requirement" && doc.get("reqId").is_none() {
-            doc["reqId"] = json!("REQ-AUTO");
+            doc["reqId"] = json_value!("REQ-AUTO");
         }
 
         Ok(doc)
@@ -54,7 +54,7 @@ impl TransverseAgent {
         ctx: &AgentContext,
         name: &str,
         history_context: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -133,7 +133,7 @@ impl TransverseAgent {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl Agent for TransverseAgent {
     fn id(&self) -> &'static str {
         "quality_manager"
@@ -193,14 +193,14 @@ impl Agent for TransverseAgent {
 
                 let (passed, findings) = self.perform_static_analysis(ctx, target).await;
 
-                let report = json!({
-                    "id": Uuid::new_v4().to_string(),
+                let report = json_value!({
+                    "id": UniqueId::new_v4().to_string(),
                     "type": "QualityAssessment",
                     "target": target,
                     "scope": scope,
                     "status": if passed { "PASSED" } else { "FAILED" },
                     "findings": findings,
-                    "generatedAt": chrono::Utc::now().to_rfc3339()
+                    "generatedAt": UtcClock::now().to_rfc3339()
                 });
 
                 let artifact = save_artifact(ctx, "transverse", "reports", &report).await?;
@@ -238,16 +238,14 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::io::{self};
-    use crate::utils::json::json;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_transverse_id() {
         assert_eq!(TransverseAgent::new().id(), "quality_manager");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_verify_quality_logic() {
@@ -261,10 +259,10 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+            crate::utils::json::json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
-        let comp_doc = json!({
+        let comp_doc = json_value!({
             "id": "comp-123",
             "name": "Mon Composant",
             "layer": "LA",
@@ -299,8 +297,8 @@ mod tests {
 
         let src_gen = sandbox.domain_root.join("src-gen").join("mon_composant");
         let full_path = src_gen.join("Cargo.toml");
-        io::create_dir_all(&src_gen).await.unwrap();
-        io::write(&full_path, "[package]\nname = \"mon_composant\"")
+        fs::create_dir_all_async(&src_gen).await.unwrap();
+        fs::write_async(&full_path, "[package]\nname = \"mon_composant\"")
             .await
             .unwrap();
 
@@ -322,7 +320,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_verify_quality_missing_in_db() {
@@ -335,7 +333,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-            crate::utils::json::json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+            crate::utils::json::json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();

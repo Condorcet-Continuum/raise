@@ -2,9 +2,9 @@
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::prelude::*; // Apporte Value, json!, Result, etc.
+use raise::utils::prelude::*; // Apporte JsonValue, json!, Result, etc.
 
-#[tokio::test]
+#[async_test]
 async fn query_get_article_by_id() {
     // 1. Initialisation de l'environnement isolé
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -18,7 +18,7 @@ async fn query_get_article_by_id() {
     .await
     .expect("❌ Échec de la création de la collection 'articles'");
 
-    let doc = json!({
+    let doc = json_value!({
         "handle": "my-article",
         "slug": "my-article",
         "displayName": "Mon Article",
@@ -54,7 +54,7 @@ async fn query_get_article_by_id() {
     );
 }
 
-#[tokio::test]
+#[async_test]
 async fn query_find_one_article_by_handle() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -67,8 +67,8 @@ async fn query_find_one_article_by_handle() {
     .expect("❌ Échec create_collection");
 
     let docs = vec![
-        json!({ "handle": "a1", "slug": "a1", "displayName": "A1", "title": "T", "status": "draft" }),
-        json!({ "handle": "a2", "slug": "a2", "displayName": "A2", "title": "T", "status": "published" }),
+        json_value!({ "handle": "a1", "slug": "a1", "displayName": "A1", "title": "T", "status": "draft" }),
+        json_value!({ "handle": "a2", "slug": "a2", "displayName": "A2", "title": "T", "status": "published" }),
     ];
 
     for doc in docs {
@@ -92,7 +92,7 @@ async fn query_find_one_article_by_handle() {
     );
 }
 
-#[tokio::test]
+#[async_test]
 async fn query_find_many_with_sort_and_limit_simulated() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -105,7 +105,7 @@ async fn query_find_many_with_sort_and_limit_simulated() {
     .expect("❌ Échec create_collection");
 
     for i in 0..5 {
-        let doc = json!({
+        let doc = json_value!({
             "handle": format!("handle-{}", i),
             "slug": format!("handle-{}", i),
             "displayName": format!("Article {}", i),

@@ -2,7 +2,7 @@
 
 use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum SyncStatus {
     /// Le nœud vient de démarrer et cherche des pairs.
     Initializing,
@@ -39,7 +39,7 @@ mod tests {
             target_hash: "abc".to_string(),
         };
 
-        let serialized = serde_json::to_string(&status).unwrap();
+        let serialized = json::serialize_to_string(&status).unwrap();
 
         // Vérifie que la structure est correctement exportée pour le front-end
         assert!(serialized.contains("Syncing"));
@@ -50,7 +50,7 @@ mod tests {
     #[test]
     fn test_sync_status_error_serialization() {
         let status = SyncStatus::Error("Network timeout".into());
-        let serialized = serde_json::to_string(&status).unwrap();
+        let serialized = json::serialize_to_string(&status).unwrap();
         assert!(serialized.contains("Error"));
         assert!(serialized.contains("Network timeout"));
     }

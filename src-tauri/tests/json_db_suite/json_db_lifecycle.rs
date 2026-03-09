@@ -1,15 +1,13 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_lifecycle.rs
+use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMode};
 use raise::json_db::storage::JsonDbConfig;
-// ✅ Imports nettoyés et précisés
-use raise::utils::json::json;
-use serde_json::Value;
 
-#[tokio::test]
+#[async_test]
 async fn db_lifecycle_minimal() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = JsonDbConfig {
@@ -19,7 +17,7 @@ async fn db_lifecycle_minimal() {
     let space = "lifecycle_minimal";
     let db = "test_db";
 
-    let system_doc = json!({
+    let system_doc = json_value!({
         "collections": { "actors": { "items": [] } },
         "rules": { "_system_rules": { "items": [] } },
         "schemas": { "v1": {} }
@@ -49,7 +47,7 @@ async fn db_lifecycle_minimal() {
         .expect("❌ drop_db hard doit réussir");
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_collection_drop_cleans_system_index() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -63,7 +61,7 @@ async fn test_collection_drop_cleans_system_index() {
     .expect("❌ Échec création");
 
     // 🎯 FIX : Annotation de type explicite pour lever l'ambiguïté
-    let sys_json: Value = mgr.load_index().await.expect("❌ Lecture via manager");
+    let sys_json: JsonValue = mgr.load_index().await.expect("❌ Lecture via manager");
     assert!(sys_json
         .pointer(&format!("/collections/{}", collection))
         .is_some());
@@ -72,13 +70,13 @@ async fn test_collection_drop_cleans_system_index() {
         .await
         .expect("❌ drop_collection a échoué");
 
-    let sys_json_after: Value = mgr.load_index().await.expect("❌ Lecture finale");
+    let sys_json_after: JsonValue = mgr.load_index().await.expect("❌ Lecture finale");
     assert!(sys_json_after
         .pointer(&format!("/collections/{}", collection))
         .is_none());
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_system_index_strict_conformance() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -91,7 +89,7 @@ async fn test_system_index_strict_conformance() {
     .unwrap();
 
     // 🎯 FIX : Annotation de type explicite
-    let doc: Value = mgr
+    let doc: JsonValue = mgr
         .load_index()
         .await
         .expect("❌ L'index doit être lisible");

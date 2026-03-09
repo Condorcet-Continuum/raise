@@ -1,14 +1,14 @@
 // FICHIER : src-tauri/src/rules_engine/analyzer.rs
 
-use crate::utils::{prelude::*, HashSet};
+use crate::utils::prelude::*;
 
 use crate::rules_engine::ast::Expr;
 
 pub struct Analyzer;
 
 impl Analyzer {
-    pub fn get_dependencies(expr: &Expr) -> HashSet<String> {
-        let mut deps = HashSet::new();
+    pub fn get_dependencies(expr: &Expr) -> UniqueSet<String> {
+        let mut deps = UniqueSet::new();
         let scope = Vec::new();
         Self::visit(expr, &mut deps, &scope);
         deps
@@ -18,7 +18,7 @@ impl Analyzer {
         Self::check_depth(expr, 0, max_depth)
     }
 
-    fn visit(expr: &Expr, deps: &mut HashSet<String>, scope: &Vec<String>) {
+    fn visit(expr: &Expr, deps: &mut UniqueSet<String>, scope: &Vec<String>) {
         match expr {
             Expr::Val(_) | Expr::Now => {}
 
@@ -131,7 +131,7 @@ impl Analyzer {
                     "Limite de récursion atteinte : profondeur {} (max: {})",
                     current, max
                 ),
-                context = json!({
+                context = json_value!({
                     "current_depth": current,
                     "max_allowed": max,
                     "action": "enforce_recursion_limit",
@@ -233,17 +233,16 @@ impl Analyzer {
 mod tests {
     use super::*;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::data::json;
 
     #[test]
     fn test_new_functions_depth() {
         // Test de profondeur sur une fonction imbriquée complexe
         let expr = Expr::Round {
             value: Box::new(Expr::Abs(Box::new(Expr::Sub(vec![
-                Expr::Val(json!(10)),
-                Expr::Val(json!(20)),
+                Expr::Val(json_value!(10)),
+                Expr::Val(json_value!(20)),
             ])))),
-            precision: Box::new(Expr::Val(json!(2))),
+            precision: Box::new(Expr::Val(json_value!(2))),
         };
         // Depth: Round (0) -> Abs (1) -> Sub (2) -> Val (3)
         assert!(Analyzer::validate_depth(&expr, 5).is_ok());

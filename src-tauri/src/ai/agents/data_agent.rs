@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/data_agent.rs
 
-use crate::utils::{async_trait, data, prelude::*, Uuid};
+use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -46,21 +46,21 @@ impl DataAgent {
         user: &str,
         doc_type: &str,
         original_name: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let response = ctx.llm.ask(LlmBackend::LocalLlama, sys, user).await?;
 
         let clean = extract_json_from_llm(&response);
-        let mut doc: Value = data::parse(&clean).unwrap_or(json!({}));
+        let mut doc: JsonValue = json::deserialize_from_str(&clean).unwrap_or(json_value!({}));
 
         // --- BLINDAGE TOTAL ---
-        doc["name"] = json!(original_name);
-        doc["id"] = json!(Uuid::new_v4().to_string());
-        doc["layer"] = json!("DATA");
-        doc["type"] = json!(doc_type);
-        doc["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+        doc["name"] = json_value!(original_name);
+        doc["id"] = json_value!(UniqueId::new_v4().to_string());
+        doc["layer"] = json_value!("DATA");
+        doc["type"] = json_value!(doc_type);
+        doc["createdAt"] = json_value!(UtcClock::now().to_rfc3339());
 
         if doc_type == "Class" && doc.get("attributes").is_none() {
-            doc["attributes"] = json!([]);
+            doc["attributes"] = json_value!([]);
         }
         Ok(doc)
     }
@@ -70,7 +70,7 @@ impl DataAgent {
         ctx: &AgentContext,
         name: &str,
         history_context: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -88,7 +88,7 @@ impl DataAgent {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl Agent for DataAgent {
     fn id(&self) -> &'static str {
         "data_architect"

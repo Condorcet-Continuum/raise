@@ -12,7 +12,7 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
 
-#[tokio::test]
+#[async_test]
 async fn test_arcadia_to_genetics_pipeline() {
     // 1. Initialisation robuste (Config + Schémas système)
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -30,7 +30,7 @@ async fn test_arcadia_to_genetics_pipeline() {
     manager
         .insert_raw(
             "la",
-            &json!({
+            &json_value!({
                 "_id": "lf_nav_01",
                 "name": "Navigation",
                 "type": "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json",
@@ -43,7 +43,7 @@ async fn test_arcadia_to_genetics_pipeline() {
     manager
         .insert_raw(
             "la",
-            &json!({
+            &json_value!({
                 "_id": "lc_cpu_01",
                 "name": "CPU",
                 "type": "https://raise.local/schemas/v1/arcadia/la/logical-component.schema.json",

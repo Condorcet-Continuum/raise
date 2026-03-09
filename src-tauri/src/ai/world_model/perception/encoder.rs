@@ -66,7 +66,7 @@ impl ArcadiaEncoder {
             Err(e) => raise_error!(
                 "ERR_AI_ENCODER_FUSION_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "layer_shape": format!("{:?}", t_layer.shape()),
                     "category_shape": format!("{:?}", t_cat.shape()),
                     "action": "concatenate_features",
@@ -91,7 +91,7 @@ impl ArcadiaEncoder {
             Err(e) => raise_error!(
                 "ERR_AI_ENCODER_ONE_HOT_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "index": index,
                     "size": size,
                     "device": "cpu",
@@ -106,7 +106,6 @@ impl ArcadiaEncoder {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::HashMap;
 
     // Helper pour créer un élément dummy
     fn make_element(kind: &str) -> ArcadiaElement {
@@ -115,7 +114,7 @@ mod tests {
             name: NameType::default(),
             kind: kind.to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         }
     }
 

@@ -4,10 +4,9 @@ use super::{driver, paths, IndexDefinition};
 // ✅ AJOUT : Import du StorageEngine
 use crate::json_db::storage::StorageEngine;
 
-use crate::utils::data::{HashMap, HashSet};
 use crate::utils::prelude::*;
 
-fn tokenize(text: &str) -> HashSet<String> {
+fn tokenize(text: &str) -> UniqueSet<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
@@ -23,8 +22,8 @@ pub async fn update_text_index(
     collection: &str,
     def: &IndexDefinition,
     doc_id: &str,
-    old_doc: Option<&Value>,
-    new_doc: Option<&Value>,
+    old_doc: Option<&JsonValue>,
+    new_doc: Option<&JsonValue>,
 ) -> RaiseResult<()> {
     let path = paths::index_path(
         &storage.config,
@@ -35,7 +34,7 @@ pub async fn update_text_index(
         def.index_type,
     );
 
-    let mut index: HashMap<String, Vec<String>> = driver::load(&path).await?;
+    let mut index: UnorderedMap<String, Vec<String>> = driver::load(&path).await?;
     let mut changed = false;
 
     if let Some(doc) = old_doc {
@@ -91,7 +90,7 @@ pub async fn search_text_index(
     );
 
     let token = query.to_lowercase();
-    driver::search::<HashMap<String, Vec<String>>>(&path, &token).await
+    driver::search::<UnorderedMap<String, Vec<String>>>(&path, &token).await
 }
 
 #[cfg(test)]
@@ -99,10 +98,6 @@ mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{
-        io::{self, tempdir},
-        json::json,
-    };
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -110,14 +105,14 @@ mod tests {
         (dir, cfg)
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_text_lifecycle() {
         let (dir, cfg) = setup_env();
         // ✅ AJOUT : Création du StorageEngine pour les tests
         let storage = StorageEngine::new(cfg);
 
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
-        io::ensure_dir(&idx_dir).await.unwrap();
+        fs::ensure_dir_async(&idx_dir).await.unwrap();
 
         let def = IndexDefinition {
             name: "bio".into(),
@@ -126,7 +121,7 @@ mod tests {
             unique: false,
         };
 
-        let doc = json!({ "bio": "Rust is great" });
+        let doc = json_value!({ "bio": "Rust is great" });
         update_text_index(&storage, "s", "d", "c", &def, "u1", None, Some(&doc))
             .await
             .unwrap();

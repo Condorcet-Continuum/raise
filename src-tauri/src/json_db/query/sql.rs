@@ -1,13 +1,11 @@
 // FICHIER : src-tauri/src/json_db/query/sql.rs
+use crate::utils::prelude::*;
 
 use crate::json_db::transactions::TransactionRequest;
 
-use crate::utils::data::Map;
-use crate::utils::prelude::*;
-
 use sqlparser::ast::{
     BinaryOperator, Expr, Insert, OrderByExpr, OrderByKind, Query as SqlQuery, SetExpr, Statement,
-    TableFactor, Value as SqlValue,
+    TableFactor, Value as SqlJsonValue,
 };
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -33,7 +31,7 @@ pub fn parse_sql(sql: &str) -> RaiseResult<SqlRequest> {
             raise_error!(
                 "ERR_DB_SQL_SYNTAX",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "sql_query": sql,
                     "dialect": format!("{:?}", dialect),
                     "action": "generate_sql_ast"
@@ -46,7 +44,7 @@ pub fn parse_sql(sql: &str) -> RaiseResult<SqlRequest> {
         raise_error!(
             "ERR_DB_SQL_SINGLE_STATEMENT_ONLY",
             error = "Multi-statement execution non supportée : une seule requête SQL est autorisée par appel.",
-            context = json!({
+            context = json_value!({
                 "statements_count": ast.len(),
                 "action": "validate_sql_batch_size",
                 "hint": "Veuillez séparer vos requêtes et les exécuter séquentiellement."
@@ -69,7 +67,7 @@ pub fn parse_sql(sql: &str) -> RaiseResult<SqlRequest> {
             raise_error!(
                 "ERR_DB_SQL_STATEMENT_UNSUPPORTED",
                 error = "Type de requête SQL non supporté par le moteur actuel.",
-                context = json!({
+                context = json_value!({
                     "attempted_statement": format!("{:?}", unsupported),
                     "supported_statements": ["SELECT", "INSERT"],
                     "action": "translate_sql_to_request",
@@ -89,7 +87,7 @@ fn translate_insert(insert: &Insert) -> RaiseResult<Vec<TransactionRequest>> {
         raise_error!(
             "ERR_DB_SQL_INSERT_SOURCE_MISSING",
             error = "Instruction INSERT invalide : clause VALUES ou source de données manquante.",
-            context = json!({
+            context = json_value!({
                 "table_name": collection,
                 "action": "parse_insert_statement",
                 "hint": "Assurez-vous que votre requête contient une clause 'VALUES' ou 'SELECT' pour alimenter l'insertion."
@@ -102,7 +100,7 @@ fn translate_insert(insert: &Insert) -> RaiseResult<Vec<TransactionRequest>> {
         raise_error!(
             "ERR_DB_SQL_INSERT_TYPE_UNSUPPORTED",
             error = "Format d'insertion non supporté : seul 'INSERT INTO ... VALUES' est autorisé.",
-            context = json!({
+            context = json_value!({
                 "attempted_body_type": format!("{:?}", query_body),
                 "action": "parse_insert_values",
                 "hint": "Les insertions basées sur des sous-requêtes (SELECT) ne sont pas encore supportées."
@@ -121,7 +119,7 @@ fn translate_insert(insert: &Insert) -> RaiseResult<Vec<TransactionRequest>> {
                     row.len(),
                     insert.columns.len()
                 ),
-                context = json!({
+                context = json_value!({
                     "expected_columns": insert.columns.iter().map(|c| c.value.to_string()).collect::<Vec<_>>(),
                     "values_count": row.len(),
                     "columns_count": insert.columns.len(),
@@ -130,7 +128,7 @@ fn translate_insert(insert: &Insert) -> RaiseResult<Vec<TransactionRequest>> {
             );
         }
 
-        let mut doc_map = Map::new();
+        let mut doc_map = JsonObject::new();
         for (i, col_ident) in insert.columns.iter().enumerate() {
             let key = col_ident.value.clone();
             let val = expr_to_value(&row[i])?;
@@ -140,7 +138,7 @@ fn translate_insert(insert: &Insert) -> RaiseResult<Vec<TransactionRequest>> {
         operations.push(TransactionRequest::Insert {
             collection: collection.clone(),
             id: None, // Laissez le manager générer l'UUID
-            document: Value::Object(doc_map),
+            document: JsonValue::Object(doc_map),
         });
     }
 
@@ -198,7 +196,7 @@ fn translate_query(sql_query: &SqlQuery) -> RaiseResult<Query> {
             raise_error!(
                 "ERR_DB_SQL_SELECT_EXPR_UNSUPPORTED",
                 error = "Structure de requête SELECT non supportée (seul le mode SELECT simple est autorisé).",
-                context = json!({
+                context = json_value!({
                     "attempted_expression": format!("{:?}", unsupported_expr),
                     "action": "translate_sql_body",
                     "hint": "Les opérations de type UNION, EXCEPT ou INTERSECT ne sont pas encore supportées par le moteur JSON-DB."
@@ -219,7 +217,7 @@ fn translate_select(
         raise_error!(
             "ERR_DB_SQL_MULTIPLE_SOURCES_UNSUPPORTED",
             error = "Le moteur JSON-DB ne supporte qu'une seule collection par requête (JOIN non supporté).",
-            context = json!({
+            context = json_value!({
                 "sources_found": select.from.iter().map(|f| f.relation.to_string()).collect::<Vec<_>>(),
                 "sources_count": select.from.len(),
                 "action": "validate_select_from_clause",
@@ -232,7 +230,7 @@ fn translate_select(
         raise_error!(
             "ERR_DB_SQL_FROM_RELATION_UNSUPPORTED",
             error = "La clause FROM est invalide ou utilise une structure non supportée (sous-requêtes, jointures).",
-            context = json!({
+            context = json_value!({
                 "attempted_relation": format!("{:?}", select.from[0].relation),
                 "action": "resolve_collection_name",
                 "hint": "Utilisez un nom de collection simple : SELECT * FROM ma_collection"
@@ -360,7 +358,7 @@ fn translate_expr(expr: &Expr) -> RaiseResult<QueryFilter> {
             raise_error!(
                 "ERR_DB_SQL_EXPRESSION_UNSUPPORTED",
                 error = "Expression SQL non supportée par le moteur de filtrage actuel.",
-                context = json!({
+                context = json_value!({
                     "attempted_expression": format!("{:?}", expr),
                     "action": "translate_sql_expression",
                     "hint": "Le moteur supporte actuellement les comparaisons simples (=, !=, <, >, <=, >=) et les opérateurs logiques (AND, OR)."
@@ -382,7 +380,7 @@ fn expr_to_field_name(expr: &Expr) -> RaiseResult<String> {
             raise_error!(
                 "ERR_DB_SQL_IDENTIFIER_EXPECTED",
                 error = "Identifiant de champ invalide ou non supporté.",
-                context = json!({
+                context = json_value!({
                     "received_expression_type": format!("{:?}", expr),
                     "action": "resolve_column_identifier",
                     "hint": "Un nom de champ simple est attendu ici. Les fonctions, calculs ou sous-requêtes ne sont pas autorisés à cet emplacement."
@@ -392,23 +390,23 @@ fn expr_to_field_name(expr: &Expr) -> RaiseResult<String> {
     }
 }
 
-fn expr_to_value(expr: &Expr) -> RaiseResult<Value> {
+fn expr_to_value(expr: &Expr) -> RaiseResult<JsonValue> {
     match expr {
         Expr::Value(value_with_span) => sql_value_to_json(&value_with_span.value),
         Expr::UnaryOp {
             op: sqlparser::ast::UnaryOperator::Minus,
             expr: inner,
         } => match expr_to_value(inner)? {
-            Value::Number(n) => {
+            JsonValue::Number(n) => {
                 if let Some(f) = n.as_f64() {
-                    Ok(Value::from(-f))
+                    Ok(JsonValue::from(-f))
                 } else if let Some(i) = n.as_i64() {
-                    Ok(Value::from(-i))
+                    Ok(JsonValue::from(-i))
                 } else {
                     raise_error!(
                         "ERR_DB_SQL_NEGATION_UNSUPPORTED",
                         error = "L'opérateur de négation 'NOT' ne peut pas être appliqué à cette expression.",
-                        context = json!({
+                        context = json_value!({
                             "expression_context": format!("{:?}", expr),
                             "action": "translate_not_operator",
                             "hint": "La négation est actuellement limitée aux comparaisons directes (ex: NOT field = value)."
@@ -420,7 +418,7 @@ fn expr_to_value(expr: &Expr) -> RaiseResult<Value> {
                 raise_error!(
                     "ERR_DB_SQL_UNARY_MINUS_TYPE_MISMATCH",
                     error = "Opération arithmétique invalide : la négation (-) requiert une valeur numérique.",
-                    context = json!({
+                    context = json_value!({
                         "received_expression": format!("{:?}", expr),
                         "action": "apply_unary_minus",
                         "hint": "Vérifiez que le champ ciblé contient des nombres. Les chaînes de caractères et les booléens ne peuvent pas être inversés avec '-'."
@@ -432,7 +430,7 @@ fn expr_to_value(expr: &Expr) -> RaiseResult<Value> {
             raise_error!(
                 "ERR_DB_SQL_LITERAL_EXPECTED",
                 error = "Expression invalide : une valeur littérale simple (string, nombre, bool) est attendue.",
-                context = json!({
+                context = json_value!({
                     "attempted_expression": format!("{:?}", expr),
                     "action": "translate_sql_value",
                     "hint": "Le moteur JSON-DB ne supporte pas encore les expressions calculées dans cette clause. Utilisez une valeur directe."
@@ -442,11 +440,11 @@ fn expr_to_value(expr: &Expr) -> RaiseResult<Value> {
     }
 }
 
-fn sql_value_to_json(val: &SqlValue) -> RaiseResult<Value> {
+fn sql_value_to_json(val: &SqlJsonValue) -> RaiseResult<JsonValue> {
     match val {
-        SqlValue::Number(n, _) => {
+        SqlJsonValue::Number(n, _) => {
             if let Ok(i) = n.parse::<i64>() {
-                Ok(Value::from(i))
+                Ok(JsonValue::from(i))
             } else {
                 let f: f64 = match n.parse() {
                     Ok(num) => num,
@@ -454,7 +452,7 @@ fn sql_value_to_json(val: &SqlValue) -> RaiseResult<Value> {
                         raise_error!(
                             "ERR_DB_NUMERIC_PARSE_FAIL",
                             error = e,
-                            context = json!({
+                            context = json_value!({
                                 "input_string": n,
                                 "target_type": "f64",
                                 "action": "parse_sql_numeric_literal",
@@ -463,12 +461,12 @@ fn sql_value_to_json(val: &SqlValue) -> RaiseResult<Value> {
                         );
                     }
                 };
-                Ok(Value::from(f))
+                Ok(JsonValue::from(f))
             }
         }
-        SqlValue::SingleQuotedString(s) => Ok(Value::from(s.clone())),
-        SqlValue::Boolean(b) => Ok(Value::from(*b)),
-        _ => Ok(Value::Null),
+        SqlJsonValue::SingleQuotedString(s) => Ok(JsonValue::from(s.clone())),
+        SqlJsonValue::Boolean(b) => Ok(JsonValue::from(*b)),
+        _ => Ok(JsonValue::Null),
     }
 }
 

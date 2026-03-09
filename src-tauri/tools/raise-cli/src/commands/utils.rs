@@ -2,14 +2,7 @@
 
 use clap::{Args, Subcommand};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::{
-    user_info, user_success, user_warn,
-    utils::{
-        config::AppConfig,
-        io::{self},
-        prelude::*,
-    },
-};
+use raise::utils::prelude::*;
 
 // 🎯 Import du contexte global CLI
 use crate::CliContext;
@@ -50,7 +43,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
             if let Some(session) = ctx.session_mgr.get_current_session().await {
                 user_info!(
                     "CLI_SESSION_ACTIVE",
-                    json!({
+                    json_value!({
                         "user_id": session.user_id,
                         "status": format!("{:?}", session.status),
                         "session_id": session._id,
@@ -61,14 +54,14 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
             } else {
                 user_warn!(
                     "CLI_SESSION_INACTIVE",
-                    json!({"hint": "Aucune session n'est détectée."})
+                    json_value!({"hint": "Aucune session n'est détectée."})
                 );
             }
 
             // 2. VERSIONS ET ENVIRONNEMENT
             user_info!(
                 "APP_VERSION",
-                json!({
+                json_value!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "env": if cfg!(debug_assertions) { "development" } else { "production" }
                 })
@@ -100,7 +93,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
 
             user_info!(
                 "LLM_ENGINE_STATUS",
-                json!({
+                json_value!({
                     "provider": provider,
                     "model": model,
                     "is_active": provider != "Non configuré"
@@ -109,13 +102,16 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
 
             // 4. VÉRIFICATION SYSTÈME DE FICHIERS
             if let Some(path) = ctx.config.get_path("PATH_RAISE_DOMAIN") {
-                let exists = io::exists(&path).await;
-                user_info!("FS_CHECK", json!({ "path": path, "exists": exists }));
+                let exists = fs::exists_async(&path).await;
+                user_info!("FS_CHECK", json_value!({ "path": path, "exists": exists }));
             }
         }
 
         UtilsCommands::Ping => {
-            user_success!("PONG", json!({"status": "alive", "timestamp": Utc::now()}));
+            user_success!(
+                "PONG",
+                json_value!({"status": "alive", "timestamp": UtcClock::now()})
+            );
         }
 
         UtilsCommands::Whoami => {
@@ -124,7 +120,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                 Some(session) => {
                     user_info!(
                         "CURRENT_USER",
-                        json!({
+                        json_value!({
                             "username": session.user_id,
                             "session_id": session._id,
                             "created_at": session.created_at,
@@ -135,7 +131,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                 None => {
                     user_warn!(
                         "NO_ACTIVE_SESSION",
-                        json!({"hint": "Utilisez 'utils login <username>' pour vous connecter."})
+                        json_value!({"hint": "Utilisez 'utils login <username>' pour vous connecter."})
                     );
                 }
             }
@@ -143,13 +139,13 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
 
         UtilsCommands::Login { username } => {
             // 🎯 Utilisation de start_session() qui gère mémoire + DB
-            user_info!("AUTH_START", json!({ "target_user": username }));
+            user_info!("AUTH_START", json_value!({ "target_user": username }));
 
             let session = ctx.session_mgr.start_session(&username).await?;
 
             user_success!(
                 "AUTH_SUCCESS",
-                json!({
+                json_value!({
                     "user": session.user_id,
                     "session_id": session._id,
                     "message": "Session manuelle établie et persistée."
@@ -165,7 +161,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
 
                 user_success!(
                     "AUTH_LOGOUT",
-                    json!({
+                    json_value!({
                         "previous_user": user_id,
                         "status": "disconnected",
                         "cleanup": "success"
@@ -174,7 +170,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
             } else {
                 user_warn!(
                     "LOGOUT_SKIPPED",
-                    json!({"reason": "No active session to terminate"})
+                    json_value!({"reason": "No active session to terminate"})
                 );
             }
         }
@@ -189,15 +185,16 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::mock::DbSandbox;
-    use raise::utils::session::SessionManager;
-    use raise::utils::Arc;
+    use raise::utils::context::SessionManager;
+
+    #[cfg(test)]
+    use raise::utils::testing::DbSandbox;
 
     /// Teste le cycle de vie complet d'une session manuelle
-    #[tokio::test]
+    #[async_test]
     async fn test_session_full_lifecycle() {
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {
@@ -242,10 +239,10 @@ mod tests {
     }
 
     /// Teste la robustesse de la commande Logout quand aucune session n'est active
-    #[tokio::test]
+    #[async_test]
     async fn test_logout_without_session() {
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let ctx = CliContext {
             config: AppConfig::get(),
             session_mgr: SessionManager::new(storage.clone()),
@@ -260,10 +257,10 @@ mod tests {
     }
 
     /// Teste le changement d'utilisateur (Login sur une session existante)
-    #[tokio::test]
+    #[async_test]
     async fn test_relogin_switches_user() {
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
         let ctx = CliContext {
             config: AppConfig::get(),
@@ -304,10 +301,10 @@ mod tests {
     }
 
     /// Teste la commande Info pour s'assurer qu'elle s'exécute sans paniquer
-    #[tokio::test]
+    #[async_test]
     async fn test_info_command_execution() {
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let ctx = CliContext {
             config: AppConfig::get(),
             session_mgr: SessionManager::new(storage.clone()),

@@ -3,7 +3,7 @@
 use crate::genetics::dto::AllocatedSolution;
 use crate::genetics::evaluators::architecture::ArchitectureCostModel;
 use crate::model_engine::types::ProjectModel;
-use crate::utils::HashMap;
+use crate::utils::prelude::*;
 
 // --- Interfaces d'Entrée ---
 
@@ -115,7 +115,7 @@ impl SystemModelProvider for ProjectModel {
 pub struct GeneticsAdapter {
     func_idx_to_id: Vec<String>,
     comp_idx_to_id: Vec<String>,
-    func_id_to_idx: HashMap<String, usize>,
+    func_id_to_idx: UnorderedMap<String, usize>,
 }
 
 impl GeneticsAdapter {
@@ -123,7 +123,7 @@ impl GeneticsAdapter {
         let functions = provider.get_functions();
         let components = provider.get_components();
 
-        let mut func_id_to_idx = HashMap::new();
+        let mut func_id_to_idx = UnorderedMap::new();
         let mut func_idx_to_id = Vec::with_capacity(functions.len());
         for (i, f) in functions.iter().enumerate() {
             func_id_to_idx.insert(f.id.clone(), i);
@@ -212,7 +212,6 @@ impl GeneticsAdapter {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
-    use crate::utils::data::json;
 
     // Helper pour remplacer l'ancienne méthode ArcadiaElement::new()
     fn make_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
@@ -221,7 +220,7 @@ mod tests {
             name: NameType::String(name.to_string()),
             kind: kind.to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         }
     }
 
@@ -229,21 +228,21 @@ mod tests {
         let mut model = ProjectModel::default();
 
         let mut f1 = make_element("F1", "Navigation", "LogicalFunction");
-        f1.properties.insert("complexity".into(), json!(20.0));
+        f1.properties.insert("complexity".into(), json_value!(20.0));
         model.la.functions.push(f1);
 
         let mut f2 = make_element("F2", "Radio", "LogicalFunction");
-        f2.properties.insert("complexity".into(), json!(10.0));
+        f2.properties.insert("complexity".into(), json_value!(10.0));
         model.la.functions.push(f2);
 
         let mut c1 = make_element("C1", "MainCPU", "PhysicalComponent");
-        c1.properties.insert("capacity".into(), json!(100.0));
+        c1.properties.insert("capacity".into(), json_value!(100.0));
         model.pa.components.push(c1);
 
         let mut ex = make_element("E1", "DataLink", "FunctionalExchange");
-        ex.properties.insert("source".into(), json!("F1"));
-        ex.properties.insert("target".into(), json!("F2"));
-        ex.properties.insert("volume".into(), json!(50.0));
+        ex.properties.insert("source".into(), json_value!("F1"));
+        ex.properties.insert("target".into(), json_value!("F2"));
+        ex.properties.insert("volume".into(), json_value!(50.0));
         model.la.exchanges.push(ex);
 
         model

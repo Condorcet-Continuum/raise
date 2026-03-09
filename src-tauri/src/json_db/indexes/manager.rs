@@ -3,11 +3,9 @@
 use super::{btree, hash, text, IndexDefinition, IndexType};
 use crate::json_db::storage::StorageEngine;
 
-use crate::utils::io::{self, Path, PathBuf};
-use crate::utils::json;
 use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serializable, Deserializable)]
 struct CollectionMeta {
     #[serde(default)]
     pub schema: Option<String>,
@@ -43,7 +41,7 @@ impl<'a> IndexManager<'a> {
             _ => raise_error!(
                 "ERR_DB_INDEX_TYPE_UNKNOWN",
                 error = format!("Le type d'index '{}' n'est pas supporté.", kind_str),
-                context = json!({
+                context = json_value!({
                     "attempted_type": kind_str,
                     "supported_types": ["hash", "btree", "text"],
                     "action": "parse_index_definition"
@@ -75,7 +73,7 @@ impl<'a> IndexManager<'a> {
             raise_error!(
                 "ERR_DB_COLLECTION_NOT_FOUND",
                 error = "La collection spécifiée est introuvable sur le disque.",
-                context = json!({
+                context = json_value!({
                     "meta_path": meta_path.to_string_lossy(),
                     "action": "load_collection_metadata",
                 })
@@ -85,7 +83,7 @@ impl<'a> IndexManager<'a> {
         let mut meta = self.load_meta(&meta_path).await?;
         if let Some(pos) = meta.indexes.iter().position(|i| i.name == field) {
             let removed = meta.indexes.remove(pos);
-            io::write(&meta_path, json::stringify_pretty(&meta)?).await?;
+            fs::write_async(&meta_path, json::serialize_to_string_pretty(&meta)?).await?;
 
             let index_filename = match removed.index_type {
                 IndexType::Hash => format!("{}.hash.idx", removed.name),
@@ -101,13 +99,13 @@ impl<'a> IndexManager<'a> {
                 .join(index_filename);
 
             if index_path.exists() {
-                io::remove_file(&index_path).await?;
+                fs::remove_file_async(&index_path).await?;
             }
         } else {
             raise_error!(
                 "ERR_DB_INDEX_NOT_FOUND",
                 error = format!("L'index associé au champ '{}' est introuvable.", field),
-                context = json!({
+                context = json_value!({
                     "target_field": field,
                     "action": "index_resolution"
                 })
@@ -127,7 +125,7 @@ impl<'a> IndexManager<'a> {
         &self,
         collection: &str,
         field: &str,
-        value: &Value,
+        value: &JsonValue,
     ) -> RaiseResult<Vec<String>> {
         let indexes = self.load_indexes(collection).await?;
 
@@ -135,7 +133,7 @@ impl<'a> IndexManager<'a> {
             raise_error!(
                 "ERR_DB_INDEX_DEFINITION_NOT_FOUND",
                 error = format!("Définition d'index introuvable pour le champ '{}'", field),
-                context = json!({
+                context = json_value!({
                     "requested_field": field,
                     "available_indexes": indexes.iter().map(|i| &i.name).collect::<Vec<_>>()
                 })
@@ -165,7 +163,7 @@ impl<'a> IndexManager<'a> {
             .config
             .db_collection_path(&self.space, &self.db, collection);
         let indexes_dir = col_path.join("_indexes");
-        io::create_dir_all(&indexes_dir).await?;
+        fs::create_dir_all_async(&indexes_dir).await?;
 
         // ✅ CORRECTION MAJEURE : On utilise list_document_ids et le StorageEngine
         // Au lieu de lire le disque physiquement, on laisse le cache LRU faire son travail !
@@ -190,12 +188,16 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub async fn index_document(&mut self, collection: &str, new_doc: &Value) -> RaiseResult<()> {
+    pub async fn index_document(
+        &mut self,
+        collection: &str,
+        new_doc: &JsonValue,
+    ) -> RaiseResult<()> {
         let Some(doc_id) = new_doc.get("_id").and_then(|v| v.as_str()) else {
             raise_error!(
                 "ERR_DB_DOCUMENT_ID_MISSING",
                 error = "Impossible d'indexer le document : attribut '_id' manquant ou invalide.",
-                context = json!({
+                context = json_value!({
                     "collection": collection,
                     "action": "index_document",
                     "hint": "Assurez-vous que le document est passé par le SchemaValidator (qui génère l'_id) avant d'atteindre le moteur d'indexation."
@@ -210,7 +212,7 @@ impl<'a> IndexManager<'a> {
                 .config
                 .db_collection_path(&self.space, &self.db, collection)
                 .join("_indexes");
-            io::create_dir_all(idx_dir).await?;
+            fs::create_dir_all_async(idx_dir).await?;
         }
 
         for def in indexes {
@@ -220,7 +222,11 @@ impl<'a> IndexManager<'a> {
         Ok(())
     }
 
-    pub async fn remove_document(&mut self, collection: &str, old_doc: &Value) -> RaiseResult<()> {
+    pub async fn remove_document(
+        &mut self,
+        collection: &str,
+        old_doc: &JsonValue,
+    ) -> RaiseResult<()> {
         let doc_id = old_doc.get("_id").and_then(|v| v.as_str()).unwrap_or("");
         if doc_id.is_empty() {
             return Ok(());
@@ -267,8 +273,8 @@ impl<'a> IndexManager<'a> {
     }
 
     async fn load_meta(&self, path: &Path) -> RaiseResult<CollectionMeta> {
-        let content = io::read_to_string(path).await?;
-        json::parse(&content)
+        let content = fs::read_to_string_async(path).await?;
+        json::deserialize_from_str(&content)
     }
 
     async fn dispatch_update(
@@ -276,8 +282,8 @@ impl<'a> IndexManager<'a> {
         col: &str,
         def: &IndexDefinition,
         id: &str,
-        old: Option<&Value>,
-        new: Option<&Value>,
+        old: Option<&JsonValue>,
+        new: Option<&JsonValue>,
     ) -> RaiseResult<()> {
         let storage = self.storage; // ✅ On passe le StorageEngine
         let s = &self.space;
@@ -295,7 +301,7 @@ impl<'a> IndexManager<'a> {
             raise_error!(
                 "ERR_DB_INDEX_UPDATE_FAIL",
                 error = e,
-                context = json!({ "index_name": def.name })
+                context = json_value!({ "index_name": def.name })
             );
         }
         Ok(())
@@ -314,8 +320,8 @@ pub async fn add_index_definition(
         .db_collection_path(space, db, collection)
         .join("_meta.json");
     let mut meta: CollectionMeta = if meta_path.exists() {
-        let content = io::read_to_string(&meta_path).await?;
-        json::parse(&content)?
+        let content = fs::read_to_string_async(&meta_path).await?;
+        json::deserialize_from_str(&content)?
     } else {
         CollectionMeta {
             schema: None,
@@ -325,7 +331,7 @@ pub async fn add_index_definition(
 
     if !meta.indexes.iter().any(|i| i.name == def.name) {
         meta.indexes.push(def);
-        io::write(&meta_path, json::stringify_pretty(&meta)?).await?;
+        fs::write_async(&meta_path, json::serialize_to_string_pretty(&meta)?).await?;
     }
     Ok(())
 }
@@ -334,10 +340,8 @@ pub async fn add_index_definition(
 mod tests {
     use super::*;
     use crate::json_db::storage::JsonDbConfig;
-    use crate::utils::io::tempdir;
-    use crate::utils::json::json;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_manager_lifecycle() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -345,13 +349,13 @@ mod tests {
         let mut mgr = IndexManager::new(&storage, "s", "d");
 
         let col_path = dir.path().join("s/d/collections/users");
-        io::create_dir_all(&col_path).await.unwrap();
+        fs::create_dir_all_async(&col_path).await.unwrap();
 
         mgr.create_index("users", "email", "hash").await.unwrap();
         assert!(col_path.join("_meta.json").exists());
 
         // ✅ CORRECTION : Utilisation de "_id"
-        let doc = json!({ "_id": "u1", "email": "a@a.com" });
+        let doc = json_value!({ "_id": "u1", "email": "a@a.com" });
         mgr.index_document("users", &doc).await.unwrap();
 
         let idx_path = col_path.join("_indexes/email.hash.idx");
@@ -361,7 +365,7 @@ mod tests {
         assert!(!idx_path.exists());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_manager_search_flow() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -369,15 +373,15 @@ mod tests {
         let mut mgr = IndexManager::new(&storage, "s", "d");
 
         let col_path = dir.path().join("s/d/collections/products");
-        io::create_dir_all(&col_path).await.unwrap();
+        fs::create_dir_all_async(&col_path).await.unwrap();
 
         mgr.create_index("products", "category", "hash")
             .await
             .unwrap();
 
         // ✅ CORRECTION : Utilisation de "_id"
-        let p1 = json!({ "_id": "p1", "category": "book" });
-        let p2 = json!({ "_id": "p2", "category": "food" });
+        let p1 = json_value!({ "_id": "p1", "category": "book" });
+        let p2 = json_value!({ "_id": "p2", "category": "food" });
 
         mgr.index_document("products", &p1).await.unwrap();
         mgr.index_document("products", &p2).await.unwrap();
@@ -385,14 +389,14 @@ mod tests {
         assert!(mgr.has_index("products", "category").await);
 
         let results = mgr
-            .search("products", "category", &json!("book"))
+            .search("products", "category", &json_value!("book"))
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "p1");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_list_indexes_filtering() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -400,7 +404,7 @@ mod tests {
         let mut mgr = IndexManager::new(&storage, "s", "d");
 
         let col_path = dir.path().join("s/d/collections/users");
-        io::create_dir_all(&col_path).await.unwrap();
+        fs::create_dir_all_async(&col_path).await.unwrap();
 
         mgr.create_index("users", "email", "hash").await.unwrap();
         mgr.create_index("users", "age", "btree").await.unwrap();

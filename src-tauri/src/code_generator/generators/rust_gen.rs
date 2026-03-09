@@ -3,13 +3,7 @@
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
 
-use crate::utils::{
-    data::{Deserialize, Value},
-    io::PathBuf,
-    prelude::*, // Importe déjà json!
-    sys,
-};
-
+use crate::utils::prelude::*;
 use heck::{ToPascalCase, ToSnakeCase};
 
 #[derive(Default)]
@@ -24,7 +18,7 @@ impl RustGenerator {
     fn format_code(&self, raw_code: &str) -> String {
         // ✅ On utilise notre façade système.
         // Elle s'occupe de lancer rustfmt, lui envoyer le code, et récupérer le résultat.
-        match sys::pipe_through("rustfmt", raw_code) {
+        match os::pipe_through("rustfmt", raw_code) {
             Ok(formatted) => formatted,
             Err(e) => {
                 // Si rustfmt n'est pas installé ou plante, on log et on renvoie le code brut.
@@ -37,14 +31,14 @@ impl RustGenerator {
 
 // --- STRUCTURES INTERNES ---
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserializable, Debug, Default)]
 struct ComponentImpl {
     technology: String,
     #[serde(rename = "artifactName")]
     artifact_name: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserializable, Debug)]
 struct ArcadiaComponent {
     #[serde(default = "default_id")]
     id: String,
@@ -54,7 +48,7 @@ struct ArcadiaComponent {
     implementation: Option<ComponentImpl>,
     #[serde(default)]
     #[serde(rename = "allocatedFunctions")]
-    allocated_functions: Vec<Value>,
+    allocated_functions: Vec<JsonValue>,
 }
 
 fn default_id() -> String {
@@ -69,28 +63,30 @@ fn default_name() -> String {
 impl LanguageGenerator for RustGenerator {
     fn generate(
         &self,
-        element: &Value,
+        element: &JsonValue,
         template_engine: &TemplateEngine,
     ) -> RaiseResult<Vec<GeneratedFile>> {
-        let component: ArcadiaComponent = crate::utils::data::from_value(element.clone())
-            .unwrap_or(ArcadiaComponent {
-                id: element
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0000")
-                    .to_string(),
-                name: element
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unnamed")
-                    .to_string(),
-                description: element
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                implementation: None,
-                allocated_functions: vec![],
-            });
+        let component: ArcadiaComponent = crate::utils::json::deserialize_from_value(
+            element.clone(),
+        )
+        .unwrap_or(ArcadiaComponent {
+            id: element
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0000")
+                .to_string(),
+            name: element
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unnamed")
+                .to_string(),
+            description: element
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            implementation: None,
+            allocated_functions: vec![],
+        });
 
         // 2. Extraction des fonctions pour l'IA
         let functions: Vec<String> = component
@@ -109,7 +105,7 @@ impl LanguageGenerator for RustGenerator {
             .collect();
 
         // 🎯 MIGRATION V1.3 : CONSTRUCTION DU CONTEXTE VIA json! (Sans Builder)
-        let context = json!({
+        let context = json_value!({
             "name": component.name,
             "id": component.id,
             "description": component.description.clone().unwrap_or_default(),
@@ -125,7 +121,7 @@ impl LanguageGenerator for RustGenerator {
                     &component,
                     impl_specs,
                     &functions,
-                    &context, // On passe le Value de json!
+                    &context, // On passe le JsonValue de json!
                     template_engine,
                 );
             }
@@ -151,7 +147,7 @@ impl RustGenerator {
         comp: &ArcadiaComponent,
         impl_specs: &ComponentImpl,
         functions: &[String],
-        context: &Value,
+        context: &JsonValue,
         template_engine: &TemplateEngine,
     ) -> RaiseResult<Vec<GeneratedFile>> {
         let crate_name = impl_specs
@@ -209,7 +205,6 @@ impl RustGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // 🗑️ Suppression de `use crate::utils::data::json;` car `json!` est déjà dans `prelude::*`
 
     fn setup_engine() -> TemplateEngine {
         let mut engine = TemplateEngine::new();
@@ -223,7 +218,7 @@ mod tests {
     fn test_legacy_generation() {
         let generator = RustGenerator::new();
         let engine = setup_engine();
-        let element = json!({ "name": "LegacyComponent", "_id": "123" });
+        let element = json_value!({ "name": "LegacyComponent", "_id": "123" });
         let files = generator.generate(&element, &engine).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path.to_str().unwrap(), "LegacyComponent.rs");
@@ -234,7 +229,7 @@ mod tests {
         let generator = RustGenerator::new();
         let engine = setup_engine();
 
-        let element = json!({
+        let element = json_value!({
             "name": "VisionSystem",
             "_id": "UUID-VISION",
             "description": "Handles camera input",

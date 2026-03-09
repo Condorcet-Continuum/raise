@@ -17,7 +17,7 @@ use raise::{
     user_error,
     user_info,
     user_success,
-    utils::{io, os, prelude::*}, // AppConfig n'est plus importé, on l'a via CliContext !
+    utils::prelude::*, // AppConfig n'est plus importé, on l'a via CliContext !
 };
 
 // 🎯 NOUVEAU : Import du contexte global CLI
@@ -82,7 +82,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         .get_path("PATH_RAISE_DATASET")
         .unwrap_or_else(|| domain_path.join("dataset"));
 
-    io::ensure_dir(&domain_path).await?;
+    fs::ensure_dir_async(&domain_path).await?;
 
     // 2. MOTEURS ET CONTEXTE (OPTIMISÉ)
     // 🎯 On réutilise le storage global !
@@ -154,7 +154,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
 
             user_info!(
                 "AI_TRAINING_START",
-                json!({ "domain": final_domain, "db": final_db, "lr": final_lr, "epochs": final_epochs })
+                json_value!({ "domain": final_domain, "db": final_db, "lr": final_lr, "epochs": final_epochs })
             );
 
             // 🎯 Utilisation propre du storage global existant
@@ -168,10 +168,10 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
             )
             .await
             {
-                Ok(msg) => user_success!("AI_TRAIN_SUCCESS", json!({ "result": msg })),
+                Ok(msg) => user_success!("AI_TRAIN_SUCCESS", json_value!({ "result": msg })),
                 Err(e) => user_error!(
                     "AI_TRAIN_FAIL",
-                    json!({ "error": e.to_string(), "action": "neural_network_training" })
+                    json_value!({ "error": e.to_string(), "action": "neural_network_training" })
                 ),
             }
         }
@@ -182,11 +182,14 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
 
 async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseResult<()> {
     // 🎯 Mise en conformité JSON stricte
-    user_info!("AI_INTERACTIVE_WELCOME", json!({}));
-    user_info!("AI_INTERACTIVE_SEPARATOR", json!({}));
-    user_info!("AI_LLM_CONNECTED", json!({"mode": "local"}));
-    user_info!("AI_STORAGE_PATH", json!({ "path": ctx.paths.domain_root }));
-    user_info!("AI_EXIT_HINT", json!({}));
+    user_info!("AI_INTERACTIVE_WELCOME", json_value!({}));
+    user_info!("AI_INTERACTIVE_SEPARATOR", json_value!({}));
+    user_info!("AI_LLM_CONNECTED", json_value!({"mode": "local"}));
+    user_info!(
+        "AI_STORAGE_PATH",
+        json_value!({ "path": ctx.paths.domain_root })
+    );
+    user_info!("AI_EXIT_HINT", json_value!({}));
 
     loop {
         print!("RAISE-AI> ");
@@ -194,7 +197,7 @@ async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseRes
         let input = os::read_stdin_line()?;
 
         if input.eq_ignore_ascii_case("exit") {
-            user_info!("AI_GOODBYE", json!({}));
+            user_info!("AI_GOODBYE", json_value!({}));
             break;
         }
         if input.is_empty() {
@@ -208,7 +211,7 @@ async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseRes
 
 async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execute: bool) {
     let classifier = IntentClassifier::new(client);
-    user_info!("AI_ANALYZING", json!({"input_length": input.len()}));
+    user_info!("AI_ANALYZING", json_value!({"input_length": input.len()}));
 
     let intent = classifier.classify(input).await;
 
@@ -218,12 +221,15 @@ async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execu
         } => {
             user_info!(
                 "AI_AGENT_START",
-                json!({ "agent": "Business Agent", "process": process_name })
+                json_value!({ "agent": "Business Agent", "process": process_name })
             );
             run_agent(BusinessAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "SA" => {
-            user_info!("AI_AGENT_START", json!({"agent": "System Agent (SA)"}));
+            user_info!(
+                "AI_AGENT_START",
+                json_value!({"agent": "System Agent (SA)"})
+            );
             run_agent(SystemAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement {
@@ -231,36 +237,42 @@ async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execu
             ref element_type,
             ..
         } if layer == "LA" || element_type.contains("Software") => {
-            user_info!("AI_AGENT_START", json!({"agent": "Software Agent (LA)"}));
+            user_info!(
+                "AI_AGENT_START",
+                json_value!({"agent": "Software Agent (LA)"})
+            );
             run_agent(SoftwareAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::GenerateCode { .. } => {
             user_info!(
                 "AI_CODE_GEN_START",
-                json!({"agent": "Software Agent (Code)"})
+                json_value!({"agent": "Software Agent (Code)"})
             );
             run_agent(SoftwareAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "PA" => {
-            user_info!("AI_AGENT_START", json!({"agent": "Hardware Agent (PA)"}));
+            user_info!(
+                "AI_AGENT_START",
+                json_value!({"agent": "Hardware Agent (PA)"})
+            );
             run_agent(HardwareAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "EPBS" => {
-            user_info!("AI_AGENT_START", json!({"agent": "EPBS Agent"}));
+            user_info!("AI_AGENT_START", json_value!({"agent": "EPBS Agent"}));
             run_agent(EpbsAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "DATA" => {
-            user_info!("AI_AGENT_START", json!({"agent": "Data Agent"}));
+            user_info!("AI_AGENT_START", json_value!({"agent": "Data Agent"}));
             run_agent(DataAgent::new(), ctx, &intent, execute).await;
         }
         EngineeringIntent::CreateElement { ref layer, .. } if layer == "TRANSVERSE" => {
-            user_info!("AI_AGENT_START", json!({"agent": "Transverse Agent"}));
+            user_info!("AI_AGENT_START", json_value!({"agent": "Transverse Agent"}));
             run_agent(TransverseAgent::new(), ctx, &intent, execute).await;
         }
         _ => {
             user_error!(
                 "AI_INTENT_UNKNOWN",
-                json!({ "intent_raw": format!("{:?}", intent) })
+                json_value!({ "intent_raw": format!("{:?}", intent) })
             );
         }
     }
@@ -275,23 +287,23 @@ async fn run_agent<A: Agent>(
     if execute {
         match agent.process(ctx, intent).await {
             Ok(Some(res)) => {
-                user_success!("AI_RESULT", json!({ "message": res.message }));
+                user_success!("AI_RESULT", json_value!({ "message": res.message }));
                 for a in res.artifacts {
-                    user_info!("AI_ARTIFACT_GENERATED", json!({ "path": a.path }));
+                    user_info!("AI_ARTIFACT_GENERATED", json_value!({ "path": a.path }));
                 }
             }
             Ok(None) => {
-                user_info!("AI_NO_ACTION", json!({}));
+                user_info!("AI_NO_ACTION", json_value!({}));
             }
             Err(e) => {
                 user_error!(
                     "AI_AGENT_ERROR",
-                    json!({ "error": e.to_string(), "source": "agent_executor" })
+                    json_value!({ "error": e.to_string(), "source": "agent_executor" })
                 );
             }
         }
     } else {
-        user_info!("AI_SIMULATION_MODE", json!({}));
+        user_info!("AI_SIMULATION_MODE", json_value!({}));
     }
 }
 
@@ -302,7 +314,7 @@ async fn run_agent<A: Agent>(
 mod tests {
     use super::*;
     use clap::Parser;
-    use raise::utils::mock;
+    use raise::utils::testing::*;
 
     #[derive(Parser)]
     struct TestCli {
@@ -310,7 +322,7 @@ mod tests {
         args: AiArgs,
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_ai_parsing_robustness() {
         mock::inject_mock_config().await;
 
@@ -331,7 +343,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_intent_dispatch_layers() {
         mock::inject_mock_config().await;
 
@@ -373,7 +385,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_intent_dispatch_software_logic() {
         mock::inject_mock_config().await;
 
@@ -391,7 +403,7 @@ mod tests {
         assert!(is_software);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_business_dispatch() {
         mock::inject_mock_config().await;
 
@@ -409,7 +421,7 @@ mod tests {
         assert!(is_business);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_ai_train_parsing() {
         mock::inject_mock_config().await;
 

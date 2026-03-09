@@ -1,6 +1,6 @@
-use self::candle_engine::CandleLlmEngine;
-use crate::utils::Mutex;
+use crate::utils::prelude::*;
 
+use self::candle_engine::CandleLlmEngine;
 pub mod candle_engine;
 pub mod client;
 pub mod prompts;
@@ -11,4 +11,4 @@ mod tests;
 
 // Structure qui porte l'état du moteur natif
 // On utilise Option car au démarrage de l'app, le moteur n'est pas encore chargé.
-pub struct NativeLlmState(pub Mutex<Option<CandleLlmEngine>>);
+pub struct NativeLlmState(pub SyncMutex<Option<CandleLlmEngine>>);

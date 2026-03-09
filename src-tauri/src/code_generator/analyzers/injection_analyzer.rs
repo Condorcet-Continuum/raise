@@ -1,9 +1,4 @@
-use crate::utils::{
-    data::HashMap,
-    io::{self, Path},
-    prelude::*,
-    Regex,
-};
+use crate::utils::prelude::*;
 /// Analyseur capable d'extraire des blocs de code protégés d'un fichier existant.
 pub struct InjectionAnalyzer;
 
@@ -12,14 +7,14 @@ impl InjectionAnalyzer {
     /// Les templates doivent utiliser la syntaxe:
     /// `// AI_INJECTION_POINT: [Clé]` ... `// END_AI_INJECTION_POINT`
     /// ou `-- AI_INJECTION_POINT: [Clé]` (pour SQL/VHDL/Lua)
-    pub async fn extract_injections(file_path: &Path) -> RaiseResult<HashMap<String, String>> {
-        let mut injections = HashMap::new();
+    pub async fn extract_injections(file_path: &Path) -> RaiseResult<UnorderedMap<String, String>> {
+        let mut injections = UnorderedMap::new();
 
         if !file_path.exists() {
             return Ok(injections);
         }
 
-        let content = io::read_to_string(file_path).await?;
+        let content = fs::read_to_string_async(file_path).await?;
 
         // Regex robuste :
         // 1. (?:^|\n)\s* -> Début de ligne avec espaces optionnels
@@ -32,7 +27,7 @@ impl InjectionAnalyzer {
         // on fait donc une approche itérative simple.
 
         let start_pattern =
-            Regex::new(r"(?m)^\s*(?://|--|#)\s*AI_INJECTION_POINT:\s*(\w+)\s*$").unwrap();
+            TextRegex::new(r"(?m)^\s*(?://|--|#)\s*AI_INJECTION_POINT:\s*(\w+)\s*$").unwrap();
         // On cherchera la fin manuellement pour plus de robustesse sur le contenu multilingue
 
         let lines: Vec<&str> = content.lines().collect();
@@ -78,9 +73,8 @@ impl InjectionAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::io::{tempdir, write_atomic};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_extract_rust_injection() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.rs");
@@ -95,7 +89,9 @@ mod tests {
         fn other() {}
         "#;
 
-        write_atomic(&file_path, content.as_bytes()).await.unwrap();
+        fs::write_atomic_async(&file_path, content.as_bytes())
+            .await
+            .unwrap();
 
         let injections = InjectionAnalyzer::extract_injections(&file_path)
             .await
@@ -105,7 +101,7 @@ mod tests {
         assert!(injections.get("MyLogic").unwrap().contains("let x = 1;"));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_extract_python_injection() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.rs");
@@ -117,7 +113,9 @@ mod tests {
             # END_AI_INJECTION_POINT
         "#;
 
-        write_atomic(&file_path, content.as_bytes()).await.unwrap();
+        fs::write_atomic_async(&file_path, content.as_bytes())
+            .await
+            .unwrap();
 
         let injections = InjectionAnalyzer::extract_injections(&file_path)
             .await

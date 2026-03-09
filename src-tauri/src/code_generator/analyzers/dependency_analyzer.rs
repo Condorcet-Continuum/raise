@@ -1,5 +1,5 @@
 use super::{AnalysisResult, Analyzer};
-use crate::utils::{data::Value, prelude::*};
+use crate::utils::prelude::*;
 
 #[derive(Default)]
 pub struct DependencyAnalyzer;
@@ -10,7 +10,7 @@ impl DependencyAnalyzer {
     }
 
     /// Détecte le type d'élément Arcadia et applique les règles de dépendance
-    fn extract_dependencies(&self, element: &Value, result: &mut AnalysisResult) {
+    fn extract_dependencies(&self, element: &JsonValue, result: &mut AnalysisResult) {
         // Tentative de détection du type via JSON-LD (@type) ou structure simple (type)
         let element_type = element
             .get("@type")
@@ -32,7 +32,7 @@ impl DependencyAnalyzer {
         }
     }
 
-    fn analyze_component(&self, component: &Value, result: &mut AnalysisResult) {
+    fn analyze_component(&self, component: &JsonValue, result: &mut AnalysisResult) {
         // 1. Dépendances fonctionnelles (Allocation)
         // Un composant doit importer les fonctions qu'il héberge/exécute
         if let Some(allocations) = component
@@ -66,7 +66,7 @@ impl DependencyAnalyzer {
         }
     }
 
-    fn analyze_function(&self, function: &Value, result: &mut AnalysisResult) {
+    fn analyze_function(&self, function: &JsonValue, result: &mut AnalysisResult) {
         // Une fonction dépend de ses échanges (Inputs/Outputs)
         if let Some(inputs) = function
             .get("incomingFunctionalExchanges")
@@ -80,7 +80,7 @@ impl DependencyAnalyzer {
         }
     }
 
-    fn analyze_generic_refs(&self, element: &Value, result: &mut AnalysisResult) {
+    fn analyze_generic_refs(&self, element: &JsonValue, result: &mut AnalysisResult) {
         // Scan récursif simple pour trouver des champs "type_ref" ou "base_class"
         if let Some(obj) = element.as_object() {
             for (key, val) in obj {
@@ -95,7 +95,7 @@ impl DependencyAnalyzer {
 }
 
 impl Analyzer for DependencyAnalyzer {
-    fn analyze(&self, model: &Value) -> RaiseResult<AnalysisResult> {
+    fn analyze(&self, model: &JsonValue) -> RaiseResult<AnalysisResult> {
         let mut result = AnalysisResult::default();
         self.extract_dependencies(model, &mut result);
         Ok(result)
@@ -105,13 +105,12 @@ impl Analyzer for DependencyAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::data::json;
 
     #[test]
     fn test_component_dependencies_extraction() {
         let analyzer = DependencyAnalyzer::new();
 
-        let component = json!({
+        let component = json_value!({
             "@type": "LogicalComponent",
             "name": "FlightManager",
             // Allocation de fonction
@@ -141,7 +140,7 @@ mod tests {
     #[test]
     fn test_function_dependencies() {
         let analyzer = DependencyAnalyzer::new();
-        let function = json!({
+        let function = json_value!({
             "@type": "LogicalFunction",
             "name": "Calculate",
             "incomingFunctionalExchanges": ["Exchange_01"]

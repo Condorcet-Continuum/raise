@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/context/tests.rs
 
-use crate::utils::data::HashMap;
+use crate::utils::prelude::*;
 
 use crate::ai::context::retriever::SimpleRetriever;
 // CORRECTION 1 : Ajout de NameType dans les imports
@@ -10,7 +10,7 @@ use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
 fn mock_element(name: &str, desc: &str) -> ArcadiaElement {
     // Note : On n'a plus besoin d'insérer "description" dans les properties
     // car elle a maintenant son propre champ dans la structure.
-    let props = HashMap::new();
+    let props = UnorderedMap::new();
 
     ArcadiaElement {
         id: "uuid-test".to_string(),

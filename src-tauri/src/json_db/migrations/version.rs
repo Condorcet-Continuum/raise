@@ -1,10 +1,9 @@
 // FICHIER : src-tauri/src/json_db/migrations/version.rs
 
 use crate::utils::prelude::*;
-use crate::utils::{fmt, Ordering};
 
 /// Représente une version de migration (Semantic Versioning simplifié)
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serializable, Deserializable)]
 pub struct MigrationVersion {
     major: u32,
     minor: u32,
@@ -19,7 +18,7 @@ impl MigrationVersion {
             raise_error!(
                 "ERR_MIGRATION_VERSION_FORMAT_INVALID",
                 error = format!("Le format de version '{}' est invalide.", version_str),
-                context = json!({
+                context = json_value!({
                     "version_input": version_str,
                     "expected_format": "x.y.z",
                     "segments_found": parts.len(),
@@ -31,7 +30,7 @@ impl MigrationVersion {
             Ok(v) => v,
             Err(_) => raise_error!(
                 "ERR_VERSION_PARSE_MAJOR",
-                context = json!({ "value": parts[0], "hint": "Le composant 'Major' de la version doit être un nombre entier." })
+                context = json_value!({ "value": parts[0], "hint": "Le composant 'Major' de la version doit être un nombre entier." })
             ),
         };
 
@@ -39,7 +38,7 @@ impl MigrationVersion {
             Ok(v) => v,
             Err(_) => raise_error!(
                 "ERR_VERSION_PARSE_MINOR",
-                context = json!({ "value": parts[1], "hint": "Le composant 'Minor' de la version doit être un nombre entier." })
+                context = json_value!({ "value": parts[1], "hint": "Le composant 'Minor' de la version doit être un nombre entier." })
             ),
         };
 
@@ -47,7 +46,7 @@ impl MigrationVersion {
             Ok(v) => v,
             Err(_) => raise_error!(
                 "ERR_VERSION_PARSE_PATCH",
-                context = json!({ "value": parts[2], "hint": "Le composant 'Patch' de la version doit être un nombre entier." })
+                context = json_value!({ "value": parts[2], "hint": "Le composant 'Patch' de la version doit être un nombre entier." })
             ),
         };
 
@@ -62,7 +61,7 @@ impl MigrationVersion {
 
 // Implémentation du tri pour ordonner les migrations
 impl Ord for MigrationVersion {
-    fn cmp(&self, other: &Self) -> Ordering {
+    fn cmp(&self, other: &Self) -> FmtOrdering {
         self.major
             .cmp(&other.major)
             .then(self.minor.cmp(&other.minor))
@@ -71,13 +70,13 @@ impl Ord for MigrationVersion {
 }
 
 impl PartialOrd for MigrationVersion {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<FmtOrdering> {
         Some(self.cmp(other))
     }
 }
 
-impl fmt::Display for MigrationVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl FmtDisplay for MigrationVersion {
+    fn fmt(&self, f: &mut FmtCursor<'_>) -> FmtResult {
         write!(f, "{}", self.raw)
     }
 }

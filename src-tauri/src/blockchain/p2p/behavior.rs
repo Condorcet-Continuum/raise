@@ -40,7 +40,7 @@ impl ArcadiaBehavior {
             Err(e) => raise_error!(
                 "ERR_P2P_GOSSIPSUB_CONFIG",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "build_gossipsub_config",
                     "layer": "libp2p_network",
                     "hint": "Vérifiez les paramètres de validation du protocole ou les limites de taille de message."
@@ -56,7 +56,7 @@ impl ArcadiaBehavior {
             Err(e) => raise_error!(
                 "ERR_P2P_BEHAVIOUR_INIT",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "initialize_gossipsub_behaviour",
                     "authenticity": "Signed",
                     "hint": "Échec de l'initialisation du comportement réseau. Vérifiez la validité de la clé locale (PeerId)."

@@ -16,7 +16,7 @@ pub fn parse_sysml_text(input: &str) -> RaiseResult<pest::iterators::Pairs<'_, R
             raise_error!(
                 "ERR_SYSML_PARSE_FAILURE",
                 error = "Échec de l'analyse syntaxique du fichier SysML v2.",
-                context = json!({
+                context = json_value!({
                     "parsing_error": format!("{}", e),
                     "location": format!("{:?}", e.location),
                     "action": "parse_sysml_v2_input",

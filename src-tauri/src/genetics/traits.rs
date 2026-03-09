@@ -1,8 +1,10 @@
-use crate::utils::{fmt::Debug, prelude::*};
+use crate::utils::prelude::*;
 
 /// Le trait Genome définit la structure manipulable par l'AG.
 /// Doit être sérialisable pour le stockage et le passage Frontend/Backend.
-pub trait Genome: Clone + Send + Sync + Debug + Serialize + for<'de> Deserialize<'de> {
+pub trait Genome:
+    Clone + Send + Sync + FmtDebug + Serializable + for<'de> Deserializable<'de>
+{
     /// Génère un individu aléatoire (initialisation)
     fn random() -> Self;
 
@@ -41,7 +43,7 @@ mod tests {
     use super::*;
 
     // Mock minimal pour valider la compilation et l'usage des traits
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serializable, Deserializable)]
     struct MockGenome(i32);
 
     impl Genome for MockGenome {

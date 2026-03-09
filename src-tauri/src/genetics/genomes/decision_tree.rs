@@ -2,7 +2,7 @@ use crate::genetics::traits::Genome;
 use crate::utils::prelude::*;
 use rand::prelude::*;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serializable, Deserializable, PartialEq)]
 pub enum TreeNode {
     Internal {
         feature_index: usize,
@@ -15,7 +15,7 @@ pub enum TreeNode {
     },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serializable, Deserializable)]
 pub struct DecisionTreeGenome {
     pub root: TreeNode,
     pub max_depth: usize,

@@ -11,7 +11,7 @@ use crate::utils::prelude::*;
 
 pub use manager::IndexManager;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serializable, Deserializable)]
 #[serde(rename_all = "lowercase")]
 pub enum IndexType {
     Hash,
@@ -19,7 +19,7 @@ pub enum IndexType {
     Text,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct IndexDefinition {
     pub name: String,
     pub field_path: String,
@@ -27,7 +27,7 @@ pub struct IndexDefinition {
     pub unique: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct IndexRecord {
     pub key: String,
     pub document_id: String,
@@ -40,16 +40,16 @@ pub struct IndexRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::json::{self, json};
 
     #[test]
     fn test_index_type_serialization() {
         // Vérifie que les enums sont sérialisés en minuscule ("hash" et pas "Hash")
         let t1 = IndexType::Hash;
-        assert_eq!(json::to_value(t1).unwrap(), json!("hash")); // Corrigé
+        assert_eq!(json::serialize_to_value(t1).unwrap(), json_value!("hash")); // Corrigé
 
         let t2 = IndexType::BTree;
-        assert_eq!(json::to_value(t2).unwrap(), json!("btree")); // Corrigé
+        assert_eq!(json::serialize_to_value(t2).unwrap(), json_value!("btree"));
+        // Corrigé
     }
 
     #[test]
@@ -61,11 +61,11 @@ mod tests {
             unique: true,
         };
 
-        let json = json::stringify(&def).unwrap();
+        let json = json::serialize_to_string(&def).unwrap();
         // On vérifie que le json contient bien "hash" en minuscule
         assert!(json.contains("\"hash\""));
 
-        let loaded: IndexDefinition = json::parse(&json).unwrap();
+        let loaded: IndexDefinition = json::deserialize_from_str(&json).unwrap();
         assert_eq!(loaded.index_type, IndexType::Hash);
     }
 }

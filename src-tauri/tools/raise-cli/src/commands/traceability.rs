@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/traceability.rs
 
 use clap::{Args, Subcommand};
-use raise::{user_info, user_success, utils::prelude::*, utils::HashMap};
+use raise::{user_info, user_success, utils::prelude::*};
 
 // Imports mis à jour depuis le cœur
 use raise::model_engine::types::ProjectModel;
@@ -32,8 +32,8 @@ pub enum TraceabilityCommands {
 }
 
 /// Helper pour extraire les documents (indispensable pour les nouveaux générateurs)
-fn get_docs(model: &ProjectModel) -> HashMap<String, Value> {
-    let mut docs = HashMap::new();
+fn get_docs(model: &ProjectModel) -> UnorderedMap<String, JsonValue> {
+    let mut docs = UnorderedMap::new();
     let mut collect = |elements: &Vec<raise::model_engine::types::ArcadiaElement>| {
         for e in elements {
             if let Ok(val) = serde_json::to_value(e) {
@@ -63,7 +63,7 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
             // 🎯 Utilisation stricte du contexte JSON pour les macros
             user_info!(
                 "TRACE_START",
-                json!({"step": "init", "message": "Initialisation du moteur de traçage..."})
+                json_value!({"step": "init", "message": "Initialisation du moteur de traçage..."})
             );
 
             let model = ProjectModel::default();
@@ -76,7 +76,7 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
 
             user_success!(
                 "AUDIT_TRACEABILITY_COMPLETE",
-                json!({
+                json_value!({
                     "rules_checked": report.compliance_results.len(),
                     "status": "verified",
                     "module": "traceability_engine"
@@ -87,7 +87,7 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
         TraceabilityCommands::Impact { component_id } => {
             user_info!(
                 "IMPACT_ANALYSIS_START",
-                json!({
+                json_value!({
                     "component": component_id,
                     "scope": "dependency_graph",
                     "action": "evaluating_side_effects"
@@ -101,7 +101,7 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
             // 🎯 Remplacement de la simple string par un JSON structuré
             user_info!(
                 "IMPACT_CALCULATING",
-                json!({"step": "graph_traversal", "message": "Calcul des propagations de changement..."})
+                json_value!({"step": "graph_traversal", "message": "Calcul des propagations de changement..."})
             );
 
             let report = analyzer.analyze(&component_id, 3);
@@ -110,10 +110,10 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
 
             user_success!(
                 "IMPACT_ANALYSIS_SUCCESS",
-                json!({
+                json_value!({
                     "component": component_id,
                     "status": "report_generated",
-                    "timestamp": Utc::now().to_rfc3339()
+                    "timestamp": UtcClock::now().to_rfc3339()
                 })
             );
         }
@@ -121,14 +121,14 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
         TraceabilityCommands::History => {
             user_info!(
                 "TRACKER_START",
-                json!({"action": "fetch_history", "message": "Consultation de l'historique des changements..."})
+                json_value!({"action": "fetch_history", "message": "Consultation de l'historique des changements..."})
             );
 
             let _tracker = ChangeTracker::new();
 
             user_success!(
                 "HISTORY_READY",
-                json!({"status": "loaded", "message": "Historique de traçabilité chargé."})
+                json_value!({"status": "loaded", "message": "Historique de traçabilité chargé."})
             );
         }
     }
@@ -140,15 +140,16 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::mock::DbSandbox;
-    use raise::utils::session::SessionManager;
-    use raise::utils::Arc;
+    use raise::utils::context::SessionManager;
 
-    #[tokio::test]
+    #[cfg(test)]
+    use raise::utils::testing::DbSandbox;
+
+    #[async_test]
     async fn test_traceability_cli_flow() {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {

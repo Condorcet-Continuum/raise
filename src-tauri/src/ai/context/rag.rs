@@ -1,8 +1,8 @@
 use crate::ai::memory::{candle_store::CandleLocalStore, MemoryRecord, VectorStore};
 use crate::ai::nlp::{embeddings::EmbeddingEngine, splitting};
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::config::AppConfig;
-use crate::utils::{io::PathBuf, prelude::*, Uuid};
+
+use crate::utils::prelude::*;
 use candle_core::Device;
 
 pub struct RagRetriever {
@@ -54,14 +54,14 @@ impl RagRetriever {
         }
 
         let vectors = self.embedder.embed_batch(chunks.clone())?;
-        let ingest_time = Utc::now().to_rfc3339();
+        let ingest_time = UtcClock::now().to_rfc3339();
 
         let mut records = Vec::new();
         for (i, chunk) in chunks.iter().enumerate() {
             records.push(MemoryRecord {
-                id: Uuid::new_v4().to_string(),
+                id: UniqueId::new_v4().to_string(),
                 content: chunk.clone(),
-                metadata: json!({
+                metadata: json_value!({
                     "source": source,
                     "chunk_index": i,
                     "total_chunks": chunks.len(),
@@ -131,15 +131,14 @@ impl RagRetriever {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
-    use crate::utils::{AsyncMutex, OnceLock};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {
-        static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+        static LOCK: StaticCell<AsyncMutex<()>> = StaticCell::new();
         LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
-    #[tokio::test]
+    #[async_test]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_candle_end_to_end() {
         let _guard = get_hf_lock().lock().await;
@@ -150,7 +149,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        inject_mock_component(&manager, "nlp",  json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+        inject_mock_component(&manager, "nlp",  json_value!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager)
             .await
@@ -172,7 +171,7 @@ mod tests {
         assert!(context.contains("spec_secu_v2.pdf"));
     }
 
-    #[tokio::test]
+    #[async_test]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_candle_empty_results() {
         let _guard = get_hf_lock().lock().await;
@@ -183,7 +182,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        inject_mock_component(&manager, "nlp", crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+        inject_mock_component(&manager, "nlp", crate::utils::json::json_value!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager)
             .await
@@ -199,7 +198,7 @@ mod tests {
         assert_eq!(context, "");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_candle_persistence() {
         let _guard = get_hf_lock().lock().await;
@@ -209,7 +208,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        inject_mock_component(&manager, "nlp",  json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+        inject_mock_component(&manager, "nlp",  json_value!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
 
         {
             let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager)
@@ -232,7 +231,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_chunking_logic() {
         let _guard = get_hf_lock().lock().await;
@@ -243,7 +242,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        inject_mock_component(&manager, "nlp", crate::utils::json::json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+        inject_mock_component(&manager, "nlp", crate::utils::json::json_value!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager)
             .await

@@ -4,15 +4,15 @@ use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::jsonld::vocabulary::PropertyType;
 use crate::json_db::jsonld::{ContextManager, VocabularyRegistry};
 use crate::model_engine::types::ProjectModel;
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 /// Service principal de traçabilité basé sur un Graphe d'IDs.
 /// 🎯 OPTIMISATION : Plus de durée de vie 'a, le Traceur possède son propre graphe orienté.
 pub struct Tracer {
     // Graphe orienté : Source ID -> List of Target IDs (Downstream)
-    downstream_links: HashMap<String, Vec<String>>,
+    downstream_links: UnorderedMap<String, Vec<String>>,
     // Index inversé : Target ID -> List of Source IDs (Upstream)
-    upstream_links: HashMap<String, Vec<String>>,
+    upstream_links: UnorderedMap<String, Vec<String>>,
 }
 
 impl Tracer {
@@ -35,7 +35,7 @@ impl Tracer {
 
         let mut collect = |elements: &Vec<crate::model_engine::types::ArcadiaElement>| {
             for e in elements {
-                if let Ok(val) = crate::utils::data::to_value(e) {
+                if let Ok(val) = crate::utils::json::serialize_to_value(e) {
                     docs.push(val);
                 }
             }
@@ -50,13 +50,13 @@ impl Tracer {
 
         Self::build_graph(docs)
     }
-    pub fn from_json_list(documents: Vec<Value>) -> Self {
+    pub fn from_json_list(documents: Vec<JsonValue>) -> Self {
         Self::build_graph(documents)
     }
     /// Construit le graphe d'adjacence à partir de n'importe quel document JSON
-    fn build_graph(documents: Vec<Value>) -> Self {
-        let mut downstream: HashMap<String, Vec<String>> = HashMap::new();
-        let mut upstream: HashMap<String, Vec<String>> = HashMap::new();
+    fn build_graph(documents: Vec<JsonValue>) -> Self {
+        let mut downstream: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
+        let mut upstream: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
 
         let ctx = ContextManager::new();
         let registry = VocabularyRegistry::global();
@@ -146,13 +146,12 @@ fn is_link_property(key: &str, ctx: &ContextManager, registry: &VocabularyRegist
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::data::json;
 
     #[test]
     fn test_reverse_indexing_ai_model() {
         let mut model = ProjectModel::default();
-        let mut props = crate::utils::HashMap::new();
-        props.insert("model_id".to_string(), json!("ai_1"));
+        let mut props = UnorderedMap::new();
+        props.insert("model_id".to_string(), json_value!("ai_1"));
 
         let report = ArcadiaElement {
             id: "rep_1".into(),

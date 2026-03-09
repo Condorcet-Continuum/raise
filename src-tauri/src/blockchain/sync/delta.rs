@@ -4,7 +4,7 @@ use crate::blockchain::storage::commit::Mutation;
 use crate::utils::prelude::*;
 
 /// Représente l'écart de données (diff) entre deux points de la chaîne.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serializable, Deserializable, Clone, Default)]
 pub struct ArcadiaDelta {
     /// Liste des mutations nécessaires pour passer de l'état A à l'état B.
     pub patch: Vec<Mutation>,
@@ -46,7 +46,6 @@ impl ArcadiaDelta {
 mod tests {
     use super::*;
     use crate::blockchain::storage::commit::MutationOp;
-    use serde_json::json;
 
     #[test]
     fn test_delta_creation() {
@@ -55,7 +54,7 @@ mod tests {
         let muta = Mutation {
             element_id: "urn:pa:comp1".into(),
             operation: MutationOp::Update,
-            payload: json!({"status": "active"}),
+            payload: json_value!({"status": "active"}),
         };
 
         delta.add_mutation(muta);

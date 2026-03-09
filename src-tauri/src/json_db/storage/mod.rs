@@ -1,15 +1,12 @@
 // FICHIER : src-tauri/src/json_db/storage/mod.rs
+use crate::utils::prelude::*;
 
 pub mod cache;
 pub mod file_storage;
 
-use crate::utils::data::{Deserialize, Serialize, Value};
-use crate::utils::error::RaiseResult;
-use crate::utils::io::PathBuf;
-
 // --- CONFIGURATION ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct JsonDbConfig {
     pub data_root: PathBuf,
 }
@@ -44,7 +41,7 @@ impl JsonDbConfig {
 pub struct StorageEngine {
     pub config: JsonDbConfig,
     // ✅ OPTIMISATION : Une clé structurée plutôt qu'une chaîne de caractères formatée !
-    pub cache: cache::Cache<(String, String, String, String), Value>,
+    pub cache: cache::Cache<(String, String, String, String), JsonValue>,
 }
 
 impl StorageEngine {
@@ -62,7 +59,7 @@ impl StorageEngine {
         db: &str,
         collection: &str,
         id: &str,
-    ) -> RaiseResult<Option<Value>> {
+    ) -> RaiseResult<Option<JsonValue>> {
         // La création d'un tuple est plus rapide qu'un format! macro
         let cache_key = (
             space.to_string(),
@@ -94,7 +91,7 @@ impl StorageEngine {
         db: &str,
         collection: &str,
         id: &str,
-        doc: &Value,
+        doc: &JsonValue,
     ) -> RaiseResult<()> {
         file_storage::write_document(&self.config, space, db, collection, id, doc).await?;
 
@@ -135,15 +132,14 @@ impl StorageEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{io::tempdir, json::json};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_storage_engine_cache_hit() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let engine = StorageEngine::new(config);
 
-        let doc = json!({"val": 42});
+        let doc = json_value!({"val": 42});
 
         engine
             .write_document("s", "d", "c", "1", &doc)

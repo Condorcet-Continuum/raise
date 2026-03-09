@@ -16,11 +16,10 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::data::json;
-    use crate::utils::mock::AgentDbSandbox;
-    use crate::utils::HashSet;
+    use crate::utils::prelude::*;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_rete_light_workflow() {
         // 1. Définition de la règle : (qty * price)
         let rule_expr = Expr::Mul(vec![
@@ -44,7 +43,7 @@ mod tests {
         assert!(deps.contains("item.price"));
 
         // 3. Evaluation
-        let context = json!({
+        let context = json_value!({
             "item": { "qty": 5, "price": 10.5 }
         });
         let provider = NoOpDataProvider;
@@ -55,20 +54,20 @@ mod tests {
         assert_eq!(result.as_f64(), Some(52.5));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_logic_and_comparison() {
         // Règle : Si age >= 18 alors "Majeur" sinon "Mineur"
         let rule = Expr::If {
             condition: Box::new(Expr::Gte(
                 Box::new(Expr::Var("age".to_string())),
-                Box::new(Expr::Val(json!(18))),
+                Box::new(Expr::Val(json_value!(18))),
             )),
-            then_branch: Box::new(Expr::Val(json!("Majeur"))),
-            else_branch: Box::new(Expr::Val(json!("Mineur"))),
+            then_branch: Box::new(Expr::Val(json_value!("Majeur"))),
+            else_branch: Box::new(Expr::Val(json_value!("Mineur"))),
         };
 
-        let ctx_kid = json!({ "age": 12 });
-        let ctx_adult = json!({ "age": 25 });
+        let ctx_kid = json_value!({ "age": 12 });
+        let ctx_adult = json_value!({ "age": 25 });
         let provider = NoOpDataProvider;
 
         Evaluator::evaluate(&rule, &ctx_kid, &provider)
@@ -79,7 +78,7 @@ mod tests {
             .unwrap();
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_rule_store_indexing() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -111,7 +110,7 @@ mod tests {
         store.register_rule("invoices", rule).await.unwrap();
 
         // Simulation changement sur "qty"
-        let mut changes = HashSet::new();
+        let mut changes = UniqueSet::new();
         changes.insert("qty".to_string());
 
         // Vérification : La règle doit être récupérée
@@ -120,7 +119,7 @@ mod tests {
         assert_eq!(impacted[0].id, "calc_total");
 
         // Simulation changement sur "other" (non utilisé)
-        let mut changes_irrelevant = HashSet::new();
+        let mut changes_irrelevant = UniqueSet::new();
         changes_irrelevant.insert("other_field".to_string());
 
         let impacted_none = store.get_impacted_rules("invoices", &changes_irrelevant);

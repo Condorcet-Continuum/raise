@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/commands/rules_commands.rs
 
-use crate::utils::{prelude::*, AsyncMutex};
+use crate::utils::prelude::*;
 
 use crate::json_db::storage::StorageEngine;
 use crate::model_engine::loader::ModelLoader;
@@ -20,7 +20,7 @@ pub struct RuleEngineState {
 /// Le frontend envoie une règle JSON et un contexte JSON (l'élément à tester).
 /// Le backend renvoie le résultat (True/False ou valeur calculée).
 #[tauri::command]
-pub async fn dry_run_rule(rule: Rule, context: Value) -> RaiseResult<Value> {
+pub async fn dry_run_rule(rule: Rule, context: JsonValue) -> RaiseResult<JsonValue> {
     let provider = NoOpDataProvider;
 
     // 1. On évalue la règle sans persistance
@@ -29,7 +29,7 @@ pub async fn dry_run_rule(rule: Rule, context: Value) -> RaiseResult<Value> {
         Err(e) => raise_error!(
             "ERR_RULE_EVAL_EXECUTION",
             error = e,
-            context = json!({
+            context = json_value!({
                 "expression": format!("{:?}", rule.expr),
                 "action": "evaluate_rule_expression",
                 "hint": "Erreur de syntaxe ou variable manquante dans le contexte. Vérifiez les types de données comparés."
@@ -73,7 +73,7 @@ pub async fn validate_model(
         Err(e) => raise_error!(
             "ERR_PROJECT_INDEX_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "index_project_structure",
                 "loader_state": "active",
                 "hint": "L'indexeur n'a pas pu scanner le projet. Vérifiez les permissions de lecture ou la présence d'un fichier de configuration corrompu à la racine."
@@ -97,35 +97,35 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_dry_run_rule_async() {
         let rule = Rule {
             id: "test_rule".to_string(),
             target: "result".to_string(),
-            expr: Expr::Eq(vec![Expr::Val(json!(10)), Expr::Val(json!(10))]),
+            expr: Expr::Eq(vec![Expr::Val(json_value!(10)), Expr::Val(json_value!(10))]),
             description: None,
             severity: None,
         };
-        let context = json!({});
+        let context = json_value!({});
 
         let result = dry_run_rule(rule, context).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), json!(true));
+        assert_eq!(result.unwrap(), json_value!(true));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_dry_run_error_async() {
         let rule = Rule {
             id: "error_rule".to_string(),
             target: "result".to_string(),
-            expr: Expr::Add(vec![Expr::Val(json!("not_a_number"))]),
+            expr: Expr::Add(vec![Expr::Val(json_value!("not_a_number"))]),
             description: None,
             severity: None,
         };
 
-        let result = dry_run_rule(rule, json!({})).await;
+        let result = dry_run_rule(rule, json_value!({})).await;
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -150,7 +150,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_validate_model_integration() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(

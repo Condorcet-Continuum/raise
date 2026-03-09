@@ -1,13 +1,12 @@
 // FICHIER : src-tauri/src/workflow_engine/handlers/task.rs
 use super::{HandlerContext, NodeHandler};
 use crate::ai::assurance::xai::{ExplanationScope, XaiFrame, XaiMethod};
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 use crate::workflow_engine::{ExecutionStatus, NodeType, WorkflowNode};
-use async_trait::async_trait;
 
 pub struct TaskHandler;
 
-#[async_trait]
+#[async_interface]
 impl NodeHandler for TaskHandler {
     fn node_type(&self) -> NodeType {
         NodeType::Task
@@ -16,7 +15,7 @@ impl NodeHandler for TaskHandler {
     async fn execute(
         &self,
         node: &WorkflowNode,
-        context: &mut HashMap<String, Value>,
+        context: &mut UnorderedMap<String, JsonValue>,
         shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
         let mut orch = shared_ctx.orchestrator.lock().await;
@@ -51,25 +50,21 @@ impl NodeHandler for TaskHandler {
 mod tests {
     use super::*;
     use crate::ai::orchestrator::AiOrchestrator;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::{Arc, AsyncMutex};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
-
-    // 🎯 IMPORTS AJOUTÉS : On récupère notre Sandbox et les injecteurs
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::data::json;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     // 🎯 FIX : La fonction prend la DB et la config de la Sandbox en paramètres
     async fn setup_dummy_context(
-        storage: Arc<crate::json_db::storage::StorageEngine>,
-        config: &crate::utils::config::AppConfig,
+        storage: SharedRef<crate::json_db::storage::StorageEngine>,
+        config: &AppConfig,
     ) -> (
-        Arc<AsyncMutex<AiOrchestrator>>,
-        Arc<PluginManager>,
+        SharedRef<AsyncMutex<AiOrchestrator>>,
+        SharedRef<PluginManager>,
         WorkflowCritic,
-        HashMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
+        UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
     ) {
         let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
@@ -77,29 +72,29 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm",
-            json!({ "provider": "mock", "model": "test" }),
+            json_value!({ "provider": "mock", "model": "test" }),
         )
         .await;
-        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
         // 2. 🎯 INITIALISATION : On utilise le StorageEngine de la Sandbox (important : Some(storage.clone()))
         let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage.clone()))
             .await
             .unwrap();
 
-        let plugin_manager = Arc::new(PluginManager::new(&storage, None));
+        let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
         let critic = WorkflowCritic::default();
-        let tools = HashMap::new();
+        let tools = UnorderedMap::new();
 
         (
-            Arc::new(AsyncMutex::new(orch)),
+            SharedRef::new(AsyncMutex::new(orch)),
             plugin_manager,
             critic,
             tools,
         )
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)] // Indispensable car on instancie l'Orchestrateur
     async fn test_task_handler_execution() {
@@ -122,10 +117,10 @@ mod tests {
             id: "task_1".into(),
             r#type: NodeType::Task,
             name: "Agent de Test".into(),
-            params: json!({ "directive": "Analyse de sécurité" }),
+            params: json_value!({ "directive": "Analyse de sécurité" }),
         };
 
-        let mut data_ctx = HashMap::new();
+        let mut data_ctx = UnorderedMap::new();
 
         // 3. Exécution de la tâche
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();

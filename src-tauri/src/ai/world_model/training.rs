@@ -30,7 +30,7 @@ impl<'a> WorldTrainer<'a> {
                 raise_error!(
                     "ERR_AI_OPTIMIZER_INIT_FAILED",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "learning_rate": lr,
                         "variable_count": engine.varmap.all_vars().len(),
                         "hint": "Échec de l'initialisation d'AdamW. Vérifiez que le Varmap contient des variables entraînables valides."
@@ -61,7 +61,7 @@ impl<'a> WorldTrainer<'a> {
             Err(e) => raise_error!(
                 "ERR_AI_LOSS_SUB_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "pred_shape": format!("{:?}", predicted_tensor.shape()),
                     "target_shape": format!("{:?}", target_tensor.shape())
                 })
@@ -83,7 +83,7 @@ impl<'a> WorldTrainer<'a> {
             Err(e) => raise_error!(
                 "ERR_AI_BACKPROP_FAILED",
                 error = e,
-                context = json!({ "hint": "Vérifiez si certains gradients sont devenus NaN ou si le graphe de calcul a été rompu." })
+                context = json_value!({ "hint": "Vérifiez si certains gradients sont devenus NaN ou si le graphe de calcul a été rompu." })
             ),
         };
 
@@ -102,10 +102,8 @@ mod tests {
     use super::*;
     use crate::ai::nlp::parser::CommandType;
     use crate::model_engine::types::NameType;
-    use crate::utils::HashMap;
+
     use candle_nn::VarMap;
-    // 🎯 NOUVEL IMPORT
-    use crate::utils::config::WorldModelConfig;
 
     fn make_dummy(id: &str, layer_idx: usize) -> ArcadiaElement {
         let kind = match layer_idx {
@@ -119,7 +117,7 @@ mod tests {
             name: NameType::default(),
             kind: kind.to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         }
     }
 

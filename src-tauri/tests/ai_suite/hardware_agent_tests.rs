@@ -1,10 +1,11 @@
+use raise::utils::prelude::*;
+
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{hardware_agent::HardwareAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::Arc;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_hardware_agent_handles_both_electronics_and_infra() {
@@ -29,7 +30,7 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.sandbox.storage.clone()),
+        SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for BusinessAgent tests"),
@@ -49,7 +50,7 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
     };
     let res_fpga = agent.process(&ctx, &intent_fpga).await;
     assert!(res_fpga.is_ok());
-    println!("   > {}", res_fpga.unwrap().unwrap());
+    println!("   > {:?}", res_fpga.unwrap().unwrap());
 
     // --- OBJECTIF 2 : INFRASTRUCTURE (Cloud) ---
     println!("☁️ Test 2 : Création Serveur Cloud...");
@@ -60,7 +61,7 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
     };
     let res_cloud = agent.process(&ctx, &intent_cloud).await;
     assert!(res_cloud.is_ok());
-    println!("   > {}", res_cloud.unwrap().unwrap());
+    println!("   > {:?}", res_cloud.unwrap().unwrap());
 
     // --- VÉRIFICATION PHYSIQUE ---
     let nodes_dir = test_root
@@ -68,7 +69,7 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
         .join("pa")
         .join("collections")
         .join("physical_nodes");
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tokio::time::sleep(TimeDuration::from_millis(1500)).await;
 
     let mut found_fpga = false;
     let mut found_cloud = false;

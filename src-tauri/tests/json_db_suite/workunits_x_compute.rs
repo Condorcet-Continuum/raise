@@ -3,9 +3,9 @@
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::{self, CollectionsManager};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-use raise::utils::prelude::*; // Apporte json!, Value, Uuid, etc.
+use raise::utils::prelude::*; // Apporte json!, JsonValue, Uuid, etc.
 
-#[tokio::test]
+#[async_test]
 async fn workunit_compute_then_validate_minimal() {
     // 1. Initialisation de l'environnement (Sandboxing total)
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -28,13 +28,13 @@ async fn workunit_compute_then_validate_minimal() {
         .expect("❌ Échec de la compilation du validateur workunit");
 
     // 3. Donnée conforme au workunit.schema.json
-    let doc = json!({
-        "_id": Uuid::new_v4().to_string(),
+    let doc = json_value!({
+        "_id": UniqueId::new_v4().to_string(),
         "code": "WU-DEVOPS-01",
         "name": { "fr": "DevOps pipeline" },
         "status": "draft",
         "version": "1.0.0",
-        "createdAt": Utc::now().to_rfc3339(),
+        "createdAt": UtcClock::now().to_rfc3339(),
         "finance": {
             "version": "1.0.0",
             "billing_model": "time_material",
@@ -52,7 +52,7 @@ async fn workunit_compute_then_validate_minimal() {
     println!("✅ Workunit minimal validé.");
 }
 
-#[tokio::test]
+#[async_test]
 async fn finance_compute_minimal() {
     // 1. Initialisation de l'environnement
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -68,7 +68,7 @@ async fn finance_compute_minimal() {
         .expect("❌ Échec compilation validateur finance");
 
     // 2. CAS DE TEST : Données brutes avant calcul
-    let mut finance_doc = json!({
+    let mut finance_doc = json_value!({
         "version": "1.0.0",
         "billing_model": "fixed",
         "revenue_scenarios": {

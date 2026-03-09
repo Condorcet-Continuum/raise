@@ -3,7 +3,7 @@
 // 1. Imports corrigés (plus de ::raise::)
 use raise_shared::chaincode::chaincode_client::ChaincodeClient;
 use raise_shared::chaincode::{chaincode_message, ChaincodeMessage}; // On importe le module interne pour l'Enum
-use serde_json::Value;
+use JsonValue;
 
 // Adresse du conteneur Docker exposé sur l'hôte
 const CHAINCODE_URL: &str = "http://127.0.0.1:9999";
@@ -19,12 +19,12 @@ fn build_register_request(
     schema_json: &str,
 ) -> RaiseResult<ChaincodeMessage, String> {
     // Validation du JSON d'entrée
-    let schema_def: Value = match serde_json::from_str(schema_json) {
+    let schema_def: JsonValue = match json::deserialize_from_str(schema_json) {
         Ok(val) => val,
         Err(e) => raise_error!(
             "ERR_JSONDB_SCHEMA_SYNTAX",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "parse_schema_definition",
                 "line": e.line(),
                 "column": e.column(),
@@ -33,14 +33,14 @@ fn build_register_request(
         ),
     };
 
-    let args = serde_json::json!({
+    let args = json_value!({
         "uri": uri,
         "version": version,
         "schema_definition": schema_def,
         "hash": "hash_simulé_tauri"
     });
 
-    let payload = match serde_json::to_vec(&serde_json::json!({
+    let payload = match serde_json::to_vec(&json_value!({
         "function": "register_schema",
         "args": args
     })) {
@@ -48,7 +48,7 @@ fn build_register_request(
         Err(e) => raise_error!(
             "ERR_SERIALIZATION_PAYLOAD_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "serialize_schema_payload",
                 "function": "register_schema",
                 "hint": "Vérifiez que les arguments ne contiennent pas de types non supportés ou de références circulaires."
@@ -56,7 +56,7 @@ fn build_register_request(
         ),
     };
 
-    let tx_id = uuid::Uuid::new_v4().to_string();
+    let tx_id = UniqueId::new_v4().to_string();
 
     Ok(ChaincodeMessage {
         // 2. Correction du chemin vers l'Enum Type
@@ -92,7 +92,7 @@ pub async fn cmd_register_schema(
             raise_error!(
                 "ERR_BLOCKCHAIN_GRPC_CONNECTION_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "url": CHAINCODE_URL,
                     "protocol": "gRPC",
                     "hint": "Échec de la connexion au Chaincode. Avez-vous lancé 'docker-compose up' ? Vérifiez que le service est accessible sur le port configuré."
@@ -111,7 +111,7 @@ pub async fn cmd_register_schema(
         Err(e) => raise_error!(
             "ERR_GRPC_TRANSPORT_FAILURE",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "establish_grpc_stream",
                 "service": "chat_service",
                 "hint": "Vérifiez la connexion réseau ou si le serveur distant est bien en ligne."
@@ -126,12 +126,12 @@ pub async fn cmd_register_schema(
         Ok(Some(msg)) => msg,
         Ok(None) => return raise_error!(
             "ERR_BLOCKCHAIN_EMPTY_RESPONSE",
-            context = json!({ "hint": "Le conteneur a fermé la connexion sans envoyer de réponse." })
+            context = json_value!({ "hint": "Le conteneur a fermé la connexion sans envoyer de réponse." })
         ),
         Err(e) => return raise_error!(
             "ERR_BLOCKCHAIN_STREAM_FAILED",
             error = e,
-            context = json!({ "protocol": "gRPC_Stream" })
+            context = json_value!({ "protocol": "gRPC_Stream" })
         ),
     };
 
@@ -145,7 +145,7 @@ pub async fn cmd_register_schema(
         // On lève une erreur métier structurée
         raise_error!(
             "ERR_BLOCKCHAIN_TRANSACTION_REJECTED",
-            context = json!({
+            context = json_value!({
                 "txid": response.txid,
                 "payload_error": err_msg,
                 "type": response.r#type

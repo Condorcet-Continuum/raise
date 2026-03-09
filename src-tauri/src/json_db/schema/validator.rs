@@ -1,15 +1,12 @@
 // FICHIER : src-tauri/src/json_db/schema/validator.rs
+use crate::utils::prelude::*;
 
 use super::registry::SchemaRegistry;
-
-use crate::utils::io::{Component, Path, PathBuf};
-use crate::utils::prelude::*;
-use crate::utils::Regex;
 
 #[derive(Debug, Clone)]
 pub struct SchemaValidator {
     root_uri: String,
-    schema: Value,
+    schema: JsonValue,
     reg: SchemaRegistry,
 }
 
@@ -20,7 +17,7 @@ impl SchemaValidator {
             raise_error!(
                 "ERR_SCHEMA_NOT_IN_REGISTRY",
                 error = format!("Le schéma sémantique est introuvable : {}", root_uri),
-                context = json!({
+                context = json_value!({
                     "root_uri": root_uri,
                     "action": "resolve_schema_from_registry",
                     "hint": "Vérifiez que l'ontologie a été correctement chargée."
@@ -36,21 +33,21 @@ impl SchemaValidator {
         })
     }
 
-    pub fn compute_then_validate(&self, instance: &mut Value) -> RaiseResult<()> {
+    pub fn compute_then_validate(&self, instance: &mut JsonValue) -> RaiseResult<()> {
         apply_defaults(instance, &self.schema, &self.reg, &self.root_uri)?;
         self.validate(instance)
     }
 
-    pub fn validate(&self, instance: &Value) -> RaiseResult<()> {
+    pub fn validate(&self, instance: &JsonValue) -> RaiseResult<()> {
         validate_node(instance, &self.schema, &self.reg, &self.root_uri)
     }
 }
 
 fn resolve_schema_node<'a>(
-    schema: &'a Value,
+    schema: &'a JsonValue,
     reg: &'a SchemaRegistry,
     current_uri: &str,
-) -> &'a Value {
+) -> &'a JsonValue {
     if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
         let (file_uri, fragment) = if ref_str.starts_with('#') {
             (current_uri.to_string(), Some(ref_str.to_string()))
@@ -74,8 +71,8 @@ fn resolve_schema_node<'a>(
 
 /// 🎯 Hydratation récursive des valeurs par défaut
 fn apply_defaults(
-    instance: &mut Value,
-    schema: &Value,
+    instance: &mut JsonValue,
+    schema: &JsonValue,
     reg: &SchemaRegistry,
     current_uri: &str,
 ) -> RaiseResult<()> {
@@ -157,10 +154,14 @@ fn apply_defaults(
                         if let Some(plan) = compute.get("plan").and_then(|v| v.as_object()) {
                             if let Some(op) = plan.get("op").and_then(|v| v.as_str()) {
                                 let computed_val = match op {
-                                    "uuid_v4" => Value::String(Uuid::new_v4().to_string()),
-                                    "now_rfc3339" => Value::String(Utc::now().to_rfc3339()),
-                                    "const" => plan.get("value").cloned().unwrap_or(Value::Null),
-                                    _ => Value::Null,
+                                    "uuid_v4" => JsonValue::String(UniqueId::new_v4().to_string()),
+                                    "now_rfc3339" => {
+                                        JsonValue::String(UtcClock::now().to_rfc3339())
+                                    }
+                                    "const" => {
+                                        plan.get("value").cloned().unwrap_or(JsonValue::Null)
+                                    }
+                                    _ => JsonValue::Null,
                                 };
 
                                 if !computed_val.is_null() {
@@ -192,8 +193,8 @@ fn apply_defaults(
 }
 
 fn validate_node(
-    instance: &Value,
-    schema: &Value,
+    instance: &JsonValue,
+    schema: &JsonValue,
     reg: &SchemaRegistry,
     current_uri: &str,
 ) -> RaiseResult<()> {
@@ -210,7 +211,7 @@ fn validate_node(
             raise_error!(
                 "ERR_SCHEMA_REF_NOT_FOUND",
                 error = format!("Référence de schéma introuvable : {}", file_uri),
-                context = json!({
+                context = json_value!({
                     "requested_uri": file_uri,
                     "action": "resolve_remote_ref",
                     "hint": "Assurez-vous que l'ontologie contenant cette URI a été chargée via 'load_layer_from_file' avant la validation."
@@ -227,7 +228,7 @@ fn validate_node(
                         "ERR_SCHEMA_POINTER_NOT_FOUND",
                         error =
                             format!("Pointeur JSON '{}' introuvable dans {}", pointer, file_uri),
-                        context = json!({
+                        context = json_value!({
                             "pointer": pointer,
                             "target_file": file_uri,
                             "action": "resolve_json_pointer",
@@ -290,11 +291,11 @@ fn validate_node(
     }
 
     // Fonction utilitaire de diagnostic (Standard RAISE V1.3)
-    fn raise_type_error(expected: &str, actual: &Value) -> RaiseResult<()> {
+    fn raise_type_error(expected: &str, actual: &JsonValue) -> RaiseResult<()> {
         raise_error!(
             "ERR_VALIDATION_TYPE_MISMATCH",
             error = format!("Échec de conformité : type '{}' attendu.", expected),
-            context = json!({
+            context = json_value!({
                 "expected_type": expected,
                 "actual_value_sample": format!("{:.50}", actual.to_string()),
                 "action": "validate_primitive_type",
@@ -306,8 +307,8 @@ fn validate_node(
 }
 
 fn validate_object(
-    instance: &Value,
-    schema: &Value,
+    instance: &JsonValue,
+    schema: &JsonValue,
     reg: &SchemaRegistry,
     current_uri: &str,
 ) -> RaiseResult<()> {
@@ -321,7 +322,7 @@ fn validate_object(
                     raise_error!(
                         "ERR_VALIDATION_REQUIRED_FIELD_MISSING",
                         error = format!("Propriété obligatoire manquante : '{}'", key),
-                        context = json!({
+                        context = json_value!({
                             "missing_key": key,
                             "available_keys": obj.keys().collect::<Vec<_>>(),
                             "action": "validate_required_properties",
@@ -341,7 +342,7 @@ fn validate_object(
                     raise_error!(
                         "ERR_VALIDATION_NESTED_PROPERTY_FAIL",
                         error = format!("Échec de validation sur la propriété '{}'", key),
-                        context = json!({
+                        context = json_value!({
                             "property_name": key,
                             "nested_error": e,
                             "action": "validate_object_properties",
@@ -358,13 +359,13 @@ fn validate_object(
     if let Some(patterns) = schema.get("patternProperties").and_then(|v| v.as_object()) {
         for (pattern, sub_schema) in patterns {
             // On compile le regex
-            let re = match Regex::new(pattern) {
+            let re = match TextRegex::new(pattern) {
                 Ok(r) => r,
                 Err(e) => {
                     raise_error!(
                         "ERR_SCHEMA_INVALID_REGEX_PATTERN",
                         error = format!("Regex invalide dans 'patternProperties' : {}", pattern),
-                        context = json!({
+                        context = json_value!({
                             "invalid_pattern": pattern,
                             "regex_error": e.to_string(),
                             "action": "compile_pattern_properties",
@@ -381,7 +382,7 @@ fn validate_object(
                         raise_error!(
                             "ERR_VALIDATION_PATTERN_PROPERTY_FAIL",
                             error = format!("Échec de validation pour la clé dynamique '{}'", key),
-                            context = json!({
+                            context = json_value!({
                                 "matched_key": key,
                                 "applied_pattern": re.as_str(),
                                 "nested_error": e,
@@ -420,7 +421,7 @@ fn validate_object(
                     raise_error!(
                         "ERR_VALIDATION_ADDITIONAL_PROPERTY_FORBIDDEN",
                         error = format!("Propriété non autorisée détectée : '{}'", k),
-                        context = json!({
+                        context = json_value!({
                             "forbidden_key": k,
                             "action": "validate_additional_properties",
                             "hint": "Ce schéma est clos (additionalProperties: false). Seules les propriétés définies explicitement ou correspondant à un motif (pattern) sont acceptées."
@@ -432,7 +433,7 @@ fn validate_object(
     }
     Ok(())
 }
-fn validate_string(instance: &Value, schema: &Value) -> RaiseResult<()> {
+fn validate_string(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> {
     let s = instance.as_str().unwrap();
 
     if let Some(min) = schema.get("minLength").and_then(|v| v.as_u64()) {
@@ -440,7 +441,7 @@ fn validate_string(instance: &Value, schema: &Value) -> RaiseResult<()> {
             raise_error!(
                 "ERR_VALIDATION_STRING_TOO_SHORT",
                 error = format!("La chaîne est trop courte (minimum: {} caractères).", min),
-                context = json!({ "actual_length": s.chars().count(), "min_length": min })
+                context = json_value!({ "actual_length": s.chars().count(), "min_length": min })
             );
         }
     }
@@ -450,19 +451,19 @@ fn validate_string(instance: &Value, schema: &Value) -> RaiseResult<()> {
             raise_error!(
                 "ERR_VALIDATION_STRING_TOO_LONG",
                 error = format!("La chaîne est trop longue (maximum: {} caractères).", max),
-                context = json!({ "actual_length": s.chars().count(), "max_length": max })
+                context = json_value!({ "actual_length": s.chars().count(), "max_length": max })
             );
         }
     }
 
     if let Some(pattern) = schema.get("pattern").and_then(|v| v.as_str()) {
-        let re = match Regex::new(pattern) {
+        let re = match TextRegex::new(pattern) {
             Ok(r) => r,
             Err(e) => {
                 raise_error!(
                     "ERR_SCHEMA_INVALID_REGEX",
                     error = format!("Regex invalide dans le schéma : {}", pattern),
-                    context = json!({ "pattern": pattern, "error": e.to_string() })
+                    context = json_value!({ "pattern": pattern, "error": e.to_string() })
                 );
             }
         };
@@ -470,14 +471,14 @@ fn validate_string(instance: &Value, schema: &Value) -> RaiseResult<()> {
             raise_error!(
                 "ERR_VALIDATION_PATTERN_MISMATCH",
                 error = "Le format de la chaîne ne correspond pas au motif exigé.",
-                context = json!({ "pattern": pattern, "value": s })
+                context = json_value!({ "pattern": pattern, "value": s })
             );
         }
     }
     Ok(())
 }
 
-fn validate_number(instance: &Value, schema: &Value) -> RaiseResult<()> {
+fn validate_number(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> {
     // as_f64() gère proprement les entiers et les flottants pour la comparaison
     let n = instance.as_f64().unwrap();
 
@@ -486,7 +487,7 @@ fn validate_number(instance: &Value, schema: &Value) -> RaiseResult<()> {
             raise_error!(
                 "ERR_VALIDATION_NUMBER_TOO_SMALL",
                 error = format!("La valeur est inférieure au minimum autorisé ({}).", min),
-                context = json!({ "actual_value": n, "minimum": min })
+                context = json_value!({ "actual_value": n, "minimum": min })
             );
         }
     }
@@ -496,7 +497,7 @@ fn validate_number(instance: &Value, schema: &Value) -> RaiseResult<()> {
             raise_error!(
                 "ERR_VALIDATION_NUMBER_TOO_LARGE",
                 error = format!("La valeur est supérieure au maximum autorisé ({}).", max),
-                context = json!({ "actual_value": n, "maximum": max })
+                context = json_value!({ "actual_value": n, "maximum": max })
             );
         }
     }
@@ -504,8 +505,8 @@ fn validate_number(instance: &Value, schema: &Value) -> RaiseResult<()> {
 }
 
 fn validate_array(
-    instance: &Value,
-    schema: &Value,
+    instance: &JsonValue,
+    schema: &JsonValue,
     reg: &SchemaRegistry,
     current_uri: &str,
 ) -> RaiseResult<()> {
@@ -519,7 +520,7 @@ fn validate_array(
                     "Le tableau contient trop peu d'éléments (minimum: {}).",
                     min
                 ),
-                context = json!({ "actual_length": arr.len(), "min_items": min })
+                context = json_value!({ "actual_length": arr.len(), "min_items": min })
             );
         }
     }
@@ -529,7 +530,7 @@ fn validate_array(
             raise_error!(
                 "ERR_VALIDATION_ARRAY_TOO_LARGE",
                 error = format!("Le tableau contient trop d'éléments (maximum: {}).", max),
-                context = json!({ "actual_length": arr.len(), "max_items": max })
+                context = json_value!({ "actual_length": arr.len(), "max_items": max })
             );
         }
     }
@@ -542,7 +543,7 @@ fn validate_array(
                     raise_error!(
                         "ERR_VALIDATION_ARRAY_ITEM_FAIL",
                         error = format!("Échec de validation à l'index [{}] du tableau", index),
-                        context = json!({ "index": index, "nested_error": e })
+                        context = json_value!({ "index": index, "nested_error": e })
                     );
                 }
             }
@@ -589,12 +590,12 @@ fn normalize_path(path: &Path) -> PathBuf {
     let mut components = Vec::new();
     for component in path.components() {
         match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
+            fs::Component::CurDir => {}
+            fs::Component::ParentDir => {
                 components.pop();
             }
-            Component::Normal(c) => components.push(c),
-            Component::RootDir | Component::Prefix(_) => {}
+            fs::Component::Normal(c) => components.push(c),
+            fs::Component::RootDir | fs::Component::Prefix(_) => {}
         }
     }
     let mut result = PathBuf::new();
@@ -611,9 +612,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::json::json;
 
-    fn setup_validator(schema: Value) -> SchemaValidator {
+    fn setup_validator(schema: JsonValue) -> SchemaValidator {
         let mut reg = SchemaRegistry::new();
         reg.register("db://test/schema".to_string(), schema);
         SchemaValidator::compile_with_registry("db://test/schema", &reg).unwrap()
@@ -621,50 +621,50 @@ mod tests {
 
     #[test]
     fn test_string_constraints() {
-        let v = setup_validator(json!({
+        let v = setup_validator(json_value!({
             "type": "string",
             "minLength": 3,
             "maxLength": 5,
             "pattern": "^[A-Z]+$"
         }));
 
-        assert!(v.validate(&json!("TEST")).is_ok()); // 4 chars, Majuscules
-        assert!(v.validate(&json!("TE")).is_err()); // Trop court
-        assert!(v.validate(&json!("TESTING")).is_err()); // Trop long
-        assert!(v.validate(&json!("test")).is_err()); // Mauvais pattern (minuscules)
+        assert!(v.validate(&json_value!("TEST")).is_ok()); // 4 chars, Majuscules
+        assert!(v.validate(&json_value!("TE")).is_err()); // Trop court
+        assert!(v.validate(&json_value!("TESTING")).is_err()); // Trop long
+        assert!(v.validate(&json_value!("test")).is_err()); // Mauvais pattern (minuscules)
     }
 
     #[test]
     fn test_number_constraints() {
-        let v = setup_validator(json!({
+        let v = setup_validator(json_value!({
             "type": "number",
             "minimum": 10.5,
             "maximum": 20.0
         }));
 
-        assert!(v.validate(&json!(15)).is_ok());
-        assert!(v.validate(&json!(10.5)).is_ok());
-        assert!(v.validate(&json!(5)).is_err()); // Trop petit
-        assert!(v.validate(&json!(21.5)).is_err()); // Trop grand
+        assert!(v.validate(&json_value!(15)).is_ok());
+        assert!(v.validate(&json_value!(10.5)).is_ok());
+        assert!(v.validate(&json_value!(5)).is_err()); // Trop petit
+        assert!(v.validate(&json_value!(21.5)).is_err()); // Trop grand
     }
 
     #[test]
     fn test_array_constraints() {
-        let v = setup_validator(json!({
+        let v = setup_validator(json_value!({
             "type": "array",
             "minItems": 1,
             "maxItems": 3,
             "items": { "type": "string" }
         }));
 
-        assert!(v.validate(&json!(["a", "b"])).is_ok()); // Valide (taille 2, full strings)
-        assert!(v.validate(&json!([])).is_err()); // Trop petit
-        assert!(v.validate(&json!(["a", "b", "c", "d"])).is_err()); // Trop grand
-        assert!(v.validate(&json!(["a", 42])).is_err()); // 42 n'est pas une string
+        assert!(v.validate(&json_value!(["a", "b"])).is_ok()); // Valide (taille 2, full strings)
+        assert!(v.validate(&json_value!([])).is_err()); // Trop petit
+        assert!(v.validate(&json_value!(["a", "b", "c", "d"])).is_err()); // Trop grand
+        assert!(v.validate(&json_value!(["a", 42])).is_err()); // 42 n'est pas une string
     }
     #[test]
     fn test_apply_defaults_basic() {
-        let v = setup_validator(json!({
+        let v = setup_validator(json_value!({
             "type": "object",
             "properties": {
                 "active": { "type": "boolean", "default": true },
@@ -672,7 +672,7 @@ mod tests {
             }
         }));
 
-        let mut data = json!({});
+        let mut data = json_value!({});
         v.compute_then_validate(&mut data)
             .expect("L'hydratation doit réussir");
 
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn test_apply_defaults_recursive() {
-        let v = setup_validator(json!({
+        let v = setup_validator(json_value!({
             "type": "object",
             "properties": {
                 "settings": {
@@ -695,7 +695,7 @@ mod tests {
             }
         }));
 
-        let mut data = json!({});
+        let mut data = json_value!({});
         v.compute_then_validate(&mut data)
             .expect("L'hydratation récursive doit réussir");
 
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_required_with_default_interplay() {
-        let v = setup_validator(json!({
+        let v = setup_validator(json_value!({
             "type": "object",
             "properties": {
                 "id": { "type": "string" },
@@ -715,13 +715,13 @@ mod tests {
         }));
 
         // Scénario 1: id présent, status manquant -> Succès (status injecté)
-        let mut data1 = json!({ "id": "u1" });
+        let mut data1 = json_value!({ "id": "u1" });
         v.compute_then_validate(&mut data1)
             .expect("Doit passer car status est injecté");
         assert_eq!(data1["status"], "pending");
 
         // Scénario 2: tout manquant -> Échec (id n'a pas de default)
-        let mut data2 = json!({});
+        let mut data2 = json_value!({});
         let res = v.compute_then_validate(&mut data2);
         assert!(
             res.is_err(),
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn test_apply_defaults_in_arrays() {
-        let v = setup_validator(json!({
+        let v = setup_validator(json_value!({
             "type": "array",
             "items": {
                 "type": "object",
@@ -744,7 +744,7 @@ mod tests {
             }
         }));
 
-        let mut data = json!([{}, {"role": "admin"}]);
+        let mut data = json_value!([{}, {"role": "admin"}]);
         v.compute_then_validate(&mut data).unwrap();
 
         assert_eq!(data[0]["role"], "user"); // Injecté

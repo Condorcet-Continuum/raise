@@ -1,4 +1,4 @@
-use crate::utils::Regex;
+use crate::utils::prelude::*;
 
 /// Structure représentant une entité extraite du texte.
 #[derive(Debug, PartialEq, Clone)]
@@ -20,7 +20,7 @@ pub fn extract_entities(text: &str) -> Vec<Entity> {
 
     // 1. Extraction des textes entre guillemets (Priorité haute)
     // Regex : capture tout ce qui est entre " " ou ' '
-    let re_quotes = Regex::new(r#"["']([^"']+)["']"#).unwrap();
+    let re_quotes = TextRegex::new(r#"["']([^"']+)["']"#).unwrap();
     for cap in re_quotes.captures_iter(text) {
         if let Some(matched) = cap.get(1) {
             entities.push(Entity {
@@ -56,7 +56,7 @@ pub fn extract_entities(text: &str) -> Vec<Entity> {
     // Ex: "Station Sol" -> capturé.
     // Regex : Mot Majuscule + (Espace + Mot Majuscule optionnel)*
     let re_proper =
-        Regex::new(r"\b[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+\b(?:\s+[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+\b)*").unwrap();
+        TextRegex::new(r"\b[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+\b(?:\s+[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+\b)*").unwrap();
 
     // Liste de déterminants à nettoyer si capturés par erreur (début de phrase)
     let determinants = ["Le ", "La ", "Les ", "Un ", "Une ", "Des ", "L'"];

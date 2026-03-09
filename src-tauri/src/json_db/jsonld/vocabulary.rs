@@ -1,10 +1,6 @@
 // FICHIER : src-tauri/src/json_db/jsonld/vocabulary.rs
 
-use crate::utils::data::HashMap;
-use crate::utils::io;
-use crate::utils::json;
 use crate::utils::prelude::*;
-use crate::utils::{Arc, OnceLock, RwLock};
 
 // --- NAMESPACES ---
 pub mod namespaces {
@@ -76,13 +72,13 @@ pub mod arcadia_types {
 }
 
 // --- STRUCTURES ---
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub enum PropertyType {
     DatatypeProperty,
     ObjectProperty,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct Class {
     pub iri: String,
     pub label: String,
@@ -90,7 +86,7 @@ pub struct Class {
     pub sub_class_of: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct Property {
     pub iri: String,
     pub label: String,
@@ -371,13 +367,13 @@ pub mod transverse {
 
 // --- REGISTRE PRINCIPAL (SINGLETON DYNAMIQUE) ---
 
-static INSTANCE: OnceLock<VocabularyRegistry> = OnceLock::new();
+static INSTANCE: StaticCell<VocabularyRegistry> = StaticCell::new();
 
 pub struct VocabularyRegistry {
-    classes: HashMap<String, Class>,
-    properties: HashMap<String, Property>,
-    default_context: HashMap<String, String>,
-    layer_contexts: Arc<RwLock<HashMap<String, Value>>>,
+    classes: UnorderedMap<String, Class>,
+    properties: UnorderedMap<String, Property>,
+    default_context: UnorderedMap<String, String>,
+    layer_contexts: SharedRef<SyncRwLock<UnorderedMap<String, JsonValue>>>,
 }
 
 impl Default for VocabularyRegistry {
@@ -393,10 +389,10 @@ impl VocabularyRegistry {
 
     pub fn new() -> Self {
         let mut registry = Self {
-            classes: HashMap::new(),
-            properties: HashMap::new(),
-            default_context: HashMap::new(),
-            layer_contexts: Arc::new(RwLock::new(HashMap::new())),
+            classes: UnorderedMap::new(),
+            properties: UnorderedMap::new(),
+            default_context: UnorderedMap::new(),
+            layer_contexts: SharedRef::new(SyncRwLock::new(UnorderedMap::new())),
         };
 
         // Enregistrement des modules
@@ -413,7 +409,7 @@ impl VocabularyRegistry {
     }
 
     fn init_default_context(&mut self) {
-        let mut map = HashMap::new();
+        let mut map = UnorderedMap::new();
         map.insert("arcadia".to_string(), namespaces::ARCADIA.to_string());
         map.insert("oa".to_string(), namespaces::OA.to_string());
         map.insert("sa".to_string(), namespaces::SA.to_string());
@@ -491,12 +487,12 @@ impl VocabularyRegistry {
 
     pub async fn load_layer_from_file(&self, layer: &str, path: &Path) -> RaiseResult<()> {
         // 1. Lecture du fichier avec diagnostic I/O
-        let content = match io::read_to_string(path).await {
+        let content = match fs::read_to_string_async(path).await {
             Ok(c) => c,
             Err(e) => raise_error!(
                 "ERR_IO_READ_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "path": path.to_string_lossy(),
                     "action": "load_layer_content"
                 })
@@ -504,12 +500,12 @@ impl VocabularyRegistry {
         };
 
         // 2. Parsing JSON avec diagnostic syntaxique
-        let json: Value = match json::parse(&content) {
+        let json: JsonValue = match json::deserialize_from_str(&content) {
             Ok(j) => j,
             Err(e) => raise_error!(
                 "ERR_JSON_PARSE_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "path": path.to_string_lossy(),
                     "layer": layer
                 })
@@ -522,7 +518,8 @@ impl VocabularyRegistry {
             Err(_) => raise_error!(
                 "ERR_INTERNAL_LOCK_POISONED",
                 error = "Incapacité d'accéder au cache des contextes : verrou corrompu.",
-                context = json!({ "component": "jsonld_processor", "resource": "layer_contexts" })
+                context =
+                    json_value!({ "component": "jsonld_processor", "resource": "layer_contexts" })
             ),
         };
 
@@ -531,7 +528,7 @@ impl VocabularyRegistry {
             raise_error!(
                 "ERR_JSONLD_CONTEXT_MISSING",
                 error = "Le document chargé n'est pas une ontologie valide (champ '@context' manquant).",
-                context = json!({
+                context = json_value!({
                     "path": path.to_string_lossy(), 
                     "layer": layer 
                 })
@@ -545,7 +542,7 @@ impl VocabularyRegistry {
 
         Ok(())
     }
-    pub fn get_context_for_layer(&self, layer: &str) -> Option<Value> {
+    pub fn get_context_for_layer(&self, layer: &str) -> Option<JsonValue> {
         let cache = self.layer_contexts.read().ok()?;
         cache.get(layer).cloned()
     }
@@ -576,7 +573,7 @@ impl VocabularyRegistry {
         false
     }
 
-    pub fn get_default_context(&self) -> &HashMap<String, String> {
+    pub fn get_default_context(&self) -> &UnorderedMap<String, String> {
         &self.default_context
     }
 
@@ -668,7 +665,7 @@ mod tests {
         assert!(reg.get_default_context().contains_key("transverse"));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_load_errors() {
         let reg = VocabularyRegistry::new();
         let path = std::path::Path::new("inconnu.jsonld");

@@ -5,7 +5,6 @@ use super::{Migration, MigrationStep};
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
 
-use crate::utils::data::HashSet;
 use crate::utils::prelude::*;
 
 pub struct Migrator<'a> {
@@ -45,7 +44,7 @@ impl<'a> Migrator<'a> {
 
         // 1. Récupérer les migrations déjà appliquées
         let applied_docs = self.manager.list_all("_migrations").await?;
-        let applied_ids: HashSet<String> = applied_docs
+        let applied_ids: UniqueSet<String> = applied_docs
             .iter()
             .filter_map(|doc| {
                 doc.get("_id")
@@ -85,11 +84,11 @@ impl<'a> Migrator<'a> {
         }
 
         // Enregistrement du succès
-        let record = json!({
+        let record = json_value!({
             "_id": migration.id,
             "version": migration.version,
             "description": migration.description,
-            "applied_at": Utc::now().to_rfc3339()
+            "applied_at": UtcClock::now().to_rfc3339()
         });
 
         self.manager.insert_raw("_migrations", &record).await?;
@@ -103,7 +102,7 @@ impl<'a> Migrator<'a> {
                 let schema_str = schema.as_str().unwrap_or_else(|| {
                     panic!(
                         "🚨 MIGRATION ÉCHOUÉE : Le schéma est obligatoire pour la collection '{}'. \
-                        Remplacez `Value::Null` par `Value::String(\"db://_system/...\")` dans vos migrations !", 
+                        Remplacez `JsonValue::Null` par `JsonValue::String(\"db://_system/...\")` dans vos migrations !", 
                         name
                     );
                 });
@@ -134,7 +133,7 @@ impl<'a> Migrator<'a> {
                 self.transform_all_documents(collection, |doc| {
                     if let Some(obj) = doc.as_object_mut() {
                         if !obj.contains_key(field) {
-                            obj.insert(field.clone(), default.clone().unwrap_or(Value::Null));
+                            obj.insert(field.clone(), default.clone().unwrap_or(JsonValue::Null));
                             return true;
                         }
                     }
@@ -185,7 +184,7 @@ impl<'a> Migrator<'a> {
         mut transformer: F,
     ) -> RaiseResult<()>
     where
-        F: FnMut(&mut Value) -> bool,
+        F: FnMut(&mut JsonValue) -> bool,
     {
         let docs = self.manager.list_all(collection).await?;
 
@@ -211,10 +210,9 @@ impl<'a> Migrator<'a> {
 mod tests {
     use super::*;
     use crate::json_db::migrations::{Migration, MigrationStep};
-    use crate::utils::json::json;
-    use crate::utils::mock::DbSandbox;
+    use crate::utils::testing::DbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_migration_lifecycle() {
         let sandbox = DbSandbox::new().await;
 
@@ -231,7 +229,7 @@ mod tests {
             description: "Init Users".to_string(),
             up: vec![MigrationStep::CreateCollection {
                 name: "users".to_string(),
-                schema: json!("db://_system/_system/schemas/v1/db/generic.schema.json"),
+                schema: json_value!("db://_system/_system/schemas/v1/db/generic.schema.json"),
             }],
             down: vec![],
             applied_at: None,
@@ -249,7 +247,7 @@ mod tests {
         assert!(mig_docs.is_ok());
 
         // ✅ CORRECTION : Utilisation de _id
-        let user_doc = json!({ "_id": "user_1", "name": "Alice" });
+        let user_doc = json_value!({ "_id": "user_1", "name": "Alice" });
         migrator
             .manager
             .insert_raw("users", &user_doc)
@@ -263,7 +261,7 @@ mod tests {
             up: vec![MigrationStep::AddField {
                 collection: "users".to_string(),
                 field: "active".to_string(),
-                default: Some(json!(true)),
+                default: Some(json_value!(true)),
             }],
             down: vec![],
             applied_at: None,
@@ -288,7 +286,7 @@ mod tests {
         assert_eq!(history.len(), 2);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_rename_field() {
         let sandbox = DbSandbox::new().await;
 
@@ -312,7 +310,7 @@ mod tests {
         // ✅ CORRECTION : Utilisation de _id
         migrator
             .manager
-            .insert_raw("products", &json!({"_id": "p1", "cost": 100}))
+            .insert_raw("products", &json_value!({"_id": "p1", "cost": 100}))
             .await
             .unwrap();
 

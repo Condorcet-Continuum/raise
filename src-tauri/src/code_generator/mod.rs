@@ -4,6 +4,8 @@ pub mod analyzers;
 pub mod generators;
 pub mod templates;
 
+use crate::utils::prelude::*;
+
 use self::analyzers::dependency_analyzer::DependencyAnalyzer;
 use self::analyzers::injection_analyzer::InjectionAnalyzer;
 use self::generators::{
@@ -14,13 +16,9 @@ use self::templates::template_engine::TemplateEngine;
 
 // ✅ IMPORTS V2 (Architecture 100% Utils)
 use self::analyzers::Analyzer;
-use crate::utils::data::{Deserialize, Serialize, Value};
-use crate::utils::io::{Path, PathBuf, ProjectScope};
-use crate::utils::prelude::*;
-use crate::utils::sys;
 
-// AJOUT : Derive Serialize pour l'affichage JSON dans les outils
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+// AJOUT : Derive Serializable pour l'affichage JSON dans les outils
+#[derive(Debug, Clone, Copy, PartialEq, Serializable, Deserializable)]
 pub enum TargetLanguage {
     Rust,
     TypeScript,
@@ -47,7 +45,7 @@ impl CodeGeneratorService {
 
     pub async fn generate_for_element(
         &self,
-        element: &Value,
+        element: &JsonValue,
         lang: TargetLanguage,
     ) -> RaiseResult<Vec<PathBuf>> {
         // 1. Analyse des dépendances
@@ -65,7 +63,7 @@ impl CodeGeneratorService {
                 raise_error!(
                     "ERR_GENERATOR_NOT_IMPLEMENTED",
                     error = "Le générateur Python n'est pas encore implémenté.",
-                    context = serde_json::json!({
+                    context = json_value!({
                         "target_language": "Python",
                         "action": "init_language_generator"
                     })
@@ -77,7 +75,7 @@ impl CodeGeneratorService {
         let mut files = generator.generate(element, &self.template_engine)?;
         let mut generated_paths = Vec::new();
 
-        let scope = ProjectScope::new(&self.root_path)?;
+        let scope = fs::ProjectScope::new_sync(&self.root_path)?;
 
         // Variable pour repérer la racine du Crate (pour Clippy)
         let mut crate_root: Option<PathBuf> = None;
@@ -98,10 +96,12 @@ impl CodeGeneratorService {
                     for (key, user_code) in injections {
                         let marker = format!("AI_INJECTION_POINT: {}", key);
                         if file.content.contains(&marker) {
-                            info!(
-                                "Réinjection trouvée pour {} : {} octets",
-                                key,
-                                user_code.len()
+                            user_info!(
+                                "MSG_REINJECTION_FOUND", // 🎯 Code unique pour l'événement
+                                json_value!({
+                                    "key": key,
+                                    "size_bytes": user_code.len()
+                                })
                             );
                             file.content = file
                                 .content
@@ -112,7 +112,9 @@ impl CodeGeneratorService {
             }
 
             // 5. Écriture finale
-            scope.write(&file.path, file.content.as_bytes()).await?;
+            scope
+                .write_async(&file.path, file.content.as_bytes())
+                .await?;
             generated_paths.push(full_path);
         }
 
@@ -128,7 +130,12 @@ impl CodeGeneratorService {
 
     /// Exécute `cargo clippy --fix` sur le dossier généré.
     fn apply_clippy(&self, crate_path: &Path) {
-        info!("🔧 Exécution de Clippy sur : {:?}", crate_path);
+        user_info!(
+            "MSG_CLIPPY_EXEC_START", // 🎯 Code unique de l'événement
+            json_value!({
+                "path": crate_path.to_string_lossy() // 🎯 Contexte typé
+            })
+        );
         let args = [
             "clippy",
             "--fix",
@@ -141,12 +148,22 @@ impl CodeGeneratorService {
             "warnings",
         ];
 
-        match sys::exec_command("cargo", &args, Some(crate_path)) {
-            Ok(_) => info!("✅ Code nettoyé par Clippy."),
-            Err(e) => warn!("⚠️ Clippy warning: {}", e),
+        match os::exec_command_sync("cargo", &args, Some(crate_path)) {
+            Ok(_) => {
+                user_info!("CLIPPY_CLEANUP_SUCCESS");
+            }
+            Err(e) => {
+                user_warn!(
+                    "CLIPPY_ANALYSIS_FAILED",
+                    json_value!({
+                        "path": crate_path.to_string_lossy(),
+                        "error": e.to_string()
+                    })
+                );
+            }
         }
 
-        let _ = sys::exec_command("cargo", &["fmt"], Some(crate_path));
+        let _ = os::exec_command_sync("cargo", &["fmt"], Some(crate_path));
     }
 }
 
@@ -154,10 +171,7 @@ impl CodeGeneratorService {
 mod tests {
     use super::*;
 
-    use crate::utils::data::json;
-    use crate::utils::io::{read_to_string, tempdir, write_atomic};
-
-    #[tokio::test]
+    #[async_test]
     async fn test_integration_analyzers() {
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
@@ -177,12 +191,12 @@ mod tests {
         let existing_file = root.join("MyComponent.rs");
         // On met des balises minimales pour ne pas perturber le parser
         let user_code = "fn custom() { println!(\"Preserved!\"); }";
-        write_atomic(&existing_file, user_code.as_bytes())
+        fs::write_atomic_async(&existing_file, user_code.as_bytes())
             .await
             .unwrap();
 
         // 4. Exécution de la génération
-        let element = json!({
+        let element = json_value!({
             "name": "MyComponent",
             "id": "A1"
         });
@@ -195,7 +209,7 @@ mod tests {
         let paths = result.expect("Le service a échoué lors de la génération");
 
         // 5. Vérification finale
-        let new_content = read_to_string(&paths[0]).await.unwrap();
+        let new_content = fs::read_to_string_async(&paths[0]).await.unwrap();
 
         // On vérifie que notre template mocké a été utilisé
         assert!(new_content.contains("MyComponent"));

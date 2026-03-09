@@ -1,10 +1,8 @@
 // FICHIER : src-tauri/src/commands/ai_commands.rs
 
-use crate::utils::config::AppConfig;
-use crate::utils::{data::HashMap, io::PathBuf, prelude::*, Arc, AsyncMutex, SyncMutex};
-
 use crate::ai::agents::AgentResult;
 use crate::ai::orchestrator::AiOrchestrator;
+use crate::utils::prelude::*;
 
 // Import Moteur Natif
 use crate::ai::llm::NativeLlmState;
@@ -23,10 +21,10 @@ use crate::model_engine::types::{ArcadiaElement, NameType};
 use tauri::{command, State};
 
 // --- STATES ---
-pub struct AiState(pub AsyncMutex<Option<Arc<AsyncMutex<AiOrchestrator>>>>);
+pub struct AiState(pub AsyncMutex<Option<SharedRef<AsyncMutex<AiOrchestrator>>>>);
 
 impl AiState {
-    pub fn new(orch: Option<Arc<AsyncMutex<AiOrchestrator>>>) -> Self {
+    pub fn new(orch: Option<SharedRef<AsyncMutex<AiOrchestrator>>>) -> Self {
         Self(AsyncMutex::new(orch))
     }
 }
@@ -65,7 +63,7 @@ pub async fn ai_reset(ai_state: State<'_, AiState>) -> RaiseResult<()> {
             raise_error!(
                 "ERR_AI_HISTORY_CLEAR_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "reset_ai_orchestrator",
                     "hint": "Échec du nettoyage de l'historique. Vérifiez si l'orchestrateur est dans un état verrouillé ou si la connexion au modèle est rompue."
                 })
@@ -92,7 +90,7 @@ pub async fn ai_learn_text(
             Err(e) => raise_error!(
                 "ERR_AI_LEARN_DOCUMENT_FAILURE",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "ingest_document",
                     "source": source,
                     "content_len": content.len(),
@@ -110,7 +108,7 @@ pub async fn ai_learn_text(
         raise_error!(
             "ERR_AI_ORCHESTRATOR_NOT_READY",
             error = "SHARED_ORCHESTRATOR_UNSET",
-            context = json!({
+            context = json_value!({
                 "action": "learn_document_request",
                 "hint": "L'orchestrateur est absent du Guard. L'IA doit être initialisée avant l'apprentissage."
             })
@@ -132,7 +130,7 @@ pub async fn ai_confirm_learning(
         raise_error!(
             "ERR_AI_SYSTEM_NOT_READY",
             error = "ORCHESTRATOR_UNINITIALIZED",
-            context = json!({
+            context = json_value!({
                 "action": "confirm_learning",
                 "hint": "L'orchestrateur IA doit être initialisé avant de confirmer un apprentissage."
             })
@@ -149,7 +147,7 @@ pub async fn ai_confirm_learning(
             raise_error!(
                 "ERR_CLI_UNKNOWN_ACTION",
                 error = "INVALID_COMMAND_TYPE",
-                context = json!({
+                context = json_value!({
                     "received_value": unknown,
                     "allowed_values": ["Create", "Delete"]
                 })
@@ -158,7 +156,7 @@ pub async fn ai_confirm_learning(
     };
 
     // 3. Construction des états (Simplifiée)
-    let props = HashMap::new();
+    let props = UnorderedMap::new();
     let state_before = ArcadiaElement {
         id: "root".to_string(),
         name: NameType::String("Context".to_string()),
@@ -183,7 +181,7 @@ pub async fn ai_confirm_learning(
         Err(e) => raise_error!(
             "ERR_AI_REINFORCEMENT_FAILED",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "reinforce_learning",
                 "intent": action_intent,
                 "hint": "L'ajustement des poids a échoué. Vérifiez la structure des tenseurs de feedback."
@@ -209,7 +207,7 @@ pub async fn ai_chat(ai_state: State<'_, AiState>, user_input: String) -> RaiseR
             Err(e) => raise_error!(
                 "ERR_AI_WORKFLOW_EXECUTION",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "orchestrate_workflow",
                     "input_preview": user_input.chars().take(50).collect::<String>(),
                     "hint": "Le workflow a échoué. Vérifiez la connectivité aux modèles ou la logique des prompts."
@@ -221,7 +219,7 @@ pub async fn ai_chat(ai_state: State<'_, AiState>, user_input: String) -> RaiseR
         raise_error!(
             "ERR_AI_SYSTEM_NOT_READY",
             error = "ORCHESTRATOR_UNINITIALIZED",
-            context = json!({
+            context = json_value!({
                 "action": "delegate_to_workflow",
                 "hint": "L'orchestrateur partagé est vide. L'initialisation a probablement échoué au démarrage."
             })
@@ -241,7 +239,7 @@ pub async fn ask_native_llm(
         Ok(lock_guard) => lock_guard,
         Err(_) => raise_error!(
             "ERR_SYS_MUTEX_POISONED",
-            context = json!({
+            context = json_value!({
                 "component": "AiState",
                 "action": "access_shared_state",
                 "hint": "Le Mutex est empoisonné suite à une panique. L'état partagé est corrompu."
@@ -255,7 +253,7 @@ pub async fn ask_native_llm(
             Err(e) => raise_error!(
                 "ERR_AI_GENERATION_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "model_inference",
                     "max_tokens": 1000,
                     "sys_prompt_len": sys.len(),
@@ -269,7 +267,7 @@ pub async fn ask_native_llm(
         raise_error!(
             "ERR_AI_ENGINE_NOT_LOADED",
             error = "MODEL_GUARD_EMPTY",
-            context = json!({
+            context = json_value!({
                 "action": "access_generation_engine",
                 "state": "loading_or_failed",
                 "hint": "Le moteur de génération est manquant. Attendez la fin du chargement ou vérifiez les erreurs d'init."
@@ -298,7 +296,7 @@ pub fn init_dl_model(state: State<'_, DlState>) -> RaiseResult<String> {
         Err(e) => raise_error!(
             "ERR_AI_MODEL_INIT_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "input_size": config.input_size,
                 "hidden_size": config.hidden_size,
                 "output_size": config.output_size,
@@ -327,7 +325,7 @@ pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> RaiseRes
             Err(e) => raise_error!(
                 "ERR_MODEL_INPUT_TENSOR",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "create_input_tensor",
                     "expected_shape": [1, 1, input_len],
                     "device": format!("{:?}", device)
@@ -341,7 +339,7 @@ pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> RaiseRes
             Err(e) => raise_error!(
                 "ERR_MODEL_FORWARD_PASS",
                 error = e,
-                context = json!({ "action": "neural_network_forward" })
+                context = json_value!({ "action": "neural_network_forward" })
             ),
         };
 
@@ -351,7 +349,7 @@ pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> RaiseRes
             Err(e) => raise_error!(
                 "ERR_MODEL_OUTPUT_CONVERSION",
                 error = e,
-                context = json!({ "action": "flatten_and_convert_to_vec" })
+                context = json_value!({ "action": "flatten_and_convert_to_vec" })
             ),
         }
     } else {
@@ -359,7 +357,7 @@ pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> RaiseRes
         raise_error!(
             "ERR_MODEL_NOT_LOADED",
             error = "MODEL_GUARD_IS_NONE",
-            context = json!({ "action": "prediction_attempt", "hint": "Le modèle n'est pas encore chargé dans le Guard." })
+            context = json_value!({ "action": "prediction_attempt", "hint": "Le modèle n'est pas encore chargé dans le Guard." })
         );
     }
 }
@@ -381,7 +379,7 @@ pub fn train_dl_step(state: State<'_, DlState>, input: Vec<f32>, target: u32) ->
             Err(e) => raise_error!(
                 "ERR_TRAIN_INPUT_TENSOR",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "create_training_input",
                     "shape": [1, 1, input_len],
                     "device": format!("{:?}", device)
@@ -394,7 +392,7 @@ pub fn train_dl_step(state: State<'_, DlState>, input: Vec<f32>, target: u32) ->
             Err(e) => raise_error!(
                 "ERR_TRAIN_TARGET_TENSOR",
                 error = e,
-                context = json!({ "action": "create_training_target", "target_val": target })
+                context = json_value!({ "action": "create_training_target", "target_val": target })
             ),
         };
 
@@ -404,7 +402,7 @@ pub fn train_dl_step(state: State<'_, DlState>, input: Vec<f32>, target: u32) ->
             Err(e) => raise_error!(
                 "ERR_TRAIN_STEP_FAILURE",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "execute_train_step",
                     "learning_rate": config.learning_rate,
                     "hint": "Échec de la backpropagation ou du calcul de la loss. Vérifiez l'intégrité des gradients."
@@ -416,7 +414,7 @@ pub fn train_dl_step(state: State<'_, DlState>, input: Vec<f32>, target: u32) ->
         raise_error!(
             "ERR_TRAIN_COMPONENTS_MISSING",
             error = "MODEL_OR_VARS_UNSET",
-            context = json!({
+            context = json_value!({
                 "action": "start_train_step",
                 "model_present": mg.is_some(),
                 "vars_present": vg.is_some()
@@ -437,7 +435,7 @@ pub fn save_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<Str
             raise_error!(
                 "ERR_MODEL_SAVE_FAILURE",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "persist_model_to_disk",
                     "path": path_display,
                     "hint": "Vérifiez l'espace disque disponible et les permissions d'écriture sur ce dossier."
@@ -451,7 +449,7 @@ pub fn save_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<Str
         raise_error!(
             "ERR_MODEL_SAVE_EMPTY",
             error = "NO_VARIABLES_IN_GUARD",
-            context = json!({
+            context = json_value!({
                 "action": "attempt_save",
                 "hint": "Le Guard de variables est vide. Assurez-vous que le modèle est initialisé avant de sauvegarder."
             })
@@ -469,7 +467,7 @@ pub fn load_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<Str
         Err(e) => raise_error!(
             "ERR_DL_MODEL_LOAD_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "path": path,
                 "action": "serialization_load_model",
                 "hint": "Le fichier modèle est peut-être corrompu ou le format n'est pas supporté (safetensors/bin)."
@@ -482,7 +480,7 @@ pub fn load_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<Str
         Ok(guard) => guard,
         Err(_) => raise_error!(
             "ERR_SYS_MUTEX_POISONED",
-            context = json!({"component": "DlState.model"})
+            context = json_value!({"component": "DlState.model"})
         ),
     };
 
@@ -491,7 +489,7 @@ pub fn load_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<Str
         Ok(guard) => guard,
         Err(_) => raise_error!(
             "ERR_SYS_MUTEX_POISONED",
-            context = json!({"component": "DlState.varmap"})
+            context = json_value!({"component": "DlState.varmap"})
         ),
     };
 

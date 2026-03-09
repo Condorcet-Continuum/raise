@@ -1,8 +1,6 @@
 // FICHIER : src-tauri/src/json_db/storage/file_storage.rs
 
 use crate::json_db::storage::JsonDbConfig;
-use crate::utils::config::AppConfig;
-use crate::utils::io::{self, Path};
 use crate::utils::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,14 +12,14 @@ pub enum DropMode {
 pub async fn open_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResult<()> {
     let db_path = config.db_root(space, db);
 
-    if !io::exists(&db_path).await {
+    if !fs::exists_async(&db_path).await {
         raise_error!(
             "ERR_DB_FS_NOT_FOUND",
             error = format!(
                 "Le répertoire de la base de données est introuvable : {}",
                 db
             ),
-            context = json!({
+            context = json_value!({
                 "space": space,
                 "db_name": db,
                 "resolved_path": db_path,
@@ -39,18 +37,18 @@ pub async fn create_db(
     config: &JsonDbConfig,
     space: &str,
     db: &str,
-    system_doc: &Value,
+    system_doc: &JsonValue,
 ) -> RaiseResult<bool> {
     let db_root = config.db_root(space, db);
 
     // 1. 🎯 OPTIMISATION ABSOLUE : Return Early
     // Si le dossier de la base existe, on ne fait STRICTEMENT rien.
-    if io::exists(&db_root).await {
+    if fs::exists_async(&db_root).await {
         return Ok(false);
     }
 
     // 2. Création du dossier racine de la base
-    io::create_dir_all(&db_root).await?;
+    fs::create_dir_all_async(&db_root).await?;
 
     let app_config = AppConfig::get();
     if space == app_config.system_domain && db == app_config.system_db {
@@ -69,11 +67,11 @@ pub async fn create_db(
                             let path = db_root.join(category).join(name);
 
                             // On crée l'arborescence (ex: /collections/actors)
-                            if let Err(e) = io::create_dir_all(&path).await {
+                            if let Err(e) = fs::create_dir_all_async(&path).await {
                                 raise_error!(
                                     "ERR_FS_DYNAMIC_DIR_FAILED",
                                     error = e,
-                                    context = json!({
+                                    context = json_value!({
                                         "category": category,
                                         "name": name,
                                         "path": path.to_string_lossy().to_string()
@@ -97,21 +95,21 @@ pub async fn drop_db(
     mode: DropMode,
 ) -> RaiseResult<()> {
     let db_path = config.db_root(space, db);
-    if !io::exists(&db_path).await {
+    if !fs::exists_async(&db_path).await {
         return Ok(());
     }
 
     match mode {
         DropMode::Hard => {
-            io::remove_dir_all(&db_path).await?;
+            fs::remove_dir_all_async(&db_path).await?;
         }
         DropMode::Soft => {
-            let timestamp = Utc::now().timestamp();
+            let timestamp = UtcClock::now().timestamp();
             let parent = db_path.parent().unwrap_or(&db_path);
             let new_name = format!("{}.deleted-{}", db, timestamp);
             let new_path = parent.join(new_name);
 
-            io::rename(&db_path, &new_path).await?;
+            fs::rename_async(&db_path, &new_path).await?;
         }
     }
     Ok(())
@@ -123,12 +121,12 @@ pub async fn write_document(
     db: &str,
     collection: &str,
     id: &str,
-    doc: &Value,
+    doc: &JsonValue,
 ) -> RaiseResult<()> {
     let col_path = config.db_collection_path(space, db, collection);
-    io::create_dir_all(&col_path).await?;
+    fs::create_dir_all_async(&col_path).await?;
     let file_path = col_path.join(format!("{}.json", id));
-    io::write_json_atomic(&file_path, doc).await?;
+    fs::write_json_atomic_async(&file_path, doc).await?;
     Ok(())
 }
 
@@ -138,16 +136,16 @@ pub async fn read_document(
     db: &str,
     collection: &str,
     id: &str,
-) -> RaiseResult<Option<Value>> {
+) -> RaiseResult<Option<JsonValue>> {
     let file_path = config
         .db_collection_path(space, db, collection)
         .join(format!("{}.json", id));
 
-    if !io::exists(&file_path).await {
+    if !fs::exists_async(&file_path).await {
         return Ok(None);
     }
 
-    let doc: Value = io::read_json(&file_path).await?;
+    let doc: JsonValue = fs::read_json_async(&file_path).await?;
     Ok(Some(doc))
 }
 
@@ -162,14 +160,14 @@ pub async fn delete_document(
         .db_collection_path(space, db, collection)
         .join(format!("{}.json", id));
 
-    if io::exists(&file_path).await {
-        io::remove_file(&file_path).await?;
+    if fs::exists_async(&file_path).await {
+        fs::remove_file_async(&file_path).await?;
     }
     Ok(())
 }
 
 pub async fn atomic_write<P: AsRef<Path>>(path: P, content: &[u8]) -> RaiseResult<()> {
-    io::write_atomic(path.as_ref(), content).await?;
+    fs::write_atomic_async(path.as_ref(), content).await?;
     Ok(())
 }
 
@@ -177,18 +175,18 @@ pub async fn atomic_write_binary<P: AsRef<Path>>(path: P, content: &[u8]) -> Rai
     atomic_write(path, content).await
 }
 
-pub async fn save_database_index(path: &io::Path, data: &Value) -> RaiseResult<()> {
-    io::write_json_compressed_atomic(path, data).await
+pub async fn save_database_index(path: &Path, data: &JsonValue) -> RaiseResult<()> {
+    fs::write_json_atomic_async(path, data).await
 }
 
 pub async fn read_system_index(
     config: &JsonDbConfig,
     space: &str,
     db: &str,
-) -> RaiseResult<Option<Value>> {
+) -> RaiseResult<Option<JsonValue>> {
     let sys_path = config.db_root(space, db).join("_system.json");
-    if io::exists(&sys_path).await {
-        let doc: Value = io::read_json(&sys_path).await?;
+    if fs::exists_async(&sys_path).await {
+        let doc: JsonValue = fs::read_json_async(&sys_path).await?;
         Ok(Some(doc))
     } else {
         Ok(None)
@@ -199,19 +197,18 @@ pub async fn write_system_index(
     config: &JsonDbConfig,
     space: &str,
     db: &str,
-    doc: &Value,
+    doc: &JsonValue,
 ) -> RaiseResult<()> {
     let sys_path = config.db_root(space, db).join("_system.json");
-    io::write_json_atomic(&sys_path, doc).await?;
+    fs::write_json_atomic_async(&sys_path, doc).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{io::tempdir, json::json};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_atomic_write() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
@@ -219,16 +216,16 @@ mod tests {
         atomic_write(&file_path, b"Hello World").await.unwrap();
         assert!(file_path.exists());
 
-        let content = io::read_to_string(&file_path).await.unwrap();
+        let content = fs::read_to_string_async(&file_path).await.unwrap();
         assert_eq!(content, "Hello World");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_document_lifecycle() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
 
-        let doc = json!({"name": "Refactor Test"});
+        let doc = json_value!({"name": "Refactor Test"});
 
         write_document(&config, "s1", "d1", "c1", "doc1", &doc)
             .await
@@ -243,24 +240,24 @@ mod tests {
         let path = config
             .db_collection_path("s1", "d1", "c1")
             .join("doc1.json");
-        assert!(io::exists(&path).await);
+        assert!(fs::exists_async(&path).await);
 
         delete_document(&config, "s1", "d1", "c1", "doc1")
             .await
             .expect("Delete failed");
 
-        assert!(!io::exists(&path).await);
+        assert!(!fs::exists_async(&path).await);
     }
 
     // 🎯 NOUVEAU TEST 1 : Introspection dynamique & Idempotence
-    #[tokio::test]
+    #[async_test]
     async fn test_create_db_dynamic_introspection() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let (space, db) = ("dyn_space", "dyn_db");
 
         // Un mock d'index hydraté avec des pièges (des objets sans "items")
-        let system_doc = json!({
+        let system_doc = json_value!({
             "collections": {
                 "users": { "items": [] },
                 "posts": { "items": [] }
@@ -300,7 +297,7 @@ mod tests {
     }
 
     // 🎯 NOUVEAU TEST 2 : Lecture et Écriture de l'Index Système
-    #[tokio::test]
+    #[async_test]
     async fn test_system_index_io() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -311,10 +308,12 @@ mod tests {
         assert!(none_index.is_none());
 
         // Création de la racine de la base pour pouvoir écrire dedans
-        create_db(&config, space, db, &json!({})).await.unwrap();
+        create_db(&config, space, db, &json_value!({}))
+            .await
+            .unwrap();
 
         // Écriture d'un index
-        let mock_doc = json!({ "name": "test_db", "version": 1 });
+        let mock_doc = json_value!({ "name": "test_db", "version": 1 });
         write_system_index(&config, space, db, &mock_doc)
             .await
             .unwrap();
@@ -328,7 +327,7 @@ mod tests {
     }
 
     // 🎯 NOUVEAU TEST 3 : Comportement de open_db
-    #[tokio::test]
+    #[async_test]
     async fn test_open_db_validation() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -341,7 +340,9 @@ mod tests {
         assert!(err_msg.contains("ERR_DB_FS_NOT_FOUND"));
 
         // 2. Succès après création
-        create_db(&config, space, db, &json!({})).await.unwrap();
+        create_db(&config, space, db, &json_value!({}))
+            .await
+            .unwrap();
         let res_ok = open_db(&config, space, db).await;
         assert!(
             res_ok.is_ok(),

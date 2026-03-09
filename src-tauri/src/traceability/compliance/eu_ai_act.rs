@@ -2,7 +2,7 @@
 
 use super::{ComplianceChecker, ComplianceReport, Violation};
 use crate::traceability::tracer::Tracer;
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 pub struct EuAiActChecker;
 
@@ -12,7 +12,7 @@ impl ComplianceChecker for EuAiActChecker {
     }
 
     /// 🎯 Version robuste : Vérification de la classification des risques et de la transparence
-    fn check(&self, _tracer: &Tracer, docs: &HashMap<String, Value>) -> ComplianceReport {
+    fn check(&self, _tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -79,16 +79,15 @@ impl ComplianceChecker for EuAiActChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_eu_ai_act_risk_classification() {
-        let mut docs: HashMap<String, Value> = HashMap::new();
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // 1. IA Conforme (Risque défini)
         docs.insert(
             "ai_safe".to_string(),
-            json!({
+            json_value!({
                 "_id": "ai_safe",
                 "nature": "AI_Model",
                 "risk_level": "Low"
@@ -98,7 +97,7 @@ mod tests {
         // 2. IA Non Conforme (Risque manquant)
         docs.insert(
             "ai_illegal".to_string(),
-            json!({
+            json_value!({
                 "_id": "ai_illegal",
                 "nature": "AI_Model",
                 "name": "BlackBox"
@@ -108,7 +107,7 @@ mod tests {
         // 3. IA Haut Risque sans transparence
         docs.insert(
             "ai_high_risk".to_string(),
-            json!({
+            json_value!({
                 "_id": "ai_high_risk",
                 "nature": "AI_Model",
                 "risk_level": "High"
@@ -134,10 +133,10 @@ mod tests {
 
     #[test]
     fn test_eu_ai_act_ignore_non_ai() {
-        let mut docs: HashMap<String, Value> = HashMap::new();
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
         docs.insert(
             "hardware_v1".to_string(),
-            json!({
+            json_value!({
                 "_id": "hardware_v1",
                 "nature": "Hardware"
             }),

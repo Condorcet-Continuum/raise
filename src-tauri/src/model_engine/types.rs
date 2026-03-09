@@ -1,13 +1,12 @@
 // FICHIER : src-tauri/src/model_engine/types.rs
 
-use crate::utils::{prelude::*, HashMap};
-// --- TYPES FONDAMENTAUX ---
+use crate::utils::prelude::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 #[serde(untagged)]
 pub enum NameType {
     String(String),
-    Object(HashMap<String, String>), // Support pour {"en": "...", "fr": "..."}
+    Object(UnorderedMap<String, String>), // Support pour {"en": "...", "fr": "..."}
 }
 
 impl NameType {
@@ -30,7 +29,7 @@ impl Default for NameType {
 }
 
 /// Structure générique représentant n'importe quel élément du modèle Arcadia.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, Default, PartialEq)]
 pub struct ArcadiaElement {
     #[serde(default, rename = "_id", alias = "id")]
     pub id: String,
@@ -47,7 +46,7 @@ pub struct ArcadiaElement {
 
     /// Propriétés dynamiques (clé -> valeur/objet)
     #[serde(flatten)]
-    pub properties: HashMap<String, serde_json::Value>,
+    pub properties: UnorderedMap<String, JsonValue>,
 }
 
 impl ArcadiaElement {
@@ -59,7 +58,7 @@ impl ArcadiaElement {
 
 // --- MODÈLE DU PROJET ---
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct ProjectMeta {
     #[serde(default)]
     pub name: String,
@@ -77,7 +76,7 @@ pub struct ProjectMeta {
     pub element_count: usize,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct ProjectModel {
     pub meta: ProjectMeta,
     pub oa: OperationalAnalysisModel,
@@ -92,7 +91,7 @@ pub struct ProjectModel {
 
 // --- COUCHES ARCADIA ---
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct OperationalAnalysisModel {
     pub actors: Vec<ArcadiaElement>,
     pub activities: Vec<ArcadiaElement>,
@@ -101,7 +100,7 @@ pub struct OperationalAnalysisModel {
     pub exchanges: Vec<ArcadiaElement>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct SystemAnalysisModel {
     pub components: Vec<ArcadiaElement>,
     pub functions: Vec<ArcadiaElement>,
@@ -110,7 +109,7 @@ pub struct SystemAnalysisModel {
     pub exchanges: Vec<ArcadiaElement>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct LogicalArchitectureModel {
     pub components: Vec<ArcadiaElement>,
     pub functions: Vec<ArcadiaElement>,
@@ -119,7 +118,7 @@ pub struct LogicalArchitectureModel {
     pub exchanges: Vec<ArcadiaElement>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct PhysicalArchitectureModel {
     pub components: Vec<ArcadiaElement>,
     pub functions: Vec<ArcadiaElement>,
@@ -128,12 +127,12 @@ pub struct PhysicalArchitectureModel {
     pub exchanges: Vec<ArcadiaElement>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct EPBSModel {
     pub configuration_items: Vec<ArcadiaElement>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct DataModel {
     pub classes: Vec<ArcadiaElement>,
     pub data_types: Vec<ArcadiaElement>,
@@ -141,7 +140,7 @@ pub struct DataModel {
 }
 
 // AJOUT : Structure pour la couche Transverse
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, Deserializable)]
 pub struct TransverseModel {
     pub requirements: Vec<ArcadiaElement>,
     pub scenarios: Vec<ArcadiaElement>,
@@ -158,7 +157,6 @@ pub struct TransverseModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_name_type_polymorphism() {
@@ -167,7 +165,7 @@ mod tests {
         assert_eq!(n1.as_str(), "Test");
 
         // Cas 2: Objet multilingue
-        let mut map = HashMap::new();
+        let mut map = UnorderedMap::new();
         map.insert("en".to_string(), "Test EN".to_string());
         map.insert("fr".to_string(), "Test FR".to_string());
         let n2 = NameType::Object(map);
@@ -177,7 +175,7 @@ mod tests {
     #[test]
     fn test_arcadia_element_flattening() {
         // Teste que les champs inconnus vont bien dans "properties"
-        let json_data = json!({
+        let json_data = json_value!({
             "_id": "123",
             "name": "MyElement",
             "type": "LogicalComponent",
@@ -185,7 +183,7 @@ mod tests {
             "allocated_to": ["456"]
         });
 
-        let el: ArcadiaElement = serde_json::from_value(json_data).unwrap();
+        let el: ArcadiaElement = json::deserialize_from_value(json_data).unwrap();
         assert_eq!(el.id, "123");
         assert_eq!(el.kind, "LogicalComponent");
 
@@ -228,7 +226,7 @@ mod tests {
         });
 
         // Sérialisation
-        let json = serde_json::to_string(&transverse).unwrap();
+        let json = json::serialize_to_string(&transverse).unwrap();
         assert!(json.contains("requirements"));
         assert!(json.contains("REQ-001"));
     }

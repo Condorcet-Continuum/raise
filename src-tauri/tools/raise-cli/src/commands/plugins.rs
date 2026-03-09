@@ -42,49 +42,49 @@ pub async fn handle(args: PluginsArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "PLUGINS_LIST_START",
-                json!({"action": "Interrogation du catalogue actif..."})
+                json_value!({"action": "Interrogation du catalogue actif..."})
             );
 
             // Simulation des capacités du PluginManager
             user_info!(
                 "PLUGINS_ACTIVE",
-                json!({"plugins": ["workflow_spy", "logic_bridge", "sensor_evaluator"]})
+                json_value!({"plugins": ["workflow_spy", "logic_bridge", "sensor_evaluator"]})
             );
 
             user_success!(
                 "PLUGINS_LIST_OK",
-                json!({"count": 3, "status": "chargés dans le runtime WASM"})
+                json_value!({"count": 3, "status": "chargés dans le runtime WASM"})
             );
         }
 
         PluginsCommands::Load { id, path } => {
             // Début du chargement : on identifie le bloc cognitif
-            user_info!("PLUGIN_LOAD_START", json!({ "id": id }));
+            user_info!("PLUGIN_LOAD_START", json_value!({ "id": id }));
 
             // Étape Système de Fichiers (FS)
-            user_info!("PLUGIN_FS_READ", json!({ "path": path }));
+            user_info!("PLUGIN_FS_READ", json_value!({ "path": path }));
 
             // Succès final
             user_success!(
                 "PLUGIN_LOAD_SUCCESS",
-                json!({ "id": id, "status": "injected" })
+                json_value!({ "id": id, "status": "injected" })
             );
         }
 
         PluginsCommands::Info { name } => {
             // Inspection détaillée
-            user_info!("PLUGIN_INSPECT", json!({ "plugin_name": name }));
+            user_info!("PLUGIN_INSPECT", json_value!({ "plugin_name": name }));
 
             // Métadonnées sur le runtime
             user_info!(
                 "PLUGIN_RUNTIME",
-                json!({ "type": "Cognitive Runtime", "engine": "WASM" })
+                json_value!({ "type": "Cognitive Runtime", "engine": "WASM" })
             );
 
             // Validation de signature
             user_success!(
                 "PLUGIN_INFO_SUCCESS",
-                json!({ "plugin_name": name, "verified": true })
+                json_value!({ "plugin_name": name, "verified": true })
             );
         }
     }
@@ -96,15 +96,16 @@ pub async fn handle(args: PluginsArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::mock::DbSandbox;
-    use raise::utils::session::SessionManager;
-    use raise::utils::Arc;
+    use raise::utils::context::SessionManager;
 
-    #[tokio::test]
+    #[cfg(test)]
+    use raise::utils::testing::DbSandbox;
+
+    #[async_test]
     async fn test_plugins_list_flow() {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {

@@ -25,7 +25,7 @@ impl Sysml2ToArcadiaMapper {
                 raise_error!(
                     "ERR_SYSML_SYNTAX_INVALID",
                     error = e,
-                    context = json!({ "action": "parse_sysml_v2" })
+                    context = json_value!({ "action": "parse_sysml_v2" })
                 )
             }
         };
@@ -38,7 +38,7 @@ impl Sysml2ToArcadiaMapper {
                 raise_error!(
                     "ERR_SYSML_EMPTY_FILE",
                     error = "Le parseur n'a retourné aucun contenu.",
-                    context = json!({ "action": "extract_ast_root" })
+                    context = json_value!({ "action": "extract_ast_root" })
                 )
             }
         };

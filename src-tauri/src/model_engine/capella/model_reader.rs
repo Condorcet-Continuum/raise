@@ -1,5 +1,5 @@
 // FICHIER : src-tauri/src/model_engine/capella/model_reader.rs
-use crate::utils::{io::Path, prelude::*};
+use crate::utils::prelude::*;
 
 use super::xmi_parser::CapellaXmiParser;
 use crate::model_engine::types::{ProjectMeta, ProjectModel};
@@ -22,7 +22,7 @@ impl CapellaReader {
 
         model.meta = ProjectMeta {
             name: filename.to_string(),
-            loaded_at: Utc::now().to_rfc3339(),
+            loaded_at: UtcClock::now().to_rfc3339(),
             element_count: Self::count_elements(&model),
             // CORRECTION : Ajout des valeurs par défaut pour les champs manquants
             ..Default::default()
@@ -82,7 +82,6 @@ impl CapellaReader {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use std::collections::HashMap;
 
     // Helper pour créer un élément dummy rapidement
     fn create_dummy(kind: &str) -> ArcadiaElement {
@@ -91,7 +90,7 @@ mod tests {
             name: NameType::default(),
             kind: kind.into(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         }
     }
 

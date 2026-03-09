@@ -1,4 +1,4 @@
-use crate::utils::{prelude::*, Instant};
+use crate::utils::prelude::*;
 use tauri::{Emitter, Window};
 
 use crate::genetics::dto::{
@@ -23,7 +23,7 @@ pub async fn run_architecture_optimization(
     window: Window,
     params: OptimizationRequest,
 ) -> RaiseResult<OptimizationResult> {
-    let start_time = Instant::now();
+    let start_time = TimeInstant::now();
 
     // 1. Préparation des données (Mapping IDs -> Index)
     let func_ids: Vec<String> = params.functions.iter().map(|f| f.id.clone()).collect();

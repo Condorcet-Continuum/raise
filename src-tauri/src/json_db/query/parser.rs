@@ -12,7 +12,7 @@ pub fn parse_projection(fields: &[String]) -> RaiseResult<Projection> {
         raise_error!(
             "ERR_DATA_FIELDS_EMPTY",
             error = "Opération impossible : la liste des champs est vide.",
-            context = json!({
+            context = json_value!({
                 "action": "validate_payload_integrity",
                 "hint": "L'objet fourni ne contient aucune propriété exploitable. Vérifiez la source de données.",
                 "severity": "medium"
@@ -45,7 +45,7 @@ impl QueryBuilder {
         }
     }
 
-    pub fn where_eq(mut self, field: impl Into<String>, value: Value) -> Self {
+    pub fn where_eq(mut self, field: impl Into<String>, value: JsonValue) -> Self {
         let c = Condition::eq(field, value);
         self.add_cond(FilterOperator::And, c);
         self
@@ -146,12 +146,12 @@ fn parse_single_sort_spec(spec: &str) -> RaiseResult<SortField> {
     })
 }
 
-pub fn parse_filter_from_json(value: &Value) -> RaiseResult<QueryFilter> {
+pub fn parse_filter_from_json(value: &JsonValue) -> RaiseResult<QueryFilter> {
     let Some(obj) = value.as_object() else {
         raise_error!(
             "ERR_JSON_TYPE_MISMATCH",
             error = "Type de donnée invalide : un objet JSON était attendu.",
-            context = json!({
+            context = json_value!({
                 "expected_type": "Object",
                 "actual_value_sample": format!("{:?}", value),
                 "action": "ensure_object_structure"
@@ -186,7 +186,7 @@ pub fn parse_filter_from_json(value: &Value) -> RaiseResult<QueryFilter> {
                     .unwrap_or("eq")
                     .to_lowercase();
 
-                let v = co.get("value").cloned().unwrap_or(Value::Null);
+                let v = co.get("value").cloned().unwrap_or(JsonValue::Null);
 
                 let op_enum = match o_str.as_str() {
                     "eq" | "=" => ComparisonOperator::Eq,
@@ -226,11 +226,10 @@ pub fn parse_filter_from_json(value: &Value) -> RaiseResult<QueryFilter> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::json::json;
 
     #[test]
     fn test_parse_filter_full() {
-        let json_input = json!({
+        let json_input = json_value!({
             "operator": "and",
             "conditions": [
                 {"field": "age", "operator": "gte", "value": 18},
@@ -266,7 +265,7 @@ mod tests {
     #[test]
     fn test_query_builder() {
         let q = QueryBuilder::new("users")
-            .where_eq("active", json!(true))
+            .where_eq("active", json_value!(true))
             .limit(5)
             .sort("created_at", SortOrder::Desc)
             .select(vec!["username".into()])

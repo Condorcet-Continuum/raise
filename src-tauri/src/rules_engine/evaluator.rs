@@ -1,24 +1,21 @@
 // FICHIER : src-tauri/src/rules_engine/evaluator.rs
 use crate::rules_engine::ast::Expr;
-use crate::utils::{async_trait, prelude::*, DateTime, Regex, Utc};
-use chrono::{Duration, NaiveDate};
-
-use std::borrow::Cow;
+use crate::utils::prelude::*;
 
 // 🎯 MIGRATION V1.3 :
 // L'énumération `EvalError` et son `impl From` ont été TOTALEMENT SUPPRIMÉS.
 // Tout le fichier utilise dorénavant nativement `RaiseResult` et les macros du socle.
 
 /// Trait permettant aux règles d'accéder à des données externes (Lookups)
-#[async_trait]
+#[async_interface]
 pub trait DataProvider: Send + Sync {
-    async fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<Value>;
+    async fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<JsonValue>;
 }
 
 pub struct NoOpDataProvider;
-#[async_trait]
+#[async_interface]
 impl DataProvider for NoOpDataProvider {
-    async fn get_value(&self, _c: &str, _id: &str, _f: &str) -> Option<Value> {
+    async fn get_value(&self, _c: &str, _id: &str, _f: &str) -> Option<JsonValue> {
         None
     }
 }
@@ -29,11 +26,11 @@ impl Evaluator {
     // 🎯 MIGRATION : Remplacement du Result standard par RaiseResult
     pub async fn evaluate<'a>(
         expr: &'a Expr,
-        context: &'a Value,
+        context: &'a JsonValue,
         provider: &dyn DataProvider,
-    ) -> RaiseResult<Cow<'a, Value>> {
+    ) -> RaiseResult<CowData<'a, JsonValue>> {
         match expr {
-            Expr::Val(v) => Ok(Cow::Borrowed(v)),
+            Expr::Val(v) => Ok(CowData::Borrowed(v)),
             Expr::Var(path) => resolve_path(context, path),
 
             // --- Opérateurs Logiques ---
@@ -41,46 +38,46 @@ impl Evaluator {
                 for e in list {
                     let val = Box::pin(Self::evaluate(e, context, provider)).await?;
                     if !is_truthy(&val) {
-                        return Ok(Cow::Owned(Value::Bool(false)));
+                        return Ok(CowData::Owned(JsonValue::Bool(false)));
                     }
                 }
-                Ok(Cow::Owned(Value::Bool(true)))
+                Ok(CowData::Owned(JsonValue::Bool(true)))
             }
             Expr::Or(list) => {
                 for e in list {
                     let val = Box::pin(Self::evaluate(e, context, provider)).await?;
                     if is_truthy(&val) {
-                        return Ok(Cow::Owned(Value::Bool(true)));
+                        return Ok(CowData::Owned(JsonValue::Bool(true)));
                     }
                 }
-                Ok(Cow::Owned(Value::Bool(false)))
+                Ok(CowData::Owned(JsonValue::Bool(false)))
             }
             Expr::Not(e) => {
                 let res = Box::pin(Self::evaluate(e, context, provider)).await?;
-                Ok(Cow::Owned(Value::Bool(!is_truthy(&res))))
+                Ok(CowData::Owned(JsonValue::Bool(!is_truthy(&res))))
             }
 
             // --- Comparaisons ---
             Expr::Eq(args) => {
                 if args.len() < 2 {
-                    return Ok(Cow::Owned(Value::Bool(true)));
+                    return Ok(CowData::Owned(JsonValue::Bool(true)));
                 }
                 let first = Box::pin(Self::evaluate(&args[0], context, provider)).await?;
                 for arg in &args[1..] {
                     let next = Box::pin(Self::evaluate(arg, context, provider)).await?;
                     if first != next {
-                        return Ok(Cow::Owned(Value::Bool(false)));
+                        return Ok(CowData::Owned(JsonValue::Bool(false)));
                     }
                 }
-                Ok(Cow::Owned(Value::Bool(true)))
+                Ok(CowData::Owned(JsonValue::Bool(true)))
             }
             Expr::Neq(args) => {
                 if args.len() < 2 {
-                    return Ok(Cow::Owned(Value::Bool(false)));
+                    return Ok(CowData::Owned(JsonValue::Bool(false)));
                 }
                 let a = Box::pin(Self::evaluate(&args[0], context, provider)).await?;
                 let b = Box::pin(Self::evaluate(&args[1], context, provider)).await?;
-                Ok(Cow::Owned(Value::Bool(a != b)))
+                Ok(CowData::Owned(JsonValue::Bool(a != b)))
             }
             Expr::Gt(a, b) => compare_nums(a, b, context, provider, |x, y| x > y).await,
             Expr::Lt(a, b) => compare_nums(a, b, context, provider, |x, y| x < y).await,
@@ -92,7 +89,7 @@ impl Evaluator {
             Expr::Mul(list) => fold_nums(list, context, provider, 1.0, |acc, x| acc * x).await,
             Expr::Sub(list) => {
                 if list.is_empty() {
-                    return Ok(Cow::Owned(json!(0)));
+                    return Ok(CowData::Owned(json_value!(0)));
                 }
                 let first_val = Box::pin(Self::evaluate(&list[0], context, provider)).await?;
 
@@ -101,7 +98,7 @@ impl Evaluator {
                     Some(num) => num,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "aggregation_init",
                             "expected": "number (f64)",
                             "received": first_val,
@@ -118,7 +115,7 @@ impl Evaluator {
                         Some(num) => num,
                         None => raise_error!(
                             "ERR_RULE_TYPE_MISMATCH",
-                            context = json!({
+                            context = json_value!({
                                 "operation": "subtraction_loop",
                                 "expected": "number (f64)",
                                 "received": current_val,
@@ -130,7 +127,7 @@ impl Evaluator {
 
                     acc -= val;
                 }
-                Ok(Cow::Owned(smart_number(acc)))
+                Ok(CowData::Owned(smart_number(acc)))
             }
             Expr::Div(list) => {
                 if list.len() < 2 {
@@ -146,7 +143,7 @@ impl Evaluator {
                     Some(n) => n,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "math_init",
                             "expected": "number (f64)",
                             "received": first_val,
@@ -163,7 +160,7 @@ impl Evaluator {
                         if n == 0.0 {
                             raise_error!(
                                 "ERR_RULE_MATH_ERROR",
-                                context = json!({
+                                context = json_value!({
                                     "operation": "division",
                                     "reason": "division_by_zero",
                                     "hint": "Le dénominateur (index 1) est égal à zéro, ce qui est mathématiquement indéfini."
@@ -174,7 +171,7 @@ impl Evaluator {
                     }
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "division",
                             "expected": "number (f64)",
                             "received": den_val,
@@ -189,7 +186,7 @@ impl Evaluator {
                         error = "Division par zéro interdite"
                     );
                 }
-                Ok(Cow::Owned(smart_number(num / den)))
+                Ok(CowData::Owned(smart_number(num / den)))
             }
             Expr::Abs(e) => {
                 let val = Box::pin(Self::evaluate(e, context, provider)).await?;
@@ -199,7 +196,7 @@ impl Evaluator {
                     Some(num) => num,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "ABS",
                             "expected": "number (f64)",
                             "received": val,
@@ -208,7 +205,7 @@ impl Evaluator {
                     ),
                 };
 
-                Ok(Cow::Owned(smart_number(v.abs())))
+                Ok(CowData::Owned(smart_number(v.abs())))
             }
             Expr::Round { value, precision } => {
                 // 1. Évaluation de la valeur principale
@@ -217,7 +214,7 @@ impl Evaluator {
                     Some(n) => n,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "ROUND",
                             "field": "value",
                             "expected": "number",
@@ -238,16 +235,16 @@ impl Evaluator {
                 let factor = 10f64.powi(p);
                 let res = (v * factor).round() / factor;
 
-                Ok(Cow::Owned(smart_number(res)))
+                Ok(CowData::Owned(smart_number(res)))
             }
 
             Expr::Min(e) => {
                 let val = Box::pin(Self::evaluate(e, context, provider)).await?;
-                let arr: &Vec<serde_json::Value> = match val.as_array() {
+                let arr: &Vec<JsonValue> = match val.as_array() {
                     Some(array) => array,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "target": "rule_evaluation_result",
                             "expected": "array",
                             "received": val,
@@ -263,18 +260,18 @@ impl Evaluator {
                     .fold(f64::INFINITY, |a, b| a.min(b));
 
                 if min.is_infinite() {
-                    Ok(Cow::Owned(Value::Null))
+                    Ok(CowData::Owned(JsonValue::Null))
                 } else {
-                    Ok(Cow::Owned(smart_number(min)))
+                    Ok(CowData::Owned(smart_number(min)))
                 }
             }
             Expr::Max(e) => {
                 let val = Box::pin(Self::evaluate(e, context, provider)).await?;
-                let arr: &Vec<serde_json::Value> = match val.as_array() {
+                let arr: &Vec<JsonValue> = match val.as_array() {
                     Some(array) => array,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "MAX",
                             "expected": "array",
                             "received": val,
@@ -289,9 +286,9 @@ impl Evaluator {
                     .fold(f64::NEG_INFINITY, |a, b| a.max(b));
 
                 if max.is_infinite() {
-                    Ok(Cow::Owned(Value::Null))
+                    Ok(CowData::Owned(JsonValue::Null))
                 } else {
-                    Ok(Cow::Owned(smart_number(max)))
+                    Ok(CowData::Owned(smart_number(max)))
                 }
             }
 
@@ -302,11 +299,11 @@ impl Evaluator {
                 expr: map_expr,
             } => {
                 let list_val = Box::pin(Self::evaluate(list, context, provider)).await?;
-                let arr: &Vec<serde_json::Value> = match list_val.as_array() {
+                let arr: &Vec<JsonValue> = match list_val.as_array() {
                     Some(array) => array,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "target": "list_operation",
                             "expected": "array",
                             "received": list_val,
@@ -325,7 +322,7 @@ impl Evaluator {
                     let res = Box::pin(Self::evaluate(map_expr, &local_ctx, provider)).await?;
                     result_arr.push(res.into_owned());
                 }
-                Ok(Cow::Owned(Value::Array(result_arr)))
+                Ok(CowData::Owned(JsonValue::Array(result_arr)))
             }
             Expr::Filter {
                 list,
@@ -334,11 +331,11 @@ impl Evaluator {
             } => {
                 let list_val = Box::pin(Self::evaluate(list, context, provider)).await?;
                 // Extraction sécurisée avec annotation de type pour stabiliser l'inférence
-                let arr: &Vec<serde_json::Value> = match list_val.as_array() {
+                let arr: &Vec<JsonValue> = match list_val.as_array() {
                     Some(array) => array,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "target": "list_operation",
                             "expected": "array",
                             "received": list_val,
@@ -359,7 +356,7 @@ impl Evaluator {
                         result_arr.push(item.clone());
                     }
                 }
-                Ok(Cow::Owned(Value::Array(result_arr)))
+                Ok(CowData::Owned(JsonValue::Array(result_arr)))
             }
 
             // --- String & Regex ---
@@ -370,7 +367,7 @@ impl Evaluator {
                     Some(s) => s,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "target": "validation_value",
                             "expected": "string",
                             "received": v_str,
@@ -383,7 +380,7 @@ impl Evaluator {
                     Some(s) => s,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "expected": "string",
                             "received": p_str,
                             "action": "parse_rule_pattern",
@@ -392,19 +389,19 @@ impl Evaluator {
                     ),
                 };
 
-                let re = match Regex::new(p) {
+                let re = match TextRegex::new(p) {
                     Ok(r) => r,
                     Err(e) => raise_error!(
                         "ERR_RULE_INVALID_REGEX",
                         error = e,
-                        context = json!({
+                        context = json_value!({
                             "pattern": p,
                             "action": "compile_validation_rule",
                             "hint": "La syntaxe de l'expression régulière est invalide. Vérifiez les caractères d'échappement et les groupes."
                         })
                     ),
                 };
-                Ok(Cow::Owned(Value::Bool(re.is_match(v))))
+                Ok(CowData::Owned(JsonValue::Bool(re.is_match(v))))
             }
             Expr::Concat(list) => {
                 let mut res = String::new();
@@ -412,7 +409,7 @@ impl Evaluator {
                     let v = Box::pin(Self::evaluate(e, context, provider)).await?;
                     res.push_str(v.as_str().unwrap_or(&v.to_string()));
                 }
-                Ok(Cow::Owned(Value::String(res)))
+                Ok(CowData::Owned(JsonValue::String(res)))
             }
 
             Expr::Replace {
@@ -429,8 +426,7 @@ impl Evaluator {
                     Some(s) => s,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context =
-                            json!({ "target": "v_val", "expected": "string", "received": v_val })
+                        context = json_value!({ "target": "v_val", "expected": "string", "received": v_val })
                     ),
                 };
 
@@ -439,8 +435,7 @@ impl Evaluator {
                     Some(s) => s,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context =
-                            json!({ "target": "p_val", "expected": "string", "received": p_val })
+                        context = json_value!({ "target": "p_val", "expected": "string", "received": p_val })
                     ),
                 };
 
@@ -449,12 +444,11 @@ impl Evaluator {
                     Some(s) => s,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context =
-                            json!({ "target": "r_val", "expected": "string", "received": r_val })
+                        context = json_value!({ "target": "r_val", "expected": "string", "received": r_val })
                     ),
                 };
 
-                Ok(Cow::Owned(Value::String(v.replace(p, r))))
+                Ok(CowData::Owned(JsonValue::String(v.replace(p, r))))
             }
 
             Expr::Upper(e) => {
@@ -465,7 +459,7 @@ impl Evaluator {
                     Some(string_value) => string_value,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "UPPER",
                             "expected": "string",
                             "received": val,
@@ -474,7 +468,7 @@ impl Evaluator {
                     ),
                 };
 
-                Ok(Cow::Owned(Value::String(s.to_uppercase())))
+                Ok(CowData::Owned(JsonValue::String(s.to_uppercase())))
             }
             Expr::Lower(e) => {
                 let val = Box::pin(Self::evaluate(e, context, provider)).await?;
@@ -484,7 +478,7 @@ impl Evaluator {
                     Some(string_value) => string_value,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "LOWER",
                             "expected": "string",
                             "received": val,
@@ -493,7 +487,7 @@ impl Evaluator {
                     ),
                 };
 
-                Ok(Cow::Owned(Value::String(s.to_lowercase())))
+                Ok(CowData::Owned(JsonValue::String(s.to_lowercase())))
             }
             Expr::Trim(e) => {
                 let val = Box::pin(Self::evaluate(e, context, provider)).await?;
@@ -503,7 +497,7 @@ impl Evaluator {
                     Some(string_value) => string_value,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "TRIM",
                             "expected": "string",
                             "received": val,
@@ -512,7 +506,7 @@ impl Evaluator {
                     ),
                 };
 
-                Ok(Cow::Owned(Value::String(s.trim().to_string())))
+                Ok(CowData::Owned(JsonValue::String(s.trim().to_string())))
             }
 
             Expr::Len(e) => {
@@ -520,12 +514,12 @@ impl Evaluator {
 
                 // Calcul de la longueur avec validation de type stricte
                 let len = match val.as_ref() {
-                    Value::Array(arr) => arr.len(),
-                    Value::String(s) => s.chars().count(), // Gestion correcte de l'Unicode
-                    Value::Object(obj) => obj.len(),
+                    JsonValue::Array(arr) => arr.len(),
+                    JsonValue::String(s) => s.chars().count(), // Gestion correcte de l'Unicode
+                    JsonValue::Object(obj) => obj.len(),
                     _ => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "operation": "LEN",
                             "expected": ["array", "string", "object"],
                             "received": val,
@@ -534,7 +528,7 @@ impl Evaluator {
                     ),
                 };
 
-                Ok(Cow::Owned(json!(len)))
+                Ok(CowData::Owned(json_value!(len)))
             }
 
             // --- Structure de Contrôle ---
@@ -552,7 +546,7 @@ impl Evaluator {
             }
 
             // --- Dates ---
-            Expr::Now => Ok(Cow::Owned(json!(Utc::now().to_rfc3339()))),
+            Expr::Now => Ok(CowData::Owned(json_value!(UtcClock::now().to_rfc3339()))),
             Expr::DateAdd { date, days } => {
                 let d_val = Box::pin(Self::evaluate(date, context, provider)).await?;
                 let days_val = Box::pin(Self::evaluate(days, context, provider))
@@ -563,7 +557,7 @@ impl Evaluator {
                     Some(s) => s,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json!({
+                        context = json_value!({
                             "target": "d_val",
                             "expected": "string",
                             "received": d_val,
@@ -573,14 +567,17 @@ impl Evaluator {
                     ),
                 };
 
-                if let Ok(dt) = DateTime::parse_from_rfc3339(d_str) {
-                    Ok(Cow::Owned(json!(
-                        (dt + Duration::days(days_val)).to_rfc3339()
-                    )))
-                } else if let Ok(nd) = NaiveDate::parse_from_str(d_str, "%Y-%m-%d") {
-                    Ok(Cow::Owned(json!((nd + Duration::days(days_val))
-                        .format("%Y-%m-%d")
-                        .to_string())))
+                if let Ok(local_dt) = d_str.parse::<LocalTimestamp>() {
+                    Ok(CowData::Owned(json_value!((local_dt
+                        + CalendarDuration::days(days_val))
+                    .to_rfc3339())))
+
+                // 🎯 3. CalendarDate fait déjà partie de ta façade !
+                } else if let Ok(nd) = CalendarDate::parse_from_str(d_str, "%Y-%m-%d") {
+                    Ok(CowData::Owned(json_value!((nd
+                        + CalendarDuration::days(days_val))
+                    .format("%Y-%m-%d")
+                    .to_string())))
                 } else {
                     crate::raise_error!(
                         "ERR_RULE_INVALID_DATE",
@@ -600,12 +597,12 @@ impl Evaluator {
                 let res = provider
                     .get_value(collection, id_s, field)
                     .await
-                    .unwrap_or(Value::Null);
-                Ok(Cow::Owned(res))
+                    .unwrap_or(JsonValue::Null);
+                Ok(CowData::Owned(res))
             }
 
             // Catch-all
-            _ => Ok(Cow::Owned(Value::Null)),
+            _ => Ok(CowData::Owned(JsonValue::Null)),
         }
     }
 }
@@ -616,10 +613,10 @@ impl Evaluator {
 async fn compare_nums<'a, F>(
     a: &Expr,
     b: &Expr,
-    c: &'a Value,
+    c: &'a JsonValue,
     p: &dyn DataProvider,
     op: F,
-) -> RaiseResult<Cow<'a, Value>>
+) -> RaiseResult<CowData<'a, JsonValue>>
 where
     F: Fn(f64, f64) -> bool,
 {
@@ -630,7 +627,7 @@ where
         Some(num) => num,
         None => raise_error!(
             "ERR_RULE_TYPE_MISMATCH",
-            context = json!({
+            context = json_value!({
                 "expected": "number (f64)",
                 "received": val_a,
                 "action": "numeric_comparison",
@@ -645,7 +642,7 @@ where
         Some(num) => num,
         None => raise_error!(
             "ERR_RULE_TYPE_MISMATCH",
-            context = json!({
+            context = json_value!({
                 "expected": "number (f64)",
                 "side": "right-hand / operand B",
                 "received": val_b,
@@ -654,16 +651,16 @@ where
             })
         ),
     };
-    Ok(Cow::Owned(Value::Bool(op(va, vb))))
+    Ok(CowData::Owned(JsonValue::Bool(op(va, vb))))
 }
 
 async fn fold_nums<'a, F>(
     list: &[Expr],
-    c: &'a Value,
+    c: &'a JsonValue,
     p: &dyn DataProvider,
     init: f64,
     op: F,
-) -> RaiseResult<Cow<'a, Value>>
+) -> RaiseResult<CowData<'a, JsonValue>>
 where
     F: Fn(f64, f64) -> f64,
 {
@@ -676,7 +673,7 @@ where
             Some(num) => num,
             None => raise_error!(
                 "ERR_RULE_TYPE_MISMATCH",
-                context = json!({
+                context = json_value!({
                     "operation": "aggregation",
                     "expected": "number (f64)",
                     "received": current_val,
@@ -688,29 +685,29 @@ where
 
         acc = op(acc, val);
     }
-    Ok(Cow::Owned(smart_number(acc)))
+    Ok(CowData::Owned(smart_number(acc)))
 }
 
-fn smart_number(n: f64) -> Value {
+fn smart_number(n: f64) -> JsonValue {
     if n.fract() == 0.0 {
-        json!(n as i64)
+        json_value!(n as i64)
     } else {
-        json!(n)
+        json_value!(n)
     }
 }
 
-fn resolve_path<'a>(context: &'a Value, path: &str) -> RaiseResult<Cow<'a, Value>> {
+fn resolve_path<'a>(context: &'a JsonValue, path: &str) -> RaiseResult<CowData<'a, JsonValue>> {
     let mut current = context;
     if path.is_empty() {
-        return Ok(Cow::Borrowed(current));
+        return Ok(CowData::Borrowed(current));
     }
     for part in path.split('.') {
         current = match current {
-            Value::Object(map) => match map.get(part) {
+            JsonValue::Object(map) => match map.get(part) {
                 Some(val) => val,
                 None => raise_error!(
                     "ERR_RULE_VAR_NOT_FOUND",
-                    context = json!({
+                    context = json_value!({
                         "path": path,
                         "missing_part": part,
                         "action": "resolve_json_path",
@@ -720,7 +717,7 @@ fn resolve_path<'a>(context: &'a Value, path: &str) -> RaiseResult<Cow<'a, Value
             },
             _ => raise_error!(
                 "ERR_RULE_PATH_RESOLUTION_FAIL",
-                context = json!({
+                context = json_value!({
                     "path": path,
                     "failed_at": part,
                     "reason": "La valeur parente n'est pas un objet (map).",
@@ -729,15 +726,15 @@ fn resolve_path<'a>(context: &'a Value, path: &str) -> RaiseResult<Cow<'a, Value
             ),
         };
     }
-    Ok(Cow::Borrowed(current))
+    Ok(CowData::Borrowed(current))
 }
 
-fn is_truthy(v: &Value) -> bool {
+fn is_truthy(v: &JsonValue) -> bool {
     match v {
-        Value::Bool(b) => *b,
-        Value::Null => false,
-        Value::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
-        Value::String(s) => !s.is_empty(),
+        JsonValue::Bool(b) => *b,
+        JsonValue::Null => false,
+        JsonValue::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
+        JsonValue::String(s) => !s.is_empty(),
         _ => true,
     }
 }
@@ -745,32 +742,31 @@ fn is_truthy(v: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_eq_async() {
         let provider = NoOpDataProvider;
-        let ctx = json!({});
-        let expr = Expr::Eq(vec![Expr::Val(json!(10)), Expr::Val(json!(10))]);
+        let ctx = json_value!({});
+        let expr = Expr::Eq(vec![Expr::Val(json_value!(10)), Expr::Val(json_value!(10))]);
         let res = Evaluator::evaluate(&expr, &ctx, &provider).await.unwrap();
         assert_eq!(res.as_bool(), Some(true));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_lookup_mock() {
         struct MockProvider;
-        #[async_trait]
+        #[async_interface]
         impl DataProvider for MockProvider {
-            async fn get_value(&self, _c: &str, _id: &str, _f: &str) -> Option<Value> {
-                Some(json!("Alice"))
+            async fn get_value(&self, _c: &str, _id: &str, _f: &str) -> Option<JsonValue> {
+                Some(json_value!("Alice"))
             }
         }
         let expr = Expr::Lookup {
             collection: "users".into(),
-            id: Box::new(Expr::Val(json!("u1"))),
+            id: Box::new(Expr::Val(json_value!("u1"))),
             field: "name".into(),
         };
-        let context_data = json!({});
+        let context_data = json_value!({});
         let res = Evaluator::evaluate(&expr, &context_data, &MockProvider)
             .await
             .unwrap();

@@ -155,7 +155,6 @@ impl QueryOptimizer {
 mod tests {
     use super::*;
     use crate::json_db::query::{Condition, FilterOperator, Query, QueryFilter};
-    use crate::utils::json::json;
 
     #[test]
     fn test_optimize_reorder() {
@@ -169,13 +168,13 @@ mod tests {
                 Condition {
                     field: "bio".into(),
                     operator: ComparisonOperator::Contains,
-                    value: json!("developer"),
+                    value: json_value!("developer"),
                 },
                 // Rapide (Eq -> score 1)
                 Condition {
                     field: "status".into(),
                     operator: ComparisonOperator::Eq,
-                    value: json!("active"),
+                    value: json_value!("active"),
                 },
             ],
         });
@@ -194,7 +193,7 @@ mod tests {
         let cond = Condition {
             field: "a".into(),
             operator: ComparisonOperator::Eq,
-            value: json!(1),
+            value: json_value!(1),
         };
         let conditions = vec![cond.clone(), cond.clone()]; // Doublon
 

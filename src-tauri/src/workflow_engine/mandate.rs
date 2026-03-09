@@ -1,5 +1,5 @@
 // FICHIER : src-tauri/src/workflow_engine/mandate.rs
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 use crate::json_db::collections::manager::CollectionsManager;
 
@@ -7,7 +7,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 // --- STRUCTURES DU MANDAT ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(rename_all = "camelCase")]
 pub struct Mandate {
     #[serde(default, rename = "_id")]
@@ -19,7 +19,7 @@ pub struct Mandate {
     pub signature: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(rename_all = "camelCase")]
 pub struct MandateMeta {
     pub author: String,
@@ -27,7 +27,7 @@ pub struct MandateMeta {
     pub version: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Strategy {
     SafetyFirst,
@@ -36,20 +36,20 @@ pub enum Strategy {
     Test,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(rename_all = "camelCase")]
 pub struct Governance {
     pub strategy: Strategy,
-    pub condorcet_weights: HashMap<String, f64>,
+    pub condorcet_weights: UnorderedMap<String, f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(rename_all = "camelCase")]
 pub struct HardLogic {
     pub vetos: Vec<VetoRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(rename_all = "camelCase")]
 pub struct VetoRule {
     pub rule: String,
@@ -58,10 +58,10 @@ pub struct VetoRule {
     // AJOUT : Stockage optionnel de la règle dynamique (AST JSON)
     // Le "Option" garantit la rétrocompatibilité (pas obligatoire dans le JSON)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ast: Option<Value>,
+    pub ast: Option<JsonValue>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(rename_all = "camelCase")]
 pub struct Observability {
     pub heartbeat_ms: u64,
@@ -81,7 +81,7 @@ impl Mandate {
             Ok(Some(document)) => document,
             Ok(None) => raise_error!(
                 "ERR_WF_MANDATE_NOT_FOUND",
-                context = json!({
+                context = json_value!({
                     "mandate_id": id,
                     "action": "resolve_mandate",
                     "hint": "L'identifiant est inconnu ou le mandat a été révoqué/supprimé."
@@ -89,7 +89,7 @@ impl Mandate {
             ),
             Err(e) => raise_error!(
                 "ERR_WF_MANDATE_DB_ACCESS",
-                context = json!({
+                context = json_value!({
                     "mandate_id": id,
                     "action": "fetch_mandate_document",
                     "db_error": e.to_string(),
@@ -99,15 +99,13 @@ impl Mandate {
         };
 
         // 2. Désérialisation avec diagnostic d'intégrité
-        let mut mandate: Mandate = match serde_json::from_value(doc) {
+        let mut mandate: Mandate = match json::deserialize_from_value(doc) {
             Ok(m) => m,
             Err(e) => raise_error!(
                 "ERR_WF_MANDATE_CORRUPT",
-                context = json!({
+                context = json_value!({
                     "mandate_id": id,
                     "serialization_error": e.to_string(),
-                    "line": e.line(),
-                    "column": e.column(),
                     "action": "parse_mandate_payload",
                     "hint": "La structure du mandat en base ne correspond plus au modèle Rust. Une migration de schéma est peut-être nécessaire."
                 })
@@ -152,7 +150,7 @@ impl Mandate {
     fn canonical_content(&self) -> String {
         let mut clone = self.clone();
         clone.signature = None;
-        serde_json::to_string(&clone).unwrap_or_default()
+        json::serialize_to_string(&clone).unwrap_or_default()
     }
 }
 
@@ -165,13 +163,13 @@ mod tests {
     use super::*;
     use crate::json_db::test_utils::init_test_env;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_fetch_mandate_success() {
         let env = init_test_env().await;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
-        let full_json = json!({
+        let full_json = json_value!({
             "_id": "man_01",
             "meta": { "author": "System", "version": "1.0", "status": "ACTIVE" },
             "governance": {
@@ -201,18 +199,18 @@ mod tests {
         assert!(mandate.hard_logic.vetos[0].ast.is_none());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_fetch_mandate_with_ast() {
         let env = init_test_env().await;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
         // Une règle dynamique injectée
-        let ast_json = json!({
+        let ast_json = json_value!({
             "Gt": [{"Var": "temp"}, {"Val": 100.0}]
         });
 
-        let full_json = json!({
+        let full_json = json_value!({
             "_id": "man_ast",
             "meta": { "author": "System", "version": "2.0", "status": "ACTIVE" },
             "governance": {
@@ -245,13 +243,13 @@ mod tests {
         assert!(mandate.hard_logic.vetos[0].ast.is_some());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_fetch_mandate_schema_mismatch() {
         let env = init_test_env().await;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
-        let bad_json = json!({
+        let bad_json = json_value!({
             "_id": "man_broken",
             "meta": { "author": "Hacker", "version": "0.0", "status": "DRAFT" },
             "governance": { "strategy": "PERFORMANCE" }

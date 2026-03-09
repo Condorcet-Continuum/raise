@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/software_agent.rs
 
-use crate::utils::{async_trait, data, io, prelude::*, Uuid};
+use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
 // ✅ IMPORT OPTIMISÉ
@@ -37,7 +37,7 @@ impl SoftwareAgent {
         name: &str,
         description: &str,
         history_context: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -56,19 +56,19 @@ impl SoftwareAgent {
         let response = self.ask_llm(ctx, system_prompt, &user_prompt).await?;
         let clean_json = extract_json_from_llm(&response);
 
-        let mut data: Value =
-            data::parse(&clean_json).unwrap_or(json!({ "name": name, "description": description }));
+        let mut data: JsonValue = json::deserialize_from_str(&clean_json)
+            .unwrap_or(json_value!({ "name": name, "description": description }));
 
-        data["id"] = json!(Uuid::new_v4().to_string());
-        data["layer"] = json!("LA");
-        data["type"] = json!("LogicalComponent");
-        data["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+        data["id"] = json_value!(UniqueId::new_v4().to_string());
+        data["layer"] = json_value!("LA");
+        data["type"] = json_value!("LogicalComponent");
+        data["createdAt"] = json_value!(UtcClock::now().to_rfc3339());
 
         Ok(data)
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl Agent for SoftwareAgent {
     fn id(&self) -> &'static str {
         "software_engineer"
@@ -149,7 +149,7 @@ impl Agent for SoftwareAgent {
                     raise_error!(
                         "ERR_MODEL_COMPONENT_NOT_FOUND",
                         error = format!("Composant '{}' introuvable dans le modèle.", context),
-                        context = json!({ "requested_name": context })
+                        context = json_value!({ "requested_name": context })
                     );
                 };
 
@@ -159,7 +159,7 @@ impl Agent for SoftwareAgent {
                 let gen_path = ctx.paths.domain_root.join("src-gen");
 
                 // ✅ OPTIMISATION : Utilisation de la config globale pour le space/db
-                let config = crate::utils::config::AppConfig::get();
+                let config = AppConfig::get();
                 let tool = CodeGenTool::new(
                     gen_path,
                     ctx.db.clone(),
@@ -169,7 +169,7 @@ impl Agent for SoftwareAgent {
 
                 let call = McpToolCall::new(
                     "generate_component_code",
-                    json!({
+                    json_value!({
                         "component_id": component_id,
                         "dry_run": false
                     }),
@@ -180,7 +180,7 @@ impl Agent for SoftwareAgent {
                     raise_error!(
                         "ERR_CODEGEN_EXECUTION_FAILURE",
                         error = format!("Erreur CodeGen: {}", result.content),
-                        context = json!({
+                        context = json_value!({
                             "result_content": result.content,
                             "status": "execution_error"
                         })
@@ -199,8 +199,8 @@ impl Agent for SoftwareAgent {
                 let artifacts: Vec<CreatedArtifact> = file_list
                     .iter()
                     .map(|path| CreatedArtifact {
-                        id: format!("gen_{}", Uuid::new_v4()),
-                        name: io::Path::new(path)
+                        id: format!("gen_{}", UniqueId::new_v4()),
+                        name: Path::new(path)
                             .file_name()
                             .unwrap_or_default()
                             .to_string_lossy()
@@ -247,14 +247,14 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_software_id() {
         assert_eq!(SoftwareAgent::new().id(), "software_engineer");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_software_delegation_triggers() {
         let _agent = SoftwareAgent::new();
         let msg = AclMessage::new(
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(msg.performative, Performative::Request);
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_software_generation_integration() {
@@ -284,11 +284,11 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         // 3. SEED DB : Injection du composant logique pour qu'il soit trouvé
-        let comp_doc = json!({
+        let comp_doc = json_value!({
             "id": "comp-jetson",
             "name": "Nvidia Jetson Controller",
             "layer": "LA",

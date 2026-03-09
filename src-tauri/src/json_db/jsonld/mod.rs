@@ -8,10 +8,6 @@
 //! - Normalisation : produire des graphes RDF canoniques
 //! - Validation : vérifier la conformité avec les schémas
 use crate::utils::prelude::*;
-use crate::utils::{
-    // Serde via la façade
-    HashMap, // Collection via la façade
-};
 
 pub mod context;
 pub mod processor;
@@ -23,23 +19,23 @@ pub use self::processor::JsonLdProcessor;
 pub use self::vocabulary::VocabularyRegistry;
 
 /// Définition d'un contexte JSON-LD (pour sérialisation/désérialisation)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct JsonLdContext {
     #[serde(rename = "@context")]
     pub context: ContextDefinition,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(untagged)]
 pub enum ContextDefinition {
     Simple(String),
-    Object(HashMap<String, ContextValue>),
+    Object(UnorderedMap<String, ContextJsonValue>),
     Array(Vec<ContextDefinition>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(untagged)]
-pub enum ContextValue {
+pub enum ContextJsonValue {
     Simple(String),
     Expanded {
         #[serde(rename = "@id")]

@@ -2,12 +2,12 @@
 
 use crate::blockchain::storage::commit::ArcadiaCommit;
 
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serializable, Deserializable, Default)]
 pub struct Ledger {
     /// Index des commits par leur hash (ID).
-    pub commits: HashMap<String, ArcadiaCommit>,
+    pub commits: UnorderedMap<String, ArcadiaCommit>,
     /// Hash du dernier commit validé (la tête de la chaîne).
     pub last_commit_hash: Option<String>,
 }
@@ -25,7 +25,7 @@ impl Ledger {
             // 🛡️ Alerte de sécurité : Intégrité compromise
             raise_error!(
                 "ERR_COMMIT_INTEGRITY_FAILED",
-                context = json!({
+                context = json_value!({
                     "commit_id": commit.id,
                     "author": commit.author,
                     "timestamp": commit.timestamp,
@@ -43,7 +43,7 @@ impl Ledger {
                     "Rupture de continuité : le parent attendu est {:?}, mais le commit pointe vers {:?}",
                     self.last_commit_hash, commit.parent_hash
                 ),
-                context = serde_json::json!({
+                context = json_value!({
                     "expected_parent_hash": self.last_commit_hash,
                     "received_parent_hash": commit.parent_hash,
                     "action": "verify_commit_chain_continuity",
@@ -83,19 +83,17 @@ mod tests {
     use super::*;
     use crate::blockchain::crypto::signing::KeyPair;
     use crate::blockchain::storage::commit::{Mutation, MutationOp};
-    use chrono::Utc;
-    use serde_json::json;
 
     fn create_mock_commit(keys: &KeyPair, parent: Option<String>) -> ArcadiaCommit {
         let mut commit = ArcadiaCommit {
             id: String::new(),
             parent_hash: parent,
             author: keys.public_key_hex(),
-            timestamp: Utc::now(),
+            timestamp: UtcClock::now(),
             mutations: vec![Mutation {
                 element_id: "urn:test:1".to_string(),
                 operation: MutationOp::Create,
-                payload: json!({"type": "Test"}),
+                payload: json_value!({"type": "Test"}),
             }],
             merkle_root: "root".to_string(),
             signature: vec![],

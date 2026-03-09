@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/model_engine/validators/dynamic_validator.rs
 
-use crate::utils::{async_trait, prelude::*};
+use crate::utils::prelude::*;
 
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
@@ -46,8 +46,8 @@ impl DynamicValidator {
     }
 
     /// Construit le contexte JSON pour l'évaluation de la règle
-    fn build_context(element: &ArcadiaElement) -> Value {
-        let mut context = json!({
+    fn build_context(element: &ArcadiaElement) -> JsonValue {
+        let mut context = json_value!({
             "_id": element.id,
             "name": element.name.as_str(),
             "kind": element.kind,
@@ -80,7 +80,7 @@ impl DynamicValidator {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl ModelValidator for DynamicValidator {
     async fn validate_element(
         &self,
@@ -101,12 +101,12 @@ impl ModelValidator for DynamicValidator {
             // Appel direct à la méthode statique evaluate
             match Evaluator::evaluate(&rule.expr, &context, loader).await {
                 Ok(result) => {
-                    // Conversion du résultat (Cow<Value>) en booléen
+                    // Conversion du résultat (Cow<JsonValue>) en booléen
                     let is_valid = match result.as_ref() {
-                        Value::Bool(b) => *b,
-                        Value::Null => false,
-                        Value::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
-                        Value::String(s) => !s.is_empty(),
+                        JsonValue::Bool(b) => *b,
+                        JsonValue::Null => false,
+                        JsonValue::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
+                        JsonValue::String(s) => !s.is_empty(),
                         _ => true,
                     };
 
@@ -192,10 +192,9 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::NameType;
     use crate::rules_engine::ast::Expr;
-    use crate::utils::data::HashMap;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_dynamic_rule_application() {
         let sandbox = AgentDbSandbox::new().await;
         let loader = ModelLoader::new_with_manager(CollectionsManager::new(
@@ -207,7 +206,7 @@ mod tests {
         // Règle : name == "ValidElement"
         let rule_expr = Expr::Eq(vec![
             Expr::Var("name".to_string()),
-            Expr::Val(json!("ValidElement")),
+            Expr::Val(json_value!("ValidElement")),
         ]);
 
         let rule = Rule {
@@ -226,7 +225,7 @@ mod tests {
             name: NameType::String("ValidElement".into()),
             kind: "OperationalActor".into(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         };
 
         // Élément invalide
@@ -235,7 +234,7 @@ mod tests {
             name: NameType::String("BadName".into()),
             kind: "OperationalActor".into(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         };
 
         let issues_1 = validator.validate_element(&valid_el, &loader).await;
@@ -246,7 +245,7 @@ mod tests {
         assert_eq!(issues_2[0].rule_id, "TEST_RULE");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_dynamic_rule_on_transverse_requirement() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -258,7 +257,7 @@ mod tests {
         // Règle dynamique : properties/priority == "High"
         let rule_expr = Expr::Eq(vec![
             Expr::Var("priority".to_string()),
-            Expr::Val(json!("High")),
+            Expr::Val(json_value!("High")),
         ]);
 
         let rule = Rule {
@@ -270,7 +269,7 @@ mod tests {
         };
 
         // Création d'une exigence invalide (Low priority)
-        let req = json!({
+        let req = json_value!({
             "_id": "REQ-LOW",
             "id": "REQ-LOW",
             "name": "Slow Request",

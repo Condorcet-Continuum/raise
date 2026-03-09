@@ -4,7 +4,7 @@ use crate::utils::prelude::*;
 use crate::ai::assurance::xai::XaiFrame;
 
 /// Résultat de l'évaluation d'une action par le critique
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct CritiqueResult {
     pub score: f32,          // Score de 0.0 à 1.0
     pub is_acceptable: bool, // Verdict binaire (Passe / Passe pas)

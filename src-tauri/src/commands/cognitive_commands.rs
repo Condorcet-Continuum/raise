@@ -1,5 +1,5 @@
 // FICHIER : src-tauri/src/commands/cognitive_commands.rs
-use crate::utils::{data::Value, prelude::*};
+use crate::utils::prelude::*;
 
 use crate::plugins::manager::PluginManager;
 use tauri::State;
@@ -18,7 +18,7 @@ pub async fn cognitive_load_plugin(
         Err(e) => raise_error!(
             "ERR_PLUGIN_LOAD_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "plugin_id": id,
                 "path": path,
                 "action": "load_external_plugin",
@@ -36,15 +36,15 @@ pub async fn cognitive_load_plugin(
 pub async fn cognitive_run_plugin(
     manager: State<'_, PluginManager>,
     id: String,
-    mandate: Option<Value>,
-) -> RaiseResult<Value> {
+    mandate: Option<JsonValue>,
+) -> RaiseResult<JsonValue> {
     // Utilisation de la nouvelle méthode run_plugin_with_context pour supporter le Workflow
     let (code, signals) = match manager.run_plugin_with_context(&id, mandate).await {
         Ok(result) => result,
         Err(e) => raise_error!(
             "ERR_PLUGIN_EXECUTION_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "plugin_id": id,
                 "action": "run_plugin_with_context",
                 "hint": "Le plugin a crashé durant l'exécution. Vérifiez les logs de sortie du plugin et la validité du mandat transmis."
@@ -52,7 +52,7 @@ pub async fn cognitive_run_plugin(
         ),
     };
 
-    Ok(json!({
+    Ok(json_value!({
         "exit_code": code,
         "signals": signals
     }))
@@ -72,8 +72,8 @@ mod tests {
     fn test_cognitive_commands_interface() {
         // Validation de la structure JSON de sortie pour le Frontend
         let code = 0;
-        let signals = vec![json!({"type": "LOG", "data": "test"})];
-        let response = json!({
+        let signals = vec![json_value!({"type": "LOG", "data": "test"})];
+        let response = json_value!({
             "exit_code": code,
             "signals": signals
         });

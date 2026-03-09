@@ -5,7 +5,7 @@ use crate::blockchain::storage::commit::ArcadiaCommit;
 use crate::utils::prelude::*;
 
 /// Types de messages échangés sur le réseau P2P souverain.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub enum ArcadiaNetMessage {
     /// Diffusion d'un nouveau commit (Gossip).
     AnnounceCommit(ArcadiaCommit),
@@ -22,7 +22,7 @@ pub enum ArcadiaNetMessage {
 }
 
 /// Réponses possibles aux requêtes directes.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub enum ArcadiaResponse {
     /// Retourne le commit demandé.
     CommitFound(ArcadiaCommit),
@@ -37,12 +37,11 @@ pub enum ArcadiaResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::Utc;
 
     #[test]
     fn test_protocol_serialization() {
         let msg = ArcadiaNetMessage::RequestLatestHash;
-        let serialized = serde_json::to_string(&msg).unwrap();
+        let serialized = json::serialize_to_string(&msg).unwrap();
         assert!(serialized.contains("RequestLatestHash"));
     }
 
@@ -55,7 +54,7 @@ mod tests {
         };
 
         let msg = ArcadiaNetMessage::SubmitVote(vote);
-        let serialized = serde_json::to_string(&msg).unwrap();
+        let serialized = json::serialize_to_string(&msg).unwrap();
 
         assert!(serialized.contains("SubmitVote"));
         assert!(serialized.contains("validator_1"));
@@ -67,14 +66,14 @@ mod tests {
             id: "commit_1".into(),
             parent_hash: None,
             author: "author_1".into(),
-            timestamp: Utc::now(),
+            timestamp: UtcClock::now(),
             mutations: vec![],
             merkle_root: "root".into(),
             signature: vec![],
         };
 
         let msg = ArcadiaNetMessage::AnnounceCommit(commit);
-        let serialized = serde_json::to_string(&msg).unwrap();
+        let serialized = json::serialize_to_string(&msg).unwrap();
         assert!(serialized.contains("AnnounceCommit"));
     }
 }

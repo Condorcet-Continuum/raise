@@ -1,6 +1,6 @@
 // src-tauri/src/ai/agents/context.rs
 
-use crate::utils::{io::PathBuf, Arc};
+use crate::utils::prelude::*;
 
 use crate::ai::llm::client::LlmClient;
 use crate::code_generator::CodeGeneratorService;
@@ -18,9 +18,9 @@ pub struct AgentPaths {
 pub struct AgentContext {
     pub agent_id: String,
     pub session_id: String,
-    pub db: Arc<StorageEngine>,
+    pub db: SharedRef<StorageEngine>,
     pub llm: LlmClient,
-    pub codegen: Arc<CodeGeneratorService>,
+    pub codegen: SharedRef<CodeGeneratorService>,
     pub paths: AgentPaths,
 }
 
@@ -28,7 +28,7 @@ impl AgentContext {
     pub async fn new(
         agent_id: &str,
         session_id: &str,
-        db: Arc<StorageEngine>,
+        db: SharedRef<StorageEngine>,
         llm: LlmClient,
         domain_root: PathBuf,
         dataset_root: PathBuf,
@@ -38,7 +38,7 @@ impl AgentContext {
             session_id: session_id.to_string(),
             db,
             llm,
-            codegen: Arc::new(CodeGeneratorService::new(domain_root.clone())),
+            codegen: SharedRef::new(CodeGeneratorService::new(domain_root.clone())),
             paths: AgentPaths {
                 domain_root,
                 dataset_root,
@@ -55,10 +55,9 @@ impl AgentContext {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::json::json;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
-    #[tokio::test] // 🎯 Les tests deviennent asynchrones
+    #[async_test] // 🎯 Les tests deviennent asynchrones
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_context_initialization_with_session() {
@@ -73,7 +72,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();
@@ -94,7 +93,7 @@ mod tests {
         assert_eq!(ctx.session_id, "session_abc");
     }
 
-    #[tokio::test] // 🎯 Les tests deviennent asynchrones
+    #[async_test] // 🎯 Les tests deviennent asynchrones
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_empty_identifiers_validation() {
@@ -108,7 +107,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-            json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+            json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();

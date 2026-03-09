@@ -3,8 +3,7 @@
 use candle_core::{DType, Device, Tensor, Var};
 use candle_nn::{VarBuilder, VarMap};
 
-use crate::utils::config::WorldModelConfig;
-use crate::utils::{io, prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 use crate::ai::nlp::parser::CommandType;
 use crate::ai::world_model::dynamics::WorldModelPredictor;
@@ -36,7 +35,7 @@ impl WorldAction {
             Err(e) => raise_error!(
                 "ERR_TENSOR_FROM_VEC",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "create_tensor_from_vec",
                     "expected_shape": [1, dim],
                     "data_len": data_len,
@@ -83,9 +82,9 @@ impl NeuroSymbolicEngine {
         Ok(predicted_future_state)
     }
 
-    fn extract_tensors_sync(&self) -> HashMap<String, Tensor> {
+    fn extract_tensors_sync(&self) -> UnorderedMap<String, Tensor> {
         let data_guard = self.varmap.data().lock().unwrap();
-        let mut extracted = HashMap::new();
+        let mut extracted = UnorderedMap::new();
         for (k, v) in data_guard.iter() {
             extracted.insert(k.clone(), v.as_tensor().clone());
         }
@@ -111,7 +110,7 @@ impl NeuroSymbolicEngine {
             Err(e) => raise_error!(
                 "ERR_ASYNC_SPAWN_FAILURE",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "spawn_blocking_save",
                     "path": path_display, // On utilise la copie légère
                     "hint": "La tâche a paniqué ou a été annulée."
@@ -125,7 +124,7 @@ impl NeuroSymbolicEngine {
             Err(e) => raise_error!(
                 "ERR_MODEL_SAVE_SAFETENSORS",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "write_safetensors_to_disk",
                     "path": path_display, // On utilise la copie légère
                     "tensor_count": tensor_count
@@ -139,14 +138,14 @@ impl NeuroSymbolicEngine {
         path: P,
         config: WorldModelConfig,
     ) -> RaiseResult<Self> {
-        let buffer = io::read(path).await?;
+        let buffer = fs::read_async(path).await?;
 
         let tensors = match candle_core::safetensors::load_buffer(&buffer, &Device::Cpu) {
             Ok(t) => t,
             Err(e) => raise_error!(
                 "ERR_MODEL_LOAD_BUFFER",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "load_safetensors_buffer",
                     "buffer_size": buffer.len(),
                     "device": "Cpu",
@@ -164,7 +163,7 @@ impl NeuroSymbolicEngine {
                     Err(e) => raise_error!(
                         "ERR_MODEL_VAR_CONVERSION",
                         error = e,
-                        context = json!({
+                        context = json_value!({
                             "action": "convert_tensor_to_var",
                             "tensor_name": name,
                             "shape": format!("{:?}", tensor.shape()),
@@ -184,9 +183,8 @@ impl NeuroSymbolicEngine {
 mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
-    use crate::utils::config::WorldModelConfig;
     use candle_nn::VarMap;
-    use tempfile::NamedTempFile; // 🎯 NOUVEL IMPORT
+    use tempfile::NamedTempFile;
 
     // Helper pour générer une config de test
     fn get_test_config() -> WorldModelConfig {
@@ -212,7 +210,7 @@ mod tests {
             name: NameType::default(),
             kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         };
         let action = WorldAction {
             intent: CommandType::Create,
@@ -220,7 +218,7 @@ mod tests {
         assert!(engine.simulate(&element, action).is_ok());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_persistence_async() {
         let file = NamedTempFile::new().unwrap();
         let path = file.path();
@@ -240,7 +238,7 @@ mod tests {
             name: NameType::default(),
             kind: "test".to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         };
         let action = WorldAction {
             intent: CommandType::Search,

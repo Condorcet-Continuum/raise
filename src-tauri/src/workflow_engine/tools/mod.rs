@@ -1,12 +1,12 @@
 // FICHIER : src-tauri/src/workflow_engine/tools/mod.rs
 
-use crate::utils::{fmt::Debug, prelude::*};
+use crate::utils::prelude::*;
 
 /// Définition d'un Outil que l'Agent (ou le Workflow) peut appeler.
 /// Inspiré par le standard MCP (Model Context Protocol).
 /// Contrairement aux Agents, ces outils doivent être DÉTERMINISTES (ou physiques).
-#[async_trait::async_trait]
-pub trait AgentTool: Send + Sync + Debug {
+#[async_interface]
+pub trait AgentTool: Send + Sync + FmtDebug {
     /// Nom unique de l'outil (ex: "read_system_metrics", "fs_write")
     fn name(&self) -> &str;
 
@@ -14,10 +14,10 @@ pub trait AgentTool: Send + Sync + Debug {
     fn description(&self) -> &str;
 
     /// Schéma JSON des arguments attendus
-    fn parameters_schema(&self) -> Value;
+    fn parameters_schema(&self) -> JsonValue;
 
     /// Exécution de l'outil avec des arguments JSON
-    async fn execute(&self, args: &Value) -> RaiseResult<Value>;
+    async fn execute(&self, args: &JsonValue) -> RaiseResult<JsonValue>;
 }
 
 // Module pour les implémentations concrètes
@@ -29,13 +29,12 @@ pub use system_tools::SystemMonitorTool;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     // --- MOCK TOOL POUR TESTER LE TRAIT ---
     #[derive(Debug)]
     struct MockEchoTool;
 
-    #[async_trait::async_trait]
+    #[async_interface]
     impl AgentTool for MockEchoTool {
         fn name(&self) -> &str {
             "mock_echo"
@@ -43,24 +42,24 @@ mod tests {
         fn description(&self) -> &str {
             "Renvoie l'argument 'input'"
         }
-        fn parameters_schema(&self) -> Value {
-            json!({})
+        fn parameters_schema(&self) -> JsonValue {
+            json_value!({})
         }
 
-        async fn execute(&self, args: &Value) -> RaiseResult<Value> {
+        async fn execute(&self, args: &JsonValue) -> RaiseResult<JsonValue> {
             let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
-            Ok(json!({ "echo": input }))
+            Ok(json_value!({ "echo": input }))
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_tool_polymorphism() {
         // Teste si on peut stocker et utiliser l'outil via son Trait (Box<dyn AgentTool>)
         let tool: Box<dyn AgentTool> = Box::new(MockEchoTool);
 
         assert_eq!(tool.name(), "mock_echo");
 
-        let args = json!({ "input": "Hello Raise" });
+        let args = json_value!({ "input": "Hello Raise" });
         let result = tool.execute(&args).await.expect("Execution failed");
 
         assert_eq!(result["echo"], "Hello Raise");

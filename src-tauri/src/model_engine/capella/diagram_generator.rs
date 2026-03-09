@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/model_engine/capella/diagram_generator.rs
 
-use crate::utils::{io::Path, prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -19,13 +19,13 @@ pub struct AirdParser;
 impl AirdParser {
     /// Extrait les positions (layout) des éléments graphiques depuis un fichier .aird
     /// Retourne une Map : Target_UUID -> Layout
-    pub fn extract_layout(path: &Path) -> RaiseResult<HashMap<String, DiagramLayout>> {
+    pub fn extract_layout(path: &Path) -> RaiseResult<UnorderedMap<String, DiagramLayout>> {
         let mut reader = match Reader::from_file(path) {
             Ok(r) => r,
             Err(e) => raise_error!(
                 "ERR_AIRD_READER_INIT",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "initialize_aird_reader",
                     "path": path.to_string_lossy(),
                     "hint": "Vérifiez que le fichier existe et que le format .aird est valide."
@@ -35,7 +35,7 @@ impl AirdParser {
         // CORRECTION API Quick-XML
         reader.config_mut().trim_text(true);
 
-        let mut layout_map = HashMap::new();
+        let mut layout_map = UnorderedMap::new();
         let mut buf = Vec::new();
 
         // Variable d'état très simplifiée pour l'exemple

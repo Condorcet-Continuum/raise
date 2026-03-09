@@ -1,4 +1,5 @@
 // FICHIER : src-tauri/src/json_db/collections/manager.rs
+use crate::utils::prelude::*;
 
 use crate::json_db::indexes::IndexManager;
 use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
@@ -6,16 +7,9 @@ use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, Query
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
 use crate::json_db::storage::{file_storage, StorageEngine};
 use crate::rules_engine::{Evaluator, Rule, RuleStore};
-use crate::utils::{Future, Pin};
 
 use super::collection;
 use super::data_provider::CachedDataProvider;
-
-use crate::utils::async_recursion;
-use crate::utils::config::AppConfig;
-use crate::utils::data::{self, HashSet};
-use crate::utils::io;
-use crate::utils::prelude::*;
 
 pub enum EntityIdentity {
     Id(String),
@@ -46,7 +40,7 @@ impl<'a> CollectionsManager<'a> {
             raise_error!(
                 "ERR_DB_MISSING_CORE_SCHEMA",
                 error = "Le schéma JSON 'index.schema.json' est introuvable. Initialisation impossible.",
-                context = json!({ "required_schema": expected_uri })
+                context = json_value!({ "required_schema": expected_uri })
             );
         }
 
@@ -55,7 +49,7 @@ impl<'a> CollectionsManager<'a> {
         let is_new = existing_doc.is_none();
 
         let mut system_doc = existing_doc.unwrap_or_else(|| {
-            json!({
+            json_value!({
                 "$schema": expected_uri,
                 "name": format!("{}_{}", self.space, self.db),
                 "space": self.space,
@@ -84,7 +78,7 @@ impl<'a> CollectionsManager<'a> {
                 .db_schemas_root(&self.space, &self.db)
                 .join("v1");
             if !schemas_dir.exists() {
-                let _ = io::ensure_dir(&schemas_dir).await;
+                let _ = fs::ensure_dir_async(&schemas_dir).await;
             }
 
             // 🎯 5. On sauvegarde l'index avec toutes les collections système injectées
@@ -115,7 +109,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(true)
     }
 
-    pub async fn load_index(&self) -> RaiseResult<Value> {
+    pub async fn load_index(&self) -> RaiseResult<JsonValue> {
         let sys_path = self
             .storage
             .config
@@ -127,7 +121,7 @@ impl<'a> CollectionsManager<'a> {
             raise_error!(
                 "ERR_DB_SYSTEM_INDEX_NOT_FOUND",
                 error = "Opération refusée : l'index de la base de données est introuvable. La base doit être explicitement initialisée via init_db().",
-                context = json!({
+                context = json_value!({
                     "path": sys_path.to_string_lossy().to_string(), 
                     "db": self.db,
                     "space": self.space
@@ -135,7 +129,7 @@ impl<'a> CollectionsManager<'a> {
             );
         }
 
-        io::read_json(&sys_path).await
+        fs::read_json_async(&sys_path).await
     }
 
     // ============================================================================
@@ -163,7 +157,7 @@ impl<'a> CollectionsManager<'a> {
         )
     }
 
-    pub async fn create_schema_def(&self, schema_name: &str, schema: Value) -> RaiseResult<()> {
+    pub async fn create_schema_def(&self, schema_name: &str, schema: JsonValue) -> RaiseResult<()> {
         let uri = self.build_schema_uri(schema_name);
         let mut reg = self.get_registry_for_uri(&uri).await?;
         reg.create_schema(&uri, schema).await
@@ -179,7 +173,7 @@ impl<'a> CollectionsManager<'a> {
         &self,
         schema_name: &str,
         prop_name: &str,
-        prop_def: Value,
+        prop_def: JsonValue,
     ) -> RaiseResult<()> {
         let uri = self.build_schema_uri(schema_name);
         let mut reg = self.get_registry_for_uri(&uri).await?;
@@ -190,7 +184,7 @@ impl<'a> CollectionsManager<'a> {
         &self,
         schema_name: &str,
         prop_name: &str,
-        prop_def: Value,
+        prop_def: JsonValue,
     ) -> RaiseResult<()> {
         let uri = self.build_schema_uri(schema_name);
         let mut reg = self.get_registry_for_uri(&uri).await?;
@@ -219,17 +213,17 @@ impl<'a> CollectionsManager<'a> {
     }
     // --- MÉTHODES DE LECTURE ---
 
-    pub async fn get_document(&self, collection: &str, id: &str) -> RaiseResult<Option<Value>> {
+    pub async fn get_document(&self, collection: &str, id: &str) -> RaiseResult<Option<JsonValue>> {
         self.storage
             .read_document(&self.space, &self.db, collection, id)
             .await
     }
 
-    pub async fn get(&self, collection: &str, id: &str) -> RaiseResult<Option<Value>> {
+    pub async fn get(&self, collection: &str, id: &str) -> RaiseResult<Option<JsonValue>> {
         self.get_document(collection, id).await
     }
 
-    pub async fn read_many(&self, collection: &str, ids: &[String]) -> RaiseResult<Vec<Value>> {
+    pub async fn read_many(&self, collection: &str, ids: &[String]) -> RaiseResult<Vec<JsonValue>> {
         let mut docs = Vec::with_capacity(ids.len());
         for _id in ids {
             let doc_opt = match self.get_document(collection, _id).await {
@@ -237,7 +231,7 @@ impl<'a> CollectionsManager<'a> {
                 Err(e) => raise_error!(
                     "ERR_DB_DOCUMENT_READ",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "collection": collection,
                         "document_id": _id
                     })
@@ -247,7 +241,7 @@ impl<'a> CollectionsManager<'a> {
                 raise_error!(
                     "ERR_DB_CORRUPTION_INDEX_MISMATCH",
                     error = "Document indexé mais introuvable physiquement",
-                    context = json!({ "_id": _id, "coll": collection })
+                    context = json_value!({ "_id": _id, "coll": collection })
                 );
             };
             docs.push(doc);
@@ -255,7 +249,7 @@ impl<'a> CollectionsManager<'a> {
         Ok(docs)
     }
 
-    pub async fn list_all(&self, collection: &str) -> RaiseResult<Vec<Value>> {
+    pub async fn list_all(&self, collection: &str) -> RaiseResult<Vec<JsonValue>> {
         // ✅ CORRECTION : On passe self.storage au lieu de &self.storage.config
         // Cela permet à list_documents de taper dans le cache.
         collection::list_documents(self.storage, &self.space, &self.db, collection).await
@@ -266,10 +260,13 @@ impl<'a> CollectionsManager<'a> {
         collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db).await
     }
 
-    async fn save_system_index(&self, doc: &mut Value) -> RaiseResult<()> {
+    async fn save_system_index(&self, doc: &mut JsonValue) -> RaiseResult<()> {
         let expected_uri = "db://_system/_system/schemas/v1/db/index.schema.json".to_string();
         if let Some(obj) = doc.as_object_mut() {
-            obj.insert("$schema".to_string(), Value::String(expected_uri.clone()));
+            obj.insert(
+                "$schema".to_string(),
+                JsonValue::String(expected_uri.clone()),
+            );
         }
 
         let reg = self.get_registry_for_uri(&expected_uri).await?;
@@ -277,7 +274,7 @@ impl<'a> CollectionsManager<'a> {
             raise_error!(
                 "ERR_DB_SECURITY_VIOLATION",
                 error = "Schéma d'index système introuvable ou non autorisé.",
-                context = json!({
+                context = json_value!({
                     "required_uri": expected_uri,
                     "action": "enforce_system_integrity",
                     "hint": "Le schéma 'index.schema.json' doit impérativement résider dans '_system/_system/schemas/v1/db'."
@@ -288,13 +285,29 @@ impl<'a> CollectionsManager<'a> {
         if let Err(e) =
             apply_business_rules(self, "_system_index", doc, None, &reg, &expected_uri).await
         {
-            warn!("⚠️ Erreur règles système sur l'index (non bloquant): {}", e);
+            user_warn!(
+                "WRN_SYSTEM_RULE_INDEX_FAIL", // 🎯 Identifiant i18n et Event ID unique
+                json_value!({
+                    "component": "INDEX_ENGINE",
+                    "technical_error": e.to_string(),
+                    "is_blocking": false,
+                    "hint": "Vérifiez l'intégrité du schéma JSON-LD dans _system"
+                })
+            );
         }
 
         // ✅ 2. Le Validator (avec x_compute) calcule ce qui manque (_id, dates)
         if let Ok(validator) = SchemaValidator::compile_with_registry(&expected_uri, &reg) {
             if let Err(e) = validator.compute_then_validate(doc) {
-                warn!("⚠️ Index système invalide (sauvegarde forcée): {}", e);
+                user_warn!(
+                    "WRN_SYSTEM_INDEX_INVALID_RECOVER", // 🎯 Identifiant i18n et Event ID unique
+                    json_value!({
+                        "component": "INDEX_ENGINE",
+                        "action": "FORCE_SAVE",
+                        "technical_error": e.to_string(),
+                        "hint": "L'index a été corrompu mais la Forteresse a forcé une récupération."
+                    })
+                );
             }
         }
 
@@ -313,13 +326,13 @@ impl<'a> CollectionsManager<'a> {
             .config
             .db_collection_path(&self.space, &self.db, name);
         if !col_path.exists() {
-            io::ensure_dir(&col_path).await?;
+            fs::ensure_dir_async(&col_path).await?;
         }
 
-        let meta = json!({ "schema": final_schema_uri, "indexes": [] });
+        let meta = json_value!({ "schema": final_schema_uri, "indexes": [] });
         let meta_path = col_path.join("_meta.json");
 
-        io::write_json_atomic(&meta_path, &meta).await?;
+        fs::write_json_atomic_async(&meta_path, &meta).await?;
 
         self.update_system_index_collection(name, &final_schema_uri)
             .await?;
@@ -357,7 +370,7 @@ impl<'a> CollectionsManager<'a> {
             raise_error!(
                 "ERR_DB_INTEGRITY_COMPROMISED",
                 error = "L'index de la base utilise un schéma non certifié ou hors du noyau de confiance.",
-                context = json!({ "found_schema": current_schema })
+                context = json_value!({ "found_schema": current_schema })
             );
         }
 
@@ -378,7 +391,7 @@ impl<'a> CollectionsManager<'a> {
                     "La cible '{}' est inconnue dans les sections collections ou rules de l'index.",
                     col_name
                 ),
-                context = json!({
+                context = json_value!({
                     "target_name": col_name,
                     "searched_paths": [col_ptr, rule_ptr]
                 })
@@ -401,17 +414,17 @@ impl<'a> CollectionsManager<'a> {
         let mut system_doc = self.load_index().await?; // 🎯 Douane stricte
 
         if system_doc.get("collections").is_none() {
-            system_doc["collections"] = json!({});
+            system_doc["collections"] = json_value!({});
         }
         if let Some(cols) = system_doc["collections"].as_object_mut() {
             let existing_items = cols
                 .get(col_name)
                 .and_then(|c| c.get("items"))
                 .cloned()
-                .unwrap_or(json!([]));
+                .unwrap_or(json_value!([]));
             cols.insert(
                 col_name.to_string(),
-                json!({ "schema": schema_uri, "items": existing_items }),
+                json_value!({ "schema": schema_uri, "items": existing_items }),
             );
         }
         self.save_system_index(&mut system_doc).await?;
@@ -444,7 +457,7 @@ impl<'a> CollectionsManager<'a> {
         let mut system_doc = self.load_index().await?; // 🎯 Douane stricte
 
         if system_doc.get("collections").is_none() {
-            system_doc["collections"] = json!({});
+            system_doc["collections"] = json_value!({});
         }
         let filename = format!("{}.json", id);
 
@@ -457,19 +470,19 @@ impl<'a> CollectionsManager<'a> {
                     .unwrap_or_default();
                 cols.insert(
                     col_name.to_string(),
-                    json!({ "schema": schema_guess, "items": [] }),
+                    json_value!({ "schema": schema_guess, "items": [] }),
                 );
             }
             if let Some(col_entry) = cols.get_mut(col_name) {
                 if col_entry.get("items").is_none() {
-                    col_entry["items"] = json!([]);
+                    col_entry["items"] = json_value!([]);
                 }
                 if let Some(items) = col_entry["items"].as_array_mut() {
                     if !items
                         .iter()
                         .any(|i| i.get("file").and_then(|f| f.as_str()) == Some(&filename))
                     {
-                        items.push(json!({ "file": filename }));
+                        items.push(json_value!({ "file": filename }));
                     }
                 }
             }
@@ -514,12 +527,12 @@ impl<'a> CollectionsManager<'a> {
     }
 
     // --- ÉCRITURE ET MISE À JOUR ---
-    pub async fn insert_raw(&self, collection: &str, doc: &Value) -> RaiseResult<()> {
+    pub async fn insert_raw(&self, collection: &str, doc: &JsonValue) -> RaiseResult<()> {
         let Some(_id) = doc.get("_id").and_then(|v| v.as_str()) else {
             raise_error!(
                 "ERR_DB_DOCUMENT_ID_MISSING",
                 error = "Attribut 'id' manquant ou format invalide dans le document",
-                context = json!({
+                context = json_value!({
                     "expected_field": "_id",
                     "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>())
                 })
@@ -539,7 +552,7 @@ impl<'a> CollectionsManager<'a> {
                 raise_error!(
                     "ERR_DB_STRICT_SCHEMA_REQUIRED",
                     error = "Impossible de créer la collection à la volée : aucun '$schema' défini dans le document.",
-                    context = json!({ "collection": collection })
+                    context = json_value!({ "collection": collection })
                 );
             }
         }
@@ -552,13 +565,26 @@ impl<'a> CollectionsManager<'a> {
         let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
         if let Err(_e) = idx_mgr.index_document(collection, doc).await {
             #[cfg(debug_assertions)]
-            warn!("⚠️ Indexation secondaire échouée: {}", _e);
+            user_warn!(
+                "WRN_SECONDARY_INDEX_FAILED", // 🎯 Identifiant i18n et Event ID unique
+                json_value!({
+                    "component": "INDEX_ENGINE",
+                    "index_type": "secondary",
+                    "technical_error": _e.to_string(),
+                    "is_critical": false,
+                    "hint": "La recherche sur cet index peut être dégradée, mais l'intégrité de la donnée source est préservée."
+                })
+            );
         }
         Ok(())
     }
 
-    #[async_recursion]
-    pub async fn insert_with_schema(&self, collection: &str, mut doc: Value) -> RaiseResult<Value> {
+    #[async_recursive]
+    pub async fn insert_with_schema(
+        &self,
+        collection: &str,
+        mut doc: JsonValue,
+    ) -> RaiseResult<JsonValue> {
         doc = self.resolve_document_references(doc).await?;
         self.prepare_document(collection, &mut doc).await?;
         self.insert_raw(collection, &doc).await?;
@@ -569,26 +595,26 @@ impl<'a> CollectionsManager<'a> {
         &self,
         collection: &str,
         id: &str,
-        patch_data: Value,
-    ) -> RaiseResult<Value> {
+        patch_data: JsonValue,
+    ) -> RaiseResult<JsonValue> {
         let resolved_patch = self.resolve_document_references(patch_data).await?;
         let old_doc_opt = self.get_document(collection, id).await?;
         let Some(mut doc) = old_doc_opt else {
             raise_error!(
                 "ERR_DB_UPDATE_TARGET_NOT_FOUND",
                 error = "Échec de la mise à jour : le document original est introuvable.",
-                context = json!({ "action": "update_document" })
+                context = json_value!({ "action": "update_document" })
             );
         };
         json_merge(&mut doc, resolved_patch);
 
         if let Some(obj) = doc.as_object_mut() {
             // 1. SÉCURITÉ : On verrouille la clé primaire pour empêcher la mutation de l'ID
-            obj.insert("_id".to_string(), Value::String(id.to_string()));
+            obj.insert("_id".to_string(), JsonValue::String(id.to_string()));
             // 2. LOGIQUE D'ÉTAT P2P : On incrémente la révision (seul le code DB connaît l'ancien état)
             if let Some(p2p) = obj.get_mut("_p2p").and_then(|v| v.as_object_mut()) {
                 if let Some(rev) = p2p.get("revision").and_then(|v| v.as_i64()) {
-                    p2p.insert("revision".to_string(), json!(rev + 1));
+                    p2p.insert("revision".to_string(), json_value!(rev + 1));
                 }
             }
         }
@@ -605,8 +631,12 @@ impl<'a> CollectionsManager<'a> {
         Ok(doc)
     }
 
-    #[async_recursion]
-    pub async fn upsert_document(&self, collection: &str, mut data: Value) -> RaiseResult<String> {
+    #[async_recursive]
+    pub async fn upsert_document(
+        &self,
+        collection: &str,
+        mut data: JsonValue,
+    ) -> RaiseResult<String> {
         data = self.resolve_document_references(data).await?;
 
         let id_opt = data
@@ -620,7 +650,7 @@ impl<'a> CollectionsManager<'a> {
                 "ERR_DB_UPSERT_MISSING_IDENTITY",
                 error =
                     "Identifiant manquant : l'upsert requiert au moins un champ 'id' ou 'name'.",
-                context = json!({
+                context = json_value!({
                     "action": "upsert_document",
                     "validation_state": {
                         "has_id": false,
@@ -683,8 +713,8 @@ impl<'a> CollectionsManager<'a> {
         Ok(true)
     }
 
-    #[async_recursion]
-    pub async fn prepare_document(&self, collection: &str, doc: &mut Value) -> RaiseResult<()> {
+    #[async_recursive]
+    pub async fn prepare_document(&self, collection: &str, doc: &mut JsonValue) -> RaiseResult<()> {
         // 1. DÉTERMINATION DU SCHÉMA
         let mut resolved_uri: Option<String> = None;
 
@@ -695,8 +725,8 @@ impl<'a> CollectionsManager<'a> {
             .join("_meta.json");
 
         if meta_path.exists() {
-            if let Ok(content) = io::read_to_string(&meta_path).await {
-                if let Ok(meta) = data::parse::<Value>(&content) {
+            if let Ok(content) = fs::read_to_string_async(&meta_path).await {
+                if let Ok(meta) = json::deserialize_from_str::<JsonValue>(&content) {
                     if let Some(s) = meta.get("schema").and_then(|v| v.as_str()) {
                         if !s.is_empty() {
                             resolved_uri = Some(self.build_schema_uri(s));
@@ -717,13 +747,21 @@ impl<'a> CollectionsManager<'a> {
         // 2. INJECTION, CALCULS & VALIDATION (SSOT via Validator)
         if let Some(uri) = &resolved_uri {
             if let Some(obj) = doc.as_object_mut() {
-                obj.insert("$schema".to_string(), Value::String(uri.clone()));
+                obj.insert("$schema".to_string(), JsonValue::String(uri.clone()));
             }
 
             let reg = self.get_registry_for_uri(uri).await?;
 
             if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, uri).await {
-                warn!("⚠️ Erreur règles métier (non bloquant): {}", e);
+                user_warn!(
+                    "WRN_BUSINESS_RULE_FAILURE", // 🎯 Identifiant i18n et Event ID unique
+                    json_value!({
+                        "component": "RULES_ENGINE",
+                        "severity": "non_blocking",
+                        "technical_error": e.to_string(),
+                        "hint": "Une règle métier n'a pas pu être validée, mais l'opération continue."
+                    })
+                );
             }
 
             let validator = SchemaValidator::compile_with_registry(uri, &reg)?;
@@ -739,19 +777,22 @@ impl<'a> CollectionsManager<'a> {
 
                 let mut doc_for_hash = obj.clone();
                 doc_for_hash.remove("_p2p");
-                let hash = self.compute_document_checksum(&Value::Object(doc_for_hash));
+                let hash = self.compute_document_checksum(&JsonValue::Object(doc_for_hash));
 
                 if let Some(p2p) = obj.get_mut("_p2p").and_then(|v| v.as_object_mut()) {
-                    p2p.insert("checksum".to_string(), json!(hash));
-                    p2p.insert("origin_node".to_string(), json!(ws_id));
-                    p2p.insert("last_sync_at".to_string(), json!(Utc::now().to_rfc3339()));
+                    p2p.insert("checksum".to_string(), json_value!(hash));
+                    p2p.insert("origin_node".to_string(), json_value!(ws_id));
+                    p2p.insert(
+                        "last_sync_at".to_string(),
+                        json_value!(UtcClock::now().to_rfc3339()),
+                    );
                 }
             }
         } else {
             raise_error!(
                 "ERR_DB_STRICT_SCHEMA_REQUIRED",
                 error = "Insertion refusée : Aucun schéma de validation n'est défini pour cette collection.",
-                context = json!({ "collection": collection, "action": "prepare_document" })
+                context = json_value!({ "collection": collection, "action": "prepare_document" })
             );
         }
 
@@ -760,7 +801,7 @@ impl<'a> CollectionsManager<'a> {
             raise_error!(
                 "ERR_AI_SEMANTIC_VALIDATION_FAIL",
                 error = e.to_string(),
-                context = json!({
+                context = json_value!({
                     "action": "semantic_integrity_check",
                     "collection": collection,
                     "resolved_uri": resolved_uri,
@@ -773,7 +814,11 @@ impl<'a> CollectionsManager<'a> {
     }
 
     // --- OPTIMISATION SEMANTIQUE ---
-    fn apply_semantic_logic(&self, doc: &mut Value, schema_uri: Option<&str>) -> RaiseResult<()> {
+    fn apply_semantic_logic(
+        &self,
+        doc: &mut JsonValue,
+        schema_uri: Option<&str>,
+    ) -> RaiseResult<()> {
         let layer_hint = if let Some(uri) = schema_uri {
             if uri.contains("/oa/") {
                 Some("oa")
@@ -803,13 +848,13 @@ impl<'a> CollectionsManager<'a> {
                         obj.insert("@context".to_string(), layer_ctx);
                     } else {
                         let defaults = registry.get_default_context();
-                        if let Ok(val) = data::to_value(defaults) {
+                        if let Ok(val) = json::serialize_to_value(defaults) {
                             obj.insert("@context".to_string(), val);
                         }
                     }
                 } else {
                     let defaults = registry.get_default_context();
-                    if let Ok(val) = data::to_value(defaults) {
+                    if let Ok(val) = json::serialize_to_value(defaults) {
                         obj.insert("@context".to_string(), val);
                     }
                 }
@@ -861,7 +906,7 @@ impl<'a> CollectionsManager<'a> {
                 let mut query = Query::new(collection);
                 query.filter = Some(QueryFilter {
                     operator: FilterOperator::And,
-                    conditions: vec![Condition::eq("name", crate::utils::json::json!(name))],
+                    conditions: vec![Condition::eq("name", crate::utils::json::json_value!(name))],
                 });
                 let res = qe.execute_query(query).await?;
 
@@ -885,11 +930,11 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    pub async fn resolve_document_references(&self, document: Value) -> RaiseResult<Value> {
+    pub async fn resolve_document_references(&self, document: JsonValue) -> RaiseResult<JsonValue> {
         resolve_refs_recursive(document, self).await
     }
 
-    fn compute_document_checksum(&self, doc: &Value) -> String {
+    fn compute_document_checksum(&self, doc: &JsonValue) -> String {
         use sha2::{Digest, Sha256};
         // Sérialisation du JSON en vecteur d'octets
         let content = serde_json::to_vec(doc).unwrap_or_default();
@@ -899,11 +944,11 @@ impl<'a> CollectionsManager<'a> {
     }
 }
 
-fn json_merge(a: &mut Value, b: Value) {
+fn json_merge(a: &mut JsonValue, b: JsonValue) {
     match (a, b) {
-        (Value::Object(a), Value::Object(b)) => {
+        (JsonValue::Object(a), JsonValue::Object(b)) => {
             for (k, v) in b {
-                json_merge(a.entry(k).or_insert(Value::Null), v);
+                json_merge(a.entry(k).or_insert(JsonValue::Null), v);
             }
         }
         (a, b) => *a = b,
@@ -911,35 +956,56 @@ fn json_merge(a: &mut Value, b: Value) {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[async_recursion]
+#[async_recursive]
 pub async fn apply_business_rules(
     manager: &CollectionsManager<'_>,
     collection_name: &str,
-    doc: &mut Value,
-    old_doc: Option<&Value>,
+    doc: &mut JsonValue,
+    old_doc: Option<&JsonValue>,
     registry: &SchemaRegistry,
     schema_uri: &str,
 ) -> RaiseResult<()> {
     let mut store = RuleStore::new(manager);
 
     if let Err(e) = store.sync_from_db().await {
-        warn!(
-            "⚠️ Warning: Impossible de charger les règles système: {}",
-            e
+        user_warn!(
+            "WRN_SYSTEM_RULES_LOAD_FAILED", // 🎯 Identifiant i18n et Event ID unique
+            json_value!({
+                "component": "RULES_ENGINE",
+                "scope": "system_rules",
+                "technical_error": e.to_string(),
+                "hint": "Le moteur de règles fonctionnera avec les paramètres par défaut, mais certaines contraintes système pourraient être absentes."
+            })
         );
     }
 
     if let Some(schema) = registry.get_by_uri(schema_uri) {
         if let Some(rules_array) = schema.get("x_rules").and_then(|v| v.as_array()) {
             for (index, rule_val) in rules_array.iter().enumerate() {
-                match data::from_value::<Rule>(rule_val.clone()) {
+                match json::deserialize_from_value::<Rule>(rule_val.clone()) {
                     Ok(rule) => {
                         if let Err(e) = store.register_rule(collection_name, rule).await {
-                            warn!("⚠️ Erreur enregistrement règle (index {}): {}", index, e);
+                            user_warn!(
+                                "WRN_RULE_REGISTRATION_FAILED", // 🎯 Identifiant i18n et Event ID unique
+                                json_value!({
+                                    "component": "RULES_ENGINE",
+                                    "item_index": index,
+                                    "technical_error": e.to_string(),
+                                    "hint": "Une règle spécifique n'a pas pu être enregistrée dans l'index. L'intégrité globale est maintenue."
+                                })
+                            );
                         }
                     }
                     Err(e) => {
-                        warn!("⚠️ Règle invalide dans le schéma (index {}): {}", index, e)
+                        user_warn!(
+                            "WRN_SCHEMA_RULE_INVALID", // 🎯 Identifiant i18n et Event ID unique
+                            json_value!({
+                                "component": "RULES_ENGINE",
+                                "item_index": index,
+                                "technical_error": e.to_string(),
+                                "hint": "Une règle du schéma JSON-LD est syntaxiquement incorrecte et a été ignorée."
+                            })
+                        );
                     }
                 }
             }
@@ -958,7 +1024,7 @@ pub async fn apply_business_rules(
             break;
         }
 
-        let mut next_changes = HashSet::new();
+        let mut next_changes = UniqueSet::new();
         for rule in rules {
             match Evaluator::evaluate(&rule.expr, doc, &provider).await {
                 Ok(result) => {
@@ -966,15 +1032,13 @@ pub async fn apply_business_rules(
                         next_changes.insert(rule.target.clone());
                     }
                 }
-                Err(crate::utils::error::AppError::Structured(ref data))
-                    if data.code == "ERR_RULE_VAR_NOT_FOUND" =>
-                {
+                Err(AppError::Structured(ref data)) if data.code == "ERR_RULE_VAR_NOT_FOUND" => {
                     continue;
                 }
                 Err(e) => {
                     raise_error!(
                         "ERR_DB_RULE_EVAL_FAIL",
-                        context = json!({
+                        context = json_value!({
                             "rule_id": rule.id,
                             "target_path": rule.target,
                             "evaluator_error": e.to_string(),
@@ -990,17 +1054,17 @@ pub async fn apply_business_rules(
     Ok(())
 }
 
-fn compute_diff(new_doc: &Value, old_doc: Option<&Value>) -> data::HashSet<String> {
-    let mut changes = data::HashSet::new();
+fn compute_diff(new_doc: &JsonValue, old_doc: Option<&JsonValue>) -> UniqueSet<String> {
+    let mut changes = UniqueSet::new();
     find_changes("", new_doc, old_doc, &mut changes);
     changes
 }
 
 fn find_changes(
     path: &str,
-    new_val: &Value,
-    old_val: Option<&Value>,
-    changes: &mut data::HashSet<String>,
+    new_val: &JsonValue,
+    old_val: Option<&JsonValue>,
+    changes: &mut UniqueSet<String>,
 ) {
     if let Some(old) = old_val {
         if new_val == old {
@@ -1012,7 +1076,7 @@ fn find_changes(
     }
 
     match (new_val, old_val) {
-        (Value::Object(new_map), Some(Value::Object(old_map))) => {
+        (JsonValue::Object(new_map), Some(JsonValue::Object(old_map))) => {
             for (k, v) in new_map {
                 let new_path = if path.is_empty() {
                     k.clone()
@@ -1022,7 +1086,7 @@ fn find_changes(
                 find_changes(&new_path, v, old_map.get(k), changes);
             }
         }
-        (Value::Object(new_map), None) => {
+        (JsonValue::Object(new_map), None) => {
             for (k, v) in new_map {
                 let new_path = if path.is_empty() {
                     k.clone()
@@ -1036,7 +1100,7 @@ fn find_changes(
     }
 }
 
-fn set_value_by_path(doc: &mut Value, path: &str, value: Value) -> bool {
+fn set_value_by_path(doc: &mut JsonValue, path: &str, value: JsonValue) -> bool {
     let parts: Vec<&str> = path.split('.').collect();
     let mut current = doc;
     for (i, part) in parts.iter().enumerate() {
@@ -1053,13 +1117,13 @@ fn set_value_by_path(doc: &mut Value, path: &str, value: Value) -> bool {
             }
         } else {
             if !current.is_object() {
-                *current = json!({});
+                *current = json_value!({});
             }
             if current.get(*part).is_none() {
                 current
                     .as_object_mut()
                     .unwrap()
-                    .insert(part.to_string(), json!({}));
+                    .insert(part.to_string(), json_value!({}));
             }
             current = current.get_mut(*part).unwrap();
         }
@@ -1084,12 +1148,12 @@ fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
 }
 
 fn resolve_refs_recursive<'a>(
-    data: Value,
+    data: JsonValue,
     col_mgr: &'a CollectionsManager<'a>,
-) -> Pin<Box<dyn Future<Output = RaiseResult<Value>> + Send + 'a>> {
+) -> Pinned<Box<dyn AsyncFuture<Output = RaiseResult<JsonValue>> + Send + 'a>> {
     Box::pin(async move {
         match data {
-            Value::String(s) => {
+            JsonValue::String(s) => {
                 if let Some((col, field, val)) = parse_smart_link(&s) {
                     let mut query = Query::new(col);
                     query.filter = Some(QueryFilter {
@@ -1104,27 +1168,27 @@ fn resolve_refs_recursive<'a>(
                             .or_else(|| doc.get("_id"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        Ok(Value::String(id.to_string()))
+                        Ok(JsonValue::String(id.to_string()))
                     } else {
-                        Ok(Value::String(s))
+                        Ok(JsonValue::String(s))
                     }
                 } else {
-                    Ok(Value::String(s))
+                    Ok(JsonValue::String(s))
                 }
             }
-            Value::Array(arr) => {
+            JsonValue::Array(arr) => {
                 let mut new_arr = Vec::new();
                 for item in arr {
                     new_arr.push(resolve_refs_recursive(item, col_mgr).await?);
                 }
-                Ok(Value::Array(new_arr))
+                Ok(JsonValue::Array(new_arr))
             }
-            Value::Object(map) => {
-                let mut new_map = crate::utils::data::Map::new();
+            JsonValue::Object(map) => {
+                let mut new_map = JsonObject::new();
                 for (k, v) in map {
                     new_map.insert(k, resolve_refs_recursive(v, col_mgr).await?);
                 }
-                Ok(Value::Object(new_map))
+                Ok(JsonValue::Object(new_map))
             }
             _ => Ok(data),
         }
@@ -1135,9 +1199,9 @@ fn resolve_refs_recursive<'a>(
 mod tests {
     use super::*;
     // 🎯 Import de notre Sandbox magique !
-    use crate::utils::mock::DbSandbox;
+    use crate::utils::testing::DbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_manager_init_db_completeness() {
         // 1. Setup de l'environnement isolé
         let sandbox = DbSandbox::new().await;
@@ -1200,7 +1264,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_manager_get_document_integration() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
@@ -1214,7 +1278,7 @@ mod tests {
             .unwrap();
 
         // ✅ CORRECTION : Utilisation de _id
-        let doc = json!({ "_id": "user_123", "name": "Test User" });
+        let doc = json_value!({ "_id": "user_123", "name": "Test User" });
         manager.insert_raw("users", &doc).await.unwrap();
 
         let result = manager.get_document("users", "user_123").await.unwrap();
@@ -1225,7 +1289,7 @@ mod tests {
         assert!(missing.is_none());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_read_many_parallel() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
@@ -1240,7 +1304,7 @@ mod tests {
 
         for i in 0..100 {
             // ✅ CORRECTION : Utilisation de _id
-            let doc = json!({ "_id": i.to_string(), "val": i });
+            let doc = json_value!({ "_id": i.to_string(), "val": i });
             manager.insert_raw("items", &doc).await.unwrap();
         }
 
@@ -1258,7 +1322,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_read_many_strict_integrity() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
@@ -1273,7 +1337,7 @@ mod tests {
 
         // ✅ CORRECTION : Utilisation de _id
         manager
-            .insert_raw("items", &json!({ "_id": "1", "val": "A" }))
+            .insert_raw("items", &json_value!({ "_id": "1", "val": "A" }))
             .await
             .unwrap();
 
@@ -1285,7 +1349,7 @@ mod tests {
         assert!(err_str.contains("ERR_DB_CORRUPTION_INDEX_MISMATCH"));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_crud_workflow() {
         let sandbox = DbSandbox::new().await;
         let mgr = CollectionsManager::new(&sandbox.storage, "test", "crud");
@@ -1300,7 +1364,7 @@ mod tests {
 
         // 1. CREATE (Insert)
         // L'insertion via le schéma va auto-générer le _id grâce à validator.rs
-        let doc = json!({ "name": "Item 1", "price": 100 });
+        let doc = json_value!({ "name": "Item 1", "price": 100 });
         let created_doc = mgr.insert_with_schema("items", doc).await.unwrap();
         let id = created_doc["_id"].as_str().unwrap().to_string();
 
@@ -1308,9 +1372,13 @@ mod tests {
         assert!(fetched.is_some());
 
         // 2. UPDATE
-        mgr.update_document("items", &id, json!({ "price": 150, "status": "active" }))
-            .await
-            .unwrap();
+        mgr.update_document(
+            "items",
+            &id,
+            json_value!({ "price": 150, "status": "active" }),
+        )
+        .await
+        .unwrap();
 
         let updated = mgr.get_document("items", &id).await.unwrap().unwrap();
         assert_eq!(updated["price"], 150);
@@ -1325,7 +1393,7 @@ mod tests {
         assert!(missing.is_none());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_upsert_idempotence() {
         let sandbox = DbSandbox::new().await;
         let mgr = CollectionsManager::new(&sandbox.storage, "test", "upsert");
@@ -1339,12 +1407,12 @@ mod tests {
         .unwrap();
 
         // ✅ CORRECTION : Utilisation de _id
-        let data1 = json!({ "_id": "config-01", "val": "A" });
+        let data1 = json_value!({ "_id": "config-01", "val": "A" });
         let res1 = mgr.upsert_document("configs", data1).await.unwrap();
         assert!(res1.contains("Created"));
 
         // ✅ CORRECTION : Utilisation de _id
-        let data2 = json!({ "_id": "config-01", "val": "B" });
+        let data2 = json_value!({ "_id": "config-01", "val": "B" });
         let res2 = mgr.upsert_document("configs", data2).await.unwrap();
         assert!(res2.contains("Updated"));
 
@@ -1389,7 +1457,7 @@ mod tests {
         assert_eq!(val, "Ceci:est:une:description");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_manager_delete_identity() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
@@ -1404,8 +1472,8 @@ mod tests {
             .unwrap();
 
         // ✅ CORRECTION : Remplacement du doublon "name" par "_id"
-        let doc_alice = json!({ "_id": "u_100", "name": "Alice" });
-        let doc_bob = json!({ "_id": "u_200", "name": "Bob" });
+        let doc_alice = json_value!({ "_id": "u_100", "name": "Alice" });
+        let doc_bob = json_value!({ "_id": "u_200", "name": "Bob" });
 
         manager.insert_raw("users", &doc_alice).await.unwrap();
         manager.insert_raw("users", &doc_bob).await.unwrap();
@@ -1458,7 +1526,7 @@ mod tests {
         assert!(err_str.contains("ERR_DB_ENTITY_NOT_FOUND"));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_manager_fail_fast_on_missing_index() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_fail", "db_fail");
@@ -1477,10 +1545,10 @@ mod tests {
             .config
             .db_root(&manager.space, &manager.db)
             .join("_system.json");
-        io::remove_file(&sys_path).await.unwrap();
+        fs::remove_file_async(&sys_path).await.unwrap();
 
         // ✅ CORRECTION : Utilisation de _id au lieu de handle
-        let doc = json!({ "_id": "1", "name": "Test Fail Fast" });
+        let doc = json_value!({ "_id": "1", "name": "Test Fail Fast" });
         let res = manager.insert_raw("users", &doc).await;
 
         assert!(
@@ -1495,7 +1563,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_manager_remove_item_from_index() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
@@ -1510,7 +1578,7 @@ mod tests {
             .unwrap();
 
         // ✅ CORRECTION : Utilisation de _id au lieu de handle
-        let doc = json!({ "_id": "u1", "name": "Alice" });
+        let doc = json_value!({ "_id": "u1", "name": "Alice" });
         manager.insert_raw("users", &doc).await.unwrap();
 
         let index = manager.load_index().await.unwrap();
@@ -1530,7 +1598,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_manager_remove_collection_from_index() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");

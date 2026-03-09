@@ -1,15 +1,15 @@
 // FICHIER : src-tauri/src/traceability/impact_analyzer.rs
 
 use super::tracer::Tracer;
-use crate::utils::{prelude::*, HashSet};
+use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serializable)]
 pub struct ImpactReport {
     pub root_element_id: String,
     pub impacted_elements: Vec<ImpactedItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serializable)]
 pub struct ImpactedItem {
     pub element_id: String,
     pub distance: usize,
@@ -26,7 +26,7 @@ impl ImpactAnalyzer {
     }
 
     pub fn analyze(&self, element_id: &str, max_depth: usize) -> ImpactReport {
-        let mut visited = HashSet::new();
+        let mut visited = UniqueSet::new();
         let mut impacted = Vec::new();
         self.traverse(element_id, 0, max_depth, &mut visited, &mut impacted);
 
@@ -41,7 +41,7 @@ impl ImpactAnalyzer {
         id: &str,
         depth: usize,
         max: usize,
-        visited: &mut HashSet<String>,
+        visited: &mut UniqueSet<String>,
         results: &mut Vec<ImpactedItem>,
     ) {
         if depth > max || !visited.insert(id.to_string()) {
@@ -69,13 +69,12 @@ impl ImpactAnalyzer {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
-    use serde_json::json;
 
     #[test]
     fn test_impact_propagation() {
         let mut model = ProjectModel::default();
-        let mut p1 = std::collections::HashMap::new();
-        p1.insert("allocatedTo".into(), json!("B"));
+        let mut p1 = UnorderedMap::new();
+        p1.insert("allocatedTo".into(), json_value!("B"));
 
         model.sa.functions.push(ArcadiaElement {
             id: "A".into(),

@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/system_agent.rs
 
-use crate::utils::{async_trait, data, prelude::*, Uuid};
+use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -26,7 +26,7 @@ impl SystemAgent {
         name: &str,
         element_type: &str,
         history_context: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -51,19 +51,19 @@ impl SystemAgent {
             .await?;
 
         let clean_json = extract_json_from_llm(&response);
-        let mut data: Value = data::parse(&clean_json)
-            .unwrap_or(json!({ "name": name, "description": "Auto-generated" }));
+        let mut data: JsonValue = json::deserialize_from_str(&clean_json)
+            .unwrap_or(json_value!({ "name": name, "description": "Auto-generated" }));
 
-        data["id"] = json!(Uuid::new_v4().to_string());
-        data["layer"] = json!("SA");
-        data["type"] = json!(format!("System{}", element_type));
-        data["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+        data["id"] = json_value!(UniqueId::new_v4().to_string());
+        data["layer"] = json_value!("SA");
+        data["type"] = json_value!(format!("System{}", element_type));
+        data["createdAt"] = json_value!(UtcClock::now().to_rfc3339());
 
         Ok(data)
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl Agent for SystemAgent {
     fn id(&self) -> &'static str {
         "system_architect"
@@ -170,7 +170,7 @@ mod tests {
     }
 
     // NOUVEAU TEST : Vérifie que la délégation ACL se déclenche pour un Composant
-    #[tokio::test]
+    #[async_test]
     async fn test_system_agent_delegation_trigger() {
         // CORRECTION WARNING : Préfixe '_' pour indiquer variables non utilisées
         let _agent = SystemAgent::new();

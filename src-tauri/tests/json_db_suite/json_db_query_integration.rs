@@ -8,39 +8,46 @@ use raise::json_db::{
         SortOrder,
     },
 };
-use raise::utils::io::{self};
+
 use raise::utils::prelude::*;
 
 /// Helper local pour charger un document de test depuis le mock dataset isolé
-async fn load_test_doc(domain_path: &Path) -> Value {
+async fn load_test_doc(domain_path: &Path) -> JsonValue {
     // On s'assure que les données de test sont présentes dans CE domaine isolé
     let dataset_file = seed_mock_datasets(domain_path)
         .await
         .expect("❌ Échec de la génération des mock datasets");
 
-    io::read_json(&dataset_file)
+    fs::read_json_async(&dataset_file)
         .await
         .expect("❌ Lecture du mock JSON impossible")
 }
 
 /// Helper pour insérer un article avec un handle spécifique
-async fn seed_article(mgr: &CollectionsManager<'_>, handle: &str, doc_template: &Value) -> String {
+async fn seed_article(
+    mgr: &CollectionsManager<'_>,
+    handle: &str,
+    doc_template: &JsonValue,
+) -> String {
     let mut doc = doc_template.clone();
     if let Some(obj) = doc.as_object_mut() {
         obj.remove("_id");
         obj.remove("name");
         obj.remove("exchangeMechanism");
 
-        obj.insert("handle".to_string(), json!(handle));
-        obj.insert("slug".to_string(), json!(handle));
+        obj.insert("handle".to_string(), json_value!(handle));
+        obj.insert("slug".to_string(), json_value!(handle));
         obj.insert(
             "displayName".to_string(),
-            json!(format!("Display {}", handle)),
+            json_value!(format!("Display {}", handle)),
         );
-        obj.insert("title".to_string(), json!(format!("Titre {}", handle)));
+        obj.insert(
+            "title".to_string(),
+            json_value!(format!("Titre {}", handle)),
+        );
         obj.insert(
             "authorId".to_string(),
-            json!("00000000-0000-0000-0000-000000000000"),
+            json_value!("00000000-0000-0000-0000-000000000000"),
         );
     }
 
@@ -60,7 +67,7 @@ async fn seed_article(mgr: &CollectionsManager<'_>, handle: &str, doc_template: 
     stored["_id"].as_str().unwrap().to_string()
 }
 
-#[tokio::test]
+#[async_test]
 async fn query_get_article_by_id() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -78,7 +85,7 @@ async fn query_get_article_by_id() {
     assert_eq!(loaded["handle"], handle);
 }
 
-#[tokio::test]
+#[async_test]
 async fn query_find_one_article_by_handle() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -93,7 +100,7 @@ async fn query_find_one_article_by_handle() {
         conditions: vec![Condition {
             field: "handle".to_string(),
             operator: ComparisonOperator::Eq,
-            value: json!(handle),
+            value: json_value!(handle),
         }],
     };
     let query = Query {
@@ -113,7 +120,7 @@ async fn query_find_one_article_by_handle() {
     assert_eq!(result.documents[0]["handle"], handle);
 }
 
-#[tokio::test]
+#[async_test]
 async fn query_find_many_with_sort_and_limit() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);

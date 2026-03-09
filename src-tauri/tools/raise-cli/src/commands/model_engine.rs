@@ -2,14 +2,7 @@
 
 use clap::{Args, Subcommand};
 
-use raise::{
-    user_error, user_info, user_success,
-    utils::{
-        io::{self},
-        prelude::*,
-    },
-};
-
+use raise::utils::prelude::*;
 // Nettoyage des imports inutilisés (ModelValidator)
 use raise::model_engine::{ConsistencyChecker, Severity, TransformationDomain};
 
@@ -48,15 +41,15 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
         ModelCommands::Load { path } => {
             user_info!(
                 "MODEL_LOAD_START",
-                json!({ "path": path, "type": "source_file" })
+                json_value!({ "path": path, "type": "source_file" })
             );
-            let path_ref = io::Path::new(&path);
+            let path_ref = Path::new(&path);
 
-            if !io::exists(path_ref).await {
+            if !fs::exists_async(path_ref).await {
                 // 🎯 Mise en conformité stricte avec JSON
                 user_error!(
                     "FS_ERROR",
-                    json!({"error": "Fichier introuvable", "path": path})
+                    json_value!({"error": "Fichier introuvable", "path": path})
                 );
                 return Ok(());
             }
@@ -65,7 +58,7 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
             // Simulation du succès de l'opération.
             user_success!(
                 "LOAD_OK",
-                json!({"status": "Modèle chargé. Prêt pour l'analyse sémantique."})
+                json_value!({"status": "Modèle chargé. Prêt pour l'analyse sémantique."})
             );
         }
 
@@ -73,7 +66,7 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte avec JSON
             user_info!(
                 "VALIDATION_START",
-                json!({"action": "Démarrage du ConsistencyChecker..."})
+                json_value!({"action": "Démarrage du ConsistencyChecker..."})
             );
 
             // On utilise le checker ré-exporté par la façade
@@ -81,7 +74,7 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
 
             user_success!(
                 "VALIDATION_COMPLETE",
-                json!({
+                json_value!({
                     "severity": format!("{:?}", Severity::Info),
                     "status": "success"
                 })
@@ -89,7 +82,7 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
         }
 
         ModelCommands::Transform { domain } => {
-            // Mapping manuel puisque l'enum n'est pas ValueEnum
+            // Mapping manuel puisque l'enum n'est pas JsonValueEnum
             let target_domain = match domain.to_lowercase().as_str() {
                 "software" => Some(TransformationDomain::Software),
                 "hardware" => Some(TransformationDomain::Hardware),
@@ -99,18 +92,21 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
 
             if let Some(d) = target_domain {
                 // Info : On trace le début de la transformation
-                user_info!("TRANSFORM_START", json!({ "domain": format!("{:?}", d) }));
+                user_info!(
+                    "TRANSFORM_START",
+                    json_value!({ "domain": format!("{:?}", d) })
+                );
 
                 // Success : On confirme la projection réussie
                 user_success!(
                     "TRANSFORM_SUCCESS",
-                    json!({ "domain": format!("{:?}", d), "status": "projected" })
+                    json_value!({ "domain": format!("{:?}", d), "status": "projected" })
                 );
             } else {
                 // Error : On remonte l'erreur de domaine avec les valeurs attendues
                 user_error!(
                     "DOMAIN_INVALID",
-                    json!({
+                    json_value!({
                         "received": domain,
                         "expected": ["software", "hardware", "system"]
                     })
@@ -126,17 +122,16 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::session::SessionManager;
-    use raise::utils::{config::AppConfig, Arc};
+    use raise::utils::context::SessionManager;
 
     #[cfg(test)]
-    use raise::utils::mock::DbSandbox;
+    use raise::utils::testing::DbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_model_engine_logic() {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {

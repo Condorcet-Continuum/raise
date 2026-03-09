@@ -37,12 +37,12 @@ impl<'a> DbAdapter<'a> {
                 if let Some(obj) = data.as_object_mut() {
                     obj.insert(
                         "_id".to_string(),
-                        Value::String(mutation.element_id.clone()),
+                        JsonValue::String(mutation.element_id.clone()),
                     );
                     obj.insert(
                         "_blockchain_sync".to_string(),
-                        json!({
-                            "sync_at": chrono::Utc::now().to_rfc3339(),
+                        json_value!({
+                            "sync_at": UtcClock::now().to_rfc3339(),
                         }),
                     );
                 }
@@ -60,7 +60,7 @@ impl<'a> DbAdapter<'a> {
     }
 
     /// Détermine la collection cible en fonction de l'URI ou du type de l'élément.
-    fn resolve_collection(&self, element_id: &str, payload: &Value) -> RaiseResult<String> {
+    fn resolve_collection(&self, element_id: &str, payload: &JsonValue) -> RaiseResult<String> {
         // 1. Détection par type explicite (@type)
         if let Some(kind) = payload.get("@type").and_then(|v| v.as_str()) {
             return Ok(self.map_type_to_collection(kind));
@@ -86,7 +86,7 @@ impl<'a> DbAdapter<'a> {
                 "Impossible de résoudre la collection pour l'ID : {}",
                 element_id
             ),
-            context = serde_json::json!({
+            context = json_value!({
                 "element_id": element_id,
                 "action": "resolve_collection_by_id",
                 "hint": "Vérifiez que l'ID respecte le format attendu et que son préfixe est bien enregistré dans le routeur."
@@ -111,9 +111,9 @@ impl<'a> DbAdapter<'a> {
 mod tests {
     use super::*;
     use crate::blockchain::storage::commit::MutationOp;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_db_adapter_upsert_logic() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -130,7 +130,7 @@ mod tests {
         let mutation = Mutation {
             element_id: "urn:oa:actor-001".to_string(),
             operation: MutationOp::Create,
-            payload: json!({
+            payload: json_value!({
                 "@type": "OperationalActor",
                 "name": "Pilot"
             }),

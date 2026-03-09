@@ -2,7 +2,7 @@
 
 use super::{ComplianceChecker, ComplianceReport, Violation};
 use crate::traceability::tracer::Tracer;
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 pub struct Iec61508Checker;
 
@@ -12,7 +12,7 @@ impl ComplianceChecker for Iec61508Checker {
     }
 
     /// 🎯 Version robuste : Audit de la certification SIL pour les systèmes industriels
-    fn check(&self, _tracer: &Tracer, docs: &HashMap<String, Value>) -> ComplianceReport {
+    fn check(&self, _tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -60,16 +60,15 @@ impl ComplianceChecker for Iec61508Checker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_iec61508_sil_validation() {
-        let mut docs: HashMap<String, Value> = HashMap::new();
+        let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // 1. Système conforme (Domaine Industriel + SIL défini)
         docs.insert(
             "Turbine_01".to_string(),
-            json!({
+            json_value!({
                 "_id": "Turbine_01",
                 "domain": "Industrial",
                 "name": "Gas Turbine Control",
@@ -80,7 +79,7 @@ mod tests {
         // 2. Système non conforme (Domaine Industriel mais SIL manquant)
         docs.insert(
             "Conveyor_02".to_string(),
-            json!({
+            json_value!({
                 "_id": "Conveyor_02",
                 "domain": "Industrial",
                 "name": "Main Conveyor Belt"
@@ -90,7 +89,7 @@ mod tests {
         // 3. Élément ignoré (Domaine différent)
         docs.insert(
             "Office_PC".to_string(),
-            json!({
+            json_value!({
                 "_id": "Office_PC",
                 "domain": "Corporate"
             }),
@@ -112,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_iec61508_empty_scope() {
-        let docs = HashMap::new();
+        let docs = UnorderedMap::new();
         let tracer = Tracer::from_json_list(vec![]);
         let checker = Iec61508Checker;
 

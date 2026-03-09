@@ -5,23 +5,18 @@
     windows_subsystem = "windows"
 )]
 
-use std::fs;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use raise::utils::{context, prelude::*};
 
 use tauri::Manager;
 
-use serde_json::Value;
-
 // --- IMPORTS RAISE ---
 use raise::ai::training::dataset;
-use raise::blockchain::{ConnectionProfile, FabricClient, SharedFabricClient};
+use raise::blockchain::{ConnectionProfile, FabricClient};
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
     json_db_commands, model_commands, rules_commands, traceability_commands, training_commands,
     utils_commands, workflow_commands,
 };
-use raise::utils::{prelude::*, AsyncMutex};
 
 // --- IMPORT IA NATIF ---
 use raise::ai::llm::candle_engine::CandleLlmEngine;
@@ -52,8 +47,6 @@ use raise::commands::ai_commands::DlState;
 
 use raise::spatial_engine;
 
-use raise::utils::session::SessionManager;
-
 #[allow(clippy::await_holding_lock)]
 fn main() {
     if let Err(e) = AppConfig::init() {
@@ -61,11 +54,11 @@ fn main() {
         std::process::exit(1);
     }
     println!("🚀 Démarrage de RAISE...");
-    raise::utils::init_logging();
+    context::init_logging();
     let _config = AppConfig::get();
 
     tauri::Builder::default()
-        .manage(NativeLlmState(Mutex::new(None)))
+        .manage(NativeLlmState(SyncMutex::new(None::<CandleLlmEngine>)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
@@ -75,7 +68,7 @@ fn main() {
                 .get_path("PATH_RAISE_DOMAIN")
                 .expect("❌ ERREUR FATALE: PATH_RAISE_DOMAIN introuvable dans la configuration !");
             if !db_root.exists() {
-                fs::create_dir_all(&db_root)?;
+                fs::create_dir_all_sync(&db_root)?;
             }
             let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
@@ -120,7 +113,7 @@ fn main() {
                 default_db,
             ));
 
-            let plugin_mgr = Arc::new(PluginManager::new(&storage, None));
+            let plugin_mgr = SharedRef::new(PluginManager::new(&storage, None));
 
             // 6. INJECTION DES ÉTATS
             app.manage(config);
@@ -129,12 +122,12 @@ fn main() {
             app.manage(plugin_mgr.clone());
 
             // Instanciation et injection du SessionManager
-            let shared_storage = Arc::new(storage_engine.clone());
-            let session_manager = SessionManager::new(shared_storage);
+            let shared_storage = SharedRef::new(storage_engine.clone());
+            let session_manager = context::SessionManager::new(shared_storage);
             app.manage(session_manager);
 
-            let app_state = Arc::new(AppState {
-                model: Mutex::new(ProjectModel::default()),
+            let app_state = SharedRef::new(AppState {
+                model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
             });
             app.manage(app_state.clone());
 
@@ -153,13 +146,13 @@ fn main() {
                     organization: "none".into(),
                     connection: None,
                 },
-                organizations: std::collections::HashMap::new(),
-                peers: std::collections::HashMap::new(),
-                certificate_authorities: std::collections::HashMap::new(),
+                organizations: UnorderedMap::new(),
+                peers: UnorderedMap::new(),
+                certificate_authorities: UnorderedMap::new(),
             };
-            app.manage(
-                Mutex::new(FabricClient::from_config(default_fabric_profile)) as SharedFabricClient,
-            );
+            app.manage(SharedRef::new(AsyncMutex::new(FabricClient::from_config(
+                default_fabric_profile,
+            ))));
 
             // --- INITIALISATION RÉSEAU ARCADIA ---
             raise::blockchain::p2p::service::init_arcadia_network(app.handle().clone());
@@ -203,11 +196,11 @@ fn main() {
                 let loader = ModelLoader::from_engine(storage_state.inner(), "mbse2", "_system");
 
                 if let Ok(model) = loader.load_full_model().await {
-                    let storage_arc = Arc::new(storage_state.inner().clone());
+                    let storage_arc = SharedRef::new(storage_state.inner().clone());
 
                     match AiOrchestrator::new(model, Some(storage_arc)).await {
                         Ok(orchestrator) => {
-                            let shared_orch = Arc::new(AsyncMutex::new(orchestrator));
+                            let shared_orch = SharedRef::new(AsyncMutex::new(orchestrator));
                             let ai_state = app_handle_clone.state::<AiState>();
                             *ai_state.0.lock().await = Some(shared_orch.clone());
 
@@ -314,7 +307,7 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> anyhow::Result<()> {
+async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> RaiseResult<()> {
     let migrator = Migrator::new(storage, space, db);
     let migrations = vec![
         Migration {
@@ -324,22 +317,22 @@ async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> a
             up: vec![
                 MigrationStep::CreateCollection {
                     name: "articles".to_string(),
-                    // 🎯 FIX : On remplace Value::Null par le schéma générique
-                    schema: Value::String(
+                    // 🎯 FIX : On remplace JsonValue::Null par le schéma générique
+                    schema: JsonValue::String(
                         "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
                     ),
                 },
                 MigrationStep::CreateCollection {
                     name: "systems".to_string(),
                     // 🎯 FIX
-                    schema: Value::String(
+                    schema: JsonValue::String(
                         "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
                     ),
                 },
                 MigrationStep::CreateCollection {
                     name: "exchange_items".to_string(),
                     // 🎯 FIX
-                    schema: Value::String(
+                    schema: JsonValue::String(
                         "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
                     ),
                 },
@@ -403,14 +396,10 @@ async fn load_arcadia_ontologies(ontology_root: &Path) {
 mod tests {
     use super::*;
 
-    use std::fs::File;
-    use std::io::Write;
-    use tempfile::tempdir;
-
     #[cfg(test)]
-    use raise::utils::mock::DbSandbox;
+    use raise::utils::testing::DbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_load_ontologies_from_directory_success() {
         let dir = tempdir().unwrap();
         let path = dir.path();
@@ -421,11 +410,12 @@ mod tests {
         let oa_path = path.join("oa.jsonld");
         let trans_path = path.join("transverse.jsonld");
 
-        let mut f_oa = File::create(&oa_path).unwrap();
-        write!(f_oa, "{}", oa_content).unwrap();
-
-        let mut f_trans = File::create(&trans_path).unwrap();
-        write!(f_trans, "{}", transverse_content).unwrap();
+        fs::write_async(&oa_path, oa_content.as_bytes())
+            .await
+            .unwrap();
+        fs::write_async(&trans_path, transverse_content.as_bytes())
+            .await
+            .unwrap();
 
         load_arcadia_ontologies(path).await;
 
@@ -436,7 +426,7 @@ mod tests {
         let _ctx_sa = registry.get_context_for_layer("sa");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_migrations_list_integrity() {
         // 1. 🎯 La Sandbox remplace tout le setup manuel en une seule ligne !
         let sandbox = DbSandbox::new().await;

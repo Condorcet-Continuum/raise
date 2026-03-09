@@ -61,7 +61,7 @@ impl EmbeddingEngine {
                     Err(e) => raise_error!(
                         "ERR_AI_ENGINE_FAST_BATCH_FAILED",
                         error = e,
-                        context = json!({
+                        context = json_value!({
                             "action": "batch_embedding_dispatch",
                             "engine": "fast_cpu_implementation",
                             "batch_size": batch_size
@@ -84,7 +84,7 @@ impl EmbeddingEngine {
                 Err(err) => raise_error!(
                     "ERR_AI_ENGINE_FAST_QUERY_FAILED",
                     error = err,
-                    context = json!({
+                    context = json_value!({
                         "action": "single_query_dispatch",
                         "engine": "fast_cpu_implementation",
                         "text_length": text.len()
@@ -102,9 +102,9 @@ impl EmbeddingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_default_engine_init() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -116,7 +116,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "nlp",
-            crate::utils::json::json!({
+            crate::utils::json::json_value!({
                 "model_name": "minilm",
                 "rust_config_file": "config.json",
                 "rust_tokenizer_file": "tokenizer.json",
@@ -132,7 +132,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_engine_switching() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -144,7 +144,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "nlp",
-            crate::utils::json::json!({
+            crate::utils::json::json_value!({
                 "model_name": "minilm",
                 "rust_config_file": "config.json",
                 "rust_tokenizer_file": "tokenizer.json",

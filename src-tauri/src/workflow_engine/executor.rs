@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/workflow_engine/executor.rs
 
-use crate::utils::{prelude::*, Arc, AsyncMutex, HashMap};
+use crate::utils::prelude::*;
 
 use super::compiler::WorkflowCompiler;
 use super::handlers::{
@@ -17,20 +17,20 @@ use crate::json_db::collections::manager::CollectionsManager;
 
 /// L'Exécuteur est le routeur principal. Il délègue la logique aux Handlers spécialisés.
 pub struct WorkflowExecutor {
-    pub orchestrator: Arc<AsyncMutex<AiOrchestrator>>,
-    pub plugin_manager: Arc<PluginManager>,
+    pub orchestrator: SharedRef<AsyncMutex<AiOrchestrator>>,
+    pub plugin_manager: SharedRef<PluginManager>,
     critic: WorkflowCritic,
-    tools: HashMap<String, Box<dyn AgentTool>>,
-    handlers: HashMap<NodeType, Box<dyn NodeHandler>>,
+    tools: UnorderedMap<String, Box<dyn AgentTool>>,
+    handlers: UnorderedMap<NodeType, Box<dyn NodeHandler>>,
 }
 
 impl WorkflowExecutor {
     /// Crée un nouvel exécuteur lié à l'intelligence centrale et au Hub de Plugins
     pub fn new(
-        orchestrator: Arc<AsyncMutex<AiOrchestrator>>,
-        plugin_manager: Arc<PluginManager>,
+        orchestrator: SharedRef<AsyncMutex<AiOrchestrator>>,
+        plugin_manager: SharedRef<PluginManager>,
     ) -> Self {
-        let mut handlers: HashMap<NodeType, Box<dyn NodeHandler>> = HashMap::new();
+        let mut handlers: UnorderedMap<NodeType, Box<dyn NodeHandler>> = UnorderedMap::new();
 
         // RECUTEMENT DE TOUS LES OUVRIERS SPÉCIALISÉS !
         handlers.insert(NodeType::GatePolicy, Box::new(GatePolicyHandler));
@@ -45,7 +45,7 @@ impl WorkflowExecutor {
             orchestrator,
             plugin_manager,
             critic: WorkflowCritic::default(),
-            tools: HashMap::new(),
+            tools: UnorderedMap::new(),
             handlers,
         }
     }
@@ -91,7 +91,7 @@ impl WorkflowExecutor {
     pub async fn execute_node(
         &self,
         node: &WorkflowNode,
-        context: &mut HashMap<String, Value>,
+        context: &mut UnorderedMap<String, JsonValue>,
     ) -> RaiseResult<ExecutionStatus> {
         tracing::info!("⚙️ Exécution : {} ({:?})", node.name, node.r#type);
 
@@ -122,16 +122,15 @@ impl WorkflowExecutor {
 mod tests {
     use super::*;
     use crate::model_engine::types::ProjectModel;
-    use crate::utils::data::json;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::tools::SystemMonitorTool;
     // N'oubliez pas d'importer le CollectionsManager si ce n'est pas déjà fait
     use crate::json_db::collections::manager::CollectionsManager;
 
     // 🎯 FIX : On passe la Config en plus pour pouvoir initialiser le Manager
     async fn create_test_executor_with_tools(
-        storage: Arc<crate::json_db::storage::StorageEngine>,
-        config: &crate::utils::config::AppConfig,
+        storage: SharedRef<crate::json_db::storage::StorageEngine>,
+        config: &AppConfig,
     ) -> WorkflowExecutor {
         let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
@@ -139,10 +138,10 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm",
-            json!({ "provider": "mock", "model": "test" }),
+            json_value!({ "provider": "mock", "model": "test" }),
         )
         .await;
-        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
         let model = ProjectModel::default();
 
@@ -151,14 +150,14 @@ mod tests {
         let orch = AiOrchestrator::new(model, Some(storage.clone()))
             .await
             .unwrap();
-        let plugin_manager = Arc::new(PluginManager::new(&storage, None));
+        let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
 
-        let mut exec = WorkflowExecutor::new(Arc::new(AsyncMutex::new(orch)), plugin_manager);
+        let mut exec = WorkflowExecutor::new(SharedRef::new(AsyncMutex::new(orch)), plugin_manager);
         exec.register_tool(Box::new(SystemMonitorTool));
         exec
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gate_pause() {
@@ -171,15 +170,15 @@ mod tests {
             id: "node_pause".into(),
             r#type: NodeType::GateHitl,
             name: "Human Check".into(),
-            params: Value::Null,
+            params: JsonValue::Null,
         };
 
-        let mut ctx = HashMap::new();
+        let mut ctx = UnorderedMap::new();
         let result = executor.execute_node(&node, &mut ctx).await;
         assert_eq!(result.unwrap(), ExecutionStatus::Paused);
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_bridge_loading_and_compilation() {
@@ -191,7 +190,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        let valid_mandate = json!({
+        let valid_mandate = json_value!({
             "_id": "mandate_prod",
             "meta": { "author": "BridgeTest", "version": "1.0", "status": "ACTIVE" },
             "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": { "agent_security": 1.0 } },

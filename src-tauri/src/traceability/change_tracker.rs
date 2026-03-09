@@ -2,20 +2,20 @@
 
 use crate::utils::prelude::*;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serializable, Deserializable)]
 pub struct ChangeLog {
     pub element_id: String,
     pub changes: Vec<FieldChange>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, PartialEq)]
 pub struct FieldChange {
     pub field: String,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serializable, Deserializable, Default)]
 pub struct ChangeTracker;
 
 impl ChangeTracker {
@@ -23,7 +23,7 @@ impl ChangeTracker {
         Self
     }
 
-    pub fn diff(&self, id: &str, old: &Value, new: &Value) -> ChangeLog {
+    pub fn diff(&self, id: &str, old: &JsonValue, new: &JsonValue) -> ChangeLog {
         let mut changes = Vec::new();
         // Lancement de la comparaison récursive à la racine
         self.compare_recursive("", old, new, &mut changes);
@@ -38,8 +38,8 @@ impl ChangeTracker {
     fn compare_recursive(
         &self,
         current_path: &str,
-        old: &Value,
-        new: &Value,
+        old: &JsonValue,
+        new: &JsonValue,
         changes: &mut Vec<FieldChange>,
     ) {
         // Si les valeurs sont strictement identiques, on s'arrête
@@ -49,7 +49,7 @@ impl ChangeTracker {
 
         match (old, new) {
             // Si on compare deux objets JSON, on entre à l'intérieur
-            (Value::Object(old_map), Value::Object(new_map)) => {
+            (JsonValue::Object(old_map), JsonValue::Object(new_map)) => {
                 // 1. On vérifie les clés du nouveau (Modifiées ou Ajoutées)
                 for (k, new_val) in new_map {
                     let next_path = if current_path.is_empty() {
@@ -106,13 +106,12 @@ impl ChangeTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::data::json;
 
     #[test]
     fn test_diff_logic_deep() {
         let tracker = ChangeTracker::new();
 
-        let old = json!({
+        let old = json_value!({
             "status": "Draft",
             "properties": {
                 "capacity": 50,
@@ -120,7 +119,7 @@ mod tests {
             }
         });
 
-        let new = json!({
+        let new = json_value!({
             "status": "Final",
             "properties": {
                 "capacity": 51,

@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/orchestrator_agent.rs
 
-use crate::utils::{async_trait, prelude::*};
+use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{load_session, save_session};
@@ -31,7 +31,7 @@ impl OrchestratorAgent {
                 raise_error!(
                     "ERR_AI_CLARIFICATION_GENERATE",
                     error = e,
-                    context = serde_json::json!({
+                    context = json_value!({
                         "backend": "LocalLlama",
                         "user_input": user_input
                     })
@@ -42,7 +42,7 @@ impl OrchestratorAgent {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl Agent for OrchestratorAgent {
     fn id(&self) -> &'static str {
         "orchestrator_agent"
@@ -123,14 +123,14 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_orchestrator_id() {
         assert_eq!(OrchestratorAgent::new().id(), "orchestrator_agent");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_clarification_logic() {
@@ -145,7 +145,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         // 🎯 LlmClient avec le manager et .await
@@ -177,7 +177,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_routing_feedback() {
@@ -191,7 +191,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm", 
-             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();

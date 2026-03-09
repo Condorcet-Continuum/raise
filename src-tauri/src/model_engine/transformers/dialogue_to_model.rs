@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/model_engine/transformers/dialogue_to_model.rs
 
-use crate::utils::{data::Value, prelude::*, HashMap, Uuid};
+use crate::utils::prelude::*;
 
 use crate::model_engine::arcadia; // <-- La source de vérité
 use crate::model_engine::types::{ArcadiaElement, NameType};
@@ -10,7 +10,7 @@ pub struct DialogueToModelTransformer;
 
 impl DialogueToModelTransformer {
     /// Convertit un JSON d'intention (issu du LLM) en structure ArcadiaElement
-    pub fn create_element_from_intent(intent: &Value) -> RaiseResult<ArcadiaElement> {
+    pub fn create_element_from_intent(intent: &JsonValue) -> RaiseResult<ArcadiaElement> {
         // 1. Validation des champs requis
         // 1. Extraction du nom de l'intention
         let name_str = match intent.get("name") {
@@ -18,7 +18,7 @@ impl DialogueToModelTransformer {
                 Some(s) => s,
                 None => raise_error!(
                     "ERR_INTENT_INVALID_FORMAT",
-                    context = json!({
+                    context = json_value!({
                         "field": "name",
                         "expected": "string",
                         "received": val,
@@ -28,7 +28,7 @@ impl DialogueToModelTransformer {
             },
             None => raise_error!(
                 "ERR_INTENT_MISSING_FIELD",
-                context = json!({
+                context = json_value!({
                     "field": "name",
                     "hint": "Le champ 'name' est obligatoire pour identifier l'intention."
                 })
@@ -41,7 +41,7 @@ impl DialogueToModelTransformer {
                 Some(s) => s,
                 None => raise_error!(
                     "ERR_INTENT_INVALID_FORMAT",
-                    context = json!({
+                    context = json_value!({
                         "field": "type",
                         "expected": "string (ex: 'Component', 'Function')",
                         "received": val,
@@ -51,7 +51,7 @@ impl DialogueToModelTransformer {
             },
             None => raise_error!(
                 "ERR_INTENT_MISSING_FIELD",
-                context = json!({
+                context = json_value!({
                     "field": "type",
                     "hint": "Le champ 'type' est requis pour déterminer la stratégie d'exécution."
                 })
@@ -90,7 +90,7 @@ impl DialogueToModelTransformer {
                 raise_error!(
                     "ERR_SEMANTIC_LAYER_TYPE_MISMATCH",
                     error = format!("Combinaison Layer/Type non reconnue : {} / {}", l, t),
-                    context = json!({
+                    context = json_value!({
                         "layer": l,
                         "semantic_type": t,
                         "action": "resolve_factory_handler",
@@ -101,7 +101,7 @@ impl DialogueToModelTransformer {
         };
 
         // 4. Construction de l'objet Arcadia
-        let properties = HashMap::new();
+        let properties = UnorderedMap::new();
 
         let description = intent
             .get("description")
@@ -110,7 +110,7 @@ impl DialogueToModelTransformer {
 
         // Création de l'élément
         Ok(ArcadiaElement {
-            id: Uuid::new_v4().to_string(), // Génération auto de l'ID
+            id: UniqueId::new_v4().to_string(), // Génération auto de l'ID
             name: NameType::String(name_str.to_string()),
             kind: type_uri.to_string(),
             description,
@@ -122,12 +122,11 @@ impl DialogueToModelTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_create_logical_component_from_intent() {
         // Intention simulée venant de l'IA
-        let intent = json!({
+        let intent = json_value!({
             "type": "Component",
             "layer": "Logical",
             "name": "FlightManager",
@@ -148,7 +147,7 @@ mod tests {
     #[test]
     fn test_default_layer_fallback() {
         // Intention incomplète (pas de layer) -> Doit défaut à Logical
-        let intent = json!({
+        let intent = json_value!({
             "type": "Component", // Pas de "layer"
             "name": "SimpleBox"
         });
@@ -161,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_error_on_unknown_type() {
-        let intent = json!({
+        let intent = json_value!({
             "type": "Unicorn", // Type inconnu
             "name": "BadElement"
         });

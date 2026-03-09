@@ -61,29 +61,29 @@ pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
             let target: TargetLanguage = lang.into();
             user_info!(
                 "FORGE_START",
-                json!({ "element_id": element_id, "stage": "init" })
+                json_value!({ "element_id": element_id, "stage": "init" })
             );
             user_info!(
                 "TARGET_RESOLVED",
-                json!({ "language": format!("{:?}", target) })
+                json_value!({ "language": format!("{:?}", target) })
             );
 
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "SYNC",
-                json!({"action": "Extraction des injections de code utilisateur..."})
+                json_value!({"action": "Extraction des injections de code utilisateur..."})
             );
 
             if target == TargetLanguage::Rust {
                 user_info!(
                     "LINT",
-                    json!({"action": "Exécution programmée de Clippy & Rustfmt."})
+                    json_value!({"action": "Exécution programmée de Clippy & Rustfmt."})
                 );
             }
 
             user_success!(
                 "FORGE_SUCCESS",
-                json!({ "target": format!("{:?}", target), "status": "completed" })
+                json_value!({ "target": format!("{:?}", target), "status": "completed" })
             );
         }
     }
@@ -95,16 +95,14 @@ pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::config::AppConfig;
-    use raise::utils::mock::DbSandbox;
-    use raise::utils::session::SessionManager;
-    use raise::utils::Arc;
+    use raise::utils::context::SessionManager;
+    use raise::utils::testing::DbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_codegen_cli_dispatch() {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {

@@ -3,15 +3,11 @@
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
 // 🎯 Import massif de notre façade utils::mock
-use raise::utils::mock::{inject_collection_schema, inject_mock_component, DbSandbox};
+use raise::utils::testing::{inject_collection_schema, inject_mock_component, DbSandbox};
 
-use raise::utils::{
-    io::{self, Path, PathBuf},
-    prelude::*,
-    Once,
-};
+use raise::utils::prelude::*;
 
-static INIT: Once = Once::new();
+static INIT: InitGuard = InitGuard::new();
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -56,7 +52,7 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     inject_mock_component(
         &mgr,
         "llm",
-        json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+        json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
     ).await;
 
     // 5. SATISFAIRE LLMCLIENT AVEC LE MANAGER
@@ -182,14 +178,14 @@ async fn inject_custom_test_schemas(domain_root: &Path) {
 #[allow(dead_code)]
 pub async fn seed_mock_datasets(domain_path: &Path) -> RaiseResult<PathBuf> {
     let dataset_dir = domain_path.join("dataset/arcadia/v1/data/exchange-items");
-    io::create_dir_all(&dataset_dir)
+    fs::create_dir_all_async(&dataset_dir)
         .await
         .expect("Create dataset dir");
 
     let gps_file = dataset_dir.join("position_gps.json");
-    let mock_data = json!({ "name": "GPS", "exchangeMechanism": "Flow" });
+    let mock_data = json_value!({ "name": "GPS", "exchangeMechanism": "Flow" });
 
-    io::write_json_atomic(&gps_file, &mock_data)
+    fs::write_json_atomic_async(&gps_file, &mock_data)
         .await
         .expect("Write mock data");
     Ok(gps_file)

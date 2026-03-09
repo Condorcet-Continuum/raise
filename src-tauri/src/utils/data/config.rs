@@ -1,55 +1,63 @@
-// FICHIER : src-tauri/src/utils/config.rs
+// FICHIER : src-tauri/src/utils/data/config.rs
 
+// 1. Base de données (AI-Ready Queries)
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 
-// 🎯 FAÇADE UTILS : Utilisation stricte du contrat de service
-use super::io::PathBuf;
-use super::prelude::*;
-use super::{HashMap, OnceLock};
+// 2. Core : Environnement, Concurrence et Erreurs
+use crate::raise_error;
+use crate::utils::core::error::RaiseResult;
+use crate::utils::core::{RuntimeEnv, StaticCell}; // Macro d'erreur globale
 
-use serde::Deserializer; // Non exporté par la façade
-use std::env;
-use std::fs; // Conservé pour les opérations synchrones d'initialisation
+// 3. I/O : Système de fichiers
+use crate::utils::io::fs::{self, PathBuf};
+
+// 4. Data : Traits, Collections sémantiques et JSON
+use crate::utils::data::json::{self, json_value, JsonValue};
+use crate::utils::data::{
+    CustomDeserializerEngine, Deserializable, DeserializationErrorTrait, Serializable, UnorderedMap,
+};
 
 /// Singleton global pour la configuration
-pub static CONFIG: OnceLock<AppConfig> = OnceLock::new();
-
+pub static CONFIG: StaticCell<AppConfig> = StaticCell::new();
 /// Constantes Système (Single Source of Truth)
 pub const SYSTEM_DOMAIN: &str = "_system";
 pub const SYSTEM_DB: &str = "_system";
 
 /// Configuration globale structurée par niveaux de responsabilité
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct AppConfig {
-    pub name: Option<HashMap<String, String>>,
+    pub name: Option<UnorderedMap<String, String>>,
 
     // --- NIVEAU 1 : SYSTEME (Global) ---
-    #[serde(default = "default_system_domain")]
+    #[serde(default = "fallback_system_domain")]
     pub system_domain: String,
-    #[serde(default = "default_system_db")]
+
+    #[serde(default = "fallback_system_db")]
     pub system_db: String,
 
     pub core: CoreConfig,
 
-    #[serde(default)]
+    #[serde(default = "fallback_world_model")]
     pub world_model: WorldModelConfig,
 
-    #[serde(default)]
+    #[serde(default = "fallback_deep_learning")]
     pub deep_learning: DeepLearningConfig,
 
     // Gestion transparente de la conversion Liste -> Map via Serde
     #[serde(deserialize_with = "deserialize_paths_flexible")]
-    pub paths: HashMap<String, String>,
+    pub paths: UnorderedMap<String, String>,
 
     // 🎯 Pointeurs UUID vers la Base de Données
     pub active_dapp: String,
-    #[serde(default)]
+
+    #[serde(default = "fallback_empty_services")]
     pub active_services: Vec<String>,
-    #[serde(default)]
+
+    #[serde(default = "fallback_empty_components")]
     pub active_components: Vec<String>,
 
-    #[serde(default)]
+    #[serde(default = "fallback_integrations")]
     pub integrations: IntegrationsConfig,
 
     // --- NIVEAU 2 & 3 : SURCHARGES (Contextuelles) ---
@@ -58,7 +66,7 @@ pub struct AppConfig {
 }
 
 /// Configuration spécifique à un contexte (Poste ou Utilisateur)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct ScopeConfig {
     pub id: String,
     pub default_domain: Option<String>,
@@ -66,25 +74,51 @@ pub struct ScopeConfig {
     pub language: Option<String>,
 }
 
-// --- HELPERS SERDE ---
+// =========================================================================
+// 🤖 FALLBACKS EXPLICITES POUR LA DÉSÉRIALISATION (AI-Ready)
+// =========================================================================
 
-fn default_system_domain() -> String {
+fn fallback_system_domain() -> String {
     SYSTEM_DOMAIN.to_string()
 }
-fn default_system_db() -> String {
+fn fallback_system_db() -> String {
     SYSTEM_DB.to_string()
 }
+fn fallback_world_model() -> WorldModelConfig {
+    WorldModelConfig::default()
+}
+fn fallback_deep_learning() -> DeepLearningConfig {
+    DeepLearningConfig::default()
+}
+fn fallback_integrations() -> IntegrationsConfig {
+    IntegrationsConfig::default()
+}
+
+/// Fallback si la liste des services est absente du JSON
+fn fallback_empty_services() -> Vec<String> {
+    Vec::new()
+}
+
+/// Fallback si la liste des composants est absente du JSON
+fn fallback_empty_components() -> Vec<String> {
+    Vec::new()
+}
+
+// =========================================================================
+// 🛠️ DÉSÉRIALISATION CUSTOMISÉE
+// =========================================================================
 
 fn deserialize_paths_flexible<'de, D>(
     deserializer: D,
-) -> std::result::Result<HashMap<String, String>, D::Error>
+) -> std::result::Result<UnorderedMap<String, String>, D::Error>
 where
-    D: Deserializer<'de>,
+    D: CustomDeserializerEngine<'de>,
 {
-    let v: Value = Deserialize::deserialize(deserializer)?;
+    // 🎯 On utilise notre alias JsonValue
+    let v: JsonValue = Deserializable::deserialize(deserializer)?;
 
     if let Some(map) = v.as_object() {
-        let mut paths = HashMap::new();
+        let mut paths = UnorderedMap::new();
         for (key, val) in map {
             if let Some(s) = val.as_str() {
                 paths.insert(key.clone(), s.to_string());
@@ -92,7 +126,7 @@ where
         }
         Ok(paths)
     } else if let Some(arr) = v.as_array() {
-        let mut paths = HashMap::new();
+        let mut paths = UnorderedMap::new();
         for item in arr {
             let id = item.get("id").and_then(|v| v.as_str());
             let val = item.get("value").and_then(|v| v.as_str());
@@ -102,15 +136,17 @@ where
         }
         Ok(paths)
     } else {
-        Err(serde::de::Error::custom(
-            "Format de 'paths' invalide : attendu Map ou Liste",
+        Err(DeserializationErrorTrait::custom(
+            "Format de 'paths' invalide : attendu JsonObject ou Liste",
         ))
     }
 }
 
-// --- SOUS-STRUCTURES DE CONFIGURATION ---
+// =========================================================================
+// SOUS-STRUCTURES DE CONFIGURATION
+// =========================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct CoreConfig {
     pub env_mode: String,
     pub graph_mode: String,
@@ -119,7 +155,7 @@ pub struct CoreConfig {
     pub language: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct WorldModelConfig {
     pub vocab_size: usize,
     pub embedding_dim: usize,
@@ -128,7 +164,7 @@ pub struct WorldModelConfig {
     pub use_gpu: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct DeepLearningConfig {
     pub input_size: usize,
     pub hidden_size: usize,
@@ -137,7 +173,7 @@ pub struct DeepLearningConfig {
     pub device: String,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Clone, Serializable, Deserializable, PartialEq, Default)]
 pub struct IntegrationsConfig {
     pub github_token: Option<String>,
     pub compose_profiles: Option<String>,
@@ -149,7 +185,9 @@ impl std::fmt::Debug for IntegrationsConfig {
     }
 }
 
-// --- IMPLÉMENTATION PRINCIPALE ---
+// =========================================================================
+// IMPLÉMENTATION PRINCIPALE
+// =========================================================================
 
 impl AppConfig {
     pub fn init() -> RaiseResult<()> {
@@ -157,9 +195,10 @@ impl AppConfig {
             return Ok(());
         }
 
-        let target_env = if cfg!(test) || env::var("RAISE_ENV_MODE").as_deref() == Ok("test") {
+        let target_env = if cfg!(test) || RuntimeEnv::var("RAISE_ENV_MODE").as_deref() == Ok("test")
+        {
             "test".to_string()
-        } else if let Ok(env_override) = env::var("RAISE_ENV_MODE") {
+        } else if let Ok(env_override) = RuntimeEnv::var("RAISE_ENV_MODE") {
             env_override
         } else if cfg!(debug_assertions) {
             "development".to_string()
@@ -196,13 +235,13 @@ impl AppConfig {
     pub async fn get_component_settings(
         manager: &CollectionsManager<'_>,
         component_id: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let mut query = Query::new("components");
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
             conditions: vec![Condition::eq(
                 "identity.component_id",
-                Value::String(component_id.to_string()),
+                JsonValue::String(component_id.to_string()), // 🎯 Remplacé
             )],
         });
 
@@ -211,7 +250,7 @@ impl AppConfig {
             Err(e) => raise_error!(
                 "ERR_CONFIG_DB_QUERY",
                 error = e,
-                context = serde_json::json!({ "requested_id": component_id })
+                context = json_value!({ "requested_id": component_id })
             ),
         };
 
@@ -219,7 +258,7 @@ impl AppConfig {
             raise_error!(
                 "ERR_CONFIG_COMPONENT_MISSING",
                 error = "Composant introuvable en base de données",
-                context = serde_json::json!({ "requested_id": component_id })
+                context = json_value!({ "requested_id": component_id })
             );
         };
 
@@ -227,7 +266,7 @@ impl AppConfig {
             raise_error!(
                 "ERR_CONFIG_SETTINGS_MISSING",
                 error = "Champ 'settings' manquant dans le document",
-                context = serde_json::json!({ "requested_id": component_id })
+                context = json_value!({ "requested_id": component_id })
             );
         };
 
@@ -235,12 +274,12 @@ impl AppConfig {
     }
 
     fn load_test_sandbox() -> RaiseResult<Self> {
-        let manifest = match env::var("CARGO_MANIFEST_DIR") {
+        let manifest = match RuntimeEnv::var("CARGO_MANIFEST_DIR") {
             Ok(v) => v,
             Err(e) => raise_error!(
                 "ERR_CONFIG_ENV_MANIFEST",
                 error = e,
-                context = serde_json::json!({ "var": "CARGO_MANIFEST_DIR" })
+                context = json_value!({ "var": "CARGO_MANIFEST_DIR" })
             ),
         };
 
@@ -250,26 +289,27 @@ impl AppConfig {
             return Ok(Self::create_default_test_config());
         }
 
-        let content = match fs::read_to_string(&path) {
+        let content = match fs::read_to_string_sync(&path) {
             Ok(c) => c,
             Err(e) => raise_error!(
                 "ERR_CONFIG_FS_READ",
                 error = e,
-                context = serde_json::json!({ "path": path.to_string_lossy() })
+                context = json_value!({ "path": path.to_string_lossy() })
             ),
         };
 
-        let mut config: AppConfig = match serde_json::from_str(&content) {
+        // 🎯 Utilisation de notre fonction sémantique de façade
+        let mut config: AppConfig = match json::deserialize_from_str(&content) {
             Ok(cfg) => cfg,
             Err(e) => raise_error!(
                 "ERR_CONFIG_PARSE",
                 error = e,
-                context = serde_json::json!({ "path": path.to_string_lossy() })
+                context = json_value!({ "path": path.to_string_lossy() })
             ),
         };
 
         if let Some(domain_path) = config.paths.get_mut("PATH_RAISE_DOMAIN") {
-            let temp_dir = env::temp_dir();
+            let temp_dir = RuntimeEnv::temp_dir();
             let temp_str = temp_dir.to_string_lossy();
 
             if domain_path.starts_with("/tmp") || domain_path.contains(temp_str.as_ref() as &str) {
@@ -282,7 +322,7 @@ impl AppConfig {
                         .as_micros()
                 );
                 *domain_path = format!("{}_{}", domain_path, unique_id);
-                let _ = fs::create_dir_all(domain_path);
+                let _ = fs::create_dir_all_sync(domain_path);
             }
         }
 
@@ -292,10 +332,10 @@ impl AppConfig {
         Ok(config)
     }
 
-    // 🎯 FIX : On passe en pub(crate) pour que mock.rs puisse générer la config
     pub(crate) fn create_default_test_config() -> Self {
-        let mut paths = HashMap::new();
-        let tmp = env::temp_dir();
+        // 🎯 Utilisation de notre UnorderedMap
+        let mut paths = UnorderedMap::new();
+        let tmp = RuntimeEnv::temp_dir();
         paths.insert(
             "PATH_RAISE_DOMAIN".to_string(),
             tmp.to_string_lossy().to_string(),
@@ -306,7 +346,7 @@ impl AppConfig {
         );
 
         AppConfig {
-            name: Some(HashMap::from([(
+            name: Some(UnorderedMap::from([(
                 "en".to_string(),
                 "Default Test Config".to_string(),
             )])),
@@ -343,21 +383,22 @@ impl AppConfig {
             raise_error!(
                 "ERR_CONFIG_SYS_MISSING",
                 error = "Configuration système introuvable",
-                context = serde_json::json!({ "target_environment": env })
+                context = json_value!({ "target_environment": env })
             );
         };
 
-        let mut config: AppConfig = match serde_json::from_value(json_val) {
+        // 🎯 Utilisation de notre fonction sémantique de façade
+        let mut config: AppConfig = match json::deserialize_from_value(json_val) {
             Ok(c) => c,
             Err(e) => raise_error!(
                 "ERR_CONFIG_DESERIALIZE",
                 error = e,
-                context = serde_json::json!({ "env": env })
+                context = json_value!({ "env": env })
             ),
         };
 
-        let hostname = env::var("HOSTNAME")
-            .or_else(|_| env::var("COMPUTERNAME"))
+        let hostname = RuntimeEnv::var("HOSTNAME")
+            .or_else(|_| RuntimeEnv::var("COMPUTERNAME"))
             .unwrap_or_else(|_| "localhost".to_string());
 
         if let Some(ws_json) = Self::load_collection_doc("workstations", |v| {
@@ -380,8 +421,8 @@ impl AppConfig {
             });
         }
 
-        let username = env::var("USER")
-            .or_else(|_| env::var("USERNAME"))
+        let username = RuntimeEnv::var("USER")
+            .or_else(|_| RuntimeEnv::var("USERNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
 
         if let Some(user_json) = Self::load_collection_doc("users", |v| {
@@ -407,17 +448,19 @@ impl AppConfig {
         Ok(config)
     }
 
-    fn load_collection_doc<F>(collection_name: &str, predicate: F) -> Option<Value>
+    fn load_collection_doc<F>(collection_name: &str, predicate: F) -> Option<JsonValue>
     where
-        F: Fn(&Value) -> bool,
+        F: Fn(&JsonValue) -> bool,
     {
         let base_domain = dirs::home_dir()?.join("raise_domain");
         let db_root = base_domain.join(SYSTEM_DOMAIN).join(SYSTEM_DB);
         let sys_index_path = db_root.join("_system.json");
         let collection_dir = db_root.join("collections").join(collection_name);
 
-        let sys_content = fs::read_to_string(&sys_index_path).ok()?;
-        let sys_index: Value = serde_json::from_str(&sys_content).ok()?;
+        let sys_content = fs::read_to_string_sync(&sys_index_path).ok()?;
+
+        // 🎯 Remplacement de serde_json::from_str
+        let sys_index: JsonValue = json::deserialize_from_str(&sys_content).ok()?;
 
         let pointer = format!("/collections/{}/items", collection_name);
         let items = sys_index.pointer(&pointer)?.as_array()?;
@@ -426,8 +469,8 @@ impl AppConfig {
             let filename = item.get("file").and_then(|f| f.as_str())?;
             let path = collection_dir.join(filename);
 
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(doc) = serde_json::from_str::<Value>(&content) {
+            if let Ok(content) = fs::read_to_string_sync(&path) {
+                if let Ok(doc) = json::deserialize_from_str::<JsonValue>(&content) {
                     if predicate(&doc) {
                         return Some(doc);
                     }
@@ -438,7 +481,9 @@ impl AppConfig {
     }
 }
 
-// --- IMPLÉMENTATIONS PAR DÉFAUT ---
+// =========================================================================
+// IMPLÉMENTATIONS PAR DÉFAUT
+// =========================================================================
 
 impl Default for WorldModelConfig {
     fn default() -> Self {
@@ -477,12 +522,13 @@ impl DeepLearningConfig {
     }
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_scope_config_structure() {
@@ -498,7 +544,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_app_config_with_scopes() {
-        let json_data = json!({
+        let json_data = json_value!({
             "name": null,
             "system_domain": "_system",
             "system_db": "_system",
@@ -522,7 +568,8 @@ mod tests {
             }
         });
 
-        let config: AppConfig = serde_json::from_value(json_data).expect("Désérialisation échouée");
+        let config: AppConfig =
+            json::deserialize_from_value(json_data).expect("Désérialisation échouée");
         assert_eq!(config.system_domain, "_system");
         assert_eq!(config.workstation.unwrap().id, "host1");
         assert_eq!(config.user.unwrap().id, "user1");
@@ -530,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_paths_list_compat() {
-        let json_data = json!({
+        let json_data = json_value!({
             "system_domain": "_sys",
             "system_db": "_db",
             "active_dapp": "mock-dapp",
@@ -547,7 +594,7 @@ mod tests {
             "integrations": {}
         });
 
-        let config: AppConfig = serde_json::from_value(json_data).unwrap();
+        let config: AppConfig = json::deserialize_from_value(json_data).unwrap();
         assert_eq!(config.paths.get("P1").unwrap(), "/v1");
     }
 }

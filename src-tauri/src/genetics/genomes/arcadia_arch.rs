@@ -1,10 +1,10 @@
-use crate::utils::{fmt, prelude::*};
+use crate::utils::prelude::*;
 
 use crate::genetics::operators::{crossover, mutation};
 use crate::genetics::traits::Genome;
 use rand::prelude::*;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serializable, Deserializable)]
 pub struct SystemAllocationGenome {
     pub genes: Vec<usize>,
     pub function_ids: Vec<String>,
@@ -90,8 +90,9 @@ impl SystemAllocationGenome {
     }
 }
 
-impl fmt::Debug for SystemAllocationGenome {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl FmtDebug for SystemAllocationGenome {
+    fn fmt(&self, f: &mut FmtCursor<'_>) -> FmtResult {
+        // 🎯 FmtCursor et FmtResult
         write!(
             f,
             "AllocGenome(sz={}, genes={:?})",

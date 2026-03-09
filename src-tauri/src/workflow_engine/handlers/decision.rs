@@ -1,12 +1,12 @@
 // FICHIER : src-tauri/src/workflow_engine/handlers/decision.rs
+use crate::utils::prelude::*;
+
 use super::{HandlerContext, NodeHandler};
-use crate::utils::{prelude::*, HashMap};
 use crate::workflow_engine::{ExecutionStatus, NodeType, WorkflowNode};
-use async_trait::async_trait;
 
 pub struct DecisionHandler;
 
-#[async_trait]
+#[async_interface]
 impl NodeHandler for DecisionHandler {
     fn node_type(&self) -> NodeType {
         NodeType::Decision
@@ -15,12 +15,12 @@ impl NodeHandler for DecisionHandler {
     async fn execute(
         &self,
         node: &WorkflowNode,
-        context: &mut HashMap<String, Value>,
+        context: &mut UnorderedMap<String, JsonValue>,
         _shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
         tracing::info!("🗳️ Algorithme de Condorcet : {}", node.name);
 
-        let default_weights = serde_json::Map::new();
+        let default_weights = JsonObject::new();
         let weights = node
             .params
             .get("weights")
@@ -89,25 +89,21 @@ impl NodeHandler for DecisionHandler {
 mod tests {
     use super::*;
     use crate::ai::orchestrator::AiOrchestrator;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::{Arc, AsyncMutex};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
-
-    // 🎯 IMPORTS AJOUTÉS : On récupère l'injecteur de mocks et le manager
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::data::json;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
 
     // 🎯 FIX : On passe la config en plus pour utiliser le CollectionsManager
     async fn setup_dummy_context(
-        storage: Arc<crate::json_db::storage::StorageEngine>,
-        config: &crate::utils::config::AppConfig,
+        storage: SharedRef<crate::json_db::storage::StorageEngine>,
+        config: &AppConfig,
     ) -> (
-        Arc<AsyncMutex<AiOrchestrator>>,
-        Arc<PluginManager>,
+        SharedRef<AsyncMutex<AiOrchestrator>>,
+        SharedRef<PluginManager>,
         WorkflowCritic,
-        HashMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
+        UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
     ) {
         let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
@@ -115,29 +111,29 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm",
-            json!({ "provider": "mock", "model": "test" }),
+            json_value!({ "provider": "mock", "model": "test" }),
         )
         .await;
-        inject_mock_component(&manager, "rag", json!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
         // 2. 🎯 ATTENTION : On passe Some(storage.clone()) au lieu de None
         let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage.clone()))
             .await
             .unwrap();
 
-        let plugin_manager = Arc::new(PluginManager::new(&storage, None));
+        let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
         let critic = WorkflowCritic::default();
-        let tools = HashMap::new();
+        let tools = UnorderedMap::new();
 
         (
-            Arc::new(AsyncMutex::new(orch)),
+            SharedRef::new(AsyncMutex::new(orch)),
             plugin_manager,
             critic,
             tools,
         )
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_decision_handler_condorcet_evaluation() {
@@ -160,12 +156,12 @@ mod tests {
             id: "dec_1".into(),
             r#type: NodeType::Decision,
             name: "Vote Final".into(),
-            params: json!({ "weights": { "agent_security": 5.0, "agent_finance": 1.0 } }),
+            params: json_value!({ "weights": { "agent_security": 5.0, "agent_finance": 1.0 } }),
         };
 
-        let mut data_ctx = HashMap::from([(
+        let mut data_ctx = UnorderedMap::from([(
             "candidates".into(),
-            json!(["Option A (Courte)", "Option B (Très très longue)"]),
+            json_value!(["Option A (Courte)", "Option B (Très très longue)"]),
         )]);
 
         // 3. Exécution du Handler

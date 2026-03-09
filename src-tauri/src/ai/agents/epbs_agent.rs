@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/agents/epbs_agent.rs
 
-use crate::utils::{async_trait, data, prelude::*, Uuid};
+use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
 use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
@@ -22,7 +22,7 @@ impl EpbsAgent {
         name: &str,
         raw_type: &str,
         history_context: &str,
-    ) -> RaiseResult<Value> {
+    ) -> RaiseResult<JsonValue> {
         let entities = entity_extractor::extract_entities(name);
         let mut nlp_hint = String::new();
         if !entities.is_empty() {
@@ -46,7 +46,7 @@ impl EpbsAgent {
                 raise_error!(
                     "ERR_AI_LLM_GENERATE",
                     error = e,
-                    context = serde_json::json!({
+                    context = json_value!({
                         "backend": "LocalLlama",
                         "user_prompt_len": user.len()
                     })
@@ -55,18 +55,18 @@ impl EpbsAgent {
         };
 
         let clean = extract_json_from_llm(&res);
-        let mut data: Value =
-            data::parse(&clean).unwrap_or(json!({"name": name, "partNumber": "UNK"}));
+        let mut data: JsonValue = json::deserialize_from_str(&clean)
+            .unwrap_or(json_value!({"name": name, "partNumber": "UNK"}));
 
-        data["id"] = json!(Uuid::new_v4().to_string());
-        data["layer"] = json!("EPBS");
-        data["type"] = json!("ConfigurationItem");
-        data["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+        data["id"] = json_value!(UniqueId::new_v4().to_string());
+        data["layer"] = json_value!("EPBS");
+        data["type"] = json_value!("ConfigurationItem");
+        data["createdAt"] = json_value!(UtcClock::now().to_rfc3339());
         Ok(data)
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl Agent for EpbsAgent {
     fn id(&self) -> &'static str {
         "configuration_manager"

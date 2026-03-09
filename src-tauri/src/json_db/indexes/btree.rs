@@ -1,6 +1,5 @@
 // FICHIER : src-tauri/src/json_db/indexes/btree.rs
 
-use crate::utils::data::BTreeMap;
 use crate::utils::prelude::*;
 
 use super::{driver, paths, IndexDefinition};
@@ -15,8 +14,8 @@ pub async fn update_btree_index(
     collection: &str,
     def: &IndexDefinition,
     doc_id: &str,
-    old_doc: Option<&Value>,
-    new_doc: Option<&Value>,
+    old_doc: Option<&JsonValue>,
+    new_doc: Option<&JsonValue>,
 ) -> RaiseResult<()> {
     let path = paths::index_path(
         &storage.config,
@@ -26,7 +25,7 @@ pub async fn update_btree_index(
         &def.name,
         def.index_type,
     );
-    driver::update::<BTreeMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
+    driver::update::<OrderedMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
 }
 
 pub async fn search_btree_index(
@@ -35,7 +34,7 @@ pub async fn search_btree_index(
     db: &str,
     collection: &str,
     def: &IndexDefinition,
-    value: &Value,
+    value: &JsonValue,
 ) -> RaiseResult<Vec<String>> {
     let path = paths::index_path(
         &storage.config,
@@ -46,7 +45,7 @@ pub async fn search_btree_index(
         def.index_type,
     );
     let key = value.to_string();
-    driver::search::<BTreeMap<String, Vec<String>>>(&path, &key).await
+    driver::search::<OrderedMap<String, Vec<String>>>(&path, &key).await
 }
 
 #[cfg(test)]
@@ -54,10 +53,6 @@ mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{
-        io::{self, tempdir},
-        json::json,
-    };
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -65,14 +60,14 @@ mod tests {
         (dir, cfg)
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_btree_lifecycle() {
         let (dir, cfg) = setup_env();
         // ✅ AJOUT : Création du StorageEngine pour les tests
         let storage = StorageEngine::new(cfg);
 
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
-        io::create_dir_all(&idx_dir).await.unwrap();
+        fs::create_dir_all_async(&idx_dir).await.unwrap();
 
         let def = IndexDefinition {
             name: "age".into(),
@@ -81,29 +76,29 @@ mod tests {
             unique: false,
         };
 
-        let doc1 = json!({ "age": 30 });
+        let doc1 = json_value!({ "age": 30 });
         update_btree_index(&storage, "s", "d", "c", &def, "u1", None, Some(&doc1))
             .await
             .unwrap();
 
-        let doc2 = json!({ "age": 25 });
+        let doc2 = json_value!({ "age": 25 });
         update_btree_index(&storage, "s", "d", "c", &def, "u2", None, Some(&doc2))
             .await
             .unwrap();
 
-        let results = search_btree_index(&storage, "s", "d", "c", &def, &json!(30))
+        let results = search_btree_index(&storage, "s", "d", "c", &def, &json_value!(30))
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "u1");
 
-        let results_25 = search_btree_index(&storage, "s", "d", "c", &def, &json!(25))
+        let results_25 = search_btree_index(&storage, "s", "d", "c", &def, &json_value!(25))
             .await
             .unwrap();
         assert_eq!(results_25.len(), 1);
         assert_eq!(results_25[0], "u2");
 
-        let results_empty = search_btree_index(&storage, "s", "d", "c", &def, &json!(99))
+        let results_empty = search_btree_index(&storage, "s", "d", "c", &def, &json_value!(99))
             .await
             .unwrap();
         assert!(results_empty.is_empty());

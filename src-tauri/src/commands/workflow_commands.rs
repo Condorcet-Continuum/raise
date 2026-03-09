@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/commands/workflow_commands.rs
 
-use crate::utils::{prelude::*, Arc, AsyncMutex, HashMap};
+use crate::utils::prelude::*;
 
 use crate::workflow_engine::{
     ExecutionStatus, Mandate, WorkflowCompiler, WorkflowDefinition, WorkflowInstance,
@@ -17,11 +17,11 @@ use tauri::{command, State};
 #[derive(Default)]
 pub struct WorkflowStore {
     pub scheduler: Option<WorkflowScheduler>,
-    pub instances: HashMap<String, WorkflowInstance>,
+    pub instances: UnorderedMap<String, WorkflowInstance>,
 }
 
 /// Vue simplifiée pour le frontend (DTO)
-#[derive(Serialize)]
+#[derive(Serializable)]
 pub struct WorkflowView {
     pub id: String,
     pub status: ExecutionStatus,
@@ -45,7 +45,7 @@ impl From<&WorkflowInstance> for WorkflowView {
 /// Met à jour la valeur du capteur de vibration (Jumeau Numérique).
 #[command]
 pub async fn set_sensor_value(
-    storage: State<'_, Arc<StorageEngine>>,
+    storage: State<'_, SharedRef<StorageEngine>>,
     value: f64,
 ) -> RaiseResult<String> {
     let config = AppConfig::get();
@@ -76,7 +76,7 @@ pub async fn submit_mandate(
         // ⚠️ Erreur d'état du moteur
         raise_error!(
             "ERR_ENGINE_NOT_INITIALIZED",
-            context = json!({
+            context = json_value!({
                 "component": "scheduler",
                 "workflow_id": wf_id,
                 "mandate_version": mandate.meta.version,
@@ -103,7 +103,7 @@ pub async fn register_workflow(
         // ⚠️ Erreur de cycle de vie du système
         raise_error!(
             "ERR_WF_SCHEDULER_NOT_READY",
-            context = json!({
+            context = json_value!({
                 "action": "register_workflow_definition",
                 "workflow_id": definition.id,
                 "component": "scheduler_store",
@@ -115,7 +115,7 @@ pub async fn register_workflow(
 
 #[command]
 pub async fn start_workflow(
-    storage: State<'_, Arc<StorageEngine>>,
+    storage: State<'_, SharedRef<StorageEngine>>,
     state: State<'_, AsyncMutex<WorkflowStore>>,
     workflow_id: String,
 ) -> RaiseResult<WorkflowView> {
@@ -128,7 +128,7 @@ pub async fn start_workflow(
             Some(s) => s,
             None => raise_error!(
                 "ERR_WF_SCHEDULER_NOT_READY",
-                context = json!({ "action": "start_workflow" })
+                context = json_value!({ "action": "start_workflow" })
             ),
         };
 
@@ -143,7 +143,7 @@ pub async fn start_workflow(
 
 #[command]
 pub async fn resume_workflow(
-    storage: State<'_, Arc<StorageEngine>>,
+    storage: State<'_, SharedRef<StorageEngine>>,
     state: State<'_, AsyncMutex<WorkflowStore>>,
     instance_id: String,
     node_id: String,
@@ -158,7 +158,7 @@ pub async fn resume_workflow(
             Some(s) => s,
             None => raise_error!(
                 "ERR_ENGINE_NOT_INITIALIZED",
-                context = json!({ "action": "resume_workflow" })
+                context = json_value!({ "action": "resume_workflow" })
             ),
         };
 
@@ -180,7 +180,7 @@ pub async fn get_workflow_state(
         Some(inst) => inst,
         None => raise_error!(
             "ERR_CACHE_INSTANCE_NOT_FOUND",
-            context = json!({
+            context = json_value!({
                 "instance_id": instance_id,
                 "cache_type": "wasm_instance_store",
                 "action": "lookup_instance",
@@ -204,7 +204,7 @@ async fn run_workflow_loop(
             Some(s) => s,
             None => raise_error!(
                 "ERR_ENGINE_NOT_INITIALIZED",
-                context = json!({
+                context = json_value!({
                     "component": "scheduler",
                     "access_mode": "read_only",
                     "state": "uninitialized",
@@ -224,7 +224,7 @@ async fn run_workflow_loop(
         Err(e) => raise_error!(
             "ERR_WF_POST_EXEC_READ_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "instance_id": instance_id,
                 "action": "post_execution_state_sync"
             })
@@ -236,7 +236,7 @@ async fn run_workflow_loop(
         Some(d) => d,
         None => raise_error!(
             "ERR_WF_STATE_DESYNC",
-            context = json!({
+            context = json_value!({
                 "instance_id": instance_id,
                 "action": "verify_final_state",
                 "hint": "L'instance a disparu après l'exécution. Vérifiez si une suppression concurrente ou un rollback a eu lieu."
@@ -244,12 +244,12 @@ async fn run_workflow_loop(
         ),
     };
 
-    let updated_instance: WorkflowInstance = match serde_json::from_value(doc.clone()) {
+    let updated_instance: WorkflowInstance = match json::deserialize_from_value(doc.clone()) {
         Ok(instance) => instance,
         Err(e) => raise_error!(
             "ERR_WORKFLOW_DESERIALIZATION_FAIL",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "update_workflow_instance",
                 "document_snapshot": doc,
                 "hint": "Le document JSON ne correspond pas à la structure WorkflowInstance. Vérifiez les champs obligatoires et le typage des enums."
@@ -267,17 +267,17 @@ async fn run_workflow_loop(
 }
 
 async fn internal_set_sensor(manager: &CollectionsManager<'_>, value: f64) -> RaiseResult<String> {
-    let sensor_doc = serde_json::json!({
+    let sensor_doc = json_value!({
         "_id": "vibration_z",
         "value": value,
-        "updatedAt": chrono::Utc::now().to_rfc3339()
+        "updatedAt": UtcClock::now().to_rfc3339()
     });
 
     if let Err(e) = manager.insert_raw("digital_twin", &sensor_doc).await {
         raise_error!(
             "ERR_DT_SENSOR_WRITE_FAIL",
             error = e,
-            context = serde_json::json!({ "sensor_id": "vibration_z" })
+            context = json_value!({ "sensor_id": "vibration_z" })
         );
     }
 
@@ -287,28 +287,28 @@ async fn internal_set_sensor(manager: &CollectionsManager<'_>, value: f64) -> Ra
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_store_not_initialized() {
         let store = WorkflowStore::default();
         assert!(store.scheduler.is_none());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_store_initial_state() {
         let store = WorkflowStore::default();
         assert!(store.instances.is_empty());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_store_lifecycle() {
         let store = WorkflowStore::default();
         assert!(store.scheduler.is_none());
         assert!(store.instances.is_empty());
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     async fn test_internal_set_sensor() {
         let sandbox = AgentDbSandbox::new().await;

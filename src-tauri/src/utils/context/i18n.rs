@@ -1,74 +1,75 @@
-// FICHIER : src-tauri/src/utils/i18n.rs
+// FICHIER : src-tauri/src/utils/context/i18n.rs
 
+// 1. Dépendances Métier (DB)
 use crate::json_db::collections;
-// ✅ AJOUT : Import du StorageEngine en plus du JsonDbConfig
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-use crate::raise_error; // Fondamental pour l'observabilité
-use crate::utils::config::AppConfig;
-use crate::utils::RaiseResult;
-use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock};
+
+// 2. Core : Concurrence et Erreurs
+use crate::utils::core::error::RaiseResult;
+use crate::utils::core::{SharedRef, StaticCell, SyncRwLock};
+// 3. Données : Collections Sémantiques et Configuration
+use crate::utils::data::config::AppConfig;
+use crate::utils::data::json::{self, json_value};
+use crate::utils::data::{Deserializable, UnorderedMap};
+
+// 4. Macros RAISE Globales
+use crate::raise_error;
 
 // --- STRUCTURES DE DÉSÉRIALISATION (Internes) ---
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserializable)]
 struct LocaleDocument {
     #[allow(dead_code)]
     locale: String,
     translations: Vec<TranslationItem>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserializable)]
 struct TranslationItem {
     key: String,
     value: String,
 }
 
 // --- SINGLETON GLOBAL ---
-// Utilisation d'Arc<RwLock> pour garantir la thread-safety entre Tauri et les services
-static TRANSLATOR: OnceLock<Arc<RwLock<Translator>>> = OnceLock::new();
+// Utilisation de SharedRef<RwLock> pour garantir la thread-safety entre Tauri et les services
+static TRANSLATOR: StaticCell<SharedRef<SyncRwLock<Translator>>> = StaticCell::new();
 
 pub struct Translator {
-    pub translations: HashMap<String, String>,
+    pub translations: UnorderedMap<String, String>, // 🎯 Remplacé
     pub current_lang: String,
 }
 
 impl Translator {
     fn new() -> Self {
         Self {
-            translations: HashMap::new(),
+            translations: UnorderedMap::new(),
             current_lang: "en".to_string(),
         }
     }
 
     /// Charge une langue spécifique depuis la collection 'locales' en base de données.
-    // ✅ MODIFICATION : Remplacement de db_config par storage
     pub async fn load_from_db(&mut self, storage: &StorageEngine, lang: &str) -> RaiseResult<()> {
-        // 1. Récupération de tous les documents de la collection locales via le StorageEngine
         let docs = match collections::list_all(storage, "_system", "_system", "locales").await {
             Ok(d) => d,
             Err(e) => raise_error!(
                 "ERR_I18N_DB_READ",
                 error = e,
-                context = serde_json::json!({ "requested_lang": lang })
+                context = json_value!({ "requested_lang": lang }) // 🎯 Remplacé
             ),
         };
 
-        // 2. Recherche du document correspondant à la langue cible
         for doc_val in docs {
             if doc_val.get("locale").and_then(|v| v.as_str()) == Some(lang) {
-                // Interception des erreurs de structure (Schéma invalide en DB)
-                let document: LocaleDocument = match serde_json::from_value(doc_val) {
+                // 🎯 Utilisation de notre façade json
+                let document: LocaleDocument = match json::deserialize_from_value(doc_val) {
                     Ok(doc) => doc,
                     Err(e) => raise_error!(
                         "ERR_I18N_PARSE",
                         error = e,
-                        context = serde_json::json!({ "lang": lang })
+                        context = json_value!({ "lang": lang })
                     ),
                 };
 
-                // Conversion de la liste en Map pour un accès O(1)
                 self.translations = document
                     .translations
                     .into_iter()
@@ -76,26 +77,25 @@ impl Translator {
                     .collect();
 
                 self.current_lang = lang.to_string();
-
                 tracing::info!(
-                    "🌍 Langue chargée avec succès : {} ({} clés)",
-                    lang,
-                    self.translations.len()
+                    target: "system_core",
+                    event_id = "I18N_LOCALE_LOADED",
+                    language = lang,
+                    key_count = self.translations.len(),
+                    "🌍 Langue chargée depuis la base de données."
                 );
 
                 return Ok(());
             }
         }
 
-        // 3. Fallback si la langue n'existe pas
         raise_error!(
             "ERR_I18N_NOT_FOUND",
             error = "Langue introuvable dans la collection 'locales'",
-            context = serde_json::json!({ "lang": lang })
+            context = json_value!({ "lang": lang })
         );
     }
 
-    /// Traduit une clé. Retourne la clé brute si non trouvée.
     pub fn t(&self, key: &str) -> String {
         self.translations
             .get(key)
@@ -106,31 +106,25 @@ impl Translator {
 
 // --- INTERFACE PUBLIQUE ---
 
-/// Initialise le système i18n global.
-/// Doit être appelé après AppConfig::init().
 pub async fn init_i18n(lang: &str) -> RaiseResult<()> {
     let config = AppConfig::get();
 
-    // Extraction sécurisée du chemin de base
     let Some(db_root) = config.get_path("PATH_RAISE_DOMAIN") else {
         raise_error!(
             "ERR_I18N_CONFIG_MISSING",
             error = "PATH_RAISE_DOMAIN est manquant dans la configuration",
-            context = serde_json::json!({ "lang": lang })
+            context = json_value!({ "lang": lang })
         );
     };
 
     let db_config = JsonDbConfig::new(db_root);
-    // ✅ AJOUT : Instanciation du StorageEngine
     let storage = StorageEngine::new(db_config);
 
     let mut temp_translator = Translator::new();
-
-    // ✅ MODIFICATION : Passage du StorageEngine
     temp_translator.load_from_db(&storage, lang).await?;
 
-    // Mise à jour atomique du singleton
-    let translator_handle = TRANSLATOR.get_or_init(|| Arc::new(RwLock::new(Translator::new())));
+    let translator_handle =
+        TRANSLATOR.get_or_init(|| SharedRef::new(SyncRwLock::new(Translator::new())));
 
     match translator_handle.write() {
         Ok(mut guard) => {
@@ -145,40 +139,33 @@ pub async fn init_i18n(lang: &str) -> RaiseResult<()> {
     }
 }
 
-/// Traduit une clé via le traducteur global (Thread-safe).
 pub fn t(key: &str) -> String {
     if let Some(arc) = TRANSLATOR.get() {
         if let Ok(read_guard) = arc.read() {
             return read_guard.t(key);
         }
     }
-    // Fallback ultime : on retourne la clé
     key.to_string()
 }
 
-// --- TESTS UNITAIRES (RAISE standard) ---
-
+// --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    // 🎯 IMPORT UNIQUE : La Sandbox remplace tout le setup manuel !
-    use crate::utils::mock::AgentDbSandbox;
-    use crate::utils::prelude::*;
-    use serde_json::json;
+    use crate::utils::core::error::AppError;
+    use crate::utils::core::UniqueId;
+    use crate::utils::testing::mock::AgentDbSandbox;
 
     #[tokio::test]
     async fn test_translator_full_flow() {
-        // 1. 🎯 MAGIE : La Sandbox crée le dossier, initialise la DB et injecte les schémas
         let sandbox = AgentDbSandbox::new().await;
-
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
 
-        // On a juste besoin de créer la collection "locales" pour ce test
         manager
             .create_collection(
                 "locales",
@@ -187,9 +174,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Insertion d'un document de langue valide
-        let doc = json!({
-            "_id": Uuid::new_v4().to_string(),
+        let doc = json_value!({
+            "_id": UniqueId::new_v4().to_string(),
             "locale": "fr",
             "translations": [
                 { "key": "WELCOME", "value": "Bienvenue sur RAISE" },
@@ -199,8 +185,6 @@ mod tests {
         manager.insert_raw("locales", &doc).await.unwrap();
 
         let mut translator = Translator::new();
-
-        // 2. 🎯 Utilisation directe de `&sandbox.db` (qui est un Arc<StorageEngine>)
         translator
             .load_from_db(&sandbox.db, "fr")
             .await
@@ -214,7 +198,6 @@ mod tests {
     #[tokio::test]
     async fn test_translator_missing_language_error() {
         let sandbox = AgentDbSandbox::new().await;
-
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
@@ -230,15 +213,10 @@ mod tests {
             .unwrap();
 
         let mut translator = Translator::new();
-
-        // On teste le cas d'erreur avec une langue inexistante
         let result = translator.load_from_db(&sandbox.db, "jp").await;
 
         assert!(result.is_err());
-        if let Err(AppError::Structured(data)) = result {
-            assert_eq!(data.code, "ERR_I18N_NOT_FOUND");
-        } else {
-            panic!("Devrait retourner ERR_I18N_NOT_FOUND structuré");
-        }
+        let AppError::Structured(data) = result.unwrap_err();
+        assert_eq!(data.code, "ERR_I18N_NOT_FOUND");
     }
 }

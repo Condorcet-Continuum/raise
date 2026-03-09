@@ -55,8 +55,9 @@ impl<G: Genome> SelectionStrategy<G> for TournamentSelection {
 mod tests {
     use super::*;
     use crate::genetics::types::Fitness;
+    use crate::utils::prelude::*;
 
-    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, Serializable, Deserializable)]
     struct MockGenome;
     impl Genome for MockGenome {
         fn random() -> Self {

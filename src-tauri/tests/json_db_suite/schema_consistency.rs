@@ -1,13 +1,13 @@
 // FICHIER : src-tauri/tests/json_db_suite/schema_consistency.rs
+use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-use raise::utils::io;
-use raise::utils::prelude::*;
+
 use walkdir::WalkDir; // Pour explorer les schémas récursivement
 
-#[tokio::test]
+#[async_test]
 async fn test_structural_integrity_json_schema() {
     // 1. Initialisation de l'environnement isolé (copie les schémas auto)
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -59,7 +59,7 @@ async fn test_structural_integrity_json_schema() {
     }
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_semantic_consistency_json_ld() {
     // On initialise juste pour le logging et les utilitaires
     let _env = setup_test_env(LlmMode::Disabled).await;
@@ -85,7 +85,7 @@ async fn test_semantic_consistency_json_ld() {
     println!("\n🧠 [SEMANTIC] Vérification de la cohérence JSON-LD...");
 
     for (schema_rel, short_type) in critical_mappings {
-        let doc = json!({
+        let doc = json_value!({
             "@context": {
                 "oa": "https://raise.io/ontology/arcadia/oa#",
                 "sa": "https://raise.io/ontology/arcadia/sa#",
@@ -127,7 +127,7 @@ async fn test_semantic_consistency_json_ld() {
     }
 }
 
-#[tokio::test]
+#[async_test]
 async fn test_detect_actor_duality() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = &env.sandbox.storage.config;
@@ -136,13 +136,13 @@ async fn test_detect_actor_duality() {
     let generic_path = schemas_root.join("actors/actor.schema.json");
     let arcadia_path = schemas_root.join("arcadia/oa/actor.schema.json");
 
-    if io::exists(&generic_path).await && io::exists(&arcadia_path).await {
+    if fs::exists_async(&generic_path).await && fs::exists_async(&arcadia_path).await {
         println!("\n⚠️  [AUDIT] Vérification de la distinction Acteur Générique vs Arcadia");
 
-        let gen_json: Value = io::read_json(&generic_path)
+        let gen_json: JsonValue = fs::read_json_async(&generic_path)
             .await
             .expect("❌ JSON générique illisible");
-        let arc_json: Value = io::read_json(&arcadia_path)
+        let arc_json: JsonValue = fs::read_json_async(&arcadia_path)
             .await
             .expect("❌ JSON arcadia illisible");
 

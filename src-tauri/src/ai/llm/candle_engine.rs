@@ -18,8 +18,7 @@ impl CandleLlmEngine {
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
         // 1. Récupération de la configuration globale dynamique
-        let settings =
-            crate::utils::config::AppConfig::get_component_settings(manager, "llm").await?;
+        let settings = AppConfig::get_component_settings(manager, "llm").await?;
 
         // 2. Lecture simple des paramètres
         let model_filename = settings
@@ -36,7 +35,7 @@ impl CandleLlmEngine {
             raise_error!(
                 "ERR_OS_HOME_NOT_FOUND",
                 error = "Impossible de localiser le répertoire personnel de l'utilisateur (HOME).",
-                context = json!({ "method": "dirs::home_dir" })
+                context = json_value!({ "method": "dirs::home_dir" })
             );
         };
 
@@ -49,14 +48,14 @@ impl CandleLlmEngine {
             raise_error!(
                 "ERR_AI_MODEL_FILE_NOT_FOUND",
                 error = format!("Modèle GGUF introuvable en local : {:?}", model_path),
-                context = json!({ "path": model_path.to_string_lossy() })
+                context = json_value!({ "path": model_path.to_string_lossy() })
             );
         }
         if !tokenizer_path.exists() {
             raise_error!(
                 "ERR_AI_TOKENIZER_FILE_NOT_FOUND",
                 error = format!("Tokenizer introuvable en local : {:?}", tokenizer_path),
-                context = json!({ "path": tokenizer_path.to_string_lossy() })
+                context = json_value!({ "path": tokenizer_path.to_string_lossy() })
             );
         }
 
@@ -74,7 +73,7 @@ impl CandleLlmEngine {
                 raise_error!(
                     "ERR_AI_TOKENIZER_LOAD_FAILED",
                     error = e,
-                    context = json!({
+                    context = json_value!({
                         "action": "initialize_tokenizer",
                         "path": tokenizer_path.to_string_lossy(),
                         "hint": "Le fichier 'tokenizer.json' est introuvable ou malformé. Vérifiez que le modèle a été correctement téléchargé dans le dossier 'assets/models'."
@@ -89,7 +88,7 @@ impl CandleLlmEngine {
             Err(e) => raise_error!(
                 "ERR_AI_MODEL_OPEN",
                 error = e,
-                context = json!({ "path": model_path.to_string_lossy() })
+                context = json_value!({ "path": model_path.to_string_lossy() })
             ),
         };
 
@@ -98,7 +97,7 @@ impl CandleLlmEngine {
             Err(e) => raise_error!(
                 "ERR_AI_MODEL_READ_CONTENT",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "READ_GGUF_CONTENT",
                     "path": model_path.to_string_lossy()
                 })
@@ -112,7 +111,7 @@ impl CandleLlmEngine {
             Err(e) => raise_error!(
                 "ERR_AI_QWEN2_WEIGHTS_LOAD",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "model_family": "Qwen2",
                     "path": model_path.to_string_lossy()
                 })
@@ -150,7 +149,7 @@ impl CandleLlmEngine {
             Err(e) => raise_error!(
                 "ERR_TOKENIZER_ENCODE",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "encode_prompt",
                     // Un petit plus pour l'IA : on capture un aperçu du prompt qui a fait planter !
                     "prompt_preview": formatted_prompt.chars().take(50).collect::<String>()
@@ -180,7 +179,7 @@ impl CandleLlmEngine {
                 Err(e) => raise_error!(
                     "ERR_AI_TENSOR_CREATION_FAILED",
                     error = e,
-                    context = json!({ "pos": index_pos })
+                    context = json_value!({ "pos": index_pos })
                 ),
             };
 
@@ -195,7 +194,7 @@ impl CandleLlmEngine {
                 Err(e) => raise_error!(
                     "ERR_AI_FORWARD_PASS_FAILED",
                     error = e,
-                    context = json!({ "index_pos": index_pos })
+                    context = json_value!({ "index_pos": index_pos })
                 ),
             };
 
@@ -235,7 +234,7 @@ impl CandleLlmEngine {
             Err(e) => raise_error!(
                 "ERR_TOKENIZER_DECODE",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "action": "decode_tokens",
                     // Info ultra-utile pour l'IA/Debug : combien de tokens ont fait planter le décodeur ?
                     "token_count": generated_tokens.len()
@@ -250,7 +249,7 @@ impl CandleLlmEngine {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     #[test]
     fn test_qwen_chatml_format() {
@@ -260,7 +259,7 @@ mod tests {
         assert_eq!(CandleLlmEngine::format_prompt(sys, user), expected);
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial] // Protection RTX 5060 en local
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_quick_inference() {
@@ -275,7 +274,7 @@ mod tests {
         inject_mock_component(
             &manager,
             "llm",
-             json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
+             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
         ).await;
 
         // On passe le manager au moteur

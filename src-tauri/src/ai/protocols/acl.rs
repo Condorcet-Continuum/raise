@@ -1,9 +1,9 @@
 // src-tauri/src/ai/protocols/acl.rs
 
-use crate::utils::{fmt, prelude::*, DateTime, Utc, Uuid};
+use crate::utils::prelude::*;
 
 /// Les types d'actes communicatifs (Performatifs)
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serializable, Deserializable, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")] // Ex: "REQUEST", "INFORM"
 pub enum Performative {
     Request,
@@ -14,21 +14,23 @@ pub enum Performative {
     Confirm,
     Failure,
 }
-impl fmt::Display for Performative {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl FmtDisplay for Performative {
+    // FmtCursor remplace fmt::Formatter et FmtResult remplace fmt::Result
+    fn fmt(&self, f: &mut FmtCursor<'_>) -> FmtResult {
+        // On conserve la logique de debug mais avec les types du framework
         write!(f, "{:?}", self)
     }
 }
 /// Structure du message Agent-to-Agent (A2A)
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serializable, Deserializable, Debug, Clone)]
 #[serde(rename_all = "camelCase")] // Convention JSON standard
 pub struct AclMessage {
     /// Identifiant unique (UUID v4)
     #[serde(rename = "_id")] // Convention type MongoDB/NoSQL souvent utilisée
-    pub id: Uuid,
+    pub id: UniqueId,
 
     /// Horodatage UTC
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: UtcTimestamp,
 
     /// L'intention communicative
     pub performative: Performative,
@@ -48,7 +50,7 @@ pub struct AclMessage {
 
     /// Référence au message précédent (Optionnel)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reply_to: Option<Uuid>,
+    pub reply_to: Option<UniqueId>,
 
     /// Ontologie de référence (Optionnel)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,8 +60,8 @@ pub struct AclMessage {
 impl AclMessage {
     pub fn new(performative: Performative, sender: &str, receiver: &str, content: &str) -> Self {
         Self {
-            id: Uuid::new_v4(),
-            timestamp: Utc::now(),
+            id: UniqueId::new_v4(),
+            timestamp: UtcClock::now(),
             performative,
             sender: sender.to_string(),
             receiver: receiver.to_string(),
@@ -72,8 +74,8 @@ impl AclMessage {
 
     pub fn reply(original: &AclMessage, performative: Performative, content: &str) -> Self {
         Self {
-            id: Uuid::new_v4(),
-            timestamp: Utc::now(),
+            id: UniqueId::new_v4(),
+            timestamp: UtcClock::now(),
             performative,
             sender: original.receiver.clone(),
             receiver: original.sender.clone(),
@@ -88,7 +90,7 @@ impl AclMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::data;
+
     #[test]
     fn test_acl_creation() {
         let msg = AclMessage::new(Performative::Request, "A", "B", "Test");
@@ -99,7 +101,7 @@ mod tests {
     #[test]
     fn test_acl_serialization() {
         let msg = AclMessage::new(Performative::Inform, "A", "B", "Data");
-        let json = data::stringify(&msg).unwrap();
+        let json = json::serialize_to_string(&msg).unwrap();
         // Vérifie que le champ s'appelle bien "_id" et pas "id"
         assert!(json.contains("_id"));
         assert!(json.contains("performative"));

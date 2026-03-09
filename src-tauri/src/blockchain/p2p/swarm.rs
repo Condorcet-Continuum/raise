@@ -2,7 +2,6 @@
 use crate::utils::prelude::*;
 
 use crate::blockchain::p2p::behavior::ArcadiaBehavior;
-use crate::utils::Duration;
 use libp2p::{identity, noise, tcp, yamux, Swarm, SwarmBuilder};
 
 /// Crée et configure un Swarm libp2p pour le réseau Raise.
@@ -26,7 +25,7 @@ pub async fn create_swarm(local_key: identity::Keypair) -> RaiseResult<Swarm<Arc
         Err(e) => raise_error!(
             "ERR_P2P_TRANSPORT_CONFIG",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "build_p2p_transport",
                 "stack": "TCP/Noise/Yamux",
                 "hint": "Échec de la configuration de la pile de transport. Vérifiez les dépendances Noise/Yamux."
@@ -39,13 +38,15 @@ pub async fn create_swarm(local_key: identity::Keypair) -> RaiseResult<Swarm<Arc
         Ok(builder) => {
             // On configure et on build ici
             builder
-                .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
+                .with_swarm_config(|cfg| {
+                    cfg.with_idle_connection_timeout(TimeDuration::from_secs(60))
+                })
                 .build()
         }
         Err(e) => raise_error!(
             "ERR_P2P_SWARM_BEHAVIOUR_INJECTION",
             error = e,
-            context = json!({
+            context = json_value!({
                 "action": "inject_behaviour_into_swarm",
                 "component": "NetworkBehavior",
                 "hint": "L'injection du comportement réseau a échoué. Vérifiez la compatibilité des protocoles sélectionnés."
@@ -63,7 +64,7 @@ mod tests {
     use super::*;
     use libp2p::identity;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_swarm_creation() {
         let local_key = identity::Keypair::generate_ed25519();
         let swarm_result = create_swarm(local_key).await;

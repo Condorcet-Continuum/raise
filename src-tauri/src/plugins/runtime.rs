@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/plugins/runtime.rs
 
-use crate::utils::{prelude::*, Arc, Mutex};
+use crate::utils::prelude::*;
 
 use super::cognitive;
 use crate::ai::orchestrator::AiOrchestrator;
@@ -17,14 +17,14 @@ pub struct PluginContext {
     pub db: String,
 
     // --- Services Backend Connectés (Hub) ---
-    pub ai_orchestrator: Option<Arc<Mutex<AiOrchestrator>>>,
+    pub ai_orchestrator: Option<SharedRef<AsyncMutex<AiOrchestrator>>>,
 
     // --- Gouvernance & Communication (Workflow Integration) ---
     /// Le Mandat : Définit ce que le plugin a le droit de faire (ex: lecture seule).
-    pub mandate: Option<Value>,
+    pub mandate: Option<JsonValue>,
 
     /// Les Signaux : Événements structurés émis par le plugin vers le WorkflowExecutor.
-    pub signals: Vec<Value>,
+    pub signals: Vec<JsonValue>,
 
     // --- Gestion de la Mémoire (Mailbox) ---
     pub output_buffer: Vec<u8>,
@@ -42,7 +42,7 @@ impl CognitivePlugin {
         storage: &StorageEngine,
         space: &str,
         db: &str,
-        ai: Option<Arc<Mutex<AiOrchestrator>>>,
+        ai: Option<SharedRef<AsyncMutex<AiOrchestrator>>>,
     ) -> RaiseResult<Self> {
         let engine = Engine::default();
         let mut linker = Linker::new(&engine);
@@ -71,7 +71,7 @@ impl CognitivePlugin {
             Err(e) => raise_error!(
                 "ERR_WASM_COMPILE_FAILED",
                 error = e.to_string(),
-                context = serde_json::json!({
+                context = json_value!({
                     "action": "compile_wasm_binary",
                     "hint": "Le binaire fourni n'est pas un module WebAssembly valide."
                 })
@@ -83,7 +83,7 @@ impl CognitivePlugin {
             Err(e) => raise_error!(
                 "ERR_WASM_INSTANTIATION_FAILED",
                 error = e.to_string(),
-                context = serde_json::json!({
+                context = json_value!({
                     "action": "instantiate_plugin",
                     "hint": "Échec de l'édition des liens (imports/exports manquants)."
                 })
@@ -94,12 +94,12 @@ impl CognitivePlugin {
     }
 
     /// Injecte un Mandat de gouvernance avant l'exécution.
-    pub fn set_mandate(&mut self, mandate: Value) {
+    pub fn set_mandate(&mut self, mandate: JsonValue) {
         self.store.data_mut().mandate = Some(mandate);
     }
 
     /// Récupère les signaux (événements) émis par le plugin après son exécution.
-    pub fn get_signals(&self) -> Vec<Value> {
+    pub fn get_signals(&self) -> Vec<JsonValue> {
         self.store.data().signals.clone()
     }
 
@@ -114,7 +114,7 @@ impl CognitivePlugin {
             Err(e) => raise_error!(
                 "ERR_WASM_SYMBOL_NOT_FOUND",
                 error = e.to_string(),
-                context = serde_json::json!({
+                context = json_value!({
                     "symbol": "run",
                     "expected_signature": "() -> i32",
                     "action": "plugin_lookup",
@@ -129,7 +129,7 @@ impl CognitivePlugin {
             Err(e) => raise_error!(
                 "ERR_WASM_EXECUTION_CRASH",
                 error = e.to_string(),
-                context = serde_json::json!({
+                context = json_value!({
                     "action": "execute_run",
                     "hint": "Le plugin a déclenché un WASM Trap (panic interne ou accès mémoire illégal)."
                 })
@@ -148,7 +148,6 @@ impl CognitivePlugin {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::io::tempdir;
 
     fn create_dummy_wasm() -> Vec<u8> {
         vec![
@@ -168,7 +167,7 @@ mod tests {
         let mut plugin = CognitivePlugin::new(&wasm, &storage, "space", "db", None).unwrap();
 
         // 1. Test Mandat
-        let test_mandate = serde_json::json!({ "permissions": { "readonly": true } });
+        let test_mandate = json_value!({ "permissions": { "readonly": true } });
         plugin.set_mandate(test_mandate.clone());
         assert_eq!(plugin.store.data().mandate, Some(test_mandate));
 

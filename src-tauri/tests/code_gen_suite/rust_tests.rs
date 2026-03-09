@@ -1,11 +1,11 @@
 // FICHIER : src-tauri/tests/code_gen_suite/rust_tests.rs
 
+use raise::utils::prelude::*;
+
 use crate::common::{setup_test_env, LlmMode};
 use raise::code_generator::{CodeGeneratorService, TargetLanguage};
-use raise::utils::data::json;
-use raise::utils::io;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_rust_skeleton_generation() {
@@ -16,7 +16,7 @@ async fn test_rust_skeleton_generation() {
         CodeGeneratorService::new(env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap());
 
     // 2. Donnée Mock (Forcer la logique Rust_Crate)
-    let actor = json!({
+    let actor = json_value!({
         "id": "uuid-test-pure",
         "name": "Moteur Physique",
         "description": "Simule la gravité.",
@@ -42,7 +42,9 @@ async fn test_rust_skeleton_generation() {
         .find(|p| p.to_string_lossy().contains("src/lib.rs"))
         .expect("Le fichier src/lib.rs est manquant");
 
-    let content = io::read_to_string(lib_path).await.expect("Lecture lib.rs");
+    let content = fs::read_to_string_async(lib_path)
+        .await
+        .expect("Lecture lib.rs");
 
     // 5. Assertions sur le fallback de rust_gen.rs
     // Le générateur transforme "Calculer Gravite" en snake_case

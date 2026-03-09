@@ -1,11 +1,12 @@
 // FICHIER : src-tauri/tests/json_db_suite/json_db_errors.rs
+use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::storage::file_storage::{create_db, open_db};
 use raise::json_db::storage::JsonDbConfig;
-use raise::utils::json::json; // 🎯 AJOUT VITAL pour le 4ème argument
+// 🎯 AJOUT VITAL pour le 4ème argument
 
-#[tokio::test]
+#[async_test]
 async fn open_missing_db_fails() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = JsonDbConfig {
@@ -22,7 +23,7 @@ async fn open_missing_db_fails() {
     );
 }
 
-#[tokio::test]
+#[async_test]
 async fn create_db_is_idempotent() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let cfg = JsonDbConfig {
@@ -30,7 +31,7 @@ async fn create_db_is_idempotent() {
     };
 
     // 🎯 On fournit un plan de construction vide (mais valide syntaxiquement)
-    let dummy_doc = json!({ "collections": {}, "rules": {}, "schemas": {} });
+    let dummy_doc = json_value!({ "collections": {}, "rules": {}, "schemas": {} });
 
     // 1. Premier appel : la DB existe DÉJÀ (créée par setup_test_env).
     // Le "Return Early" de l'idempotence doit renvoyer false.

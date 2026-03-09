@@ -7,9 +7,9 @@ use raise::json_db::{
     query::{sql, Condition, FilterOperator, Query, QueryEngine, QueryFilter},
     transactions::{manager::TransactionManager, TransactionRequest},
 };
-use raise::utils::prelude::*; // SSOT : Apporte json!, Arc, Value, etc.
+use raise::utils::prelude::*; // SSOT : Apporte json!, SharedRef, JsonValue, etc.
 
-#[tokio::test]
+#[async_test]
 async fn test_json_db_global_scenario() {
     // 1. SETUP ENVIRONNEMENT (Robuste & Isolé)
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -45,12 +45,12 @@ async fn test_json_db_global_scenario() {
         TransactionRequest::Insert {
             collection: "users".into(),
             id: Some("u1".into()),
-            document: json!({ "name": "Alice", "email": "alice@corp.com", "age": 30 }),
+            document: json_value!({ "name": "Alice", "email": "alice@corp.com", "age": 30 }),
         },
         TransactionRequest::Insert {
             collection: "users".into(),
             id: Some("u2".into()),
-            document: json!({ "name": "Bob", "email": "bob@corp.com", "age": 40 }),
+            document: json_value!({ "name": "Bob", "email": "bob@corp.com", "age": 40 }),
         },
     ];
 
@@ -110,7 +110,7 @@ async fn test_json_db_global_scenario() {
         collection: "users".into(),
         filter: Some(QueryFilter {
             operator: FilterOperator::And,
-            conditions: vec![Condition::eq("age", json!(25))],
+            conditions: vec![Condition::eq("age", json_value!(25))],
         }),
         sort: None,
         limit: None,

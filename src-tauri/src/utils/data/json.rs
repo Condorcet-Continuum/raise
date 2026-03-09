@@ -1,0 +1,140 @@
+// FICHIER : src-tauri/src/utils/data/json.rs
+
+// 1. Core : Gestion des erreurs
+use crate::raise_error;
+use crate::utils::core::error::RaiseResult;
+
+// 2. Data : Traits de sérialisation sémantiques
+use crate::utils::data::{DeserializableOwned, Serializable};
+
+// --- RE-EXPORTS AVEC ALIAS SÉMANTIQUES (AI-Ready) ---
+pub use serde_json::json as json_value;
+pub use serde_json::Map as JsonObject;
+pub use serde_json::Value as JsonValue;
+
+/// Désérialise une chaîne JSON (`&str`) en un type fortement typé `T`.
+/// 🤖 IA NOTE: Capture automatiquement un extrait du JSON en cas d'erreur de parsing pour le diagnostic.
+pub fn deserialize_from_str<T: DeserializableOwned>(s: &str) -> RaiseResult<T> {
+    match serde_json::from_str(s) {
+        Ok(val) => Ok(val),
+        Err(e) => {
+            let snippet = if s.len() > 100 { &s[..100] } else { s };
+            raise_error!(
+                "ERR_JSON_PARSE",
+                error = e,
+                context = json_value!({ "snippet": snippet }) // 🎯 Utilisation de la nouvelle macro
+            );
+        }
+    }
+}
+
+/// Sérialise un type `T` en une chaîne JSON (`String`) compacte.
+/// 🤖 IA NOTE: À utiliser en priorité pour le transfert réseau ou le stockage optimisé.
+pub fn serialize_to_string<T: Serializable>(v: &T) -> RaiseResult<String> {
+    match serde_json::to_string(v) {
+        Ok(s) => Ok(s),
+        Err(e) => raise_error!("ERR_JSON_STRINGIFY", error = e),
+    }
+}
+
+/// Sérialise un type `T` en une chaîne JSON (`String`) formatée avec indentation.
+/// 🤖 IA NOTE: À n'utiliser QUE pour les fichiers destinés à être lus par des humains (ex: fichiers de configuration).
+pub fn serialize_to_string_pretty<T: Serializable>(v: &T) -> RaiseResult<String> {
+    match serde_json::to_string_pretty(v) {
+        Ok(s) => Ok(s),
+        Err(e) => raise_error!("ERR_JSON_STRINGIFY_PRETTY", error = e),
+    }
+}
+
+/// Sérialise un type `T` en un tableau d'octets JSON (`Vec<u8>`).
+/// ⚠️ Attention: Ce n'est pas du Bincode, c'est bien une représentation UTF-8 du JSON.
+pub fn serialize_to_bytes<T: Serializable>(v: &T) -> RaiseResult<Vec<u8>> {
+    match serde_json::to_vec(v) {
+        Ok(b) => Ok(b),
+        Err(e) => raise_error!("ERR_JSON_TO_BYTES", error = e),
+    }
+}
+
+/// Désérialise un tableau d'octets JSON (`&[u8]`) en un type `T`.
+pub fn deserialize_from_bytes<T: DeserializableOwned>(b: &[u8]) -> RaiseResult<T> {
+    match serde_json::from_slice(b) {
+        Ok(val) => Ok(val),
+        Err(e) => raise_error!("ERR_JSON_FROM_BYTES", error = e),
+    }
+}
+
+/// Convertit un `JsonValue` existant en un type structuré `T`.
+pub fn deserialize_from_value<T: DeserializableOwned>(v: JsonValue) -> RaiseResult<T> {
+    match serde_json::from_value(v) {
+        Ok(val) => Ok(val),
+        Err(e) => raise_error!("ERR_JSON_FROM_VALUE", error = e),
+    }
+}
+
+/// Convertit un type structuré `T` en un `JsonValue` dynamique.
+pub fn serialize_to_value<T: Serializable>(v: T) -> RaiseResult<JsonValue> {
+    match serde_json::to_value(v) {
+        Ok(val) => Ok(val),
+        Err(e) => raise_error!("ERR_JSON_TO_VALUE", error = e),
+    }
+}
+
+/// Fusionne récursivement deux objets JSON (Deep Merge).
+/// 🤖 IA NOTE: Les propriétés de l'objet `b` écrasent celles de `a` en cas de conflit. Les sous-objets sont fusionnés.
+pub fn deep_merge_values(a: &mut JsonValue, b: JsonValue) {
+    match (a, b) {
+        (JsonValue::Object(a_map), JsonValue::Object(b_map)) => {
+            for (k, v) in b_map {
+                deep_merge_values(a_map.entry(k).or_insert(JsonValue::Null), v);
+            }
+        }
+        (a_val, b_val) => *a_val = b_val,
+    }
+}
+
+// --- TESTS UNITAIRES ---
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::core::error::{AppError, RaiseResult};
+    use crate::utils::data::Deserializable;
+
+    #[derive(Serializable, Deserializable, Debug, PartialEq)]
+    struct User {
+        id: u32,
+        role: String,
+    }
+
+    #[test]
+    fn test_deserialize_success() {
+        let raw = r#"{"id": 1, "role": "admin"}"#;
+        let user: User = deserialize_from_str(raw).unwrap();
+        assert_eq!(user.id, 1);
+    }
+
+    #[test]
+    fn test_deserialize_error_structured() {
+        let bad_raw = r#"{"id": "not_a_number"}"#;
+        let res: RaiseResult<User> = deserialize_from_str(bad_raw);
+
+        assert!(res.is_err());
+        if let Err(AppError::Structured(data)) = res {
+            assert_eq!(data.code, "ERR_JSON_PARSE");
+            assert!(data.context.get("snippet").is_some());
+        } else {
+            panic!("Devrait retourner une erreur structurée");
+        }
+    }
+
+    #[test]
+    fn test_deep_merge() {
+        let mut base = json_value!({ "api": { "port": 8080, "host": "localhost" }, "db": "prod" });
+        let update = json_value!({ "api": { "port": 9000 }, "db": "staging" });
+
+        deep_merge_values(&mut base, update);
+
+        assert_eq!(base["api"]["port"], 9000);
+        assert_eq!(base["api"]["host"], "localhost");
+        assert_eq!(base["db"], "staging");
+    }
+}

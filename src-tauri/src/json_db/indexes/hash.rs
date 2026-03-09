@@ -1,6 +1,5 @@
 // FICHIER : src-tauri/src/json_db/indexes/hash.rs
 
-use crate::utils::data::HashMap;
 use crate::utils::prelude::*;
 
 use super::{driver, paths, IndexDefinition};
@@ -15,8 +14,8 @@ pub async fn update_hash_index(
     collection: &str,
     def: &IndexDefinition,
     doc_id: &str,
-    old_doc: Option<&Value>,
-    new_doc: Option<&Value>,
+    old_doc: Option<&JsonValue>,
+    new_doc: Option<&JsonValue>,
 ) -> RaiseResult<()> {
     // ✅ MODIFIÉ : On extrait la config du storage pour le path
     let path = paths::index_path(
@@ -27,7 +26,7 @@ pub async fn update_hash_index(
         &def.name,
         def.index_type,
     );
-    driver::update::<HashMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
+    driver::update::<UnorderedMap<String, Vec<String>>>(&path, def, doc_id, old_doc, new_doc).await
 }
 
 /// Recherche des IDs de documents correspondant exactement à une valeur.
@@ -37,7 +36,7 @@ pub async fn search_hash_index(
     db: &str,
     collection: &str,
     def: &IndexDefinition,
-    value: &Value,
+    value: &JsonValue,
 ) -> RaiseResult<Vec<String>> {
     let path = paths::index_path(
         &storage.config,
@@ -49,7 +48,7 @@ pub async fn search_hash_index(
     );
 
     let key = value.to_string();
-    driver::search::<HashMap<String, Vec<String>>>(&path, &key).await
+    driver::search::<UnorderedMap<String, Vec<String>>>(&path, &key).await
 }
 
 #[cfg(test)]
@@ -57,10 +56,6 @@ mod tests {
     use super::*;
     use crate::json_db::indexes::IndexType;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
-    use crate::utils::{
-        io::{self, tempdir},
-        json::json,
-    };
 
     fn setup_env() -> (tempfile::TempDir, JsonDbConfig) {
         let dir = tempdir().unwrap();
@@ -68,14 +63,14 @@ mod tests {
         (dir, cfg)
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_hash_lifecycle() {
         let (dir, cfg) = setup_env();
         // ✅ AJOUT : Création du StorageEngine pour les tests
         let storage = StorageEngine::new(cfg);
 
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
-        io::ensure_dir(&idx_dir).await.unwrap();
+        fs::ensure_dir_async(&idx_dir).await.unwrap();
 
         let def = IndexDefinition {
             name: "email".into(),
@@ -85,31 +80,40 @@ mod tests {
         };
 
         // 1. Insertion
-        let doc = json!({ "email": "test@mail.com" });
+        let doc = json_value!({ "email": "test@mail.com" });
         update_hash_index(&storage, "s", "d", "c", &def, "doc1", None, Some(&doc))
             .await
             .unwrap();
 
         // 2. Recherche (Succès)
-        let results = search_hash_index(&storage, "s", "d", "c", &def, &json!("test@mail.com"))
-            .await
-            .unwrap();
+        let results =
+            search_hash_index(&storage, "s", "d", "c", &def, &json_value!("test@mail.com"))
+                .await
+                .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], "doc1");
 
         // 3. Recherche (Echec)
-        let empty = search_hash_index(&storage, "s", "d", "c", &def, &json!("other@mail.com"))
-            .await
-            .unwrap();
+        let empty = search_hash_index(
+            &storage,
+            "s",
+            "d",
+            "c",
+            &def,
+            &json_value!("other@mail.com"),
+        )
+        .await
+        .unwrap();
         assert!(empty.is_empty());
 
         // 4. Suppression
         update_hash_index(&storage, "s", "d", "c", &def, "doc1", Some(&doc), None)
             .await
             .unwrap();
-        let deleted = search_hash_index(&storage, "s", "d", "c", &def, &json!("test@mail.com"))
-            .await
-            .unwrap();
+        let deleted =
+            search_hash_index(&storage, "s", "d", "c", &def, &json_value!("test@mail.com"))
+                .await
+                .unwrap();
         assert!(deleted.is_empty());
     }
 }

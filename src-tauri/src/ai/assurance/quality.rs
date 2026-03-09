@@ -1,7 +1,7 @@
 use crate::utils::prelude::*;
 
 /// Catégorie de la métrique mesurée
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum MetricCategory {
     Performance, // Précision, Rappel, F1-Score...
     Robustness,  // Stabilité face au bruit
@@ -10,14 +10,14 @@ pub enum MetricCategory {
 }
 
 /// Statut global du rapport de qualité
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum QualityStatus {
     Pass,    // Succès total
     Warning, // Succès mitigé
     Fail,    // Échec critique
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct QualityMetric {
     pub name: String,
     pub category: MetricCategory,
@@ -28,7 +28,7 @@ pub struct QualityMetric {
     pub passed: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct QualityReport {
     #[serde(rename = "_id")]
     pub id: String,
@@ -44,10 +44,10 @@ pub struct QualityReport {
 impl QualityReport {
     pub fn new(model_id: &str, dataset_version: &str) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: UniqueId::new_v4().to_string(),
             model_id: model_id.to_string(),
             dataset_version: dataset_version.to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
+            timestamp: UtcClock::now().timestamp(),
             metrics: Vec::new(),
             overall_status: QualityStatus::Warning,
             global_score: 0.0,

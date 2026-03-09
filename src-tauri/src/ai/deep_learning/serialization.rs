@@ -1,8 +1,6 @@
 use crate::utils::prelude::*;
 
 use crate::ai::deep_learning::models::sequence_net::SequenceNet;
-use crate::utils::config::DeepLearningConfig;
-use crate::utils::io::Path;
 use candle_core::DType;
 use candle_nn::{VarBuilder, VarMap};
 
@@ -43,11 +41,10 @@ pub fn load_checkpoint(varmap: &mut VarMap, path: impl AsRef<Path>) -> RaiseResu
 mod tests {
     use super::*;
     use crate::ai::deep_learning::trainer::Trainer;
-    use crate::utils::io::{self, Path};
-    use crate::utils::mock::DbSandbox;
+    use crate::utils::testing::DbSandbox;
     use candle_core::{DType, Tensor};
 
-    #[tokio::test]
+    #[async_test]
     async fn test_save_and_load_consistency() -> RaiseResult<()> {
         // 1. Initialisation du Singleton avec le "moule de test" (10, 20, 5, LR=0.1)
         let sandbox = DbSandbox::new().await;
@@ -87,7 +84,7 @@ mod tests {
             .sum_all()?
             .to_scalar::<f32>()?;
 
-        let _ = io::remove_file(Path::new(path)).await;
+        let _ = fs::remove_file_async(Path::new(path)).await;
 
         assert!(diff < 1e-5, "Le modèle chargé diffère (diff: {})", diff);
         Ok(())

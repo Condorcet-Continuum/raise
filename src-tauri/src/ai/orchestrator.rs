@@ -11,10 +11,7 @@ use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 use candle_nn::VarMap;
 
 use crate::json_db::storage::StorageEngine;
-use crate::utils::{io::PathBuf, prelude::*, Arc};
-
-// --- CONFIGURATION ---
-use crate::utils::config::AppConfig;
+use crate::utils::prelude::*;
 
 // --- IMPORTS AGENTS ---
 use crate::ai::agents::intent_classifier::IntentClassifier;
@@ -35,14 +32,14 @@ pub struct AiOrchestrator {
     world_engine_path: PathBuf,
 
     // Référence au StorageEngine pour les Agents (Optionnel pour le mode léger, requis pour les agents)
-    storage: Option<Arc<StorageEngine>>,
+    storage: Option<SharedRef<StorageEngine>>,
 }
 
 impl AiOrchestrator {
     /// Constructeur
     pub async fn new(
         model: ProjectModel,
-        storage_engine: Option<Arc<StorageEngine>>,
+        storage_engine: Option<SharedRef<StorageEngine>>,
     ) -> RaiseResult<Self> {
         let app_config = AppConfig::get();
 
@@ -51,7 +48,7 @@ impl AiOrchestrator {
             raise_error!(
                 "ERR_CONFIG_DOMAIN_PATH_MISSING",
                 error = "PATH_RAISE_DOMAIN est manquant dans la configuration AppConfig",
-                context = json!({
+                context = json_value!({
                     "required_key": "PATH_RAISE_DOMAIN",
                     "action": "initialize_domain_context"
                 })
@@ -63,7 +60,7 @@ impl AiOrchestrator {
         // 🎯 1. INSTANCIATION CENTRALE DE LA BASE DE DONNÉES
         let actual_storage = storage_engine.unwrap_or_else(|| {
             let storage_cfg = crate::json_db::storage::JsonDbConfig::new(domain_path.clone());
-            Arc::new(StorageEngine::new(storage_cfg))
+            SharedRef::new(StorageEngine::new(storage_cfg))
         });
 
         let manager = crate::json_db::collections::manager::CollectionsManager::new(
@@ -102,7 +99,7 @@ impl AiOrchestrator {
             Err(e) => raise_error!(
                 "ERR_CHAT_MEMORY_STORE_INIT",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "chats_path": chats_path.to_string_lossy(),
                     "component": "CHAT_SYSTEM"
                 })
@@ -161,7 +158,7 @@ impl AiOrchestrator {
             raise_error!(
                 "ERR_CONFIG_DOMAIN_PATH_MISSING",
                 error = "PATH_RAISE_DOMAIN est manquant dans la configuration AppConfig",
-                context = json!({
+                context = json_value!({
                     "required_key": "PATH_RAISE_DOMAIN",
                     "action": "initialize_app_domain"
                 })
@@ -175,7 +172,7 @@ impl AiOrchestrator {
             raise_error!(
                 "ERR_AGENT_STORAGE_MISSING",
                 error = "StorageEngine requis pour l'exécution des agents",
-                context = json!({
+                context = json_value!({
                     "component": "AGENT_RUNNER",
                     "action": "execute_agent"
                 })
@@ -313,12 +310,10 @@ mod tests {
     use crate::ai::protocols::acl::{AclMessage, Performative};
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::NameType;
-    use crate::utils::data::json;
-    use crate::utils::mock::{inject_mock_component, AgentDbSandbox};
-    use crate::utils::{data::HashMap, AsyncMutex, OnceLock};
+    use crate::utils::testing::*;
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {
-        static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+        static LOCK: StaticCell<AsyncMutex<()>> = StaticCell::new();
         LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
@@ -328,7 +323,7 @@ mod tests {
             name: NameType::default(),
             kind: "https://raise.io/ontology/arcadia/la#LogicalFunction".to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         }
     }
 
@@ -342,13 +337,13 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        inject_mock_component(&manager, "llm",  json!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })).await;
-        inject_mock_component(&manager, "nlp",  json!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+        inject_mock_component(&manager, "llm",  json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })).await;
+        inject_mock_component(&manager, "nlp",  json_value!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
 
         sandbox
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_init() {
@@ -364,7 +359,7 @@ mod tests {
         assert_eq!(orch.unwrap().session.id, "main_session");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_full_acl_path() {
         let msg = AclMessage::new(
             Performative::Request,
@@ -375,7 +370,7 @@ mod tests {
         assert_eq!(msg.receiver, "quality_manager");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_learning_cycle() {
@@ -392,7 +387,7 @@ mod tests {
         assert!(loss.is_ok(), "L'apprentissage a échoué : {:?}", loss.err());
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_agent_factory() {
@@ -407,7 +402,7 @@ mod tests {
         assert!(orch.create_agent("unknown_hacker_agent").is_none());
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_clear_history() {
@@ -433,7 +428,7 @@ mod tests {
         assert_eq!(orch.session.id, "main_session");
     }
 
-    #[tokio::test]
+    #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_learn_document() {

@@ -10,9 +10,6 @@ use crate::json_db::storage::StorageEngine;
 use crate::json_db::transactions::lock_manager::LockManager;
 use crate::json_db::transactions::{Operation, Transaction, TransactionRequest};
 
-use crate::utils::data::HashSet;
-use crate::utils::io::{self, Path};
-use crate::utils::json;
 use crate::utils::prelude::*;
 
 /// Structure pour stocker l'inverse d'une opération réalisée (Undo Log en mémoire)
@@ -20,18 +17,18 @@ enum UndoAction {
     Insert {
         collection: String,
         id: String,
-        inserted_doc: Value,
+        inserted_doc: JsonValue,
     },
     Update {
         collection: String,
         id: String,
-        previous_doc: Value,
-        bad_doc: Value,
+        previous_doc: JsonValue,
+        bad_doc: JsonValue,
     },
     Delete {
         collection: String,
         id: String,
-        previous_doc: Value,
+        previous_doc: JsonValue,
     },
 }
 
@@ -76,7 +73,7 @@ impl<'a> TransactionManager<'a> {
                     // 🎯 Si un ID est fourni dans la requête, on force son injection en _id
                     if let Some(explicit_id) = id {
                         if let Some(obj) = document.as_object_mut() {
-                            obj.insert("_id".to_string(), Value::String(explicit_id));
+                            obj.insert("_id".to_string(), JsonValue::String(explicit_id));
                         }
                     }
                     col_mgr.prepare_document(&collection, &mut document).await?;
@@ -253,7 +250,7 @@ impl<'a> TransactionManager<'a> {
         .await
     }
 
-    async fn load_dataset_file(&self, path: &str) -> RaiseResult<Value> {
+    async fn load_dataset_file(&self, path: &str) -> RaiseResult<JsonValue> {
         let dataset_root = self
             .storage
             .config
@@ -264,13 +261,13 @@ impl<'a> TransactionManager<'a> {
 
         let resolved_path = path.replace("$PATH_RAISE_DATASET", &dataset_root);
 
-        let content = match io::read_to_string(Path::new(&resolved_path)).await {
+        let content = match fs::read_to_string_async(Path::new(&resolved_path)).await {
             Ok(c) => c,
             Err(e) => {
                 raise_error!(
                     "ERR_FS_READ_FAIL",
                     error = format!("Échec de lecture du fichier : {}", e),
-                    context = json!({
+                    context = json_value!({
                         "resolved_path": resolved_path,
                         "os_error": e.to_string(),
                         "action": "load_collection_file",
@@ -279,7 +276,7 @@ impl<'a> TransactionManager<'a> {
                 );
             }
         };
-        json::parse(&content)
+        json::deserialize_from_str(&content)
     }
 
     async fn resolve_id(
@@ -288,7 +285,7 @@ impl<'a> TransactionManager<'a> {
         collection: &str,
         id: Option<String>,
         handle: Option<String>,
-        document: Option<&Value>,
+        document: Option<&JsonValue>,
         pending_ops: &[Operation],
     ) -> RaiseResult<String> {
         if let Some(i) = id {
@@ -336,7 +333,7 @@ impl<'a> TransactionManager<'a> {
                     conditions: vec![Condition {
                         field: "handle".to_string(),
                         operator: ComparisonOperator::Eq,
-                        value: Value::String(h),
+                        value: JsonValue::String(h),
                     }],
                 }),
                 sort: None,
@@ -378,7 +375,7 @@ impl<'a> TransactionManager<'a> {
                 "Aucune entité trouvée pour l'identité fournie dans '{}'",
                 collection
             ),
-            context = json!({
+            context = json_value!({
                 "collection": collection,
                 "action": "resolve_entity_identity",
                 "hint": "L'identifiant ou le handle spécifié n'existe pas dans cette collection."
@@ -401,7 +398,7 @@ impl<'a> TransactionManager<'a> {
         op_block(&mut tx)?;
 
         // 1. VERROUILLAGE
-        let collections_to_lock: HashSet<String> = tx
+        let collections_to_lock: UniqueSet<String> = tx
             .operations
             .iter()
             .map(|op| match op {
@@ -449,9 +446,9 @@ impl<'a> TransactionManager<'a> {
             .config
             .db_root(&self.space, &self.db)
             .join("wal");
-        io::ensure_dir(&wal_path).await?;
+        fs::ensure_dir_async(&wal_path).await?;
         let tx_file = wal_path.join(format!("{}.json", tx.id));
-        io::write_json_atomic(&tx_file, tx).await?;
+        fs::write_json_atomic_async(&tx_file, tx).await?;
         Ok(())
     }
 
@@ -466,10 +463,10 @@ impl<'a> TransactionManager<'a> {
             .join("_system.json");
 
         let mut system_index = if sys_path.exists() {
-            let c = io::read_to_string(&sys_path).await?;
-            json::parse::<Value>(&c).unwrap_or(json!({"collections": {} }))
+            let c = fs::read_to_string_async(&sys_path).await?;
+            json::deserialize_from_str::<JsonValue>(&c).unwrap_or(json_value!({"collections": {} }))
         } else {
-            json!({"collections": {} })
+            json_value!({"collections": {} })
         };
 
         let mut undo_stack: Vec<UndoAction> = Vec::new();
@@ -484,7 +481,7 @@ impl<'a> TransactionManager<'a> {
                     let mut final_doc = document.clone();
                     if let Some(obj) = final_doc.as_object_mut() {
                         if !obj.contains_key("_id") {
-                            obj.insert("_id".to_string(), Value::String(id.clone()));
+                            obj.insert("_id".to_string(), JsonValue::String(id.clone()));
                         }
                     }
 
@@ -545,7 +542,7 @@ impl<'a> TransactionManager<'a> {
                             raise_error!(
                                 "ERR_DB_UPDATE_TARGET_MISSING",
                                 error = format!("Impossible de mettre à jour le document {}/{} : cible introuvable.", collection, id),
-                                context = json!({
+                                context = json_value!({
                                     "collection": collection,
                                     "document_id": id,
                                     "action": "execute_update_op",
@@ -559,7 +556,7 @@ impl<'a> TransactionManager<'a> {
                     json_merge(&mut final_doc, document.clone());
 
                     if let Some(obj) = final_doc.as_object_mut() {
-                        obj.insert("_id".to_string(), Value::String(id.clone()));
+                        obj.insert("_id".to_string(), JsonValue::String(id.clone()));
                     }
 
                     if let Err(e) = self.apply_schema_logic(collection, &mut final_doc).await {
@@ -644,7 +641,7 @@ impl<'a> TransactionManager<'a> {
             }
         }
 
-        io::write_json_atomic(&sys_path, &system_index).await?;
+        fs::write_json_atomic_async(&sys_path, &system_index).await?;
         Ok(())
     }
 
@@ -702,7 +699,7 @@ impl<'a> TransactionManager<'a> {
         Ok(())
     }
 
-    async fn apply_schema_logic(&self, collection: &str, doc: &mut Value) -> RaiseResult<()> {
+    async fn apply_schema_logic(&self, collection: &str, doc: &mut JsonValue) -> RaiseResult<()> {
         let meta_path = self
             .storage
             .config
@@ -711,8 +708,8 @@ impl<'a> TransactionManager<'a> {
         let mut resolved_uri = None;
 
         if meta_path.exists() {
-            if let Ok(content) = io::read_to_string(&meta_path).await {
-                if let Ok(meta) = json::parse::<Value>(&content) {
+            if let Ok(content) = fs::read_to_string_async(&meta_path).await {
+                if let Ok(meta) = json::deserialize_from_str::<JsonValue>(&content) {
                     if let Some(s) = meta.get("schema").and_then(|v| v.as_str()) {
                         if !s.is_empty() {
                             resolved_uri = Some(s.to_string());
@@ -724,7 +721,7 @@ impl<'a> TransactionManager<'a> {
 
         if let Some(uri) = resolved_uri {
             if let Some(obj) = doc.as_object_mut() {
-                obj.insert("$schema".to_string(), Value::String(uri.clone()));
+                obj.insert("$schema".to_string(), JsonValue::String(uri.clone()));
             }
             let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await?;
             let validator = match SchemaValidator::compile_with_registry(&uri, &reg) {
@@ -736,7 +733,7 @@ impl<'a> TransactionManager<'a> {
                             "Impossible de préparer le validateur pour le schéma : {}",
                             uri
                         ),
-                        context = json!({
+                        context = json_value!({
                             "schema_uri": uri,
                             "nested_error": e,
                             "action": "initialize_validator",
@@ -751,7 +748,7 @@ impl<'a> TransactionManager<'a> {
 
     fn update_index_entry(
         &self,
-        system_index: &mut Value,
+        system_index: &mut JsonValue,
         collection: &str,
         id: &str,
         is_delete: bool,
@@ -762,14 +759,17 @@ impl<'a> TransactionManager<'a> {
             .and_then(|c| c.as_object_mut())
         {
             if !cols.contains_key(collection) && !is_delete {
-                cols.insert(collection.to_string(), json!({ "schema": "", "items": [] }));
+                cols.insert(
+                    collection.to_string(),
+                    json_value!({ "schema": "", "items": [] }),
+                );
             }
             if let Some(col_data) = cols.get_mut(collection) {
                 if col_data.get("items").is_none() {
                     col_data
                         .as_object_mut()
                         .unwrap()
-                        .insert("items".to_string(), json!([]));
+                        .insert("items".to_string(), json_value!([]));
                 }
                 if let Some(items) = col_data.get_mut("items").and_then(|i| i.as_array_mut()) {
                     if is_delete {
@@ -779,7 +779,7 @@ impl<'a> TransactionManager<'a> {
                             .iter()
                             .any(|i| i.get("file").and_then(|f| f.as_str()) == Some(&filename));
                         if !exists {
-                            items.push(json!({ "file": filename }));
+                            items.push(json_value!({ "file": filename }));
                         }
                     }
                 }
@@ -795,8 +795,8 @@ impl<'a> TransactionManager<'a> {
             .db_root(&self.space, &self.db)
             .join("wal")
             .join(format!("{}.json", tx.id));
-        if io::exists(&path).await {
-            io::remove_file(&path).await?;
+        if fs::exists_async(&path).await {
+            fs::remove_file_async(&path).await?;
         }
         Ok(())
     }
@@ -805,21 +805,21 @@ impl<'a> TransactionManager<'a> {
         self.commit_wal(tx).await
     }
 
-    fn resolve_intra_tx_refs(&self, doc: &mut Value, pending_ops: &[Operation]) {
+    fn resolve_intra_tx_refs(&self, doc: &mut JsonValue, pending_ops: &[Operation]) {
         let mut new_val = None;
 
         match doc {
-            Value::Object(map) => {
+            JsonValue::Object(map) => {
                 for (_, v) in map.iter_mut() {
                     self.resolve_intra_tx_refs(v, pending_ops);
                 }
             }
-            Value::Array(arr) => {
+            JsonValue::Array(arr) => {
                 for v in arr.iter_mut() {
                     self.resolve_intra_tx_refs(v, pending_ops);
                 }
             }
-            Value::String(s) => {
+            JsonValue::String(s) => {
                 if s.starts_with("ref:") {
                     let parts: Vec<&str> = s.split(':').collect();
                     if parts.len() == 4 {
@@ -860,16 +860,16 @@ impl<'a> TransactionManager<'a> {
 
         // Mutation In-Place si on a trouvé l'ID dans la transaction courante !
         if let Some(id) = new_val {
-            *doc = Value::String(id);
+            *doc = JsonValue::String(id);
         }
     }
 }
 
-fn json_merge(a: &mut Value, b: Value) {
+fn json_merge(a: &mut JsonValue, b: JsonValue) {
     match (a, b) {
-        (Value::Object(a), Value::Object(b)) => {
+        (JsonValue::Object(a), JsonValue::Object(b)) => {
             for (k, v) in b {
-                json_merge(a.entry(k).or_insert(Value::Null), v);
+                json_merge(a.entry(k).or_insert(JsonValue::Null), v);
             }
         }
         (a, b) => *a = b,
@@ -880,25 +880,22 @@ fn json_merge(a: &mut Value, b: Value) {
 // TESTS
 // ============================================================================
 
-// ============================================================================
-// TESTS
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::io::{self, Path};
-    use crate::utils::mock::DbSandbox;
+    use crate::utils::testing::DbSandbox;
 
-    async fn create_dataset_file(root: &Path, rel_path: &str, content: Value) {
+    async fn create_dataset_file(root: &Path, rel_path: &str, content: JsonValue) {
         let full_path = root.join(rel_path);
         if let Some(parent) = full_path.parent() {
-            io::ensure_dir(parent).await.unwrap();
+            fs::ensure_dir_async(parent).await.unwrap();
         }
-        io::write_json_atomic(&full_path, &content).await.unwrap();
+        fs::write_json_atomic_async(&full_path, &content)
+            .await
+            .unwrap();
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_transaction_commit_success() {
         let sandbox = DbSandbox::new().await;
         let space = &sandbox.config.system_domain;
@@ -918,7 +915,7 @@ mod tests {
         let tm = TransactionManager::new(storage, space, db);
         let res = tm
             .execute(|tx| {
-                tx.add_insert("users", "user1", json!({"name": "Alice"}));
+                tx.add_insert("users", "user1", json_value!({"name": "Alice"}));
                 Ok(())
             })
             .await;
@@ -929,10 +926,10 @@ mod tests {
             .config
             .db_collection_path(space, db, "users")
             .join("user1.json");
-        assert!(crate::utils::io::exists(&doc_path).await);
+        assert!(fs::exists_async(&doc_path).await);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_transaction_rollback_on_error() {
         let sandbox = DbSandbox::new().await;
         let space = &sandbox.config.system_domain;
@@ -952,11 +949,11 @@ mod tests {
         let tm = TransactionManager::new(storage, space, db);
         let res = tm
             .execute(|tx| {
-                tx.add_insert("users", "user2", json!({"name": "Bob"}));
+                tx.add_insert("users", "user2", json_value!({"name": "Bob"}));
                 raise_error!(
                     "ERR_TX_SIMULATED_FAILURE",
                     error = "Échec intentionnel pour test de rollback",
-                    context = json!({
+                    context = json_value!({
                         "transaction_id": "test_sync_001"
                     })
                 );
@@ -975,7 +972,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_smart_insert_injects_metadata() {
         let sandbox = DbSandbox::new().await;
         let space = &sandbox.config.system_domain;
@@ -996,7 +993,7 @@ mod tests {
         let req = vec![TransactionRequest::Insert {
             collection: "users".to_string(),
             id: None,
-            document: json!({ "name": "Test User" }),
+            document: json_value!({ "name": "Test User" }),
         }];
         tm.execute_smart(req).await.expect("Transaction failed");
 
@@ -1008,7 +1005,7 @@ mod tests {
         assert!(res.documents[0].get("_id").is_some());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_atomicity_failure_rollback_smart() {
         let sandbox = DbSandbox::new().await;
         let space = &sandbox.config.system_domain;
@@ -1034,13 +1031,13 @@ mod tests {
             TransactionRequest::Insert {
                 collection: "items".to_string(),
                 id: Some("item1".to_string()),
-                document: json!({ "_id": "item1","val": "A" }),
+                document: json_value!({ "_id": "item1","val": "A" }),
             },
             TransactionRequest::Update {
                 collection: "items".to_string(),
                 id: Some("ghost_id".to_string()),
                 handle: None,
-                document: json!({ "val": "B" }),
+                document: json_value!({ "val": "B" }),
             },
         ];
 
@@ -1056,14 +1053,17 @@ mod tests {
             "Rollback Fichier échoué : item1 ne devrait pas être là"
         );
 
-        let search_res = idx_mgr.search("items", "val", &json!("A")).await.unwrap();
+        let search_res = idx_mgr
+            .search("items", "val", &json_value!("A"))
+            .await
+            .unwrap();
         assert!(
             search_res.is_empty(),
             "Rollback Index échoué : L'index contient encore la donnée !"
         );
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_upsert_workflow() {
         let sandbox = DbSandbox::new().await;
         let space = &sandbox.config.system_domain;
@@ -1087,12 +1087,12 @@ mod tests {
             .get_path("PATH_RAISE_DOMAIN")
             .unwrap()
             .join("dataset");
-        io::ensure_dir(&dataset_dir).await.unwrap();
+        fs::ensure_dir_async(&dataset_dir).await.unwrap();
 
         create_dataset_file(
             &dataset_dir,
             "bob.json",
-            json!({ "handle": "bob", "role": "worker" }),
+            json_value!({ "handle": "bob", "role": "worker" }),
         )
         .await;
 
@@ -1105,7 +1105,7 @@ mod tests {
         create_dataset_file(
             &dataset_dir,
             "bob.json",
-            json!({ "handle": "bob", "role": "boss" }),
+            json_value!({ "handle": "bob", "role": "boss" }),
         )
         .await;
 
@@ -1124,7 +1124,7 @@ mod tests {
         assert_eq!(res.documents[0]["role"], "boss");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_upsert_resolution_by_name() {
         let sandbox = DbSandbox::new().await;
         let space = &sandbox.config.system_domain;
@@ -1146,7 +1146,7 @@ mod tests {
         let req1 = vec![TransactionRequest::Insert {
             collection: "users".to_string(),
             id: None,
-            document: json!({
+            document: json_value!({
                 "name": "alice",
                 "username": "alice_raise",
                 "email": "alice@raise.local",
@@ -1162,7 +1162,7 @@ mod tests {
             collection: "users".to_string(),
             id: None,
             handle: None,
-            document: json!({
+            document: json_value!({
                 "name": "alice",
                 "email": "new_alice@raise.local"
             }),

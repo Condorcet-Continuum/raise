@@ -2,7 +2,7 @@
 
 use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
-use crate::utils::{data, prelude::*};
+use crate::utils::prelude::*;
 use crate::AppState;
 
 /// Synchroniseur responsable de la mise à jour du modèle symbolique en mémoire.
@@ -16,19 +16,11 @@ impl<'a> ModelSync<'a> {
     }
 
     /// Applique les mutations d'un commit au ProjectModel global.
-    pub fn sync_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
-        let mut model_guard = match self.app_state.model.lock() {
-            Ok(guard) => guard,
-            Err(e) => raise_error!(
-                "ERR_SYS_MUTEX_POISONED",
-                error = e,
-                context = json!({
-                    "action": "sync_commit_to_memory",
-                    "component": "ProjectModel",
-                    "hint": "Le Mutex du modèle est empoisonné suite à une panique précédente. Une réinitialisation du service peut être nécessaire pour restaurer l'état."
-                })
-            ),
-        };
+    pub async fn sync_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
+        // 🎯 Ajout du mot-clé async
+
+        // 🎯 On attend l'acquisition du verrou asynchrone (infaillible et non-bloquant)
+        let mut model_guard = self.app_state.model.lock().await;
 
         for mutation in &commit.mutations {
             // Utilisation de l'auto-deref pour la garde du Mutex (Validation Clippy)
@@ -40,12 +32,14 @@ impl<'a> ModelSync<'a> {
     fn apply_mutation(&self, model: &mut ProjectModel, mutation: &Mutation) -> RaiseResult<()> {
         match mutation.operation {
             MutationOp::Create | MutationOp::Update => {
-                let element: ArcadiaElement = match data::from_value(mutation.payload.clone()) {
+                let element: ArcadiaElement = match json::deserialize_from_value(
+                    mutation.payload.clone(),
+                ) {
                     Ok(el) => el,
                     Err(e) => raise_error!(
                         "ERR_SYNC_PAYLOAD_INVALID",
                         error = e,
-                        context = json!({
+                        context = json_value!({
                             "element_id": mutation.element_id,
                             "action": "deserialize_mutation_payload",
                             "hint": "Échec du mapping JSON vers ArcadiaElement. Vérifiez si des champs obligatoires sont manquants ou si les types (string/int) correspondent."
@@ -93,7 +87,7 @@ impl<'a> ModelSync<'a> {
         crate::raise_error!(
             "ERR_SYNC_ELEMENT_NOT_FOUND",
             error = format!("Élément '{}' introuvable pour suppression.", id),
-            context = json!({
+            context = json_value!({
                 "element_id": id,
                 "action": "delete_element_from_model",
                 "hint": "L'élément a peut-être déjà été supprimé ou n'a jamais été synchronisé en mémoire."
@@ -116,7 +110,7 @@ impl<'a> ModelSync<'a> {
             _ => crate::raise_error!(
                 "ERR_SYNC_UNSUPPORTED_KIND",
                 error = format!("Type Arcadia '{}' non géré par le ModelSync.", kind),
-                context = json!({
+                context = json_value!({
                     "kind": kind,
                     "action": "resolve_model_vector",
                     "hint": "Vérifiez que ce type est bien supporté par le synchroniseur. Une mise à jour du Bridge peut être nécessaire."
@@ -135,42 +129,41 @@ impl<'a> ModelSync<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::Mutex;
 
     fn create_test_state() -> AppState {
         AppState {
-            model: Mutex::new(ProjectModel::default()),
+            model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
         }
     }
 
-    #[test]
-    fn test_upsert_new_element() {
+    #[async_test]
+    async fn test_upsert_new_element() {
         let state = create_test_state();
         let sync = ModelSync::new(&state);
 
         let mutation = Mutation {
             element_id: "urn:sa:comp1".into(),
             operation: MutationOp::Create,
-            payload: json!({
+            payload: json_value!({
                 "id": "urn:sa:comp1",
                 "type": "SystemComponent",
                 "name": "Radar Unit"
             }),
         };
 
-        sync.apply_mutation(&mut state.model.lock().unwrap(), &mutation)
+        sync.apply_mutation(&mut *state.model.lock().await, &mutation)
             .unwrap();
-        let model = state.model.lock().unwrap();
+        let model = state.model.lock().await;
         assert_eq!(model.sa.components.len(), 1);
         assert_eq!(model.sa.components[0].name.as_str(), "Radar Unit");
     }
 
-    #[test]
-    fn test_delete_element_success() {
+    #[async_test]
+    async fn test_delete_element_success() {
         let state = create_test_state();
         let sync = ModelSync::new(&state);
 
-        let mut model = state.model.lock().unwrap();
+        let mut model = state.model.lock().await;
         model.la.components.push(ArcadiaElement {
             id: "urn:la:ecu".into(),
             kind: "LogicalComponent".into(),
@@ -181,12 +174,12 @@ mod tests {
         let mutation = Mutation {
             element_id: "urn:la:ecu".into(),
             operation: MutationOp::Delete,
-            payload: json!({}),
+            payload: json_value!({}),
         };
 
-        sync.apply_mutation(&mut state.model.lock().unwrap(), &mutation)
+        sync.apply_mutation(&mut *state.model.lock().await, &mutation)
             .unwrap();
-        let model = state.model.lock().unwrap();
+        let model = state.model.lock().await;
         assert!(model.la.components.is_empty());
     }
 }

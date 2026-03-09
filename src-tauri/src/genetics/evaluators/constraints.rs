@@ -1,10 +1,11 @@
+use crate::utils::prelude::*;
+
 use super::architecture::ArchitectureCostModel;
 use crate::genetics::genomes::arcadia_arch::SystemAllocationGenome;
-use crate::utils::fmt::Debug;
 
 /// Trait pour définir une règle métier qui doit être respectée.
 /// Retourne un score de violation (0.0 = Respecté, >0.0 = Violé).
-pub trait SystemConstraint: Send + Sync + Debug {
+pub trait SystemConstraint: Send + Sync + FmtDebug {
     fn check(&self, genome: &SystemAllocationGenome, model: &ArchitectureCostModel) -> f32;
     fn name(&self) -> String;
 }

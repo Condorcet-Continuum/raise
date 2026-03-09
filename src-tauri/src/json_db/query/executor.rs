@@ -1,8 +1,6 @@
 // FICHIER : src-tauri/src/json_db/query/executor.rs
 
-use crate::utils::json;
 use crate::utils::prelude::*;
-use crate::utils::{Future, Ordering, Pin};
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::indexes::manager::IndexManager;
@@ -12,7 +10,7 @@ use crate::json_db::query::{
 };
 
 // --- TRAIT ASYNC POUR L'INDEX ---
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type BoxFuture<'a, T> = Pinned<Box<dyn AsyncFuture<Output = T> + Send + 'a>>;
 
 pub trait IndexProvider: Send + Sync {
     fn has_index<'a>(&'a self, collection: &'a str, field: &'a str) -> BoxFuture<'a, bool>;
@@ -21,7 +19,7 @@ pub trait IndexProvider: Send + Sync {
         &'a self,
         collection: &'a str,
         field: &'a str,
-        value: &'a Value,
+        value: &'a JsonValue,
     ) -> BoxFuture<'a, RaiseResult<Vec<String>>>;
 }
 
@@ -35,7 +33,7 @@ impl IndexProvider for NoOpIndexProvider {
         &'a self,
         _c: &'a str,
         _f: &'a str,
-        _v: &'a Value,
+        _v: &'a JsonValue,
     ) -> BoxFuture<'a, RaiseResult<Vec<String>>> {
         Box::pin(async { Ok(vec![]) })
     }
@@ -61,7 +59,7 @@ impl<'a> IndexProvider for RealIndexProvider<'a> {
         &'b self,
         collection: &'b str,
         field: &'b str,
-        value: &'b Value,
+        value: &'b JsonValue,
     ) -> BoxFuture<'b, RaiseResult<Vec<String>>> {
         Box::pin(async move { self.manager.search(collection, field, value).await })
     }
@@ -148,7 +146,8 @@ impl<'a> QueryEngine<'a> {
         let limit = query.limit.unwrap_or(documents.len());
 
         // 4. PAGINATION
-        let mut paged_docs: Vec<Value> = documents.into_iter().skip(offset).take(limit).collect();
+        let mut paged_docs: Vec<JsonValue> =
+            documents.into_iter().skip(offset).take(limit).collect();
 
         // 5. PROJECTION
         if let Some(projection) = &query.projection {
@@ -165,7 +164,7 @@ impl<'a> QueryEngine<'a> {
         })
     }
 
-    async fn find_index_candidate(&self, query: &Query) -> Option<(String, Value)> {
+    async fn find_index_candidate(&self, query: &Query) -> Option<(String, JsonValue)> {
         if let Some(filter) = &query.filter {
             if filter.operator == FilterOperator::And {
                 for cond in &filter.conditions {
@@ -208,7 +207,7 @@ impl<'a> QueryEngine<'a> {
 
     fn evaluate_filter(
         &self,
-        document: &Value,
+        document: &JsonValue,
         filter: &QueryFilter,
         collection_name: &str,
     ) -> bool {
@@ -230,7 +229,7 @@ impl<'a> QueryEngine<'a> {
 
     fn evaluate_condition(
         &self,
-        document: &Value,
+        document: &JsonValue,
         condition: &Condition,
         collection_name: &str,
     ) -> bool {
@@ -243,35 +242,35 @@ impl<'a> QueryEngine<'a> {
             ComparisonOperator::Matches => self.values_equal(val, Some(&clean_cond_val)),
 
             ComparisonOperator::Gt => {
-                self.compare_values(val, &clean_cond_val) == Some(Ordering::Greater)
+                self.compare_values(val, &clean_cond_val) == Some(FmtOrdering::Greater)
             }
             ComparisonOperator::Gte => {
                 let o = self.compare_values(val, &clean_cond_val);
-                o == Some(Ordering::Greater) || o == Some(Ordering::Equal)
+                o == Some(FmtOrdering::Greater) || o == Some(FmtOrdering::Equal)
             }
             ComparisonOperator::Lt => {
-                self.compare_values(val, &clean_cond_val) == Some(Ordering::Less)
+                self.compare_values(val, &clean_cond_val) == Some(FmtOrdering::Less)
             }
             ComparisonOperator::Lte => {
                 let o = self.compare_values(val, &clean_cond_val);
-                o == Some(Ordering::Less) || o == Some(Ordering::Equal)
+                o == Some(FmtOrdering::Less) || o == Some(FmtOrdering::Equal)
             }
 
             ComparisonOperator::Contains => match (val, &clean_cond_val) {
-                (Some(Value::String(s)), Value::String(sub)) => {
+                (Some(JsonValue::String(s)), JsonValue::String(sub)) => {
                     s.to_lowercase().contains(&sub.to_lowercase())
                 }
-                (Some(Value::Array(arr)), v) => {
+                (Some(JsonValue::Array(arr)), v) => {
                     if arr.contains(v) {
                         return true;
                     }
                     let v_str = match v {
-                        Value::String(s) => s.to_lowercase(),
+                        JsonValue::String(s) => s.to_lowercase(),
                         _ => v.to_string().to_lowercase(),
                     };
                     arr.iter().any(|item| {
                         let item_str = match item {
-                            Value::String(s) => s.to_lowercase(),
+                            JsonValue::String(s) => s.to_lowercase(),
                             _ => item.to_string().to_lowercase(),
                         };
                         item_str == v_str
@@ -281,11 +280,11 @@ impl<'a> QueryEngine<'a> {
             },
 
             ComparisonOperator::StartsWith => match (val, &clean_cond_val) {
-                (Some(Value::String(s)), Value::String(prefix)) => s.starts_with(prefix),
+                (Some(JsonValue::String(s)), JsonValue::String(prefix)) => s.starts_with(prefix),
                 _ => false,
             },
             ComparisonOperator::EndsWith => match (val, &clean_cond_val) {
-                (Some(Value::String(s)), Value::String(suffix)) => s.ends_with(suffix),
+                (Some(JsonValue::String(s)), JsonValue::String(suffix)) => s.ends_with(suffix),
                 _ => false,
             },
             ComparisonOperator::In => {
@@ -298,12 +297,12 @@ impl<'a> QueryEngine<'a> {
             }
 
             ComparisonOperator::Like => {
-                if let Some(Value::String(s)) = val {
+                if let Some(JsonValue::String(s)) = val {
                     return self.match_like_smart(s, &clean_cond_val);
                 }
-                if let Some(Value::Array(arr)) = val {
+                if let Some(JsonValue::Array(arr)) = val {
                     return arr.iter().any(|item| {
-                        if let Value::String(s) = item {
+                        if let JsonValue::String(s) = item {
                             self.match_like_smart(s, &clean_cond_val)
                         } else {
                             self.match_like_smart(&item.to_string(), &clean_cond_val)
@@ -315,9 +314,9 @@ impl<'a> QueryEngine<'a> {
         }
     }
 
-    fn match_like_smart(&self, text: &str, pattern_val: &Value) -> bool {
+    fn match_like_smart(&self, text: &str, pattern_val: &JsonValue) -> bool {
         let pattern_str = match pattern_val {
-            Value::String(s) => s,
+            JsonValue::String(s) => s,
             _ => return false,
         };
 
@@ -363,10 +362,10 @@ impl<'a> QueryEngine<'a> {
 
     fn get_field_value_smart<'b>(
         &self,
-        doc: &'b Value,
+        doc: &'b JsonValue,
         raw_path: &str,
         collection_name: &str,
-    ) -> Option<&'b Value> {
+    ) -> Option<&'b JsonValue> {
         let clean_raw = self.clean_field_name_quotes(raw_path);
         let norm_path = self.normalize_field_path(&clean_raw, collection_name);
 
@@ -382,7 +381,7 @@ impl<'a> QueryEngine<'a> {
             }
         }
 
-        if let Value::Object(map) = doc {
+        if let JsonValue::Object(map) = doc {
             for val in map.values() {
                 if val.is_object() {
                     if let Some(v) = self.get_field_value_deep_case_insensitive(val, &norm_path) {
@@ -401,14 +400,14 @@ impl<'a> QueryEngine<'a> {
 
     fn get_field_value_deep_case_insensitive<'b>(
         &self,
-        doc: &'b Value,
+        doc: &'b JsonValue,
         path: &str,
-    ) -> Option<&'b Value> {
+    ) -> Option<&'b JsonValue> {
         let parts: Vec<&str> = path.split('.').collect();
         let mut current = doc;
         for part in parts {
             match current {
-                Value::Object(map) => {
+                JsonValue::Object(map) => {
                     if let Some(v) = map.get(part) {
                         current = v;
                     } else if let Some((_, v)) =
@@ -446,8 +445,8 @@ impl<'a> QueryEngine<'a> {
         trimmed.to_string()
     }
 
-    fn strip_quotes(&self, val: &Value) -> Value {
-        if let Value::String(s) = val {
+    fn strip_quotes(&self, val: &JsonValue) -> JsonValue {
+        if let JsonValue::String(s) = val {
             let mut processing = s.clone();
             loop {
                 let trimmed = processing.trim();
@@ -462,13 +461,13 @@ impl<'a> QueryEngine<'a> {
                 }
             }
             if processing != *s {
-                return Value::String(processing);
+                return JsonValue::String(processing);
             }
         }
         val.clone()
     }
 
-    fn values_equal(&self, a: Option<&Value>, b: Option<&Value>) -> bool {
+    fn values_equal(&self, a: Option<&JsonValue>, b: Option<&JsonValue>) -> bool {
         match (a, b) {
             (Some(v1), Some(v2)) => {
                 if v1 == v2 {
@@ -486,34 +485,34 @@ impl<'a> QueryEngine<'a> {
 
     fn compare_docs(
         &self,
-        a: &Value,
-        b: &Value,
+        a: &JsonValue,
+        b: &JsonValue,
         sort_fields: &[SortField],
         collection_name: &str,
-    ) -> Ordering {
+    ) -> FmtOrdering {
         for s in sort_fields {
             let va = self.get_field_value_smart(a, &s.field, collection_name);
             let vb = self.get_field_value_smart(b, &s.field, collection_name);
             let cmp = self.compare_json_values(va, vb);
-            if cmp != Ordering::Equal {
+            if cmp != FmtOrdering::Equal {
                 return match s.order {
                     SortOrder::Asc => cmp,
                     SortOrder::Desc => cmp.reverse(),
                 };
             }
         }
-        Ordering::Equal
+        FmtOrdering::Equal
     }
 
-    fn compare_values(&self, a: Option<&Value>, b: &Value) -> Option<Ordering> {
+    fn compare_values(&self, a: Option<&JsonValue>, b: &JsonValue) -> Option<FmtOrdering> {
         self.compare_json_values(a, Some(b)).into()
     }
 
-    fn compare_json_values(&self, a: Option<&Value>, b: Option<&Value>) -> Ordering {
+    fn compare_json_values(&self, a: Option<&JsonValue>, b: Option<&JsonValue>) -> FmtOrdering {
         match (a, b) {
             (Some(v1), Some(v2)) => {
                 if let (Some(n1), Some(n2)) = (v1.as_f64(), v2.as_f64()) {
-                    return n1.partial_cmp(&n2).unwrap_or(Ordering::Equal);
+                    return n1.partial_cmp(&n2).unwrap_or(FmtOrdering::Equal);
                 }
                 if let (Some(s1), Some(s2)) = (v1.as_str(), v2.as_str()) {
                     return s1.cmp(s2);
@@ -521,17 +520,22 @@ impl<'a> QueryEngine<'a> {
                 if let (Some(b1), Some(b2)) = (v1.as_bool(), v2.as_bool()) {
                     return b1.cmp(&b2);
                 }
-                Ordering::Equal
+                FmtOrdering::Equal
             }
-            (None, Some(_)) => Ordering::Less,
-            (Some(_), None) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
+            (None, Some(_)) => FmtOrdering::Less,
+            (Some(_), None) => FmtOrdering::Greater,
+            (None, None) => FmtOrdering::Equal,
         }
     }
 
-    fn project_fields(&self, doc: &Value, projection: &Projection, collection_name: &str) -> Value {
-        if let Value::Object(map) = doc {
-            let mut new_map = json::Map::new();
+    fn project_fields(
+        &self,
+        doc: &JsonValue,
+        projection: &Projection,
+        collection_name: &str,
+    ) -> JsonValue {
+        if let JsonValue::Object(map) = doc {
+            let mut new_map = JsonObject::new();
             match projection {
                 Projection::Include(fields) => {
                     if fields.is_empty() {
@@ -560,7 +564,7 @@ impl<'a> QueryEngine<'a> {
                     }
                 }
             }
-            Value::Object(new_map)
+            JsonValue::Object(new_map)
         } else {
             doc.clone()
         }
@@ -582,7 +586,8 @@ impl<'a> QueryEngine<'a> {
         let mut resolved_paths = Vec::new();
 
         if let Ok(content) = tokio::fs::read_to_string(&index_path).await {
-            if let Ok(index_json) = crate::utils::data::parse::<Value>(&content) {
+            if let Ok(index_json) = crate::utils::json::deserialize_from_str::<JsonValue>(&content)
+            {
                 if let Some(collections) = index_json
                     .pointer("/collections")
                     .and_then(|v| v.as_object())
@@ -616,12 +621,11 @@ impl<'a> QueryEngine<'a> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::mock::DbSandbox;
-    use crate::utils::{json::json, Arc, HashMap, Mutex};
+    use crate::utils::testing::DbSandbox;
 
     // Mock Provider Async
     struct MockIndex {
-        indexes: Arc<Mutex<HashMap<String, Vec<String>>>>,
+        indexes: SharedRef<SyncMutex<UnorderedMap<String, Vec<String>>>>,
     }
 
     impl IndexProvider for MockIndex {
@@ -637,7 +641,7 @@ mod tests {
             &'a self,
             _c: &'a str,
             field: &'a str,
-            _val: &'a Value,
+            _val: &'a JsonValue,
         ) -> BoxFuture<'a, RaiseResult<Vec<String>>> {
             let idx = self.indexes.clone();
             let f = field.to_string();
@@ -648,7 +652,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_full_query_execution() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -670,11 +674,17 @@ mod tests {
 
         // ✅ CORRECTION : "_id" au lieu de "id"
         manager
-            .insert_raw("users", &json!({"_id": "1", "age": 20, "role": "user"}))
+            .insert_raw(
+                "users",
+                &json_value!({"_id": "1", "age": 20, "role": "user"}),
+            )
             .await
             .unwrap();
         manager
-            .insert_raw("users", &json!({"_id": "2", "age": 30, "role": "admin"}))
+            .insert_raw(
+                "users",
+                &json_value!({"_id": "2", "age": 30, "role": "admin"}),
+            )
             .await
             .unwrap();
 
@@ -682,7 +692,7 @@ mod tests {
             collection: "users".into(),
             filter: Some(QueryFilter {
                 operator: FilterOperator::And,
-                conditions: vec![Condition::eq("role", json!("admin"))],
+                conditions: vec![Condition::eq("role", json_value!("admin"))],
             }),
             sort: None,
             limit: None,
@@ -696,7 +706,7 @@ mod tests {
         assert_eq!(result.documents[0]["_id"], "2");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_smart_like_and_array() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -718,7 +728,7 @@ mod tests {
 
         // ✅ CORRECTION : "_id" au lieu de "id"
         manager
-            .insert_raw("docs", &json!({"_id": "1", "tags": ["rust", "code"]}))
+            .insert_raw("docs", &json_value!({"_id": "1", "tags": ["rust", "code"]}))
             .await
             .unwrap();
 
@@ -729,7 +739,7 @@ mod tests {
                 conditions: vec![Condition::new(
                     "tags",
                     ComparisonOperator::Like,
-                    json!("rust"),
+                    json_value!("rust"),
                 )],
             }),
             sort: None,
@@ -742,7 +752,7 @@ mod tests {
         assert_eq!(result.total_count, 1);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_query_engine_uses_mock_index() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -761,18 +771,18 @@ mod tests {
 
         // ✅ CORRECTION : "_id" au lieu de "id"
         manager
-            .insert_raw("users", &json!({"_id": "1", "role": "admin"}))
+            .insert_raw("users", &json_value!({"_id": "1", "role": "admin"}))
             .await
             .unwrap();
         manager
-            .insert_raw("users", &json!({"_id": "2", "role": "user"}))
+            .insert_raw("users", &json_value!({"_id": "2", "role": "user"}))
             .await
             .unwrap();
 
-        let mut idx_map = HashMap::new();
+        let mut idx_map = UnorderedMap::new();
         idx_map.insert("role".to_string(), vec!["1".to_string()]);
         let mock_provider = Box::new(MockIndex {
-            indexes: Arc::new(Mutex::new(idx_map)),
+            indexes: SharedRef::new(SyncMutex::new(idx_map)),
         });
 
         let engine = QueryEngine::new(&manager).with_index_provider(mock_provider);
@@ -781,7 +791,7 @@ mod tests {
             collection: "users".into(),
             filter: Some(QueryFilter {
                 operator: FilterOperator::And,
-                conditions: vec![Condition::eq("role", json!("admin"))],
+                conditions: vec![Condition::eq("role", json_value!("admin"))],
             }),
             sort: None,
             limit: None,
@@ -796,7 +806,7 @@ mod tests {
         assert_eq!(result.documents[0]["_id"], "1");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_evaluate_condition_logic() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -806,10 +816,14 @@ mod tests {
         );
         let engine = QueryEngine::new(&manager);
 
-        let doc = json!({ "age": 25, "tags": ["a", "b"] });
+        let doc = json_value!({ "age": 25, "tags": ["a", "b"] });
 
-        assert!(engine.evaluate_condition(&doc, &Condition::gt("age", json!(20)), "col"));
-        assert!(!engine.evaluate_condition(&doc, &Condition::lt("age", json!(20)), "col"));
-        assert!(engine.evaluate_condition(&doc, &Condition::contains("tags", json!("a")), "col"));
+        assert!(engine.evaluate_condition(&doc, &Condition::gt("age", json_value!(20)), "col"));
+        assert!(!engine.evaluate_condition(&doc, &Condition::lt("age", json_value!(20)), "col"));
+        assert!(engine.evaluate_condition(
+            &doc,
+            &Condition::contains("tags", json_value!("a")),
+            "col"
+        ));
     }
 }

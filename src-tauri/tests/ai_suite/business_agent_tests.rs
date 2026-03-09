@@ -1,11 +1,13 @@
+use raise::utils::prelude::*;
+
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{business_agent::BusinessAgent, Agent, AgentContext};
-use raise::utils::Arc;
+
 // 👇 Ajout de l'import du manager
 use raise::json_db::collections::manager::CollectionsManager;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_business_agent_generates_oa_entities() {
@@ -40,7 +42,7 @@ async fn test_business_agent_generates_oa_entities() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.sandbox.storage.clone()),
+        SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),
@@ -81,7 +83,7 @@ async fn test_business_agent_generates_oa_entities() {
     }
 
     // 2. CAS B : L'agent a fait le travail lui-même
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tokio::time::sleep(TimeDuration::from_millis(1500)).await;
 
     // On s'assure qu'au moins la Capacité a été générée
     let capabilities_dir = test_root

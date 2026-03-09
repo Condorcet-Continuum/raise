@@ -2,14 +2,7 @@
 
 use clap::Args;
 
-use raise::{
-    raise_error, user_info, user_success,
-    utils::{
-        data::Value,
-        io::{self},
-        prelude::*,
-    },
-};
+use raise::utils::prelude::*;
 
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::json_db::storage::JsonDbConfig;
@@ -50,7 +43,7 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
         raise_error!(
             "FS_DIRECTORY_MISSING",
             error = "Dataset root folder not found",
-            context = json!({
+            context = json_value!({
                 "path": dataset_root,
                 "required_for": "data_persistence"
             })
@@ -61,7 +54,7 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
         raise_error!(
             "FS_DIRECTORY_MISSING",
             error = "Domain root folder not found",
-            context = json!({
+            context = json_value!({
                 "path": domain_root,
                 "required_for": "domain_logic_isolation"
             })
@@ -83,7 +76,7 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
 
     user_info!(
         "VALIDATOR_LOADING_REGISTRY",
-        json!({
+        json_value!({
             "space": space,
             "db": db_name,
             "action": "schema_fetch"
@@ -96,7 +89,7 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
             raise_error!(
                 "SCHEMA_REGISTRY_LOAD_CRITICAL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "space": space,
                     "db": db_name,
                     "hint": "Vérifiez la connexion réseau ou l'existence de la table des schémas"
@@ -109,8 +102,8 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
     let data_full_path = dataset_root.join(&args.data);
 
     // REFACTOR : Lecture asynchrone, typée et sécurisée
-    // Plus besoin de fs::read_to_string manuel ni de serde_json::from_str
-    let mut doc: Value = io::read_json(&data_full_path).await?;
+    // Plus besoin de fs::read_to_string manuel ni de json::deserialize_from_str
+    let mut doc: JsonValue = fs::read_json_async(&data_full_path).await?;
 
     // 5. VALIDATION
     let target_uri = &args.schema;
@@ -118,7 +111,7 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
 
     user_info!(
         "VALIDATOR_START",
-        json!({ "uri": full_uri, "protocol": "https" })
+        json_value!({ "uri": full_uri, "protocol": "https" })
     );
 
     let validator = match SchemaValidator::compile_with_registry(&full_uri, &registry) {
@@ -127,7 +120,7 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
             raise_error!(
                 "SCHEMA_COMPILATION_FAILED",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "uri": full_uri,
                     "component": "SchemaValidator"
                 })
@@ -138,10 +131,13 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
     match validator.compute_then_validate(&mut doc) {
         Ok(_) => {
             // 🎯 Conformité JSON stricte
-            user_success!("VALIDATOR_SUCCESS", json!({"status": "validation_passed"}));
+            user_success!(
+                "VALIDATOR_SUCCESS",
+                json_value!({"status": "validation_passed"})
+            );
 
             if let Some(id) = doc.get("_id") {
-                user_info!("VALIDATOR_ID_GENERATED", json!({ "_id": id }));
+                user_info!("VALIDATOR_ID_GENERATED", json_value!({ "_id": id }));
             }
             Ok(())
         }
@@ -149,7 +145,7 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
             raise_error!(
                 "VALIDATOR_FAILURE",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "status": "validation_rejected",
                     "schema_uri": full_uri
                 })
@@ -163,7 +159,6 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use clap::Parser;
-    use raise::utils::io::PathBuf;
 
     #[derive(Parser)]
     struct TestCli {

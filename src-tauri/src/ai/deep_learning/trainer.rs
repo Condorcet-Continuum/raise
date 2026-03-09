@@ -1,8 +1,7 @@
 // FICHIER : src-tauri/src/ai/deep_learning/trainer.rs
 use crate::utils::prelude::*;
 
-use crate::ai::deep_learning::models::sequence_net::SequenceNet;
-use crate::utils::config::DeepLearningConfig; // 🎯 Nouvel import
+use crate::ai::deep_learning::models::sequence_net::SequenceNet; // 🎯 Nouvel import
 use candle_core::Tensor;
 use candle_nn::VarMap;
 
@@ -68,11 +67,11 @@ impl<'a> Trainer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mock::DbSandbox;
+    use crate::utils::testing::DbSandbox;
     use candle_core::DType;
     use candle_nn::VarBuilder;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_training_convergence() -> RaiseResult<()> {
         // 1. Initialisation via le Singleton (Moule de test : 10, 20, 5)
         let sandbox = DbSandbox::new().await;

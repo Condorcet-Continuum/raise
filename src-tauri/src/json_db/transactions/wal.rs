@@ -3,7 +3,6 @@
 use crate::json_db::storage::JsonDbConfig;
 use crate::json_db::transactions::{Transaction, TransactionLog, TransactionStatus};
 
-use crate::utils::io::{self, PathBuf};
 use crate::utils::prelude::*;
 
 /// Helper pour obtenir le chemin du dossier WAL
@@ -20,7 +19,7 @@ pub async fn write_entry(
 ) -> RaiseResult<()> {
     let dir = get_wal_dir(config, space, db);
 
-    io::ensure_dir(&dir).await?;
+    fs::ensure_dir_async(&dir).await?;
 
     let file_path = dir.join(format!("{}.json", tx.id));
 
@@ -28,10 +27,10 @@ pub async fn write_entry(
         id: tx.id.clone(),
         status: TransactionStatus::Pending,
         operations: tx.operations.clone(),
-        timestamp: chrono::Utc::now().timestamp(),
+        timestamp: UtcClock::now().timestamp(),
     };
 
-    io::write_json_atomic(&file_path, &log).await?;
+    fs::write_json_atomic_async(&file_path, &log).await?;
 
     Ok(())
 }
@@ -45,8 +44,8 @@ pub async fn remove_entry(
 ) -> RaiseResult<()> {
     let file_path = get_wal_dir(config, space, db).join(format!("{}.json", tx_id));
 
-    if io::exists(&file_path).await {
-        io::remove_file(&file_path).await?;
+    if fs::exists_async(&file_path).await {
+        fs::remove_file_async(&file_path).await?;
     }
 
     Ok(())
@@ -61,14 +60,14 @@ pub async fn list_pending(
     let dir = get_wal_dir(config, space, db);
     let mut pending_ids = Vec::new();
 
-    if io::exists(&dir).await {
-        let mut entries = io::read_dir(&dir).await?;
+    if fs::exists_async(&dir).await {
+        let mut entries = fs::read_dir_async(&dir).await?;
         while let Some(entry) = match entries.next_entry().await {
             Ok(e) => e,
             Err(e) => raise_error!(
                 "ERR_FS_SCAN_ITERATION_FAIL",
                 error = e,
-                context = json!({
+                context = json_value!({
                     "directory": dir,
                     "action": "collect_pending_ids"
                 })
@@ -94,12 +93,10 @@ pub async fn list_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::transactions::manager::TransactionManager;
-    // ✅ AJOUT : Import du StorageEngine
     use crate::json_db::storage::StorageEngine;
-    use crate::utils::io::tempdir;
+    use crate::json_db::transactions::manager::TransactionManager;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_wal_persistence() {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig {
@@ -115,8 +112,8 @@ mod tests {
 
         // Le dossier WAL doit avoir été créé (même si vide après commit)
         let wal_path = config.db_root("s", "d").join("wal");
-        if !io::exists(&wal_path).await {
-            io::ensure_dir(&wal_path).await.unwrap();
+        if !fs::exists_async(&wal_path).await {
+            fs::ensure_dir_async(&wal_path).await.unwrap();
         }
 
         // Test écriture directe

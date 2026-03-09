@@ -1,11 +1,11 @@
 // FICHIER : src-tauri/src/commands/utils_commands.rs
 
-use crate::utils::prelude::*;
-use crate::utils::session::{Session, SessionManager}; // 🎯 Import des modèles de session
+use crate::utils::{context, prelude::*};
+
 use tauri::command;
 
 /// Structure de réponse renvoyée au Frontend
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serializable)]
 pub struct SystemInfoResponse {
     pub app_version: String,
     pub env_mode: String,
@@ -45,8 +45,8 @@ pub async fn get_app_info() -> RaiseResult<SystemInfoResponse> {
 #[command]
 pub async fn session_login(
     user_id: String,
-    state: tauri::State<'_, SessionManager>,
-) -> RaiseResult<Session> {
+    state: tauri::State<'_, context::SessionManager>,
+) -> RaiseResult<context::Session> {
     tracing::info!(
         "📥 Commande reçue : session_login pour l'utilisateur '{}'",
         user_id
@@ -61,7 +61,7 @@ pub async fn session_login(
 
 /// Clôture la session courante
 #[command]
-pub async fn session_logout(state: tauri::State<'_, SessionManager>) -> RaiseResult<()> {
+pub async fn session_logout(state: tauri::State<'_, context::SessionManager>) -> RaiseResult<()> {
     tracing::info!("📥 Commande reçue : session_logout");
 
     state.end_session().await?;
@@ -72,7 +72,9 @@ pub async fn session_logout(state: tauri::State<'_, SessionManager>) -> RaiseRes
 
 /// Récupère la session active (et met à jour le heartbeat)
 #[command]
-pub async fn session_get(state: tauri::State<'_, SessionManager>) -> RaiseResult<Option<Session>> {
+pub async fn session_get(
+    state: tauri::State<'_, context::SessionManager>,
+) -> RaiseResult<Option<context::Session>> {
     // On ne met qu'un log debug ici car le frontend risque d'appeler cette route très souvent
     tracing::debug!("📥 Commande reçue : session_get");
 

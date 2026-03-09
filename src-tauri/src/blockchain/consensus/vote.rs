@@ -1,10 +1,10 @@
 // src-tauri/src/blockchain/consensus/vote.rs
 //! Gestion du mécanisme de vote et de la validation du quorum pour Arcadia.
 
-use crate::utils::{prelude::*, HashMap};
+use crate::utils::prelude::*;
 
 /// Représente un vote individuel émis par un validateur.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct Vote {
     /// Identifiant du commit (hash) sur lequel porte le vote.
     pub commit_id: String,
@@ -17,7 +17,7 @@ pub struct Vote {
 /// Collecteur de votes pour un commit spécifique.
 pub struct VoteCollector {
     /// Mapping : commit_id -> (Mapping : validator_key -> Vote)
-    votes: HashMap<String, HashMap<String, Vote>>,
+    votes: UnorderedMap<String, UnorderedMap<String, Vote>>,
     /// Taille du quorum requise (définie par le ConsensusConfig).
     required_quorum: usize,
 }
@@ -26,7 +26,7 @@ impl VoteCollector {
     /// Crée un nouveau collecteur avec le quorum spécifié.
     pub fn new(required_quorum: usize) -> Self {
         Self {
-            votes: HashMap::new(),
+            votes: UnorderedMap::new(),
             required_quorum,
         }
     }
@@ -34,7 +34,7 @@ impl VoteCollector {
     /// Ajoute un vote au collecteur.
     /// Retourne true si le quorum est atteint après cet ajout.
     pub fn add_vote(&mut self, vote: Vote) -> bool {
-        // CORRECTION CLIPPY : Utilisation de or_default() au lieu de or_insert_with(HashMap::new)
+        // CORRECTION CLIPPY : Utilisation de or_default() au lieu de or_insert_with(UnorderedMap::new)
         let commit_votes = self.votes.entry(vote.commit_id.clone()).or_default();
 
         commit_votes.insert(vote.validator_key.clone(), vote);
@@ -51,7 +51,7 @@ impl VoteCollector {
     }
 
     /// Récupère tous les votes pour un commit (utile pour l'agrégation finale).
-    pub fn get_votes(&self, commit_id: &str) -> Option<&HashMap<String, Vote>> {
+    pub fn get_votes(&self, commit_id: &str) -> Option<&UnorderedMap<String, Vote>> {
         self.votes.get(commit_id)
     }
 

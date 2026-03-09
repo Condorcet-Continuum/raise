@@ -6,16 +6,16 @@ use crate::json_db::storage::StorageEngine;
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
 use crate::rules_engine::evaluator::DataProvider;
 
-use crate::utils::{async_trait, io, prelude::*, Arc, AsyncRwLock, HashMap, Utc};
+use crate::utils::prelude::*;
 
 use tauri::State;
 
 /// Cache de localisation pour le Lazy Loading.
-type LocationIndex = HashMap<String, String>;
+type LocationIndex = UnorderedMap<String, String>;
 
 pub struct ModelLoader<'a> {
     pub manager: CollectionsManager<'a>,
-    index: Arc<AsyncRwLock<LocationIndex>>,
+    index: SharedRef<AsyncRwLock<LocationIndex>>,
     processor: JsonLdProcessor,
 }
 
@@ -29,7 +29,7 @@ impl<'a> ModelLoader<'a> {
     pub fn from_engine(storage: &'a StorageEngine, space: &str, db: &str) -> Self {
         Self {
             manager: CollectionsManager::new(storage, space, db),
-            index: Arc::new(AsyncRwLock::new(HashMap::new())),
+            index: SharedRef::new(AsyncRwLock::new(UnorderedMap::new())),
             processor: JsonLdProcessor::new(),
         }
     }
@@ -37,7 +37,7 @@ impl<'a> ModelLoader<'a> {
     pub fn new_with_manager(manager: CollectionsManager<'a>) -> Self {
         Self {
             manager,
-            index: Arc::new(AsyncRwLock::new(HashMap::new())),
+            index: SharedRef::new(AsyncRwLock::new(UnorderedMap::new())),
             processor: JsonLdProcessor::new(),
         }
     }
@@ -67,14 +67,14 @@ impl<'a> ModelLoader<'a> {
                 col,
             );
 
-            if io::exists(&col_path).await {
-                let mut entries = io::read_dir(&col_path).await?;
+            if fs::exists_async(&col_path).await {
+                let mut entries = fs::read_dir_async(&col_path).await?;
                 while let Some(entry) = match entries.next_entry().await {
                     Ok(e) => e,
                     Err(e) => raise_error!(
                         "ERR_FS_INDEX_ENTRY_FAIL",
                         error = e,
-                        context = json!({
+                        context = json_value!({
                             "collection_path": col_path,
                             "action": "build_global_index"
                         })
@@ -116,7 +116,7 @@ impl<'a> ModelLoader<'a> {
                             "Document '{}' introuvable dans la collection '{}'.",
                             id, col
                         ),
-                        context = json!({
+                        context = json_value!({
                             "document_id": id,
                             "collection": col,
                             "action": "fetch_document_from_index",
@@ -131,7 +131,7 @@ impl<'a> ModelLoader<'a> {
                 raise_error!(
                     "ERR_DB_UNKNOWN_IDENTITY",
                     error = format!("Identifiant inconnu ou non indexé : {}", id),
-                    context = json!({
+                    context = json_value!({
                         "document_id": id,
                         "action": "resolve_collection_from_id",
                         "hint": "Vérifiez que le document a été correctement inséré ou que l'ID est valide."
@@ -141,7 +141,7 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
-    pub async fn get_json(&self, id: &str) -> RaiseResult<Value> {
+    pub async fn get_json(&self, id: &str) -> RaiseResult<JsonValue> {
         let collection = {
             let idx = self.index.read().await;
             idx.get(id).cloned()
@@ -152,7 +152,7 @@ impl<'a> ModelLoader<'a> {
                 Some(doc) => Ok(doc),
                 None => raise_error!(
                     "ERR_DOC_NOT_FOUND",
-                    context = json!({
+                    context = json_value!({
                         "document_id": id,
                         "collection": col,
                         "action": "fetch_document",
@@ -162,7 +162,7 @@ impl<'a> ModelLoader<'a> {
             },
             None => raise_error!(
                 "ERR_INDEX_MISSING_ID",
-                context = json!({
+                context = json_value!({
                     "document_id": id,
                     "action": "lookup_index",
                     "hint": "Cet ID n'est rattaché à aucune collection connue dans l'index global."
@@ -171,7 +171,11 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
-    fn json_to_element(&self, doc: Value, layer_hint: Option<&str>) -> RaiseResult<ArcadiaElement> {
+    fn json_to_element(
+        &self,
+        doc: JsonValue,
+        layer_hint: Option<&str>,
+    ) -> RaiseResult<ArcadiaElement> {
         let id = doc
             .get("id")
             .and_then(|v| v.as_str())
@@ -208,7 +212,7 @@ impl<'a> ModelLoader<'a> {
             Some(o) => o,
             None => raise_error!(
                 "ERR_DB_INVALID_JSON_TYPE",
-                context = json!({
+                context = json_value!({
                     "expected": "Object",
                     "received": format!("{:?}", doc),
                     "action": "access_document_object",
@@ -216,7 +220,7 @@ impl<'a> ModelLoader<'a> {
                 })
             ),
         };
-        let mut properties = HashMap::new();
+        let mut properties = UnorderedMap::new();
         for (k, v) in obj {
             if !matches!(
                 k.as_str(),
@@ -237,7 +241,7 @@ impl<'a> ModelLoader<'a> {
 
     // --- HYDRATATION ---
 
-    pub async fn fetch_hydrated_element(&self, element_id: &str) -> RaiseResult<Value> {
+    pub async fn fetch_hydrated_element(&self, element_id: &str) -> RaiseResult<JsonValue> {
         let mut element = self.get_json(element_id).await?;
 
         let relations = [
@@ -257,7 +261,11 @@ impl<'a> ModelLoader<'a> {
         Ok(element)
     }
 
-    pub async fn hydrate_element(&self, element: &mut Value, fields: &[&str]) -> RaiseResult<()> {
+    pub async fn hydrate_element(
+        &self,
+        element: &mut JsonValue,
+        fields: &[&str],
+    ) -> RaiseResult<()> {
         for field in fields {
             if let Some(target_val) = element.get_mut(*field) {
                 if let Some(arr) = target_val.as_array_mut() {
@@ -277,7 +285,7 @@ impl<'a> ModelLoader<'a> {
                             hydrated_list.push(item.clone());
                         }
                     }
-                    *target_val = serde_json::json!(hydrated_list);
+                    *target_val = json_value!(hydrated_list);
                 } else if let Some(tid) = target_val.as_str() {
                     if let Ok(doc) = self.get_json(tid).await {
                         *target_val = doc;
@@ -301,7 +309,7 @@ impl<'a> ModelLoader<'a> {
         let mut model = ProjectModel {
             meta: ProjectMeta {
                 name: format!("{}/{}", self.manager.space, self.manager.db),
-                loaded_at: Utc::now().to_rfc3339(),
+                loaded_at: UtcClock::now().to_rfc3339(),
                 element_count: count,
                 ..Default::default()
             },
@@ -404,9 +412,9 @@ impl<'a> ModelLoader<'a> {
 
 // --- DATA PROVIDER ---
 
-#[async_trait]
+#[async_interface]
 impl<'a> DataProvider for ModelLoader<'a> {
-    async fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<Value> {
+    async fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<JsonValue> {
         let doc_opt = if !collection.is_empty() {
             self.manager
                 .get_document(collection, id)
@@ -434,10 +442,9 @@ impl<'a> DataProvider for ModelLoader<'a> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::data::json;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_loader_index_and_semantic_resolution() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -446,7 +453,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        let doc = json!({
+        let doc = json_value!({
             "_id": "UUID-SEM-1", "name": "User", "@type": "OperationalActor"
         });
         manager
@@ -466,7 +473,7 @@ mod tests {
         assert_eq!(el.name.as_str(), "User");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_transverse_dispatch_comprehensive() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -484,39 +491,39 @@ mod tests {
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "_id": "REQ-1", "name": "Req1", "type": "Requirement" }),
+                &json_value!({ "_id": "REQ-1", "name": "Req1", "type": "Requirement" }),
             )
             .await
             .unwrap();
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "_id": "SC-1", "name": "Scen1", "type": "Scenario" }),
+                &json_value!({ "_id": "SC-1", "name": "Scen1", "type": "Scenario" }),
             )
             .await
             .unwrap();
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "_id": "FC-1", "name": "Chain1", "type": "FunctionalChain" }),
+                &json_value!({ "_id": "FC-1", "name": "Chain1", "type": "FunctionalChain" }),
             )
             .await
             .unwrap();
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "_id": "CST-1", "name": "Const1", "type": "Constraint" }),
+                &json_value!({ "_id": "CST-1", "name": "Const1", "type": "Constraint" }),
             )
             .await
             .unwrap();
         manager
             .insert_raw(
                 "transverse",
-                &json!({ "_id": "COM-1", "name": "Def1", "type": "CommonDefinition" }),
+                &json_value!({ "_id": "COM-1", "name": "Def1", "type": "CommonDefinition" }),
             )
             .await
             .unwrap();
-        manager.insert_raw("transverse", &json!({ "_id": "OTH-1", "name": "Other1", "type": "https://raise.io/ontology/arcadia/transverse#CustomThing" })).await.unwrap();
+        manager.insert_raw("transverse", &json_value!({ "_id": "OTH-1", "name": "Other1", "type": "https://raise.io/ontology/arcadia/transverse#CustomThing" })).await.unwrap();
 
         let loader = ModelLoader::new_with_manager(manager);
         let model = loader.load_full_model().await.unwrap();
@@ -545,7 +552,7 @@ mod tests {
         assert_eq!(model.transverse.others.len(), 1, "Other manquant");
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_provider_access_on_transverse() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -563,7 +570,7 @@ mod tests {
         manager
             .insert_raw(
                 "transverse",
-                &json!({
+                &json_value!({
                     "_id": "REQ-TEST", "name": "Limit", "properties": { "max": 120 }
                 }),
             )
@@ -574,11 +581,11 @@ mod tests {
         loader.index_project().await.unwrap();
 
         let name = loader.get_value("transverse", "REQ-TEST", "name").await;
-        assert_eq!(name, Some(Value::String("Limit".to_string())));
+        assert_eq!(name, Some(JsonValue::String("Limit".to_string())));
 
         let max = loader
             .get_value("transverse", "REQ-TEST", "properties/max")
             .await;
-        assert_eq!(max, Some(json!(120)));
+        assert_eq!(max, Some(json_value!(120)));
     }
 }

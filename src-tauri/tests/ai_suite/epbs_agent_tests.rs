@@ -1,10 +1,11 @@
+use raise::utils::prelude::*;
+
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{epbs_agent::EpbsAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::Arc;
 
-#[tokio::test]
+#[async_test]
 #[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_epbs_agent_creates_configuration_item() {
@@ -30,7 +31,7 @@ async fn test_epbs_agent_creates_configuration_item() {
     let ctx = AgentContext::new(
         agent_id,
         &session_id,
-        Arc::new(env.sandbox.storage.clone()),
+        SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),
@@ -51,7 +52,7 @@ async fn test_epbs_agent_creates_configuration_item() {
     let result = agent.process(&ctx, &intent).await;
     assert!(result.is_ok());
     if let Ok(Some(res)) = &result {
-        println!("{}", res);
+        println!("{:?}", res);
     }
 
     // VÉRIFICATION
@@ -60,7 +61,7 @@ async fn test_epbs_agent_creates_configuration_item() {
         .join("epbs")
         .join("collections")
         .join("configuration_items");
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tokio::time::sleep(TimeDuration::from_millis(1500)).await;
 
     let mut found = false;
     if items_dir.exists() {

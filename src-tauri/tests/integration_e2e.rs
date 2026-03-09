@@ -10,9 +10,9 @@ use raise::model_engine::arcadia;
 use raise::model_engine::loader::ModelLoader;
 use raise::model_engine::validators::{DynamicValidator, ModelValidator, Severity};
 use raise::rules_engine::ast::{Expr, Rule};
-use raise::utils::prelude::*; // Plus besoin de 'io::tempdir'
+use raise::utils::prelude::*;
 
-#[tokio::test]
+#[async_test]
 async fn test_full_stack_integration() {
     // =========================================================================
     // ÉTAPE 1 : Infrastructure (JSON-DB)
@@ -32,7 +32,7 @@ async fn test_full_stack_integration() {
     // On injecte deux éléments directement en JSON dans la collection 'la' (Logical Architecture)
 
     // Élément A : VALIDE (Possède une description)
-    let valid_json = json!({
+    let valid_json = json_value!({
         "_id": "UUID_VALID_1",
         arcadia::PROP_ID: "UUID_VALID_1",
         arcadia::PROP_NAME: "ValidComponent",
@@ -41,7 +41,7 @@ async fn test_full_stack_integration() {
     });
 
     // Élément B : INVALIDE (Pas de description)
-    let invalid_json = json!({
+    let invalid_json = json_value!({
         "_id": "UUID_INVALID_1",
         arcadia::PROP_ID: "UUID_INVALID_1",
         arcadia::PROP_NAME: "UndocumentedThing",
@@ -73,7 +73,7 @@ async fn test_full_stack_integration() {
     // Expression AST : description != null
     let rule_expr = Expr::Not(Box::new(Expr::Eq(vec![
         Expr::Var(arcadia::PROP_DESCRIPTION.to_string()),
-        Expr::Val(serde_json::Value::Null),
+        Expr::Val(JsonValue::Null),
     ])));
 
     let rule = Rule {

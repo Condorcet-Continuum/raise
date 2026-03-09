@@ -37,31 +37,31 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte avec JSON
             user_info!(
                 "BLOCKCHAIN",
-                json!({"action": "Interrogation des états globaux..."})
+                json_value!({"action": "Interrogation des états globaux..."})
             );
 
             // Simulation d'un client Fabric (utilisant le ré-export FabricClient)
             user_info!(
                 "FABRIC",
-                json!({"status": "Client initialisé (en attente de transaction)"})
+                json_value!({"status": "Client initialisé (en attente de transaction)"})
             );
 
             // Simulation VPN
             user_info!(
                 "VPN_MESH",
-                json!({"status": "Connecté (Innernet Client actif)"})
+                json_value!({"status": "Connecté (Innernet Client actif)"})
             );
 
             user_success!(
                 "BC_STATUS_OK",
-                json!({"message": "Tous les sous-systèmes blockchain sont opérationnels."})
+                json_value!({"message": "Tous les sous-systèmes blockchain sont opérationnels."})
             );
         }
 
         BlockchainCommands::VpnCheck { profile } => {
             user_info!(
                 "VPN_INIT",
-                json!({ "profile": profile, "action": "establish_connection" })
+                json_value!({ "profile": profile, "action": "establish_connection" })
             );
 
             // Utilisation de VpnConfig pour valider la structure
@@ -72,7 +72,7 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
 
             user_success!(
                 "VPN_READY",
-                json!({
+                json_value!({
                     "profile": profile,
                     "status": "connected",
                     "mesh_verified": true
@@ -88,16 +88,14 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::config::AppConfig;
-    use raise::utils::mock::DbSandbox;
-    use raise::utils::session::SessionManager;
-    use raise::utils::Arc;
+    use raise::utils::context::SessionManager;
+    use raise::utils::testing::DbSandbox;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_blockchain_status_mock() {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {
@@ -113,10 +111,10 @@ mod tests {
         assert!(handle(args, ctx).await.is_ok());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_vpn_config_flow() {
         let sandbox = DbSandbox::new().await;
-        let storage = Arc::new(sandbox.storage.clone());
+        let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext {

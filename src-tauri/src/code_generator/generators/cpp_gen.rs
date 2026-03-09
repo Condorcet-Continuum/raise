@@ -1,6 +1,6 @@
 use super::{GeneratedFile, LanguageGenerator};
 use crate::code_generator::templates::template_engine::TemplateEngine;
-use crate::utils::{data::Value, io::PathBuf, prelude::*};
+use crate::utils::prelude::*;
 use heck::ToPascalCase;
 
 #[derive(Default)]
@@ -15,7 +15,7 @@ impl CppGenerator {
 impl LanguageGenerator for CppGenerator {
     fn generate(
         &self,
-        element: &Value,
+        element: &JsonValue,
         template_engine: &TemplateEngine,
     ) -> RaiseResult<Vec<GeneratedFile>> {
         let name = element
@@ -29,8 +29,8 @@ impl LanguageGenerator for CppGenerator {
             .unwrap_or("");
 
         // 🎯 MIGRATION V1.3 : Création native, propre et sans Builder !
-        // Si votre template_engine.render attend un serde_json::Value :
-        let context = crate::utils::prelude::json!({
+        // Si votre template_engine.render attend un JsonValue :
+        let context = crate::utils::prelude::json_value!({
             "name": name,
             "id": id,
             "description": desc
@@ -57,7 +57,6 @@ impl LanguageGenerator for CppGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::data::json;
 
     fn setup_engine() -> TemplateEngine {
         let mut engine = TemplateEngine::new();
@@ -76,7 +75,7 @@ mod tests {
         let gen = CppGenerator::new();
         let engine = setup_engine();
 
-        let element = json!({
+        let element = json_value!({
             "name": "NavigationSystem",
             "_id": "NAV_001"
         });

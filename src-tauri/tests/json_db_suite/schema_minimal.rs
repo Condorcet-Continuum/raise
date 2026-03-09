@@ -2,9 +2,9 @@
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
-use raise::utils::prelude::*; // Apporte json!, Value, etc.
+use raise::utils::prelude::*; // Apporte json!, JsonValue, etc.
 
-#[tokio::test]
+#[async_test]
 async fn schema_instantiate_validate_minimal() {
     // 1. Initialisation de l'environnement (Sandboxing total)
     let env = setup_test_env(LlmMode::Disabled).await;
@@ -32,11 +32,11 @@ async fn schema_instantiate_validate_minimal() {
 
     // 3. Construction d'un document minimal conforme
     // On simule un document qui possède les champs système requis par base.schema.json
-    let mut doc = json!({
+    let mut doc = json_value!({
       "$schema": root_uri,
-      "_id": uuid::Uuid::new_v4().to_string(),
-      "createdAt": chrono::Utc::now().to_rfc3339(),
-      "updatedAt": chrono::Utc::now().to_rfc3339(),
+      "_id": UniqueId::new_v4().to_string(),
+      "createdAt": UtcClock::now().to_rfc3339(),
+      "updatedAt": UtcClock::now().to_rfc3339(),
 
       "handle": "devops-engineer",
       "displayName": "Ingénieur DevOps",

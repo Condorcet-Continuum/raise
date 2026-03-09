@@ -8,7 +8,6 @@
 //! - Validation
 
 use super::context::ContextManager;
-use crate::utils::data::Map;
 use crate::utils::prelude::*;
 
 /// Représentation simple d'un nœud RDF pour l'export
@@ -69,7 +68,7 @@ impl JsonLdProcessor {
         Self { context_manager }
     }
 
-    pub fn with_doc_context(mut self, doc: &Value) -> RaiseResult<Self> {
+    pub fn with_doc_context(mut self, doc: &JsonValue) -> RaiseResult<Self> {
         self.context_manager.load_from_doc(doc)?;
         Ok(self)
     }
@@ -86,10 +85,10 @@ impl JsonLdProcessor {
 
     // --- ALGORITHMES JSON-LD ---
 
-    pub fn expand(&self, doc: &Value) -> Value {
+    pub fn expand(&self, doc: &JsonValue) -> JsonValue {
         match doc {
-            Value::Object(map) => {
-                let mut new_map = Map::new();
+            JsonValue::Object(map) => {
+                let mut new_map = JsonObject::new();
                 for (k, v) in map {
                     let expanded_key = self.context_manager.expand_term(k);
 
@@ -100,17 +99,17 @@ impl JsonLdProcessor {
                     };
                     new_map.insert(expanded_key, expanded_val);
                 }
-                Value::Object(new_map)
+                JsonValue::Object(new_map)
             }
-            Value::Array(arr) => Value::Array(arr.iter().map(|v| self.expand(v)).collect()),
+            JsonValue::Array(arr) => JsonValue::Array(arr.iter().map(|v| self.expand(v)).collect()),
             _ => doc.clone(),
         }
     }
 
-    pub fn compact(&self, doc: &Value) -> Value {
+    pub fn compact(&self, doc: &JsonValue) -> JsonValue {
         match doc {
-            Value::Object(map) => {
-                let mut new_map = Map::new();
+            JsonValue::Object(map) => {
+                let mut new_map = JsonObject::new();
                 for (k, v) in map {
                     if k == "@context" {
                         continue;
@@ -125,28 +124,30 @@ impl JsonLdProcessor {
                     };
                     new_map.insert(compacted_key, compacted_val);
                 }
-                Value::Object(new_map)
+                JsonValue::Object(new_map)
             }
-            Value::Array(arr) => Value::Array(arr.iter().map(|v| self.compact(v)).collect()),
+            JsonValue::Array(arr) => {
+                JsonValue::Array(arr.iter().map(|v| self.compact(v)).collect())
+            }
             _ => doc.clone(),
         }
     }
 
-    fn expand_value_as_iri(&self, val: &Value) -> Value {
+    fn expand_value_as_iri(&self, val: &JsonValue) -> JsonValue {
         match val {
-            Value::String(s) => Value::String(self.context_manager.expand_term(s)),
-            Value::Array(arr) => {
-                Value::Array(arr.iter().map(|v| self.expand_value_as_iri(v)).collect())
+            JsonValue::String(s) => JsonValue::String(self.context_manager.expand_term(s)),
+            JsonValue::Array(arr) => {
+                JsonValue::Array(arr.iter().map(|v| self.expand_value_as_iri(v)).collect())
             }
             _ => val.clone(),
         }
     }
 
-    fn compact_value_as_iri(&self, val: &Value) -> Value {
+    fn compact_value_as_iri(&self, val: &JsonValue) -> JsonValue {
         match val {
-            Value::String(s) => Value::String(self.context_manager.compact_iri(s)),
-            Value::Array(arr) => {
-                Value::Array(arr.iter().map(|v| self.compact_value_as_iri(v)).collect())
+            JsonValue::String(s) => JsonValue::String(self.context_manager.compact_iri(s)),
+            JsonValue::Array(arr) => {
+                JsonValue::Array(arr.iter().map(|v| self.compact_value_as_iri(v)).collect())
             }
             _ => val.clone(),
         }
@@ -154,13 +155,13 @@ impl JsonLdProcessor {
 
     // --- UTILITAIRES RDF / VALIDATION ---
 
-    pub fn get_id(&self, doc: &Value) -> Option<String> {
+    pub fn get_id(&self, doc: &JsonValue) -> Option<String> {
         doc.get("@id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
 
-    pub fn get_type(&self, doc: &Value) -> Option<String> {
+    pub fn get_type(&self, doc: &JsonValue) -> Option<String> {
         if let Some(t) = doc.get("@type") {
             return t.as_str().map(|s| s.to_string());
         }
@@ -170,7 +171,7 @@ impl JsonLdProcessor {
         None
     }
 
-    pub fn validate_required_fields(&self, doc: &Value, required: &[&str]) -> RaiseResult<()> {
+    pub fn validate_required_fields(&self, doc: &JsonValue, required: &[&str]) -> RaiseResult<()> {
         let expanded = self.expand(doc);
         for &field in required {
             let iri = self.context_manager.expand_term(field);
@@ -178,7 +179,7 @@ impl JsonLdProcessor {
                 raise_error!(
                     "ERR_SEMANTIC_FIELD_MISSING",
                     error = format!("Champ requis '{}' introuvable (recherche infructueuse dans le document et l'IRI étendu).", field),
-                    context = json!({
+                    context = json_value!({
                         "field_name": field,
                         "iri_target": iri,
                         "sources_checked": ["document_root", "expanded_context"],
@@ -190,13 +191,13 @@ impl JsonLdProcessor {
         Ok(())
     }
 
-    pub fn to_ntriples(&self, doc: &Value) -> RaiseResult<String> {
+    pub fn to_ntriples(&self, doc: &JsonValue) -> RaiseResult<String> {
         let expanded = self.expand(doc);
         let Some(id) = self.get_id(&expanded) else {
             raise_error!(
                 "ERR_SEMANTIC_ID_MISSING",
                 error = "Identifiant sémantique '@id' introuvable après expansion.",
-                context = json!({
+                context = json_value!({
                     "action": "extract_semantic_id",
                     // FIX : On passe par as_object() pour accéder aux clés en toute sécurité
                     "available_keys": expanded.as_object().map(|m| m.keys().collect::<Vec<_>>()),
@@ -212,7 +213,7 @@ impl JsonLdProcessor {
                     continue;
                 }
 
-                let objects = if let Value::Array(arr) = val {
+                let objects = if let JsonValue::Array(arr) = val {
                     arr.iter().collect()
                 } else {
                     vec![val]
@@ -220,8 +221,8 @@ impl JsonLdProcessor {
 
                 for o in objects {
                     let obj_str = match o {
-                        Value::String(s) if s.starts_with("http") => format!("<{}>", s),
-                        Value::String(s) => format!("{:?}", s),
+                        JsonValue::String(s) if s.starts_with("http") => format!("<{}>", s),
+                        JsonValue::String(s) => format!("{:?}", s),
                         _ => format!("{:?}", o.to_string()),
                     };
                     lines.push(format!("<{}> <{}> {} .", id, pred, obj_str));
@@ -240,12 +241,11 @@ impl JsonLdProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::json::json;
 
     #[test]
     fn test_get_id() {
         let processor = JsonLdProcessor::new();
-        let doc = json!({
+        let doc = json_value!({
             "@id": "http://example.org/1"
         });
         assert_eq!(
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_get_type() {
         let processor = JsonLdProcessor::new();
-        let doc = json!({
+        let doc = json_value!({
             "@type": "http://example.org/Type"
         });
         assert_eq!(
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn test_validate_required_fields() {
         let processor = JsonLdProcessor::new();
-        let doc = json!({
+        let doc = json_value!({
             "@id": "test",
             "name": "Test Activity"
         });
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_expand_with_oa() {
-        let doc = json!({
+        let doc = json_value!({
             "@id": "urn:uuid:123",
             "@type": "oa:OperationalActivity",
             "oa:name": "Manger"

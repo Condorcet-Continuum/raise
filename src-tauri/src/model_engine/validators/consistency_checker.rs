@@ -4,7 +4,7 @@ use super::{ModelValidator, Severity, ValidationIssue};
 use crate::json_db::jsonld::vocabulary::VocabularyRegistry; // Accès à l'ontologie
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
-use crate::utils::{async_trait, prelude::*};
+use crate::utils::prelude::*;
 
 /// Validateur de cohérence technique et sémantique.
 #[derive(Default)]
@@ -86,8 +86,8 @@ impl ConsistencyChecker {
                 if let Some(range_iri) = &prop_def.range {
                     // Récupération des IDs cibles (tableau ou valeur simple)
                     let target_ids = match prop_val {
-                        Value::String(s) => vec![s.clone()],
-                        Value::Array(arr) => arr
+                        JsonValue::String(s) => vec![s.clone()],
+                        JsonValue::Array(arr) => arr
                             .iter()
                             .filter_map(|v| v.as_str().map(|s| s.to_string()))
                             .collect(),
@@ -134,7 +134,7 @@ impl ConsistencyChecker {
     }
 }
 
-#[async_trait]
+#[async_interface]
 impl ModelValidator for ConsistencyChecker {
     async fn validate_element(
         &self,
@@ -247,8 +247,7 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::jsonld::vocabulary::{arcadia_types, namespaces};
     use crate::model_engine::types::NameType;
-    use crate::utils::data::HashMap;
-    use crate::utils::mock::AgentDbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
     fn create_dummy_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
         ArcadiaElement {
@@ -256,7 +255,7 @@ mod tests {
             name: NameType::String(name.to_string()),
             kind: kind.to_string(),
             description: None,
-            properties: HashMap::new(),
+            properties: UnorderedMap::new(),
         }
     }
 
@@ -293,7 +292,7 @@ mod tests {
 
         // ... qui essaie d'avoir une propriété "involvesActivity" (réservée à OA Capability)
         let prop_iri = format!("{}involvesActivity", namespaces::OA);
-        el.properties.insert(prop_iri, json!(["UUID-ACT-1"]));
+        el.properties.insert(prop_iri, json_value!(["UUID-ACT-1"]));
 
         let issues = checker.check_local_logic(&el);
 
@@ -306,7 +305,7 @@ mod tests {
         assert!(err.message.contains("ne peut pas s'appliquer"));
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_full_validation_scans_transverse() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -316,7 +315,7 @@ mod tests {
         );
 
         // Insertion d'une Exigence SANS NOM (doit déclencher SYS_002)
-        let invalid_req = json!({
+        let invalid_req = json_value!({
             "_id": "REQ-BAD",
             "id": "REQ-BAD",
             "name": "", // Nom vide -> Erreur
