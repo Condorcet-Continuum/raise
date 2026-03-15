@@ -309,6 +309,7 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_data_session_persistence() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
