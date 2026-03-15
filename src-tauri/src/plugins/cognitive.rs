@@ -72,7 +72,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                         context = json_value!({"ptr": ptr})
                     ),
                 };
-                let write_len = std::cmp::min(data_len, max_len as usize);
+                let write_len = MinOf(data_len, max_len as usize);
                 match mem.write(&mut caller, ptr as usize, &data[0..write_len]) {
                     Ok(_) => Ok(write_len as i32),
                     Err(write_err) => raise_error!(

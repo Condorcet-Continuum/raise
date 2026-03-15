@@ -46,7 +46,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                     json_value!({
                         "user_id": session.user_id,
                         "status": format!("{:?}", session.status),
-                        "session_id": session._id,
+                        "session_id": session.id,
                         "domain": session.context.current_domain,
                         "db": session.context.current_db,
                     })
@@ -122,7 +122,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                         "CURRENT_USER",
                         json_value!({
                             "username": session.user_id,
-                            "session_id": session._id,
+                            "session_id": session.id,
                             "created_at": session.created_at,
                             "last_activity": session.last_activity_at
                         })
@@ -147,7 +147,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                 "AUTH_SUCCESS",
                 json_value!({
                     "user": session.user_id,
-                    "session_id": session._id,
+                    "session_id": session.id,
                     "message": "Session manuelle établie et persistée."
                 })
             );
@@ -196,6 +196,7 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
         let ctx = CliContext {
             config: AppConfig::get(),
@@ -262,6 +263,7 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
         let ctx = CliContext {
             config: AppConfig::get(),
             session_mgr: session_mgr.clone(),
@@ -305,6 +307,7 @@ mod tests {
     async fn test_info_command_execution() {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
         let ctx = CliContext {
             config: AppConfig::get(),
             session_mgr: SessionManager::new(storage.clone()),

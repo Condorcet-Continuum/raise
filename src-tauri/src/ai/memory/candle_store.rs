@@ -73,7 +73,7 @@ impl CandleLocalStore {
             let thread_path = tensor_path.clone();
             let matrix_clone = matrix.clone();
 
-            let join_handle = tokio::task::spawn_blocking(move || {
+            let join_handle = spawn_cpu_task(move || {
                 let mut map = UnorderedMap::new();
                 map.insert("vectors".to_string(), matrix_clone);
                 // On utilise le clone ici

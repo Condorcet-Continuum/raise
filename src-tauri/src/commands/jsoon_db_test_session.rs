@@ -254,7 +254,7 @@ pub async fn jsondb_evaluate_draft(
         .join("_meta.json");
 
     let schema_uri = if meta_path.exists() {
-        let content = match std::fs::read_to_string(&meta_path) {
+        let content = match fs::read_to_string_sync(&meta_path) {
             Ok(c) => c,
             Err(e) => raise_error!(
                 "ERR_DB_META_READ_FAIL",
@@ -672,7 +672,7 @@ pub async fn jsondb_init_demo_rules(
         ),
     };
 
-    if let Err(e) = std::fs::write(&schema_path, pretty_json) {
+    if let Err(e) =  fs::write_sync(&schema_path, pretty_json) {
         raise_error!(
             "ERR_FS_WRITE_FAIL",
             error = e,
@@ -793,7 +793,7 @@ pub async fn jsondb_init_model_rules(
         ),
     };
 
-    if let Err(e) = std::fs::write(&schema_path, pretty_json) {
+    if let Err(e) =  fs::write_sync(&schema_path, pretty_json) {
         raise_error!(
             "ERR_FS_WRITE_FAIL",
             error = e,

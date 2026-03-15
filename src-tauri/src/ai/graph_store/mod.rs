@@ -8,8 +8,6 @@ use crate::json_db::jsonld::JsonLdProcessor;
 // 🎯 Imports mis à jour
 use crate::json_db::collections::manager::CollectionsManager;
 
-use candle_core::Device;
-
 #[derive(Clone)]
 pub struct GraphStore {
     storage_path: PathBuf,
@@ -42,11 +40,7 @@ impl GraphStore {
                     embedder = Some(SharedRef::new(AsyncMutex::new(engine)));
 
                     // 🎯 ALIGNEMENT MATÉRIEL : Utilisation du GPU si activé dans la config
-                    let device = if wm_config.use_gpu {
-                        Device::new_cuda(0).unwrap_or(Device::Cpu)
-                    } else {
-                        Device::Cpu
-                    };
+                    let device = AppConfig::device().clone();
 
                     let v_dir = storage_path.join("vectors");
                     let v_store = CandleLocalStore::new(&v_dir, &device);

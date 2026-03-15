@@ -23,10 +23,10 @@ impl FabricClient {
         }
     }
 
-    pub async fn load_from_file<P: AsRef<std::path::Path>>(path: P) -> RaiseResult<Self> {
+    pub async fn load_from_file<P: AsRef<Path>>(path: P) -> RaiseResult<Self> {
         let path_str = path.as_ref().display().to_string();
 
-        let content = match tokio::fs::read_to_string(&path).await {
+        let content = match fs::read_to_string_async(path.as_ref()).await {
             Ok(c) => c,
             Err(e) => {
                 raise_error!(
@@ -67,7 +67,7 @@ impl FabricClient {
         let cert_str = cert_path.as_ref().display().to_string();
         let key_str = key_path.as_ref().display().to_string();
 
-        let cert = match tokio::fs::read(&cert_path).await {
+        let cert = match fs::read_async(&cert_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 raise_error!(
@@ -82,7 +82,7 @@ impl FabricClient {
             }
         };
 
-        let key = match tokio::fs::read(&key_path).await {
+        let key = match fs::read_async(&key_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 raise_error!(
@@ -191,7 +191,7 @@ impl FabricClient {
         tracing::debug!("{}", log_msg);
 
         // Simulation réseau
-        tokio::time::sleep(TimeDuration::from_millis(100)).await;
+        sleep_async(TimeDuration::from_millis(100)).await;
 
         Ok(format!("TX_ID_MOCK_12345 ({})", log_msg))
     }

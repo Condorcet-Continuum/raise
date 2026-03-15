@@ -96,7 +96,7 @@ mod tests {
     use super::*;
     use crate::utils::testing::AgentDbSandbox;
 
-    #[async_test] // CORRECTION : Utilisation de tokio pour les tests asynchrones
+    #[async_test]
     async fn test_extract_domain_data_filtering() {
         // A. Setup d'une base de données temporaire 100% isolée en UNE seule ligne !
         let sandbox = AgentDbSandbox::new().await;

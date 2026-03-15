@@ -54,15 +54,15 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
         "llm",
         json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
     ).await;
-
+    raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
     // 5. SATISFAIRE LLMCLIENT AVEC LE MANAGER
     let client = match llm_mode {
         LlmMode::Enabled => {
             let mock_model_file = domain_path.join("_system/ai-assets/models/mock.gguf");
             if let Some(parent) = mock_model_file.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                let _ = fs::ensure_dir_sync(parent);
             }
-            let _ = std::fs::write(&mock_model_file, b"dummy content");
+            let _ = fs::write_sync(&mock_model_file, b"dummy content");
 
             let isolated_client = LlmClient::new(&mgr)
                 .await

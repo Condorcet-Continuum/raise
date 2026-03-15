@@ -75,8 +75,8 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
     let mut found_cloud = false;
 
     if nodes_dir.exists() {
-        for e in std::fs::read_dir(&nodes_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path())
+        for e in fs::read_dir_sync(&nodes_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
 

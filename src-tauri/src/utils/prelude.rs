@@ -9,12 +9,13 @@ pub use crate::utils::core::error::{anyhow, AnyResult, AppError, Context, RaiseR
 pub use crate::utils::core::{
     async_interface, // 🎯 Alias de async_trait::async_trait
     async_recursive,
-    async_test,        // 🎯 Alias de tokio::test
-    is_same_reference, // 🎯 Alias de ptr::eq
+    async_test,
+    is_same_reference,
     sleep_async,
     // Runtime & Tasks
     spawn_async_task,
     spawn_cpu_task,
+    AgentAttention,
     AsyncChannel,
     AsyncCommand,
     AsyncFuture,
@@ -35,7 +36,9 @@ pub use crate::utils::core::{
     InitGuard,      // 🎯 Alias de Once
     LocalClock,     // 🎯 Alias de chrono::Local
     LocalTimestamp, // 🎯 Alias de chrono::DateTime<Local>
+    MaxOf,
     MemoryCache,
+    MinOf,
     Ord,
     Parsable,
     PartialEq,

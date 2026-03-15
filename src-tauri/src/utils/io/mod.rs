@@ -33,6 +33,8 @@ pub use fs::{
     exists_async,
     exists_sync,
     include_dir,
+    open_async,
+    open_sync,
     read_async,
     read_compressed_async,
     read_compressed_sync,

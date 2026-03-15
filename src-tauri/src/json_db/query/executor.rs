@@ -585,7 +585,7 @@ impl<'a> QueryEngine<'a> {
             .join("_system.json");
         let mut resolved_paths = Vec::new();
 
-        if let Ok(content) = tokio::fs::read_to_string(&index_path).await {
+        if let Ok(content) = fs::read_to_string_async(&index_path).await {
             if let Ok(index_json) = crate::utils::json::deserialize_from_str::<JsonValue>(&content)
             {
                 if let Some(collections) = index_json

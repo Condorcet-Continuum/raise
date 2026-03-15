@@ -105,8 +105,8 @@ async fn test_transverse_agent_ivvq_cycle() {
     let req_dir = test_root.join("un2/transverse/collections/requirements");
     let mut found_req = false;
     if req_dir.exists() {
-        for e in std::fs::read_dir(&req_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path())
+        for e in fs::read_dir_sync(&req_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
             if content.contains("req-sys")
@@ -124,8 +124,8 @@ async fn test_transverse_agent_ivvq_cycle() {
     let proc_dir = test_root.join("un2/transverse/collections/test_procedures");
     let mut found_proc = false;
     if proc_dir.exists() {
-        for e in std::fs::read_dir(&proc_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path())
+        for e in fs::read_dir_sync(&proc_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
 
@@ -149,8 +149,8 @@ async fn test_transverse_agent_ivvq_cycle() {
     let camp_dir = test_root.join("un2/transverse/collections/test_campaigns");
     let mut found_camp = false;
     if camp_dir.exists() {
-        for e in std::fs::read_dir(&camp_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path())
+        for e in fs::read_dir_sync(&camp_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
 

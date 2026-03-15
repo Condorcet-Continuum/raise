@@ -101,8 +101,7 @@ impl NeuroSymbolicEngine {
 
         // 2. On attend la fin de la tâche (les originaux sont déplacés ici)
         let spawn_result =
-            tokio::task::spawn_blocking(move || candle_core::safetensors::save(&tensors, path))
-                .await;
+            spawn_cpu_task(move || candle_core::safetensors::save(&tensors, path)).await;
 
         // 3. Gestion de l'erreur de Spawn
         let save_result = match spawn_result {

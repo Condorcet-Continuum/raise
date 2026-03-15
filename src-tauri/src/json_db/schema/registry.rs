@@ -341,9 +341,11 @@ impl SchemaRegistry {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::utils::testing::mock::inject_mock_config;
 
     #[async_test]
     async fn test_registry_loading() -> RaiseResult<()> {
+        inject_mock_config().await;
         // 1. Setup environnement
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
@@ -378,6 +380,8 @@ mod tests {
     }
     #[async_test]
     async fn test_schema_ddl_operations() -> RaiseResult<()> {
+        inject_mock_config().await;
+
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let space = "s1";

@@ -151,7 +151,7 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
-
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
         let ctx = CliContext {
             config: AppConfig::get(),
             session_mgr,

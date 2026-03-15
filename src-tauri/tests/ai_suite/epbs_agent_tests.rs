@@ -65,8 +65,8 @@ async fn test_epbs_agent_creates_configuration_item() {
 
     let mut found = false;
     if items_dir.exists() {
-        for e in std::fs::read_dir(&items_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path()).unwrap_or_default();
+        for e in fs::read_dir_sync(&items_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path()).unwrap_or_default();
 
             if content.contains("name") && content.contains("Rack Server") {
                 found = true;

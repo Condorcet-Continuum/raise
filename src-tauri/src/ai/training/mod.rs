@@ -2,7 +2,7 @@
 
 use crate::json_db::storage::StorageEngine;
 use crate::utils::prelude::*;
-use candle_core::{Device, Tensor};
+use candle_core::Tensor;
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarMap};
 use tokenizers::Tokenizer;
 
@@ -17,7 +17,7 @@ pub async fn ai_train_domain_native(
     epochs: usize,
     lr: f64,
 ) -> RaiseResult<String> {
-    let _device = Device::new_cuda(0).unwrap_or(Device::Cpu);
+    let _device = AppConfig::device().clone();
     // ---------------------------------------------------------
     // 1. RÉCUPÉRATION DU TOKENIZER DEPUIS LA DB
     // ---------------------------------------------------------
@@ -308,7 +308,6 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
-    // On garde l'ignore si CUDA n'est pas là car Device::new_cuda(0) est "hardcoded" dans ta fonction
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_train_domain_native_empty_data() {
         let sandbox = AgentDbSandbox::new().await;

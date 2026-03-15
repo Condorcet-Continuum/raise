@@ -91,8 +91,8 @@ async fn test_data_agent_creates_class_and_enum() {
     let mut found_class = false;
 
     if classes_dir.exists() {
-        for e in std::fs::read_dir(&classes_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path())
+        for e in fs::read_dir_sync(&classes_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
 
@@ -118,8 +118,8 @@ async fn test_data_agent_creates_class_and_enum() {
     let mut found_enum = false;
 
     if types_dir.exists() {
-        for e in std::fs::read_dir(&types_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path())
+        for e in fs::read_dir_sync(&types_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
 

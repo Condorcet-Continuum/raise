@@ -178,6 +178,7 @@ impl<'a> ModelLoader<'a> {
     ) -> RaiseResult<ArcadiaElement> {
         let id = doc
             .get("id")
+            .or_else(|| doc.get("_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();

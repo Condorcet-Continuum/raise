@@ -45,7 +45,7 @@ impl AgentTool for SystemMonitorTool {
         let config = AppConfig::get();
         let db_root = config
             .get_path("PATH_RAISE_DOMAIN")
-            .unwrap_or_else(|| std::path::PathBuf::from("./_system"));
+            .unwrap_or_else(|| PathBuf::from("./_system"));
 
         let storage = StorageEngine::new(JsonDbConfig::new(db_root));
         let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);

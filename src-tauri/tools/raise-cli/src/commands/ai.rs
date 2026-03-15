@@ -4,6 +4,7 @@ use clap::{Args, Subcommand};
 
 // --- IMPORTS MÉTIER RAISE ---
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
+use raise::ai::agents::tools::query_knowledge_graph;
 use raise::ai::agents::{
     business_agent::BusinessAgent, data_agent::DataAgent, epbs_agent::EpbsAgent,
     hardware_agent::HardwareAgent, software_agent::SoftwareAgent, system_agent::SystemAgent,
@@ -25,6 +26,14 @@ use crate::CliContext;
 
 #[derive(Args, Debug, Clone)]
 pub struct AiArgs {
+    /// Espace de travail (écrase la configuration par défaut)
+    #[arg(long)]
+    pub space: Option<String>,
+
+    /// Base de données (écrase la configuration par défaut)
+    #[arg(long)]
+    pub db: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<AiCommands>,
 }
@@ -41,6 +50,13 @@ pub enum AiCommands {
         input: String,
         #[arg(long, short = 'x')]
         execute: bool,
+    },
+
+    /// 🔍 Inspecter un agent et son prompt lié
+    #[command(visible_alias = "view")]
+    Inspect {
+        /// Référence de l'agent (ex: 'ref:agents:handle:agent_alpha_planner')
+        reference: String,
     },
 
     /// 🧠 Entraîne un adaptateur LoRA pour un domaine spécifique en local
@@ -69,8 +85,8 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
     // 🎯 Heartbeat automatique
     let _ = ctx.session_mgr.touch().await;
 
-    let space = &ctx.config.system_domain;
-    let db = &ctx.config.system_db;
+    let space = args.space.as_ref().unwrap_or(&ctx.config.system_domain);
+    let db = args.db.as_ref().unwrap_or(&ctx.config.system_db);
 
     let domain_path = ctx
         .config
@@ -98,7 +114,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         .unwrap_or_else(|| "cli_user".to_string());
     let session_id = current_session
         .as_ref()
-        .map(|s| s._id.clone())
+        .map(|s| s.id.clone())
         .unwrap_or_else(|| "cli_session".to_string());
 
     // Instanciation asynchrone du Contexte Agent avec les vraies IDs
@@ -117,6 +133,9 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         AiCommands::Interactive => run_interactive_mode(&agent_ctx, client).await?,
         AiCommands::Classify { input, execute } => {
             process_input(&agent_ctx, &input, client, execute).await
+        }
+        AiCommands::Inspect { reference } => {
+            inspect_agent_logic(&agent_ctx, &reference, space, db).await?;
         }
         AiCommands::Train {
             domain,
@@ -305,6 +324,53 @@ async fn run_agent<A: Agent>(
     } else {
         user_info!("AI_SIMULATION_MODE", json_value!({}));
     }
+}
+
+async fn inspect_agent_logic(
+    ctx: &AgentContext,
+    reference: &str,
+    space: &str, // 🎯 On passe le domaine résolu ici
+    db: &str,    // 🎯 Et la DB ici
+) -> RaiseResult<()> {
+    user_info!(
+        "AI_INSPECT_START",
+        json_value!({
+            "target": reference,
+            "space": space,
+            "db": db
+        })
+    );
+
+    // On récupère l'agent
+    let agent_doc = query_knowledge_graph(ctx, reference, false).await?;
+
+    if let Some(prompt_id) = agent_doc["neuro_profile"]["prompt_id"].as_str() {
+        // On récupère le prompt
+        let prompt_doc = query_knowledge_graph(ctx, prompt_id, false).await?;
+
+        // ✅ Correction Serde : .as_array() est nécessaire pour appeler .len()
+        let directives_len = prompt_doc["directives"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0);
+
+        user_success!(
+            "AI_PROMPT_RESOLVED",
+            json_value!({
+                "persona": prompt_doc["identity"]["persona"],
+                "directives_count": directives_len
+            })
+        );
+
+        println!("\n📝 --- INSTRUCTIONS RÉCUPÉRÉES ---");
+        println!("Identité : {}", prompt_doc["identity"]["persona"]);
+        if let Some(directives) = prompt_doc["directives"].as_array() {
+            for (i, d) in directives.iter().enumerate() {
+                println!("  {}. {}", i + 1, d.as_str().unwrap_or(""));
+            }
+        }
+    }
+    Ok(())
 }
 
 // --- TESTS UNITAIRES ---

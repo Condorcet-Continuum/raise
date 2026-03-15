@@ -142,6 +142,12 @@ impl<'a> CollectionsManager<'a> {
 
     /// Construit l'URI standardisée en utilisant le space et la db du manager
     pub fn build_schema_uri(&self, schema_name: &str) -> String {
+        if schema_name.starts_with("db://")
+            || schema_name.starts_with("http://")
+            || schema_name.starts_with("https://")
+        {
+            return schema_name.to_string();
+        }
         let relative_path = if let Some(idx) = schema_name.find("/schemas/v1/") {
             &schema_name[idx + "/schemas/v1/".len()..]
         } else {
@@ -871,7 +877,7 @@ impl<'a> CollectionsManager<'a> {
                 .with_doc_context(doc)
                 .unwrap_or_else(|_| JsonLdProcessor::new());
 
-            if let Some(type_uri) = processor.get_type(doc) {
+            if let Some(type_uri) = processor.get_primary_type(doc) {
                 let registry = VocabularyRegistry::global();
                 let mut expanded_type = processor.context_manager().expand_term(&type_uri);
 

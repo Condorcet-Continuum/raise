@@ -9,6 +9,7 @@ use crate::utils::core::error::RaiseResult;
 use crate::utils::core::{AsyncRwLock, SharedRef, UniqueId, UtcClock};
 
 // 3. Data : Configuration, Collections et Typage JSON
+use crate::raise_error;
 use crate::utils::data::config::AppConfig;
 use crate::utils::data::json::{self, json_value};
 use crate::utils::data::UnorderedMap;
@@ -43,9 +44,17 @@ pub struct CrudPolicy {
 
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct Session {
-    pub _id: String,
+    #[serde(rename = "_id")]
+    pub id: String,
+
+    #[serde(rename = "_created_at")]
     pub created_at: String,
+
+    #[serde(rename = "_updated_at")]
     pub updated_at: String,
+
+    #[serde(rename = "@type", default = "fallback_session_type")]
+    pub semantic_type: Vec<String>,
 
     pub user_id: String,
     pub user_name: String,
@@ -56,6 +65,10 @@ pub struct Session {
 
     #[serde(default = "fallback_cached_permissions")]
     pub cached_permissions: Option<UnorderedMap<String, CrudPolicy>>, // 🎯 Remplacé
+}
+
+fn fallback_session_type() -> Vec<String> {
+    vec!["Session".to_string(), "cfg:Session".to_string()]
 }
 
 fn fallback_cached_permissions() -> Option<UnorderedMap<String, CrudPolicy>> {
@@ -100,26 +113,57 @@ impl SessionManager {
             "00000000-0000-0000-0000-000000000000".to_string()
         };
 
-        let now = UtcClock::now(); // 🎯 Remplacé
-        let session = Session {
-            _id: UniqueId::new_v4().to_string(),
-            created_at: now.to_rfc3339(),
-            updated_at: now.to_rfc3339(),
-            user_id: final_user_id,
-            user_name: username_or_id.to_string(),
-            status: SessionStatus::Active,
-            expires_at: (now + chrono::Duration::hours(8)).to_rfc3339(),
-            last_activity_at: now.to_rfc3339(),
-            context: ctx,
-            cached_permissions: None,
-        };
+        let now = UtcClock::now();
 
-        // 🎯 Remplacé
-        let doc = json::serialize_to_value(&session)?;
+        let payload = json_value!({
+            "user_id": final_user_id,
+            "user_name": username_or_id,
+            "status": "active",
+            "last_activity_at": now.to_rfc3339(), // Géré en Rust car mis à jour dynamiquement via touch()
+            "context": ctx,
+        });
+        /*
+             let session = Session {
+                 id: UniqueId::new_v4().to_string(),
+                 created_at: now.to_rfc3339(),
+                 updated_at: now.to_rfc3339(),
+                 user_id: final_user_id,
+                 user_name: username_or_id.to_string(),
+                 status: SessionStatus::Active,
+                 expires_at: (now + chrono::Duration::hours(8)).to_rfc3339(),
+                 last_activity_at: now.to_rfc3339(),
+                 context: ctx,
+                 cached_permissions: None,
+             };
+
+
+             let doc = json::serialize_to_value(&session)?;
+             let mgr = self.get_db_manager();
+
+             let _ = mgr.init_db().await;
+             mgr.insert_with_schema("sessions", doc).await?;
+
+             let mut lock = self.current_session.write().await;
+             *lock = Some(session.clone());
+        */
         let mgr = self.get_db_manager();
-
         let _ = mgr.init_db().await;
-        mgr.insert_with_schema("sessions", doc).await?;
+
+        // 2. PERSISTANCE & HYDRATATION
+        // Le moteur applique le session.schema.json, calcule la date +8h,
+        // injecte les UUIDs et les types sémantiques (@type).
+        let hydrated_doc = mgr.insert_with_schema("sessions", payload).await?;
+
+        // 3. LECTURE (Le miroir)
+        // Serde mappe le document parfait généré par json-db vers notre structure Rust.
+        let session: Session = match json::deserialize_from_value(hydrated_doc) {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_SESSION_DESERIALIZE",
+                error = e,
+                context = json_value!({ "action": "read_from_jsondb" })
+            ),
+        };
 
         let mut lock = self.current_session.write().await;
         *lock = Some(session.clone());
@@ -148,7 +192,7 @@ impl SessionManager {
                 "last_activity_at": session.last_activity_at,
                 "updated_at": session.updated_at
             });
-            let _ = mgr.update_document("sessions", &session._id, patch).await;
+            let _ = mgr.update_document("sessions", &session.id, patch).await;
         }
 
         Ok(())
@@ -158,7 +202,7 @@ impl SessionManager {
         let session_id_to_delete = {
             let mut lock = self.current_session.write().await;
             if let Some(session) = lock.take() {
-                Some(session._id)
+                Some(session.id)
             } else {
                 None
             }
@@ -207,7 +251,7 @@ mod tests {
         assert_eq!(session.user_id, user_uuid);
         assert_eq!(session.status, SessionStatus::Active);
         assert!(
-            !session._id.is_empty(),
+            !session.id.is_empty(),
             "L'UUID de la session doit être généré"
         );
 
@@ -230,7 +274,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        let doc_opt = db_mgr.get_document("sessions", &session._id).await.unwrap();
+        let doc_opt = db_mgr.get_document("sessions", &session.id).await.unwrap();
         assert!(
             doc_opt.is_some(),
             "La session n'a pas été sauvegardée dans json_db"
@@ -266,7 +310,7 @@ mod tests {
             &sandbox.config.system_db,
         );
         let doc = db_mgr
-            .get_document("sessions", &session._id)
+            .get_document("sessions", &session.id)
             .await
             .unwrap()
             .unwrap();
@@ -295,7 +339,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        let doc_opt = db_mgr.get_document("sessions", &session._id).await.unwrap();
+        let doc_opt = db_mgr.get_document("sessions", &session.id).await.unwrap();
         assert!(
             doc_opt.is_none(),
             "La session aurait dû être supprimée physiquement"

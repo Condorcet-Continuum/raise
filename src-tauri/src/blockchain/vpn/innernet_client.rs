@@ -2,7 +2,6 @@
 //! Client Innernet pour RAISE
 //!
 //! Gère la connexion au mesh VPN WireGuard via la CLI `innernet`.
-//! Utilise tokio::process pour ne pas bloquer le runtime Tauri.
 
 use crate::utils::prelude::*;
 

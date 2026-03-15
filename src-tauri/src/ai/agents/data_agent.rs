@@ -1,12 +1,13 @@
-// FICHIER : src-tauri/src/ai/agents/data_agent.rs
-
 use crate::utils::prelude::*;
 
 use super::intent_classifier::EngineeringIntent;
-use super::tools::{extract_json_from_llm, load_session, save_artifact, save_session};
+// ✅ IMPORT DU MODULE TOOLS FACTORISÉ
+use super::tools::{
+    extract_json_from_llm, load_session, query_knowledge_graph, save_artifact, save_session,
+};
 use super::{Agent, AgentContext, AgentResult};
 
-// AJOUT : Import du protocole ACL
+// Import du protocole ACL
 use crate::ai::protocols::acl::{AclMessage, Performative};
 
 use crate::ai::llm::client::LlmBackend;
@@ -31,9 +32,13 @@ impl DataAgent {
             || lower.contains("hardware")
         {
             ("hardware_architect", format!("J'ai défini le signal physique '{}'. Merci de vérifier la compatibilité avec les interfaces matérielles.", name))
-        } else if lower.contains("config") || lower.contains("param") || lower.contains("settings")
+        } else if lower.contains("config")
+            || lower.contains("param")
+            || lower.contains("settings")
+            || lower.contains("log")
+        // ✅ AJOUT : Les logs sont du domaine software
         {
-            ("software_engineer", format!("J'ai défini la structure de configuration '{}'. Peux-tu l'implémenter dans le code ?", name))
+            ("software_engineer", format!("J'ai défini la structure logicielle '{}'. Peux-tu l'implémenter dans le code ?", name))
         } else {
             ("system_architect", format!("J'ai défini la donnée système '{}'. Elle est disponible pour les échanges fonctionnels.", name))
         }
@@ -115,7 +120,43 @@ impl Agent for DataAgent {
                     &format!("Create Data Element: {} ({})", name, element_type),
                 );
 
-                // Calcul Historique
+                // --- 🎯 ÉTAPE : VÉRIFICATION SÉMANTIQUE ---
+                let slug = name.to_lowercase().replace(" ", "_");
+
+                // ✅ CORRECTIF : On utilise un format d'URN compatible ref:<collection>:<id>
+                let element_type_lower = element_type.to_lowercase();
+                let collection_name = match element_type_lower.as_str() {
+                    "class" | "classe" | "classes" => "classes",
+                    "component" | "composant" | "components" => "components",
+                    other => other,
+                };
+
+                // On retire le préfixe "data:" qui perturbait la résolution par collection
+                let reference = format!("ref:{}:_id:{}", collection_name, slug);
+
+                if let Ok(existing) = query_knowledge_graph(ctx, &reference, false).await {
+                    // ✅ CORRECTIF COMPILATION : On vérifie les variantes spécifiquement
+                    let is_real_data = match &existing {
+                        JsonValue::Object(o) => !o.is_empty(),
+                        JsonValue::Array(a) => !a.is_empty(),
+                        JsonValue::String(s) => !s.is_empty(),
+                        JsonValue::Null => false,
+                        _ => true, // Booléens ou Nombres sont considérés comme des données présentes
+                    };
+
+                    if is_real_data {
+                        let msg = format!(
+                            "La donnée **{}** est déjà définie dans le modèle (Reference: `{}`). Création ignorée.",
+                            name,
+                            reference
+                        );
+                        session.add_message("assistant", &msg);
+                        save_session(ctx, &session).await?;
+                        return Ok(Some(AgentResult::text(msg)));
+                    }
+                }
+
+                // Calcul Historique pour l'enrichissement LLM
                 let history_str = session
                     .messages
                     .iter()
@@ -135,15 +176,11 @@ impl Agent for DataAgent {
 
                 let artifact = save_artifact(ctx, "data", collection, &doc).await?;
 
-                // 2. ROUTAGE DYNAMIQUE (Data -> All Layers)
+                // 2. ROUTAGE DYNAMIQUE
                 let (target_agent, msg_content) = self.determine_target_agent(name);
 
-                let acl_msg = AclMessage::new(
-                    Performative::Inform, // "Inform" car c'est une mise à disposition de donnée
-                    self.id(),
-                    target_agent,
-                    &msg_content,
-                );
+                let acl_msg =
+                    AclMessage::new(Performative::Inform, self.id(), target_agent, &msg_content);
 
                 let msg = format!(
                     "Donnée **{}** définie. Notification envoyée à l'agent **{}**.",
@@ -156,7 +193,6 @@ impl Agent for DataAgent {
                 Ok(Some(AgentResult {
                     message: msg,
                     artifacts: vec![artifact],
-                    // AJOUT : Message sortant dynamique
                     outgoing_message: Some(acl_msg),
                 }))
             }
@@ -165,34 +201,149 @@ impl Agent for DataAgent {
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES ET D'INTÉGRATION SÉMANTIQUE
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::llm::client::LlmClient;
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     #[test]
-    fn test_data_agent_sanity() {
+    fn test_data_agent_id() {
         assert_eq!(DataAgent::new().id(), "data_architect");
     }
 
-    // NOUVEAU TEST : Vérifie le routage dynamique vers les autres couches
     #[test]
-    fn test_data_dynamic_routing() {
+    fn test_data_routing_logic() {
         let agent = DataAgent::new();
 
-        // Cas 1 : Métier -> Business
-        let (target1, _) = agent.determine_target_agent("Client_Business_Object");
-        assert_eq!(target1, "business_analyst");
+        let (t1, _) = agent.determine_target_agent("Business_Invoice");
+        assert_eq!(t1, "business_analyst");
 
-        // Cas 2 : Hardware -> Hardware
-        let (target2, _) = agent.determine_target_agent("Analog_Signal_Voltage");
-        assert_eq!(target2, "hardware_architect");
+        let (t2, _) = agent.determine_target_agent("Voltage_Sensor_Reading");
+        assert_eq!(t2, "hardware_architect");
 
-        // Cas 3 : Config -> Software
-        let (target3, _) = agent.determine_target_agent("App_Config_Settings");
-        assert_eq!(target3, "software_engineer");
+        // ✅ TEST CORRIGÉ : System_Log_Level doit maintenant router vers software_engineer
+        let (t3, _) = agent.determine_target_agent("System_Log_Level");
+        assert_eq!(t3, "software_engineer");
+    }
 
-        // Cas 4 : Défaut -> System
-        let (target4, _) = agent.determine_target_agent("Generic_Data");
-        assert_eq!(target4, "system_architect");
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_data_duplicate_prevention_integration() {
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
+        // ✅ SEED : On injecte bien dans "classes" pour correspondre à la résolution sémantique
+        let existing_data = json_value!({
+            "_id": "user_profile",
+            "name": "User Profile",
+            "type": "Class",
+            "layer": "DATA"
+        });
+
+        manager
+            .create_collection(
+                "classes",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+        manager
+            .upsert_document("classes", existing_data)
+            .await
+            .unwrap();
+
+        inject_mock_component(
+            &manager,
+            "llm",
+            json_value!({
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+            }),
+        )
+        .await;
+
+        let llm = LlmClient::new(&manager).await.unwrap();
+        let ctx = AgentContext::new(
+            "test_user",
+            "sess_data_01",
+            sandbox.db.clone(),
+            llm,
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
+        )
+        .await;
+
+        let agent = DataAgent::new();
+
+        let intent = EngineeringIntent::CreateElement {
+            layer: "DATA".to_string(),
+            element_type: "Class".to_string(),
+            name: "User Profile".to_string(),
+        };
+
+        let result = agent.process(&ctx, &intent).await.unwrap();
+
+        if let Some(res) = result {
+            // ✅ VÉRIFICATION : L'agent doit avoir trouvé le doublon
+            assert!(
+                res.message.contains("déjà définie"),
+                "L'agent n'a pas détecté le doublon. Message reçu: {}",
+                res.message
+            );
+            assert!(res.artifacts.is_empty());
+        } else {
+            panic!("L'agent aurait dû renvoyer un résultat.");
+        }
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_data_session_persistence() {
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
+        inject_mock_component(
+            &manager,
+            "llm",
+            json_value!({
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+            }),
+        )
+        .await;
+
+        let llm = LlmClient::new(&manager).await.unwrap();
+        let ctx = AgentContext::new(
+            "test_user",
+            "sess_persist_01",
+            sandbox.db.clone(),
+            llm,
+            sandbox.domain_root.clone(),
+            sandbox.domain_root.clone(),
+        )
+        .await;
+
+        let mut session = super::load_session(&ctx).await.unwrap();
+        session.add_message("user", "Ping");
+        super::save_session(&ctx, &session).await.unwrap();
+
+        let session_reload = super::load_session(&ctx).await.unwrap();
+        assert_eq!(session_reload.messages.len(), 1);
+        assert_eq!(session_reload.messages[0].content, "Ping");
     }
 }

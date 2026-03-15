@@ -2,12 +2,18 @@
 #![cfg(any(test, debug_assertions))]
 
 // 1. Core : Concurrence, Mémoire et Identifiants
-use crate::utils::core::SharedRef;
+use crate::raise_error;
+use crate::utils::core::error::RaiseResult;
+use crate::utils::core::{RuntimeEnv, SharedRef, UniqueId, UtcClock};
 use crate::utils::io::fs::{self, tempdir, Path, PathBuf, TempDir};
 
 // 2. Data : Configuration, JSON et Traits
-use crate::utils::data::config::{AppConfig, CONFIG};
+use crate::utils::data::config::{
+    AppConfig, CoreConfig, DeepLearningConfig, IntegrationsConfig, WorldModelConfig, CONFIG,
+    SYSTEM_DB, SYSTEM_DOMAIN,
+};
 use crate::utils::data::json::{self, json_value, JsonValue};
+use crate::utils::data::UnorderedMap;
 
 // 4. Dépendances métier (Base de données JSON)
 use crate::json_db::collections::manager::CollectionsManager;
@@ -18,18 +24,168 @@ use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 pub const SESSION_SCHEMA_MOCK: &str = r#"{
     "type": "object",
     "properties": {
-        "user_id": { "type": "string", "format": "uuid" },
+        "_id": {
+            "type": "string",
+            "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "if_missing",
+                "plan": { "op": "uuid_v4" }
+            }
+        },
+        "_created_at": {
+            "type": "string",
+            "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "if_missing",
+                "plan": { "op": "now_rfc3339" }
+            }
+        },
+        "_updated_at": {
+            "type": "string",
+            "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "always",
+                "plan": { "op": "now_rfc3339" }
+            }
+        },
+        "@type": {
+            "type": "array",
+            "items": { "type": "string" },
+            "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "if_missing",
+                "plan": { "op": "const", "value": ["Session", "cfg:Session"] }
+            }
+        },
+        "user_id": { "type": "string" },
         "user_name": { "type": "string" },
         "status": { "type": "string", "enum": ["active", "idle", "expired", "revoked"] },
-        "expires_at": { "type": "string", "format": "date-time" },
+        "expires_at": { 
+            "type": "string", 
+            "format": "date-time",
+            "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "if_missing",
+                "plan": { "op": "now_rfc3339" }
+            }
+        },
         "last_activity_at": { "type": "string", "format": "date-time" },
         "context": { 
             "type": "object",
             "required": ["current_domain", "current_db", "active_dapp"]
         }
     },
-    "required": ["user_id", "status", "expires_at", "context"]
+    "required": ["_id", "_created_at", "_updated_at", "user_id", "status", "expires_at", "context"]
 }"#;
+
+// =========================================================================
+// 🔧 UTILS DE CONFIGURATION DE TEST
+// =========================================================================
+
+pub fn create_default_test_config() -> AppConfig {
+    let mut paths = UnorderedMap::new();
+    let tmp = RuntimeEnv::temp_dir();
+    paths.insert(
+        "PATH_RAISE_DOMAIN".to_string(),
+        tmp.to_string_lossy().to_string(),
+    );
+    paths.insert(
+        "PATH_LOGS".to_string(),
+        tmp.join("logs").to_string_lossy().to_string(),
+    );
+
+    AppConfig {
+        id: UniqueId::new_v4().to_string(),
+        created_at: UtcClock::now().to_rfc3339(),
+        updated_at: UtcClock::now().to_rfc3339(),
+        semantic_type: vec!["SystemConfig".to_string(), "cfg:SystemConfig".to_string()],
+        name: Some(UnorderedMap::from([(
+            "en".to_string(),
+            "Default Test Config".to_string(),
+        )])),
+        system_domain: SYSTEM_DOMAIN.to_string(),
+        system_db: SYSTEM_DB.to_string(),
+        workstation: None,
+        user: None,
+        core: CoreConfig {
+            env_mode: "test".to_string(),
+            graph_mode: "none".to_string(),
+            log_level: "debug".to_string(),
+            vector_store_provider: "memory".to_string(),
+            language: "en".to_string(),
+        },
+        world_model: WorldModelConfig::default(),
+        deep_learning: DeepLearningConfig::default(),
+        paths,
+        active_dapp: "ref:dapps:handle:mock-dapp".to_string(),
+        active_services: vec!["ref:services:handle:mock-service".to_string()],
+        active_components: vec!["ref:components:handle:mock-comp-1".to_string()],
+        integrations: IntegrationsConfig::default(),
+    }
+}
+
+pub fn load_test_sandbox() -> RaiseResult<AppConfig> {
+    let manifest = match RuntimeEnv::var("CARGO_MANIFEST_DIR") {
+        Ok(v) => v,
+        Err(e) => raise_error!(
+            "ERR_CONFIG_ENV_MANIFEST",
+            error = e,
+            context = json_value!({ "var": "CARGO_MANIFEST_DIR" })
+        ),
+    };
+
+    let path = PathBuf::from(manifest).join("tests/config.test.json");
+
+    if !path.exists() {
+        return Ok(create_default_test_config());
+    }
+
+    let content = match fs::read_to_string_sync(&path) {
+        Ok(c) => c,
+        Err(e) => raise_error!(
+            "ERR_CONFIG_FS_READ",
+            error = e,
+            context = json_value!({ "path": path.to_string_lossy() })
+        ),
+    };
+
+    let mut config: AppConfig = match json::deserialize_from_str(&content) {
+        Ok(cfg) => cfg,
+        Err(e) => raise_error!(
+            "ERR_CONFIG_PARSE",
+            error = e,
+            context = json_value!({ "path": path.to_string_lossy() })
+        ),
+    };
+
+    if let Some(domain_path) = config.paths.get_mut("PATH_RAISE_DOMAIN") {
+        let temp_dir = RuntimeEnv::temp_dir();
+        let temp_str = temp_dir.to_string_lossy();
+
+        if domain_path.starts_with("/tmp") || domain_path.contains(temp_str.as_ref() as &str) {
+            let unique_id = format!(
+                "{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_micros()
+            );
+            *domain_path = format!("{}_{}", domain_path, unique_id);
+            let _ = fs::create_dir_all_sync(domain_path);
+        }
+    }
+
+    config.system_domain = SYSTEM_DOMAIN.to_string();
+    config.system_db = SYSTEM_DB.to_string();
+
+    Ok(config)
+}
 
 // --- FONCTIONS MOCKS ---
 
@@ -202,8 +358,22 @@ pub async fn inject_collection_schema(domain_root: &Path, collection_name: &str,
 
 pub async fn inject_mock_config() {
     if CONFIG.get().is_none() {
-        let config = AppConfig::create_default_test_config();
+        let config = create_default_test_config();
         let _ = CONFIG.set(config);
+    }
+    if crate::utils::data::config::DEVICE.get().is_none() {
+        // 🎯 On utilise la détection intelligente au lieu de forcer le CPU
+        let test_device = if cfg!(feature = "cuda") {
+            candle_core::Device::new_cuda(0).unwrap_or(candle_core::Device::Cpu)
+        } else {
+            candle_core::Device::Cpu
+        };
+
+        let _ = crate::utils::data::config::DEVICE.set(test_device);
+        println!(
+            "🧪 [Raise Test] Device injecté : {:?}",
+            crate::utils::data::config::DEVICE.get()
+        );
     }
 }
 

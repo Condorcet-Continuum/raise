@@ -248,8 +248,8 @@ pub async fn jsondb_evaluate_draft(
         .join("_meta.json");
 
     let schema_uri = if meta_path.exists() {
-        // 1. Lecture du fichier sans map_err
-        let content = match std::fs::read_to_string(&meta_path) {
+        // 1. Lecture du fichier
+        let content = match fs::read_to_string_sync(&meta_path) {
             Ok(c) => c,
             Err(e) => raise_error!(
                 "ERR_DB_META_READ_FAIL",
@@ -258,7 +258,7 @@ pub async fn jsondb_evaluate_draft(
             ),
         };
 
-        // 2. Parsing JSON sans map_err
+        // 2. Parsing JSON
         let meta: JsonValue = match json::deserialize_from_str(&content) {
             Ok(m) => m,
             Err(e) => raise_error!(
@@ -639,7 +639,6 @@ pub async fn jsondb_init_demo_rules(
         .db_schemas_root(&space, &db)
         .join("v1/invoices/default.json");
     if let Some(parent) = schema_path.parent() {
-        // On remplace le map_err par un match ou un if let Err explicite
         if let Err(e) = fs::create_dir_all_async(parent).await {
             raise_error!(
                 "ERR_FS_DIR_CREATION_FAIL",
@@ -666,8 +665,8 @@ pub async fn jsondb_init_demo_rules(
         ),
     };
 
-    // 2. Écriture disque sans map_err
-    if let Err(e) = std::fs::write(&schema_path, pretty_json) {
+    // 2. Écriture disque
+    if let Err(e) = fs::write_sync(&schema_path, pretty_json) {
         raise_error!(
             "ERR_FS_WRITE_FAIL",
             error = e,
@@ -786,8 +785,8 @@ pub async fn jsondb_init_model_rules(
         ),
     };
 
-    // 3. Écriture disque sans map_err
-    if let Err(e) = std::fs::write(&schema_path, pretty_json) {
+    // 3. Écriture disque
+    if let Err(e) = fs::write_sync(&schema_path, pretty_json) {
         raise_error!(
             "ERR_FS_WRITE_FAIL",
             error = e,

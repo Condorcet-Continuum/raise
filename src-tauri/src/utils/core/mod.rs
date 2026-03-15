@@ -76,6 +76,14 @@ pub use std::cmp::Ordering as FmtOrdering;
 /// 🤖 IA NOTE : Traits pour l'égalité et l'ordonnancement.
 pub use std::cmp::{Eq, Ord, PartialEq, PartialOrd};
 
+/// 🤖 IA NOTE : Sélectionne la valeur la plus petite.
+/// Utilisé pour le "clipping" de probabilités ou pour borner la consommation de ressources.
+pub use std::cmp::min as MinOf;
+
+/// 🤖 IA NOTE : Sélectionne la valeur la plus grande.
+/// Utilisé pour garantir un seuil de confiance minimal (thresholding).
+pub use std::cmp::max as MaxOf;
+
 /// 🤖 IA NOTE : Trait indispensable pour utiliser un type comme clé de cache ou de dictionnaire.
 pub use std::hash::Hash as Hashable; // 🎯 L'alias sémantique !
 
@@ -128,20 +136,17 @@ pub use tokio::sync::Mutex as AsyncMutex;
 pub use tokio::sync::RwLock as AsyncRwLock;
 
 /// 🤖 IA NOTE : Builder asynchrone pour configurer et lancer un processus externe sans bloquer Tauri.
-pub use tokio::process::Command as AsyncCommand; // 🎯 L'ajout officiel !
+pub use tokio::process::Command as AsyncCommand;
 
 // --- CONTRÔLE DE FLUX & RUNTIME ---
 pub use tokio::task::spawn as spawn_async_task;
 pub use tokio::task::spawn_blocking as spawn_cpu_task;
 pub use tokio::time::sleep as sleep_async;
 
-/// 🤖 IA NOTE : Lance une tâche asynchrone légère (Green Thread).
-/// Idéal pour les entrées/sorties ou l'attente de messages.
-pub use tokio::task::spawn as xxxxx_spawn_async_task;
-
-/// 🤖 IA NOTE : Lance une tâche bloquante sur un pool de threads séparé.
-/// Indispensable pour les calculs lourds qui pourraient figer l'interface.
-pub use tokio::task::spawn_blocking as xxxxx_spawn_cpu_task;
+// 🤖 IA NOTE : Système de gestion de l'attention de l'agent.
+/// Permet de surveiller plusieurs flux (UI, Timer, Réseau) en simultané.
+/// La première branche complétée interrompt proprement les autres.
+pub use tokio::select as AgentAttention;
 
 // --- SYSTÈME DE MESSAGERIE ASYNCHRONE (Tokio) ---
 #[allow(non_snake_case)]

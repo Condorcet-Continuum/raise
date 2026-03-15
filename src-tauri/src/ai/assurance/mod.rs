@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/ai/assurance/mod.rs
 
+pub mod health;
 pub mod quality;
 pub mod xai;
 

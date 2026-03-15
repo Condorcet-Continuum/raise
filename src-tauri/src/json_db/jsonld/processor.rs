@@ -161,14 +161,35 @@ impl JsonLdProcessor {
             .map(|s| s.to_string())
     }
 
-    pub fn get_type(&self, doc: &JsonValue) -> Option<String> {
+    /// Récupère tous les types sémantiques (supporte String et Array de Strings)
+    pub fn get_types(&self, doc: &JsonValue) -> Vec<String> {
+        let mut types = Vec::new();
+
+        let extract_types = |val: &JsonValue, out: &mut Vec<String>| {
+            if let Some(s) = val.as_str() {
+                out.push(s.to_string());
+            } else if let Some(arr) = val.as_array() {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        out.push(s.to_string());
+                    }
+                }
+            }
+        };
+
         if let Some(t) = doc.get("@type") {
-            return t.as_str().map(|s| s.to_string());
+            extract_types(t, &mut types);
         }
         if let Some(t) = doc.get("http://www.w3.org/1999/02/22-rdf-syntax-ns#type") {
-            return t.as_str().map(|s| s.to_string());
+            extract_types(t, &mut types);
         }
-        None
+
+        types
+    }
+
+    /// Garde une compatibilité ascendante pour récupérer le type principal
+    pub fn get_primary_type(&self, doc: &JsonValue) -> Option<String> {
+        self.get_types(doc).into_iter().next()
     }
 
     pub fn validate_required_fields(&self, doc: &JsonValue, required: &[&str]) -> RaiseResult<()> {
@@ -221,9 +242,20 @@ impl JsonLdProcessor {
 
                 for o in objects {
                     let obj_str = match o {
-                        JsonValue::String(s) if s.starts_with("http") => format!("<{}>", s),
-                        JsonValue::String(s) => format!("{:?}", s),
-                        _ => format!("{:?}", o.to_string()),
+                        JsonValue::String(s)
+                            if self.context_manager.expand_term(s).starts_with("http") =>
+                        {
+                            // C'est une IRI (après expansion potentielle)
+                            format!("<{}>", self.context_manager.expand_term(s))
+                        }
+                        JsonValue::String(s) => format!("\"{}\"", s), // Littéral string pur
+                        JsonValue::Bool(b) => {
+                            format!("\"{}\"^^<http://www.w3.org/2001/XMLSchema#boolean>", b)
+                        }
+                        JsonValue::Number(n) => {
+                            format!("\"{}\"^^<http://www.w3.org/2001/XMLSchema#double>", n)
+                        }
+                        _ => format!("\"{}\"", o.to_string().replace("\"", "\\\"")), // Échappement de sécurité
                     };
                     lines.push(format!("<{}> <{}> {} .", id, pred, obj_str));
                 }
@@ -261,7 +293,7 @@ mod tests {
             "@type": "http://example.org/Type"
         });
         assert_eq!(
-            processor.get_type(&doc),
+            processor.get_primary_type(&doc),
             Some("http://example.org/Type".to_string())
         );
     }

@@ -59,10 +59,7 @@ impl CandleLlmEngine {
             );
         }
 
-        // 5. Initialisation matérielle (CPU par défaut)
-        // 5. DÉTECTION MATÉRIELLE DYNAMIQUE (Priorité absolue : CUDA)
-        let device = candle_core::Device::new_cuda(0).unwrap_or(candle_core::Device::Cpu); // Fallback CPU si erreur
-
+        let device = AppConfig::device().clone();
         println!("🚀 [Candle LLM] Moteur Qwen chargé sur : {:?}", device);
 
         // 6. Chargement du Tokenizer depuis le fichier local
@@ -83,7 +80,7 @@ impl CandleLlmEngine {
         };
 
         // 7. Chargement du modèle GGUF depuis le fichier local
-        let mut file = match std::fs::File::open(&model_path) {
+        let mut file = match fs::open_sync(&model_path) {
             Ok(f) => f,
             Err(e) => raise_error!(
                 "ERR_AI_MODEL_OPEN",

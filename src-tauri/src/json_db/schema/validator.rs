@@ -153,17 +153,7 @@ fn apply_defaults(
                     if should_compute {
                         if let Some(plan) = compute.get("plan").and_then(|v| v.as_object()) {
                             if let Some(op) = plan.get("op").and_then(|v| v.as_str()) {
-                                let computed_val = match op {
-                                    "uuid_v4" => JsonValue::String(UniqueId::new_v4().to_string()),
-                                    "now_rfc3339" => {
-                                        JsonValue::String(UtcClock::now().to_rfc3339())
-                                    }
-                                    "const" => {
-                                        plan.get("value").cloned().unwrap_or(JsonValue::Null)
-                                    }
-                                    _ => JsonValue::Null,
-                                };
-
+                                let computed_val = execute_compute_plan(op, plan);
                                 if !computed_val.is_null() {
                                     obj.insert(key.clone(), computed_val);
                                 }
@@ -190,6 +180,51 @@ fn apply_defaults(
     }
 
     Ok(())
+}
+
+/// 🎯 Moteur d'évaluation (AST) pour les directives x_compute
+fn execute_compute_plan(op: &str, plan: &JsonObject<String, JsonValue>) -> JsonValue {
+    match op {
+        // --- 1. IDENTIFIANTS ---
+        "uuid_v4" => JsonValue::String(UniqueId::new_v4().to_string()),
+
+        // --- 2. TEMPS ET DATES ---
+        "now_rfc3339" => JsonValue::String(UtcClock::now().to_rfc3339()),
+        "now_plus_hours" => {
+            let hours = plan
+                .get("value")
+                .and_then(|v: &JsonValue| v.as_i64())
+                .unwrap_or(0);
+            let future = UtcClock::now() + CalendarDuration::hours(hours);
+            JsonValue::String(future.to_rfc3339())
+        }
+        "now_plus_days" => {
+            let days = plan
+                .get("value")
+                .and_then(|v: &JsonValue| v.as_i64())
+                .unwrap_or(0);
+            let future = UtcClock::now() + CalendarDuration::days(days);
+            JsonValue::String(future.to_rfc3339())
+        }
+
+        // --- 3. LOGIQUE STATIQUE ---
+        "const" => plan.get("value").cloned().unwrap_or(JsonValue::Null),
+
+        // --- FALLBACK ---
+        _ => {
+            // 🎯 Utilisation de votre macro façade pour une alerte métier
+            user_warn!(
+                "WARN_COMPUTE_OP_UNKNOWN",
+                json_value!({
+                    "operator": op,
+                    "plan": plan,
+                    "hint": "Opérateur x_compute inconnu ou non pris en charge ignoré."
+                })
+            );
+
+            JsonValue::Null
+        }
+    }
 }
 
 fn validate_node(

@@ -581,23 +581,14 @@ async fn parse_data(input: &str) -> RaiseResult<JsonValue> {
     }
 }
 
-async fn bootstrap_ontologies(root_dir: &Path, space: &str) {
-    let space_path = root_dir
-        .join(space)
-        .join("_system/schemas/v1/arcadia/@context");
-    let global_path = root_dir.join("ontology/arcadia/@context");
-    let target = if space_path.exists() {
-        &space_path
-    } else {
-        &global_path
-    };
+async fn bootstrap_ontologies(root_dir: &Path, _space: &str) {
+    // L'ontologie est désormais centralisée
+    let ontology_root = root_dir.join("_system/ontology");
 
-    if target.exists() {
-        let registry = VocabularyRegistry::global();
-        for layer in ["oa", "sa", "la", "pa", "epbs", "data", "transverse"] {
-            let _ = registry
-                .load_layer_from_file(layer, &target.join(format!("{}.jsonld", layer)))
-                .await;
+    if ontology_root.exists() {
+        // init() gère sa propre mutabilité et popule le registre dynamique global
+        if let Err(e) = VocabularyRegistry::init(&ontology_root).await {
+            eprintln!("⚠️ [CLI] Erreur d'initialisation sémantique : {}", e);
         }
     }
 }

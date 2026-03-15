@@ -76,14 +76,19 @@ fn main() {
             let default_space = &app_config.system_domain;
             let default_db = &app_config.system_db;
 
-            // 3. CHARGEMENT ONTOLOGIES
-            let ontology_path = db_root
-                .join(default_space)
-                .join(default_db)
-                .join("schemas/v1/arcadia/@context");
-
+            // 🎯 3. INITIALISATION DYNAMIQUE DES ONTOLOGIES (Bootstrapping)
+            let ontology_root = db_root.join("_system/ontology");
             tauri::async_runtime::spawn(async move {
-                load_arcadia_ontologies(&ontology_path).await;
+                println!(
+                    "📂 [Ontology] Initialisation sémantique depuis {:?}",
+                    ontology_root
+                );
+                // 🎯 Appel au nouveau scanner récursif agnostique
+                if let Err(e) = VocabularyRegistry::init(&ontology_root).await {
+                    eprintln!("❌ [Ontology] Échec de l'initialisation sémantique : {}", e);
+                } else {
+                    println!("✅ [Ontology] Système sémantique opérationnel (Data-Driven).");
+                }
             });
 
             // 4. GRAPH STORE
@@ -356,38 +361,6 @@ async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> R
     Ok(())
 }
 
-// --- LOGIQUE DE CHARGEMENT DES ONTOLOGIES ---
-
-async fn load_arcadia_ontologies(ontology_root: &Path) {
-    let registry = VocabularyRegistry::global();
-    let layers = ["oa", "sa", "la", "pa", "epbs", "data", "transverse"];
-
-    println!(
-        "📂 [Ontology] Démarrage du chargement depuis {:?}",
-        ontology_root
-    );
-
-    for layer in layers {
-        let path = ontology_root.join(format!("{}.jsonld", layer));
-
-        if path.exists() {
-            if let Err(e) = registry.load_layer_from_file(layer, &path).await {
-                eprintln!(
-                    "⚠️ [Ontology] Erreur lors du chargement de {}: {}",
-                    layer, e
-                );
-            } else {
-                println!("✅ [Ontology] Couche '{}' chargée avec succès.", layer);
-            }
-        } else {
-            eprintln!(
-                "⚠️ [Ontology] Fichier manquant pour la couche '{}' : {:?}",
-                layer, path
-            );
-        }
-    }
-}
-
 // ============================================================================
 // TESTS UNITAIRES
 // ============================================================================
@@ -404,26 +377,21 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path();
 
-        let oa_content = r#"{ "@context": { "oa": "http://oa#" } }"#;
-        let transverse_content = r#"{ "@context": { "lib": "http://lib#" } }"#;
+        // On simule une structure d'ontologie
+        let raise_dir = path.join("raise");
+        fs::create_dir_all_sync(&raise_dir).unwrap();
 
-        let oa_path = path.join("oa.jsonld");
-        let trans_path = path.join("transverse.jsonld");
-
-        fs::write_async(&oa_path, oa_content.as_bytes())
-            .await
-            .unwrap();
-        fs::write_async(&trans_path, transverse_content.as_bytes())
+        let content = r#"{ "@context": { "test": "http://test#" }, "@graph": [] }"#;
+        fs::write_async(&raise_dir.join("core.jsonld"), content.as_bytes())
             .await
             .unwrap();
 
-        load_arcadia_ontologies(path).await;
+        // 🎯 On teste l'initialisation globale
+        let res = VocabularyRegistry::init(path).await;
+        assert!(res.is_ok());
 
         let registry = VocabularyRegistry::global();
-        assert!(registry.get_context_for_layer("oa").is_some());
-        assert!(registry.get_context_for_layer("transverse").is_some());
-
-        let _ctx_sa = registry.get_context_for_layer("sa");
+        assert!(registry.get_default_context().contains_key("test"));
     }
 
     #[async_test]

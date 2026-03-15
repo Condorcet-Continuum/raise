@@ -3,7 +3,6 @@
 use futures::StreamExt;
 use libp2p::swarm::SwarmEvent;
 use tauri::{AppHandle, Manager};
-use tokio::sync::mpsc;
 
 use crate::blockchain::bridge::ArcadiaBridge; // 🎯 Import du Bridge
 use crate::blockchain::consensus::{ConsensusEngine, Vote}; // 🎯 Import du Vote
@@ -29,7 +28,7 @@ pub fn init_arcadia_network(app_handle: AppHandle) {
 
     if let Ok(swarm) = swarm_res {
         // 3. Création du canal MPSC
-        let (swarm_tx, swarm_rx) = tokio::sync::mpsc::channel::<ArcadiaNetMessage>(100);
+        let (swarm_tx, swarm_rx) = AsyncChannel::channel::<ArcadiaNetMessage>(100);
 
         // 4. Injection des états dans Tauri
         app_handle.manage(swarm_tx);
@@ -64,7 +63,7 @@ pub fn init_arcadia_network(app_handle: AppHandle) {
 pub fn spawn_p2p_service(
     app_handle: AppHandle,
     mut swarm: libp2p::Swarm<ArcadiaBehavior>,
-    mut swarm_rx: mpsc::Receiver<ArcadiaNetMessage>,
+    mut swarm_rx: AsyncChannel::Receiver<ArcadiaNetMessage>,
     local_peer_id: String, // 🎯 NOUVEAU : On passe l'ID du pair local
 ) {
     tauri::async_runtime::spawn(async move {
@@ -74,7 +73,7 @@ pub fn spawn_p2p_service(
         let app_state = app_handle.state::<SharedRef<AppState>>();
 
         loop {
-            tokio::select! {
+            AgentAttention! {
                 // 1. ÉCOUTE DU RÉSEAU P2P
                 event = swarm.select_next_some() => {
                     if let SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Gossipsub(libp2p::gossipsub::Event::Message { message, .. })) = event {
@@ -146,7 +145,7 @@ mod tests {
     #[async_test]
     async fn test_p2p_channel_communication() {
         // Test du canal MPSC utilisé pour la communication Tauri -> Service P2P
-        let (tx, mut rx) = mpsc::channel::<ArcadiaNetMessage>(100);
+        let (tx, mut rx) = AsyncChannel::channel::<ArcadiaNetMessage>(100);
 
         // Simulation d'une commande envoyée par l'interface UI (ex: arcadia_broadcast_mutation)
         let commit = ArcadiaCommit {

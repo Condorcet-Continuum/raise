@@ -60,7 +60,6 @@ impl ArcadiaEncoder {
         let t_cat = Self::encode_category(category)?;
 
         // 3. Concaténation (Feature Fusion)
-        // On remplace le map_err par un match pour capturer les dimensions en cas d'échec
         let t_combined = match Tensor::cat(&[&t_layer, &t_cat], 1) {
             Ok(t) => t,
             Err(e) => raise_error!(

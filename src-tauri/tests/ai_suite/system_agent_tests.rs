@@ -75,8 +75,8 @@ async fn test_system_agent_creates_function_end_to_end() {
 
     let mut found = false;
     if functions_dir.exists() {
-        for e in std::fs::read_dir(&functions_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path())
+        for e in fs::read_dir_sync(&functions_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
 

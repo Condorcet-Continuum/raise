@@ -16,9 +16,7 @@ impl CandleEngine {
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
         // 1. DÉTECTION DYNAMIQUE DU MATÉRIEL (GPU > CPU)
-        let device = Device::new_metal(0) // Apple Silicon (M1/M2/M3)
-            .or_else(|_| Device::new_cuda(0)) // Nvidia CUDA
-            .unwrap_or(Device::Cpu); // Fallback CPU standard
+        let device = AppConfig::device().clone();
 
         println!("🕯️ [Candle NLP] Moteur initialisé sur : {:?}", device);
 
@@ -79,7 +77,7 @@ impl CandleEngine {
         }
 
         // 4. Chargement de la configuration
-        let config_str = match std::fs::read_to_string(&config_path) {
+        let config_str = match fs::read_to_string_sync(&config_path) {
             Ok(content) => content,
             Err(e) => raise_error!(
                 "ERR_CONFIG_READ",

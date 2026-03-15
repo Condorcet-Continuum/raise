@@ -17,7 +17,6 @@ impl VectorQuantizer {
     /// * `num_embeddings`: Taille du vocabulaire (K)
     /// * `embedding_dim`: Dimension des vecteurs (D)
     pub fn new(num_embeddings: usize, embedding_dim: usize, vb: VarBuilder) -> RaiseResult<Self> {
-        // On remplace le map_err par un match pour extraire l'Embedding proprement
         let embedding = match candle_nn::embedding(num_embeddings, embedding_dim, vb) {
             Ok(emb) => emb,
             Err(e) => {

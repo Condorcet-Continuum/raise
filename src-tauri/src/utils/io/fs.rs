@@ -15,6 +15,37 @@ pub use tempfile::{tempdir, TempDir};
 pub use walkdir::WalkDir;
 
 // =========================================================================
+// 7. OUVERTURE DE FICHIERS (Handles)
+// =========================================================================
+
+/// 🤖 IA NOTE : Ouvre un descripteur de fichier en lecture seule de manière asynchrone.
+/// Idéal pour streamer de gros fichiers (modèles IA, datasets) sans charger toute la RAM.
+pub async fn open_async(path: impl AsRef<Path>) -> RaiseResult<tokio::fs::File> {
+    let p = path.as_ref();
+    match tokio::fs::File::open(p).await {
+        Ok(file) => Ok(file),
+        Err(e) => raise_error!(
+            "ERR_FS_OPEN_ASYNC",
+            error = e,
+            context = json_value!({ "path": p.to_string_lossy() })
+        ),
+    }
+}
+
+/// 🤖 IA NOTE : Ouvre un descripteur de fichier en lecture seule de manière synchrone.
+pub fn open_sync(path: impl AsRef<Path>) -> RaiseResult<std::fs::File> {
+    let p = path.as_ref();
+    match std::fs::File::open(p) {
+        Ok(file) => Ok(file),
+        Err(e) => raise_error!(
+            "ERR_FS_OPEN_SYNC",
+            error = e,
+            context = json_value!({ "path": p.to_string_lossy() })
+        ),
+    }
+}
+
+// =========================================================================
 // 1. LECTURE & ÉCRITURE BASIQUES
 // =========================================================================
 

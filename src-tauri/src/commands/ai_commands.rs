@@ -58,7 +58,6 @@ pub async fn ai_reset(ai_state: State<'_, AiState>) -> RaiseResult<()> {
     if let Some(shared_orch) = &*guard {
         let mut orchestrator = shared_orch.lock().await;
 
-        // On remplace le map_err par un match explicite
         if let Err(e) = orchestrator.clear_history().await {
             raise_error!(
                 "ERR_AI_HISTORY_CLEAR_FAIL",

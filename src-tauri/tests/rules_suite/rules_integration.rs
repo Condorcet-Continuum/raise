@@ -1,10 +1,9 @@
 // FICHIER : src-tauri/tests/rules_suite/rules_integration.rs
+use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections;
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::prelude::*;
-use std::fs;
 
 #[async_test]
 async fn test_end_to_end_rules_execution() {
@@ -72,8 +71,8 @@ async fn test_end_to_end_rules_execution() {
         .db_schemas_root(space, db)
         .join("v1/invoices/default.json");
 
-    fs::create_dir_all(schema_inv_path.parent().unwrap()).unwrap();
-    fs::write(&schema_inv_path, schema_content.to_string()).unwrap();
+    fs::create_dir_all_sync(schema_inv_path.parent().unwrap()).unwrap();
+    fs::write_sync(&schema_inv_path, schema_content.to_string()).unwrap();
 
     // 3. Création collection
     // ✅ CORRECTION : Remplacement de `config` par `storage`

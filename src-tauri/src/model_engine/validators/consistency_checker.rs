@@ -245,7 +245,6 @@ impl ModelValidator for ConsistencyChecker {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::json_db::jsonld::vocabulary::{arcadia_types, namespaces};
     use crate::model_engine::types::NameType;
     use crate::utils::testing::AgentDbSandbox;
 
@@ -262,8 +261,8 @@ mod tests {
     #[test]
     fn test_valid_element_logic() {
         let checker = ConsistencyChecker::new();
-        // Utilisation d'une URI valide pour passer la validation de domaine implicite
-        let kind = format!("{}{}", namespaces::LA, arcadia_types::LA_COMPONENT);
+        // 🎯 Utilisation d'une URI de test explicite
+        let kind = "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string();
         let el = create_dummy_element("UUID-1", "MyComponent", &kind);
         let issues = checker.check_local_logic(&el);
         assert!(issues.is_empty());
@@ -272,7 +271,7 @@ mod tests {
     #[test]
     fn test_missing_name_warning() {
         let checker = ConsistencyChecker::new();
-        let kind = format!("{}{}", namespaces::LA, arcadia_types::LA_COMPONENT);
+        let kind = "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string();
         let el = create_dummy_element("UUID-2", "", &kind);
         let issues = checker.check_local_logic(&el);
 
@@ -281,24 +280,23 @@ mod tests {
         assert_eq!(issues[0].rule_id, "SYS_002");
     }
 
-    // TEST SÉMANTIQUE : Domaine invalide
     #[test]
     fn test_domain_violation() {
         let checker = ConsistencyChecker::new();
 
         // Un PhysicalComponent...
-        let kind_pa = format!("{}{}", namespaces::PA, arcadia_types::PA_COMPONENT);
+        let kind_pa = "https://raise.io/ontology/arcadia/pa#PhysicalComponent".to_string();
         let mut el = create_dummy_element("UUID-BAD", "BadComponent", &kind_pa);
 
-        // ... qui essaie d'avoir une propriété "involvesActivity" (réservée à OA Capability)
-        let prop_iri = format!("{}involvesActivity", namespaces::OA);
+        // ... qui essaie d'avoir une propriété "involvesActivity" (normalement liée à une Capability)
+        let prop_iri = "https://raise.io/ontology/arcadia/oa#involvesActivity".to_string();
         el.properties.insert(prop_iri, json_value!(["UUID-ACT-1"]));
 
         let issues = checker.check_local_logic(&el);
 
         assert!(
             !issues.is_empty(),
-            "Devrait détecter une violation de domaine"
+            "Devrait détecter une violation de domaine sémantique"
         );
         let err = &issues[0];
         assert_eq!(err.rule_id, "SEM_001");
@@ -314,13 +312,13 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        // Insertion d'une Exigence SANS NOM (doit déclencher SYS_002)
+        // Insertion d'une Exigence sémantique avec nom vide
         let invalid_req = json_value!({
             "_id": "REQ-BAD",
-            "id": "REQ-BAD",
-            "name": "", // Nom vide -> Erreur
+            "name": "",
             "type": "https://raise.io/ontology/arcadia/transverse#Requirement"
         });
+
         manager
             .create_collection(
                 "transverse",
@@ -328,6 +326,7 @@ mod tests {
             )
             .await
             .unwrap();
+
         manager
             .insert_raw("transverse", &invalid_req)
             .await
@@ -336,17 +335,15 @@ mod tests {
         let loader = ModelLoader::new_with_manager(manager);
         let checker = ConsistencyChecker::new();
 
-        // EXECUTION : Validation globale
         let issues = checker.validate_full(&loader).await;
 
-        // VERIFICATION
-        // On s'attend à trouver une erreur SYS_002 sur REQ-BAD
         let found = issues
             .iter()
             .any(|i| i.element_id == "REQ-BAD" && i.rule_id == "SYS_002");
+
         assert!(
             found,
-            "La validation globale n'a pas détecté l'exigence invalide dans la couche transverse."
+            "La validation globale n'a pas détecté l'élément invalide."
         );
     }
 }

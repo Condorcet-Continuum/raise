@@ -91,7 +91,7 @@ pub async fn exec_command_async(
     })
     .await;
 
-    // 🎯 Un match propre et explicite, sans map_err, fidèle à ton architecture !
+    // 🎯 Un match propre et explicite !
     match join_res {
         Ok(Ok(stdout)) => Ok(stdout),
         Ok(Err(e)) => Err(e), // Propagation propre de l'erreur métier

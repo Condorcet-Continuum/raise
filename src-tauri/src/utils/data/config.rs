@@ -7,7 +7,7 @@ use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, Query
 // 2. Core : Environnement, Concurrence et Erreurs
 use crate::raise_error;
 use crate::utils::core::error::RaiseResult;
-use crate::utils::core::{RuntimeEnv, StaticCell}; // Macro d'erreur globale
+use crate::utils::core::{RuntimeEnv, StaticCell, UniqueId, UtcClock}; // Macro d'erreur globale
 
 // 3. I/O : Système de fichiers
 use crate::utils::io::fs::{self, PathBuf};
@@ -20,6 +20,8 @@ use crate::utils::data::{
 
 /// Singleton global pour la configuration
 pub static CONFIG: StaticCell<AppConfig> = StaticCell::new();
+pub static DEVICE: StaticCell<candle_core::Device> = StaticCell::new();
+
 /// Constantes Système (Single Source of Truth)
 pub const SYSTEM_DOMAIN: &str = "_system";
 pub const SYSTEM_DB: &str = "_system";
@@ -27,6 +29,19 @@ pub const SYSTEM_DB: &str = "_system";
 /// Configuration globale structurée par niveaux de responsabilité
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct AppConfig {
+    // --- MÉTADONNÉES SYSTÈMES & SÉMANTIQUES ---
+    #[serde(rename = "_id", default = "fallback_id")]
+    pub id: String,
+
+    #[serde(rename = "_created_at", default = "fallback_date")]
+    pub created_at: String,
+
+    #[serde(rename = "_updated_at", default = "fallback_date")]
+    pub updated_at: String,
+
+    #[serde(rename = "@type", default = "fallback_config_type")]
+    pub semantic_type: Vec<String>,
+
     pub name: Option<UnorderedMap<String, String>>,
 
     // --- NIVEAU 1 : SYSTEME (Global) ---
@@ -44,11 +59,10 @@ pub struct AppConfig {
     #[serde(default = "fallback_deep_learning")]
     pub deep_learning: DeepLearningConfig,
 
-    // Gestion transparente de la conversion Liste -> Map via Serde
     #[serde(deserialize_with = "deserialize_paths_flexible")]
     pub paths: UnorderedMap<String, String>,
 
-    // 🎯 Pointeurs UUID vers la Base de Données
+    // 🎯 Pointeurs Sémantiques (Doivent stocker des valeurs du type "ref:dapps:handle:...")
     pub active_dapp: String,
 
     #[serde(default = "fallback_empty_services")]
@@ -60,7 +74,7 @@ pub struct AppConfig {
     #[serde(default = "fallback_integrations")]
     pub integrations: IntegrationsConfig,
 
-    // --- NIVEAU 2 & 3 : SURCHARGES (Contextuelles) ---
+    // --- NIVEAU 2 & 3 : SURCHARGES ---
     pub workstation: Option<ScopeConfig>,
     pub user: Option<ScopeConfig>,
 }
@@ -77,7 +91,15 @@ pub struct ScopeConfig {
 // =========================================================================
 // 🤖 FALLBACKS EXPLICITES POUR LA DÉSÉRIALISATION (AI-Ready)
 // =========================================================================
-
+fn fallback_id() -> String {
+    UniqueId::new_v4().to_string()
+}
+fn fallback_date() -> String {
+    UtcClock::now().to_rfc3339()
+}
+fn fallback_config_type() -> Vec<String> {
+    vec!["SystemConfig".to_string(), "cfg:SystemConfig".to_string()]
+}
 fn fallback_system_domain() -> String {
     SYSTEM_DOMAIN.to_string()
 }
@@ -206,11 +228,20 @@ impl AppConfig {
             "production".to_string()
         };
 
+        #[cfg(any(test, debug_assertions))]
         let config = if target_env == "test" {
-            Self::load_test_sandbox()?
+            crate::utils::testing::mock::load_test_sandbox()?
         } else {
             Self::load_production_config(&target_env)?
         };
+
+        #[cfg(not(any(test, debug_assertions)))]
+        let config = Self::load_production_config(&target_env)?;
+
+        if DEVICE.get().is_none() {
+            let device = Self::detect_best_device(&config);
+            let _ = DEVICE.set(device); // On initialise le singleton hardware
+        }
 
         if CONFIG.set(config).is_err() {
             raise_error!(
@@ -272,7 +303,7 @@ impl AppConfig {
 
         Ok(settings)
     }
-
+    /*
     fn load_test_sandbox() -> RaiseResult<Self> {
         let manifest = match RuntimeEnv::var("CARGO_MANIFEST_DIR") {
             Ok(v) => v,
@@ -333,7 +364,6 @@ impl AppConfig {
     }
 
     pub(crate) fn create_default_test_config() -> Self {
-        // 🎯 Utilisation de notre UnorderedMap
         let mut paths = UnorderedMap::new();
         let tmp = RuntimeEnv::temp_dir();
         paths.insert(
@@ -346,6 +376,10 @@ impl AppConfig {
         );
 
         AppConfig {
+            id: fallback_id(),
+            created_at: fallback_date(),
+            updated_at: fallback_date(),
+            semantic_type: fallback_config_type(),
             name: Some(UnorderedMap::from([(
                 "en".to_string(),
                 "Default Test Config".to_string(),
@@ -364,13 +398,14 @@ impl AppConfig {
             world_model: WorldModelConfig::default(),
             deep_learning: DeepLearningConfig::default(),
             paths,
-            active_dapp: "mock-dapp-id".to_string(),
-            active_services: vec!["mock-service-id".to_string()],
-            active_components: vec!["mock-comp-id-1".to_string()],
+            // 🎯 L'Agent IA s'attendra à des références croisées ici :
+            active_dapp: "ref:dapps:handle:mock-dapp".to_string(),
+            active_services: vec!["ref:services:handle:mock-service".to_string()],
+            active_components: vec!["ref:components:handle:mock-comp-1".to_string()],
             integrations: IntegrationsConfig::default(),
         }
     }
-
+    */
     fn load_production_config(env: &str) -> RaiseResult<Self> {
         let system_json = Self::load_collection_doc("configs", |v| {
             v.get("core")
@@ -478,6 +513,32 @@ impl AppConfig {
             }
         }
         None
+    }
+
+    /// Logique de détection interne au démarrage
+    fn detect_best_device(config: &AppConfig) -> candle_core::Device {
+        // Si l'utilisateur a désactivé le GPU globalement
+        if !config.world_model.use_gpu {
+            return candle_core::Device::Cpu;
+        }
+
+        #[cfg(feature = "metal")]
+        if let Ok(dev) = candle_core::Device::new_metal(0) {
+            return dev;
+        }
+
+        #[cfg(feature = "cuda")]
+        if let Ok(dev) = candle_core::Device::new_cuda(0) {
+            return dev;
+        }
+
+        // Fallback CPU : MKL (Intel/AMD) ou Accelerate (Mac) sera utilisé ici
+        candle_core::Device::Cpu
+    }
+
+    /// Helper statique pour récupérer le device partout dans Raise
+    pub fn device() -> &'static candle_core::Device {
+        DEVICE.get().expect("Device non initialisé")
     }
 }
 

@@ -79,9 +79,9 @@ async fn test_software_agent_creates_component_end_to_end() {
     }
 
     if components_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&components_dir) {
+        if let Ok(entries) = fs::read_dir_sync(&components_dir) {
             for e in entries.flatten() {
-                let content = std::fs::read_to_string(e.path()).unwrap_or_default();
+                let content = fs::read_to_string_sync(&e.path()).unwrap_or_default();
                 if content.contains("TestAuthService") || content.contains("testauthservice") {
                     found = true;
                     break;

@@ -17,7 +17,6 @@ impl<'a> WorldTrainer<'a> {
     pub fn new(engine: &'a NeuroSymbolicEngine, lr: f64) -> RaiseResult<Self> {
         let vars = engine.varmap.all_vars();
 
-        // On remplace le map_err par un match pour un diagnostic précis
         let opt = match AdamW::new(
             vars,
             ParamsAdamW {

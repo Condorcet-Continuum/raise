@@ -70,7 +70,7 @@ mod tests {
         rx.recv().await.unwrap();
 
         // Tâche 2 essaie de prendre le verrou (doit attendre)
-        let start = std::time::Instant::now();
+        let start = TimeInstant::now();
         // Ceci va bloquer (await) tant que lock1 n'est pas lâché
         let _guard = lock2.write().await;
         let duration = start.elapsed();

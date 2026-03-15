@@ -1,49 +1,43 @@
 // FICHIER : src-tauri/src/model_engine/arcadia/element_kind.rs
 
-use crate::json_db::jsonld::vocabulary::namespaces; // Import des namespaces officiels
 use crate::model_engine::types::ArcadiaElement;
 use crate::utils::prelude::*;
 
 /// Les couches principales de la méthodologie Arcadia + Data + Transverse
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serializable)]
 pub enum Layer {
-    OperationalAnalysis,  // OA
-    SystemAnalysis,       // SA
-    LogicalArchitecture,  // LA
-    PhysicalArchitecture, // PA
-    EPBS,                 // EPBS
-    Data,                 // Class, Types
-    Transverse,           // Common, Libraries, Shared definitions
+    OperationalAnalysis,
+    SystemAnalysis,
+    LogicalArchitecture,
+    PhysicalArchitecture,
+    EPBS,
+    Data,
+    Transverse,
     Unknown,
 }
 
 /// Catégorisation fonctionnelle simplifiée des éléments
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serializable)]
 pub enum ElementCategory {
-    Component,  // System, Logical, Physical Component
-    Function,   // Activity, System/Logical/Physical Function
-    Actor,      // Operational Actor, System Actor...
-    Exchange,   // Functional Exchange, Component Exchange
-    Interface,  // Interface, Port
-    Data,       // Class, Type
-    Capability, // Capability, Scenario
+    Component,
+    Function,
+    Actor,
+    Exchange,
+    Interface,
+    Data,
+    Capability,
     Other,
 }
-impl Layer {
-    /// Le nombre total de couches (utilisé pour la taille du tenseur)
-    pub const COUNT: usize = 8;
 
-    /// Convertit automatiquement la variante en index numérique (0 à 7)
+impl Layer {
+    pub const COUNT: usize = 8;
     pub fn index(&self) -> usize {
         *self as usize
     }
 }
 
 impl ElementCategory {
-    /// Le nombre total de catégories (utilisé pour la taille du tenseur)
     pub const COUNT: usize = 8;
-
-    /// Convertit automatiquement la variante en index numérique (0 à 7)
     pub fn index(&self) -> usize {
         *self as usize
     }
@@ -53,37 +47,30 @@ impl ElementCategory {
 pub trait ArcadiaSemantics {
     fn get_layer(&self) -> Layer;
     fn get_category(&self) -> ElementCategory;
-    fn is_behavioral(&self) -> bool; // Est-ce un élément de comportement (Fonction/Exchange) ?
-    fn is_structural(&self) -> bool; // Est-ce un élément de structure (Composant/Interface) ?
+    fn is_behavioral(&self) -> bool;
+    fn is_structural(&self) -> bool;
 }
 
 impl ArcadiaSemantics for ArcadiaElement {
     fn get_layer(&self) -> Layer {
-        // Détection robuste basée sur les préfixes d'URI définis dans l'ontologie
-        // Grâce au Loader, self.kind est garanti être une URI complète (ou normalisée).
+        let k = &self.kind;
 
-        if self.kind.starts_with(namespaces::OA) {
+        // Déduction agnostique par segment d'URI
+        if k.contains("/oa#") {
             Layer::OperationalAnalysis
-        } else if self.kind.starts_with(namespaces::SA) {
+        } else if k.contains("/sa#") {
             Layer::SystemAnalysis
-        } else if self.kind.starts_with(namespaces::LA) {
+        } else if k.contains("/la#") {
             Layer::LogicalArchitecture
-        } else if self.kind.starts_with(namespaces::PA) {
+        } else if k.contains("/pa#") {
             Layer::PhysicalArchitecture
-        } else if self.kind.starts_with(namespaces::EPBS) {
+        } else if k.contains("/epbs#") {
             Layer::EPBS
-        } else if self.kind.starts_with(namespaces::DATA) {
+        } else if k.contains("/data#") {
             Layer::Data
-        }
-        // Détection de la couche Transverse (souvent /transverse ou /common ou /libraries)
-        // Comme il n'y a pas encore de namespace::TRANSVERSE officiel, on vérifie le segment d'URI
-        else if self.kind.contains("/transverse")
-            || self.kind.contains("/common")
-            || self.kind.contains("/libraries")
-        {
+        } else if k.contains("/transverse") || k.contains("/common") || k.contains("/libraries") {
             Layer::Transverse
         } else {
-            // Fallback pour compatibilité partielle ou types externes
             Layer::Unknown
         }
     }
@@ -91,9 +78,7 @@ impl ArcadiaSemantics for ArcadiaElement {
     fn get_category(&self) -> ElementCategory {
         let k = &self.kind;
 
-        // Note: Avec des URIs complètes (ex: ...#SystemComponent), ends_with fonctionne parfaitement
-        // car le fragment (#...) est toujours à la fin.
-
+        // Déduction agnostique par suffixe d'URI
         if k.ends_with("Component") || k.ends_with("System") || k.ends_with("ConfigurationItem") {
             ElementCategory::Component
         } else if k.ends_with("Function") || k.ends_with("Activity") {
@@ -132,6 +117,7 @@ impl ArcadiaSemantics for ArcadiaElement {
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
+    use crate::utils::data::UnorderedMap;
 
     fn make_el(kind: &str) -> ArcadiaElement {
         ArcadiaElement {
@@ -144,40 +130,34 @@ mod tests {
     }
 
     #[test]
-    fn test_layer_detection_with_namespaces() {
-        // Test avec les vraies URIs de production construites via le vocabulaire
-        let el_oa = make_el(&format!("{}{}", namespaces::OA, "OperationalActor"));
+    fn test_layer_detection_agnostic() {
+        let el_oa = make_el("https://raise.io/ontology/arcadia/oa#OperationalActor");
         assert_eq!(el_oa.get_layer(), Layer::OperationalAnalysis);
 
-        let el_sa = make_el(&format!("{}{}", namespaces::SA, "SystemFunction"));
+        let el_sa = make_el("https://raise.io/ontology/arcadia/sa#SystemFunction");
         assert_eq!(el_sa.get_layer(), Layer::SystemAnalysis);
 
-        let el_data = make_el(&format!("{}{}", namespaces::DATA, "Class"));
+        let el_data = make_el("https://raise.io/ontology/arcadia/data#Class");
         assert_eq!(el_data.get_layer(), Layer::Data);
 
-        // Test Transverse
         let el_trans = make_el("https://raise.io/ontology/arcadia/transverse#CommonLib");
         assert_eq!(el_trans.get_layer(), Layer::Transverse);
 
-        // Test cas inconnu
         let el_unknown = make_el("http://unknown.org/thing");
         assert_eq!(el_unknown.get_layer(), Layer::Unknown);
     }
 
     #[test]
-    fn test_category_detection() {
-        // Test structurel (PA)
-        let comp = make_el(&format!("{}{}", namespaces::PA, "PhysicalComponent"));
+    fn test_category_detection_agnostic() {
+        let comp = make_el("https://raise.io/ontology/arcadia/pa#PhysicalComponent");
         assert_eq!(comp.get_category(), ElementCategory::Component);
         assert!(comp.is_structural());
 
-        // Test comportemental (SA)
-        let func = make_el(&format!("{}{}", namespaces::SA, "SystemFunction"));
+        let func = make_el("https://raise.io/ontology/arcadia/sa#SystemFunction");
         assert_eq!(func.get_category(), ElementCategory::Function);
         assert!(func.is_behavioral());
 
-        // Test Data
-        let data = make_el(&format!("{}{}", namespaces::DATA, "DataType"));
+        let data = make_el("https://raise.io/ontology/arcadia/data#DataType");
         assert_eq!(data.get_category(), ElementCategory::Data);
     }
 }

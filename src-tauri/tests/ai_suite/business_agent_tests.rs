@@ -94,8 +94,8 @@ async fn test_business_agent_generates_oa_entities() {
     let mut found_cap = false;
 
     if capabilities_dir.exists() {
-        for e in std::fs::read_dir(&capabilities_dir).unwrap().flatten() {
-            let content = std::fs::read_to_string(e.path())
+        for e in fs::read_dir_sync(&capabilities_dir).unwrap().flatten() {
+            let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
             if content.contains("crédit")
@@ -120,7 +120,7 @@ async fn test_business_agent_generates_oa_entities() {
         .join("collections")
         .join("actors");
     if actors_dir.exists() {
-        let count = std::fs::read_dir(&actors_dir).unwrap().count();
+        let count = fs::read_dir_sync(&actors_dir).unwrap().count();
         println!(
             "✅ SUCCÈS : L'agent a généré {} acteur(s) physique(s).",
             count

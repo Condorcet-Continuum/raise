@@ -145,4 +145,11 @@ tempfile = "3.10"     # Manquant pour transactions/tests.rs
 
 [features]
 default = []
+# Pour l'utilisateur sur PC (NVIDIA)
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+# Pour l'utilisateur sur PC (Intel/AMD - Accélération CPU)
+mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
+# Pour l'utilisateur sur Mac (Accélération GPU Apple)
+metal = ["candle-core/metal", "candle-nn/metal"]
+# Pour l'utilisateur sur Mac (Accélération CPU Apple)
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
