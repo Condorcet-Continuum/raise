@@ -645,30 +645,28 @@ impl<'a> CollectionsManager<'a> {
     ) -> RaiseResult<String> {
         data = self.resolve_document_references(data).await?;
 
+        // 🎯 1. EXTRACTION DE TOUTES LES CLÉS D'IDENTITÉ POSSIBLES
         let id_opt = data
             .get("_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let handle_opt = data.get("handle").cloned();
         let name_opt = data.get("name").cloned();
 
-        if id_opt.is_none() && name_opt.is_none() {
+        if id_opt.is_none() && handle_opt.is_none() && name_opt.is_none() {
             raise_error!(
                 "ERR_DB_UPSERT_MISSING_IDENTITY",
-                error =
-                    "Identifiant manquant : l'upsert requiert au moins un champ 'id' ou 'name'.",
+                error = "Identifiant manquant : l'upsert requiert '_id', 'handle' ou 'name'.",
                 context = json_value!({
                     "action": "upsert_document",
-                    "validation_state": {
-                        "has_id": false,
-                        "has_name": false
-                    },
-                    "hint": "Vérifiez que le document JSON contient une clé 'id' ou 'name' à la racine."
+                    "hint": "Fournissez une clé d'identification unique à la racine du document."
                 })
             );
         }
 
         let mut target_id = None;
 
+        // 🎯 2. RECHERCHE DIRECTE PAR ID (O(1))
         if let Some(ref id) = id_opt {
             if let Ok(Some(_)) = self.get_document(collection, id).await {
                 target_id = Some(id.clone());
@@ -676,23 +674,33 @@ impl<'a> CollectionsManager<'a> {
         }
 
         if target_id.is_none() {
-            if let Some(name_val) = name_opt {
+            // FIX : On priorise 'handle', puis 'name'
+            let search_param = if let Some(v) = handle_opt {
+                Some(("handle", v))
+            } else {
+                name_opt.map(|v| ("name", v))
+            };
+
+            // Si un champ alternatif existe, on interroge la base
+            if let Some((field, value)) = search_param {
                 let mut query = Query::new(collection);
                 query.filter = Some(QueryFilter {
                     operator: FilterOperator::And,
-                    conditions: vec![Condition::eq("name", name_val)],
+                    conditions: vec![Condition::eq(field, value)],
                 });
                 query.limit = Some(1);
 
-                let result = QueryEngine::new(self).execute_query(query).await?;
-
-                if let Some(existing_doc) = result.documents.first() {
-                    if let Some(found_id) = existing_doc.get("_id").and_then(|v| v.as_str()) {
-                        target_id = Some(found_id.to_string());
+                if let Ok(result) = QueryEngine::new(self).execute_query(query).await {
+                    if let Some(existing_doc) = result.documents.first() {
+                        if let Some(found_id) = existing_doc.get("_id").and_then(|v| v.as_str()) {
+                            target_id = Some(found_id.to_string());
+                        }
                     }
                 }
             }
         }
+
+        // 🎯 4. EXÉCUTION DE L'ACTION DÉFINITIVE
         match target_id {
             Some(id) => {
                 self.update_document(collection, &id, data).await?;

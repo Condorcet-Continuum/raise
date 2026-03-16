@@ -35,7 +35,11 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "SPATIAL_START",
-                json_value!({"action": "Génération procédurale de la topologie Arcadia..."})
+                json_value!({
+                    "action": "Génération procédurale de la topologie Arcadia...",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
 
             // Récupération du graphe spatial
@@ -73,9 +77,12 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "HEALTH_START",
-                json_value!({"action": "Analyse de la stabilité des nœuds..."})
+                json_value!({
+                    "action": "Analyse de la stabilité des nœuds...",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
-
             let graph = get_spatial_topology();
 
             // Identification des composants instables (stabilité < 0.5)
@@ -122,11 +129,7 @@ mod tests {
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr,
-            storage,
-        };
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
 
         let args = SpatialArgs {
             command: SpatialCommands::Health,

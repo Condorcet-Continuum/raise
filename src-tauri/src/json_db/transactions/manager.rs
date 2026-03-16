@@ -1148,7 +1148,7 @@ mod tests {
             id: None,
             document: json_value!({
                 "name": "alice",
-                "username": "alice_raise",
+                "handle": "alice_raise",
                 "email": "alice@raise.local",
                 "default_domain": "_system"
             }),

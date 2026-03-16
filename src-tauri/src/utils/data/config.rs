@@ -303,109 +303,7 @@ impl AppConfig {
 
         Ok(settings)
     }
-    /*
-    fn load_test_sandbox() -> RaiseResult<Self> {
-        let manifest = match RuntimeEnv::var("CARGO_MANIFEST_DIR") {
-            Ok(v) => v,
-            Err(e) => raise_error!(
-                "ERR_CONFIG_ENV_MANIFEST",
-                error = e,
-                context = json_value!({ "var": "CARGO_MANIFEST_DIR" })
-            ),
-        };
 
-        let path = PathBuf::from(manifest).join("tests/config.test.json");
-
-        if !path.exists() {
-            return Ok(Self::create_default_test_config());
-        }
-
-        let content = match fs::read_to_string_sync(&path) {
-            Ok(c) => c,
-            Err(e) => raise_error!(
-                "ERR_CONFIG_FS_READ",
-                error = e,
-                context = json_value!({ "path": path.to_string_lossy() })
-            ),
-        };
-
-        // 🎯 Utilisation de notre fonction sémantique de façade
-        let mut config: AppConfig = match json::deserialize_from_str(&content) {
-            Ok(cfg) => cfg,
-            Err(e) => raise_error!(
-                "ERR_CONFIG_PARSE",
-                error = e,
-                context = json_value!({ "path": path.to_string_lossy() })
-            ),
-        };
-
-        if let Some(domain_path) = config.paths.get_mut("PATH_RAISE_DOMAIN") {
-            let temp_dir = RuntimeEnv::temp_dir();
-            let temp_str = temp_dir.to_string_lossy();
-
-            if domain_path.starts_with("/tmp") || domain_path.contains(temp_str.as_ref() as &str) {
-                let unique_id = format!(
-                    "{}_{}",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_micros()
-                );
-                *domain_path = format!("{}_{}", domain_path, unique_id);
-                let _ = fs::create_dir_all_sync(domain_path);
-            }
-        }
-
-        config.system_domain = SYSTEM_DOMAIN.to_string();
-        config.system_db = SYSTEM_DB.to_string();
-
-        Ok(config)
-    }
-
-    pub(crate) fn create_default_test_config() -> Self {
-        let mut paths = UnorderedMap::new();
-        let tmp = RuntimeEnv::temp_dir();
-        paths.insert(
-            "PATH_RAISE_DOMAIN".to_string(),
-            tmp.to_string_lossy().to_string(),
-        );
-        paths.insert(
-            "PATH_LOGS".to_string(),
-            tmp.join("logs").to_string_lossy().to_string(),
-        );
-
-        AppConfig {
-            id: fallback_id(),
-            created_at: fallback_date(),
-            updated_at: fallback_date(),
-            semantic_type: fallback_config_type(),
-            name: Some(UnorderedMap::from([(
-                "en".to_string(),
-                "Default Test Config".to_string(),
-            )])),
-            system_domain: SYSTEM_DOMAIN.to_string(),
-            system_db: SYSTEM_DB.to_string(),
-            workstation: None,
-            user: None,
-            core: CoreConfig {
-                env_mode: "test".to_string(),
-                graph_mode: "none".to_string(),
-                log_level: "debug".to_string(),
-                vector_store_provider: "memory".to_string(),
-                language: "en".to_string(),
-            },
-            world_model: WorldModelConfig::default(),
-            deep_learning: DeepLearningConfig::default(),
-            paths,
-            // 🎯 L'Agent IA s'attendra à des références croisées ici :
-            active_dapp: "ref:dapps:handle:mock-dapp".to_string(),
-            active_services: vec!["ref:services:handle:mock-service".to_string()],
-            active_components: vec!["ref:components:handle:mock-comp-1".to_string()],
-            integrations: IntegrationsConfig::default(),
-        }
-    }
-    */
     fn load_production_config(env: &str) -> RaiseResult<Self> {
         let system_json = Self::load_collection_doc("configs", |v| {
             v.get("core")
@@ -456,15 +354,15 @@ impl AppConfig {
             });
         }
 
-        let username = RuntimeEnv::var("USER")
-            .or_else(|_| RuntimeEnv::var("USERNAME"))
+        let userhandle = RuntimeEnv::var("USER")
+            .or_else(|_| RuntimeEnv::var("USERHANDLE"))
             .unwrap_or_else(|_| "unknown".to_string());
 
         if let Some(user_json) = Self::load_collection_doc("users", |v| {
-            v.get("username").and_then(|u| u.as_str()) == Some(username.as_str())
+            v.get("userhandle").and_then(|u| u.as_str()) == Some(userhandle.as_str())
         }) {
             config.user = Some(ScopeConfig {
-                id: username,
+                id: userhandle,
                 default_domain: user_json
                     .get("default_domain")
                     .and_then(|v| v.as_str())

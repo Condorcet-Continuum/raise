@@ -2,6 +2,7 @@
 
 use clap::{Args, Subcommand};
 use raise::json_db::collections::manager::CollectionsManager;
+use raise::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 use raise::utils::prelude::*;
 
 // 🎯 Import du contexte global CLI
@@ -25,10 +26,30 @@ pub enum UtilsCommands {
     /// Se connecter avec un identifiant utilisateur (Force une nouvelle session)
     Login {
         /// Identifiant utilisateur (ex: "zair", "admin")
-        username: String,
+        userhandle: String,
     },
     /// Ferme la session actuelle et nettoie les données
     Logout,
+    Config {
+        /// L'action à effectuer ("show" ou "set")
+        #[arg(default_value = "show")]
+        action: String,
+        /// La clé à modifier (ex: "core.log_level", "default_db")
+        key: Option<String>,
+        /// La nouvelle valeur
+        value: Option<String>,
+    },
+
+    /// Change le domaine actif de la session (bascule automatiquement sur la DB par défaut du domaine)
+    UseDomain {
+        /// Le nom (handle) du domaine cible
+        domain: String,
+    },
+    /// Change la base de données active (doit appartenir au domaine en cours)
+    UseDb {
+        /// Le nom (handle) de la base de données cible
+        db: String,
+    },
 }
 
 pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
@@ -71,14 +92,11 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
             let mut provider = String::from("Non configuré");
             let mut model = String::from("Inconnu");
 
-            // Utilisation du storage déjà ouvert dans le contexte
-            let manager = CollectionsManager::new(
-                &ctx.storage,
-                &ctx.config.system_domain,
-                &ctx.config.system_db,
-            );
+            // 🎯 On utilise directement les valeurs résolues du contexte !
+            let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
             if let Ok(settings) = AppConfig::get_component_settings(&manager, "llm").await {
+                // `settings` est déjà un JsonValue, on peut le requêter directement
                 provider = settings
                     .get("provider")
                     .and_then(|v| v.as_str())
@@ -96,7 +114,9 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                 json_value!({
                     "provider": provider,
                     "model": model,
-                    "is_active": provider != "Non configuré"
+                    "is_active": provider != "Non configuré",
+                    "domain": ctx.active_domain, // 🎯 Traçabilité !
+                    "db": ctx.active_db
                 })
             );
 
@@ -121,7 +141,9 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                     user_info!(
                         "CURRENT_USER",
                         json_value!({
-                            "username": session.user_id,
+                            "userhandle": session.user_id,
+                            "active_domain": ctx.active_domain,
+                            "active_db": ctx.active_db,
                             "session_id": session.id,
                             "created_at": session.created_at,
                             "last_activity": session.last_activity_at
@@ -131,17 +153,17 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                 None => {
                     user_warn!(
                         "NO_ACTIVE_SESSION",
-                        json_value!({"hint": "Utilisez 'utils login <username>' pour vous connecter."})
+                        json_value!({"hint": "Utilisez 'utils login <userhandle>' pour vous connecter."})
                     );
                 }
             }
         }
 
-        UtilsCommands::Login { username } => {
+        UtilsCommands::Login { userhandle } => {
             // 🎯 Utilisation de start_session() qui gère mémoire + DB
-            user_info!("AUTH_START", json_value!({ "target_user": username }));
+            user_info!("AUTH_START", json_value!({ "target_user": userhandle }));
 
-            let session = ctx.session_mgr.start_session(&username).await?;
+            let session = ctx.session_mgr.start_session(&userhandle).await?;
 
             user_success!(
                 "AUTH_SUCCESS",
@@ -174,6 +196,136 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                 );
             }
         }
+
+        UtilsCommands::Config { action, key, value } => {
+            match action.to_lowercase().as_str() {
+                // 👁️ AFFICHER LA CONFIGURATION
+                "show" => {
+                    let session = ctx.session_mgr.get_current_session().await;
+                    user_info!(
+                        "CLI_CURRENT_CONFIG",
+                        json_value!({
+                            "context": {
+                                "active_user": ctx.active_user,
+                                "active_domain": ctx.active_domain,
+                                "active_db": ctx.active_db,
+                            },
+                            "session": session,
+                            "global_config": {
+                                "system_domain": ctx.config.system_domain,
+                                "system_db": ctx.config.system_db,
+                                "env_mode": ctx.config.core.env_mode,
+                                "language": ctx.config.core.language,
+                                "log_level": ctx.config.core.log_level,
+                            }
+                        })
+                    );
+                }
+
+                // ✏️ MODIFIER LA CONFIGURATION UTILISATEUR
+                "set" => {
+                    let Some(k) = key else {
+                        user_warn!(
+                            "CLI_USAGE",
+                            json_value!({"hint": "Usage: utils config set <key> <value>"})
+                        );
+                        return Ok(());
+                    };
+                    let Some(v) = value else {
+                        user_warn!(
+                            "CLI_USAGE",
+                            json_value!({"hint": "Usage: utils config set <key> <value>"})
+                        );
+                        return Ok(());
+                    };
+
+                    let sys_mgr = CollectionsManager::new(&ctx.storage, "_system", "_system");
+
+                    // 1. Trouver le document de l'utilisateur courant
+                    let mut query = Query::new("users");
+                    query.filter = Some(QueryFilter {
+                        operator: FilterOperator::And,
+                        conditions: vec![Condition::eq("handle", json_value!(&ctx.active_user))],
+                    });
+
+                    let res = QueryEngine::new(&sys_mgr).execute_query(query).await?;
+
+                    if let Some(doc) = res.documents.first() {
+                        let id = doc.get("_id").and_then(|id| id.as_str()).unwrap_or("");
+
+                        // 2. Création du patch JSON (gère un niveau d'imbrication max, ex: core.log_level)
+                        let patch = if k.contains('.') {
+                            let parts: Vec<&str> = k.split('.').collect();
+                            let mut inner = raise::utils::data::json::JsonObject::new();
+                            inner.insert(parts[1].to_string(), json_value!(v.clone()));
+
+                            let mut outer = raise::utils::data::json::JsonObject::new();
+                            outer.insert(parts[0].to_string(), JsonValue::Object(inner));
+                            JsonValue::Object(outer)
+                        } else {
+                            let mut map = raise::utils::data::json::JsonObject::new();
+                            map.insert(k.clone(), json_value!(v.clone()));
+                            JsonValue::Object(map)
+                        };
+
+                        // 3. Mise à jour persistante dans JsonDB
+                        match sys_mgr.update_document("users", id, patch).await {
+                            Ok(_) => {
+                                user_success!(
+                                    "CONFIG_UPDATED",
+                                    json_value!({
+                                        "user": ctx.active_user,
+                                        "key": k,
+                                        "new_value": v,
+                                        "hint": "Re-tapez 'login <votre_nom>' pour rafraîchir la session avec ces nouveaux paramètres !"
+                                    })
+                                );
+                            }
+                            Err(e) => {
+                                user_error!(
+                                    "CONFIG_UPDATE_FAILED",
+                                    json_value!({"error": e.to_string()})
+                                );
+                            }
+                        }
+                    } else {
+                        user_error!(
+                            "USER_NOT_FOUND",
+                            json_value!({
+                                "userhandle": ctx.active_user,
+                                "hint": "Impossible de modifier la configuration d'un utilisateur non persistant."
+                            })
+                        );
+                    }
+                }
+                _ => {
+                    user_warn!(
+                        "CLI_USAGE",
+                        json_value!({"hint": "Action inconnue. Usage: utils config [show|set]"})
+                    );
+                }
+            }
+        }
+
+        // 🎯 CHANGER DE DOMAINE
+        UtilsCommands::UseDomain { domain } => match ctx.session_mgr.switch_domain(&domain).await {
+            Ok(new_ctx) => {
+                user_success!("DOMAIN_SWITCHED", json_value!(new_ctx));
+            }
+            Err(e) => {
+                user_error!("DOMAIN_ERROR", json_value!({"error": e.to_string()}));
+            }
+        },
+
+        // 🎯 CHANGER DE BASE DE DONNÉES
+        UtilsCommands::UseDb { db } => match ctx.session_mgr.switch_db(&db).await {
+            Ok(new_ctx) => {
+                user_success!("DB_SWITCHED", json_value!(new_ctx));
+            }
+            Err(e) => {
+                user_error!("DB_ERROR", json_value!({"error": e.to_string()}));
+            }
+        },
     }
     Ok(())
 }
@@ -185,10 +337,13 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::utils::context::SessionManager;
+    use raise::json_db::collections::manager::CollectionsManager;
+    use raise::utils::context::SessionManager; // 🎯 Requis pour l'injection
 
     #[cfg(test)]
-    use raise::utils::testing::DbSandbox;
+    use raise::utils::testing::mock::inject_mock_user;
+    #[cfg(test)]
+    use raise::utils::testing::DbSandbox; // 🎯 Import du helper magique
 
     /// Teste le cycle de vie complet d'une session manuelle
     #[async_test]
@@ -198,11 +353,7 @@ mod tests {
         let session_mgr = SessionManager::new(storage.clone());
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr: session_mgr.clone(),
-            storage,
-        };
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr.clone(), storage.clone());
 
         // 1. État initial (Pas de session)
         let who_args = UtilsArgs {
@@ -211,13 +362,20 @@ mod tests {
         handle(who_args, ctx.clone()).await.unwrap();
         assert!(session_mgr.get_current_session().await.is_none());
 
-        // 🎯 FIX: Utilisation d'un UUID valide au lieu de "manual_tester"
-        let test_uuid = "11111111-1111-1111-1111-111111111111";
+        let test_user = "Astra-CLI-Tester";
+
+        // 🎯 INJECTION DE L'UTILISATEUR AVANT LE LOGIN
+        let db_mgr = CollectionsManager::new(
+            &sandbox.storage,
+            &AppConfig::get().system_domain,
+            &AppConfig::get().system_db,
+        );
+        inject_mock_user(&db_mgr, test_user).await;
 
         // 2. Login
         let login_args = UtilsArgs {
             command: UtilsCommands::Login {
-                username: test_uuid.into(),
+                userhandle: test_user.into(),
             },
         };
         handle(login_args, ctx.clone()).await.unwrap();
@@ -226,7 +384,7 @@ mod tests {
             .get_current_session()
             .await
             .expect("La session devrait exister");
-        assert_eq!(s.user_id, test_uuid);
+        assert_eq!(s.user_handle, test_user); // 🎯 On vérifie le nom de l'utilisateur
 
         // 3. Logout
         let logout_args = UtilsArgs {
@@ -244,12 +402,11 @@ mod tests {
     async fn test_logout_without_session() {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr: SessionManager::new(storage.clone()),
+        let ctx = CliContext::mock(
+            AppConfig::get(),
+            SessionManager::new(storage.clone()),
             storage,
-        };
-
+        );
         let args = UtilsArgs {
             command: UtilsCommands::Logout,
         };
@@ -264,21 +421,25 @@ mod tests {
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr: session_mgr.clone(),
-            storage,
-        };
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr.clone(), storage);
 
-        // 🎯 FIX: Utilisation d'UUIDs valides au lieu de "user_a" et "user_b"
-        let user_a_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-        let user_b_uuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let user_a = "Agent-A";
+        let user_b = "Agent-B";
+
+        // 🎯 INJECTION DES DEUX UTILISATEURS
+        let db_mgr = CollectionsManager::new(
+            &sandbox.storage,
+            &AppConfig::get().system_domain,
+            &AppConfig::get().system_db,
+        );
+        inject_mock_user(&db_mgr, user_a).await;
+        inject_mock_user(&db_mgr, user_b).await;
 
         // Login User A
         handle(
             UtilsArgs {
                 command: UtilsCommands::Login {
-                    username: user_a_uuid.into(),
+                    userhandle: user_a.into(),
                 },
             },
             ctx.clone(),
@@ -290,7 +451,7 @@ mod tests {
         handle(
             UtilsArgs {
                 command: UtilsCommands::Login {
-                    username: user_b_uuid.into(),
+                    userhandle: user_b.into(),
                 },
             },
             ctx.clone(),
@@ -299,7 +460,7 @@ mod tests {
         .unwrap();
 
         let current = session_mgr.get_current_session().await.unwrap();
-        assert_eq!(current.user_id, user_b_uuid);
+        assert_eq!(current.user_handle, user_b); // 🎯 On vérifie que B a pris le dessus
     }
 
     /// Teste la commande Info pour s'assurer qu'elle s'exécute sans paniquer
@@ -308,11 +469,11 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr: SessionManager::new(storage.clone()),
+        let ctx = CliContext::mock(
+            AppConfig::get(),
+            SessionManager::new(storage.clone()),
             storage,
-        };
+        );
 
         let args = UtilsArgs {
             command: UtilsCommands::Info,

@@ -26,14 +26,6 @@ use crate::CliContext;
 
 #[derive(Args, Debug, Clone)]
 pub struct AiArgs {
-    /// Espace de travail (écrase la configuration par défaut)
-    #[arg(long)]
-    pub space: Option<String>,
-
-    /// Base de données (écrase la configuration par défaut)
-    #[arg(long)]
-    pub db: Option<String>,
-
     #[command(subcommand)]
     pub command: Option<AiCommands>,
 }
@@ -85,9 +77,6 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
     // 🎯 Heartbeat automatique
     let _ = ctx.session_mgr.touch().await;
 
-    let space = args.space.as_ref().unwrap_or(&ctx.config.system_domain);
-    let db = args.db.as_ref().unwrap_or(&ctx.config.system_db);
-
     let domain_path = ctx
         .config
         .get_path("PATH_RAISE_DOMAIN")
@@ -99,27 +88,23 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         .unwrap_or_else(|| domain_path.join("dataset"));
 
     fs::ensure_dir_async(&domain_path).await?;
-
     // 2. MOTEURS ET CONTEXTE (OPTIMISÉ)
-    // 🎯 On réutilise le storage global !
     let storage = ctx.storage.clone();
-    let manager = CollectionsManager::new(&storage, space, db);
+
+    // 🎯 PLUS DE DEVINETTE : On utilise directement le contexte résolu !
+    let manager = CollectionsManager::new(&storage, &ctx.active_domain, &ctx.active_db);
     let client = LlmClient::new(&manager).await?;
 
-    // 🎯 On récupère la vraie identité de l'utilisateur CLI !
+    // On récupère juste l'ID de session
     let current_session = ctx.session_mgr.get_current_session().await;
-    let user_id = current_session
-        .as_ref()
-        .map(|s| s.user_id.clone())
-        .unwrap_or_else(|| "cli_user".to_string());
     let session_id = current_session
         .as_ref()
         .map(|s| s.id.clone())
         .unwrap_or_else(|| "cli_session".to_string());
 
-    // Instanciation asynchrone du Contexte Agent avec les vraies IDs
+    // Instanciation asynchrone du Contexte Agent avec le vrai User résolu
     let agent_ctx = AgentContext::new(
-        &user_id,
+        &ctx.active_user,
         &session_id,
         storage.clone(),
         client.clone(),
@@ -130,12 +115,12 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
 
     // 3. EXÉCUTION
     match args.command.unwrap_or(AiCommands::Interactive) {
-        AiCommands::Interactive => run_interactive_mode(&agent_ctx, client).await?,
+        AiCommands::Interactive => run_interactive_mode(&agent_ctx, &ctx, client).await?,
         AiCommands::Classify { input, execute } => {
             process_input(&agent_ctx, &input, client, execute).await
         }
         AiCommands::Inspect { reference } => {
-            inspect_agent_logic(&agent_ctx, &reference, space, db).await?;
+            inspect_agent_logic(&agent_ctx, &reference, &ctx.active_domain, &ctx.active_db).await?;
         }
         AiCommands::Train {
             domain,
@@ -143,30 +128,8 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
             epochs,
             lr,
         } => {
-            let final_domain = domain
-                .or_else(|| {
-                    ctx.config
-                        .user
-                        .as_ref()
-                        .and_then(|u| u.default_domain.clone())
-                })
-                .or_else(|| {
-                    ctx.config
-                        .workstation
-                        .as_ref()
-                        .and_then(|w| w.default_domain.clone())
-                })
-                .unwrap_or_else(|| ctx.config.system_domain.clone());
-
-            let final_db = target_db
-                .or_else(|| ctx.config.user.as_ref().and_then(|u| u.default_db.clone()))
-                .or_else(|| {
-                    ctx.config
-                        .workstation
-                        .as_ref()
-                        .and_then(|w| w.default_db.clone())
-                })
-                .unwrap_or_else(|| ctx.config.system_db.clone());
+            let final_domain = domain.unwrap_or_else(|| ctx.active_domain.clone());
+            let final_db = target_db.unwrap_or_else(|| ctx.active_db.clone());
 
             let final_epochs = epochs.unwrap_or(3);
             let final_lr = lr.unwrap_or(ctx.config.deep_learning.learning_rate);
@@ -176,10 +139,9 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
                 json_value!({ "domain": final_domain, "db": final_db, "lr": final_lr, "epochs": final_epochs })
             );
 
-            // 🎯 Utilisation propre du storage global existant
             match ai_train_domain_native(
                 &storage,
-                space,
+                &ctx.active_domain, // L'espace d'exécution principal
                 &final_db,
                 &final_domain,
                 final_epochs,
@@ -199,7 +161,11 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
     Ok(())
 }
 
-async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseResult<()> {
+async fn run_interactive_mode(
+    ctx: &AgentContext,
+    cli_ctx: &CliContext,
+    client: LlmClient,
+) -> RaiseResult<()> {
     // 🎯 Mise en conformité JSON stricte
     user_info!("AI_INTERACTIVE_WELCOME", json_value!({}));
     user_info!("AI_INTERACTIVE_SEPARATOR", json_value!({}));
@@ -209,9 +175,12 @@ async fn run_interactive_mode(ctx: &AgentContext, client: LlmClient) -> RaiseRes
         json_value!({ "path": ctx.paths.domain_root })
     );
     user_info!("AI_EXIT_HINT", json_value!({}));
-
+    let prompt = format!(
+        "RAISE-AI [{}@{}/{}]> ",
+        cli_ctx.active_user, cli_ctx.active_domain, cli_ctx.active_db
+    );
     loop {
-        print!("RAISE-AI> ");
+        print!("{}", prompt);
         os::flush_stdout()?;
         let input = os::read_stdin_line()?;
 

@@ -36,7 +36,7 @@ fn get_docs(model: &ProjectModel) -> UnorderedMap<String, JsonValue> {
     let mut docs = UnorderedMap::new();
     let mut collect = |elements: &Vec<raise::model_engine::types::ArcadiaElement>| {
         for e in elements {
-            if let Ok(val) = serde_json::to_value(e) {
+            if let Ok(val) = json::serialize_to_value(e) {
                 docs.insert(e.id.clone(), val);
             }
         }
@@ -63,7 +63,12 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
             // 🎯 Utilisation stricte du contexte JSON pour les macros
             user_info!(
                 "TRACE_START",
-                json_value!({"step": "init", "message": "Initialisation du moteur de traçage..."})
+                json_value!({
+                    "step": "init",
+                    "message": "Initialisation du moteur de traçage...",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
 
             let model = ProjectModel::default();
@@ -72,7 +77,7 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
             let tracer = Tracer::from_legacy_model(&model);
             let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name);
 
-            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            println!("{}", json::serialize_to_string_pretty(&report).unwrap());
 
             user_success!(
                 "AUDIT_TRACEABILITY_COMPLETE",
@@ -90,7 +95,9 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
                 json_value!({
                     "component": component_id,
                     "scope": "dependency_graph",
-                    "action": "evaluating_side_effects"
+                    "action": "evaluating_side_effects",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
                 })
             );
 
@@ -106,7 +113,7 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
 
             let report = analyzer.analyze(&component_id, 3);
 
-            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            println!("{}", json::serialize_to_string_pretty(&report).unwrap());
 
             user_success!(
                 "IMPACT_ANALYSIS_SUCCESS",
@@ -121,7 +128,12 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
         TraceabilityCommands::History => {
             user_info!(
                 "TRACKER_START",
-                json_value!({"action": "fetch_history", "message": "Consultation de l'historique des changements..."})
+                json_value!({
+                    "action": "fetch_history",
+                    "message": "Consultation de l'historique des changements...",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
 
             let _tracker = ChangeTracker::new();
@@ -152,11 +164,7 @@ mod tests {
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr,
-            storage,
-        };
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
 
         let args = TraceabilityArgs {
             command: TraceabilityCommands::Audit,

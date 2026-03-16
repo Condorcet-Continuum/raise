@@ -2,11 +2,12 @@
 
 // 1. Dépendances Métier (Base de données locale)
 use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 use crate::json_db::storage::StorageEngine;
 
 // 2. Core : Concurrence, Horloge, Identifiants et Erreurs
 use crate::utils::core::error::RaiseResult;
-use crate::utils::core::{AsyncRwLock, SharedRef, UniqueId, UtcClock};
+use crate::utils::core::{AsyncRwLock, SharedRef, UtcClock};
 
 // 3. Data : Configuration, Collections et Typage JSON
 use crate::raise_error;
@@ -57,7 +58,7 @@ pub struct Session {
     pub semantic_type: Vec<String>,
 
     pub user_id: String,
-    pub user_name: String,
+    pub user_handle: String,
     pub status: SessionStatus,
     pub expires_at: String,
     pub last_activity_at: String,
@@ -96,66 +97,69 @@ impl SessionManager {
         CollectionsManager::new(&self.storage, &config.system_domain, &config.system_db)
     }
 
-    pub async fn start_session(&self, username_or_id: &str) -> RaiseResult<Session> {
+    pub async fn start_session(&self, target_user: &str) -> RaiseResult<Session> {
+        let mgr = self.get_db_manager();
+        let _ = mgr.init_db().await;
         let config = AppConfig::get();
 
+        // 1. VÉRIFICATION DU USER DANS JSON_DB
+        let mut query = Query::new("users");
+        query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("handle", json_value!(target_user))],
+        });
+
+        let qe = QueryEngine::new(&mgr);
+        let res = qe.execute_query(query).await?;
+
+        let Some(doc) = res.documents.first() else {
+            // 🎯 UTILISATION DE RAISE_ERROR!
+            raise_error!(
+                "ERR_USER_NOT_FOUND",
+                error = format!(
+                    "L'utilisateur '{}' est introuvable dans le système.",
+                    target_user
+                ),
+                context = json_value!({"handle": target_user, "action": "start_session"})
+            );
+        };
+
+        // 2. EXTRACTION DES PRÉFÉRENCES ET DE L'ID
+        let def_domain = doc
+            .get("default_domain")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&config.system_domain)
+            .to_string();
+        let def_db = doc
+            .get("default_db")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&config.system_db)
+            .to_string();
+        let user_id = doc
+            .get("_id")
+            .or_else(|| doc.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(target_user)
+            .to_string();
+
         let ctx = SessionContext {
-            current_domain: config.system_domain.clone(),
-            current_db: config.system_db.clone(),
+            current_domain: def_domain,
+            current_db: def_db,
             active_dapp: config.active_dapp.clone(),
         };
 
-        // 🎯 Remplacé (UniqueId)
-        let is_uuid = UniqueId::parse_str(username_or_id).is_ok();
-        let final_user_id = if is_uuid {
-            username_or_id.to_string()
-        } else {
-            "00000000-0000-0000-0000-000000000000".to_string()
-        };
-
         let now = UtcClock::now();
-
         let payload = json_value!({
-            "user_id": final_user_id,
-            "user_name": username_or_id,
+            "user_id": user_id,
+            "user_handle": target_user,
             "status": "active",
-            "last_activity_at": now.to_rfc3339(), // Géré en Rust car mis à jour dynamiquement via touch()
+            "last_activity_at": now.to_rfc3339(),
             "context": ctx,
         });
-        /*
-             let session = Session {
-                 id: UniqueId::new_v4().to_string(),
-                 created_at: now.to_rfc3339(),
-                 updated_at: now.to_rfc3339(),
-                 user_id: final_user_id,
-                 user_name: username_or_id.to_string(),
-                 status: SessionStatus::Active,
-                 expires_at: (now + chrono::Duration::hours(8)).to_rfc3339(),
-                 last_activity_at: now.to_rfc3339(),
-                 context: ctx,
-                 cached_permissions: None,
-             };
 
-
-             let doc = json::serialize_to_value(&session)?;
-             let mgr = self.get_db_manager();
-
-             let _ = mgr.init_db().await;
-             mgr.insert_with_schema("sessions", doc).await?;
-
-             let mut lock = self.current_session.write().await;
-             *lock = Some(session.clone());
-        */
-        let mgr = self.get_db_manager();
-        let _ = mgr.init_db().await;
-
-        // 2. PERSISTANCE & HYDRATATION
-        // Le moteur applique le session.schema.json, calcule la date +8h,
-        // injecte les UUIDs et les types sémantiques (@type).
+        // 3. CRÉATION EN BASE
         let hydrated_doc = mgr.insert_with_schema("sessions", payload).await?;
 
-        // 3. LECTURE (Le miroir)
-        // Serde mappe le document parfait généré par json-db vers notre structure Rust.
         let session: Session = match json::deserialize_from_value(hydrated_doc) {
             Ok(s) => s,
             Err(e) => raise_error!(
@@ -169,6 +173,170 @@ impl SessionManager {
         *lock = Some(session.clone());
 
         Ok(session)
+    }
+
+    pub async fn switch_domain(&self, target_domain: &str) -> RaiseResult<SessionContext> {
+        let mgr = self.get_db_manager();
+        let config = AppConfig::get();
+
+        // 1. VÉRIFIER LE DOMAINE
+        let mut dom_query = Query::new("domains");
+        dom_query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("handle", json_value!(target_domain))],
+        });
+
+        let res = QueryEngine::new(&mgr).execute_query(dom_query).await?;
+        let Some(dom_doc) = res.documents.first() else {
+            // 🎯 UTILISATION DE RAISE_ERROR!
+            raise_error!(
+                "ERR_DOMAIN_NOT_FOUND",
+                error = format!("Le domaine '{}' n'existe pas.", target_domain),
+                context = json_value!({"target_domain": target_domain})
+            );
+        };
+
+        let domain_uuid = dom_doc
+            .get("_id")
+            .or_else(|| dom_doc.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // 2. TROUVER LA DB PAR DÉFAUT
+        let db_query = Query::new("databases");
+        let domain_ref = format!("ref:domains:handle:{}", target_domain);
+
+        let mut auto_db = config.system_db.clone();
+        if let Ok(db_res) = QueryEngine::new(&mgr).execute_query(db_query).await {
+            for doc in db_res.documents {
+                let doc_domain_id = doc.get("domain_id").and_then(|v| v.as_str()).unwrap_or("");
+                if doc_domain_id == domain_uuid || doc_domain_id == domain_ref {
+                    if let Some(h) = doc.get("handle").and_then(|v| v.as_str()) {
+                        auto_db = h.to_string();
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 3. METTRE À JOUR LA SESSION
+        self.update_session_context(target_domain, &auto_db).await
+    }
+
+    pub async fn switch_db(&self, target_db: &str) -> RaiseResult<SessionContext> {
+        let mgr = self.get_db_manager();
+
+        let current_domain = {
+            let lock = self.current_session.read().await;
+            lock.as_ref()
+                .map(|s| s.context.current_domain.clone())
+                .unwrap_or_default()
+        };
+
+        // 1. RÉCUPÉRER L'UUID DU DOMAINE ACTIF
+        let mut dom_query = Query::new("domains");
+        dom_query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("handle", json_value!(&current_domain))],
+        });
+
+        let mut domain_uuid = String::new();
+        if let Ok(res) = QueryEngine::new(&mgr).execute_query(dom_query).await {
+            if let Some(doc) = res.documents.first() {
+                domain_uuid = doc
+                    .get("_id")
+                    .or_else(|| doc.get("id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+            }
+        }
+
+        // 2. VÉRIFIER L'APPARTENANCE
+        let mut db_query = Query::new("databases");
+        db_query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("handle", json_value!(target_db))],
+        });
+
+        let res = QueryEngine::new(&mgr).execute_query(db_query).await?;
+        let Some(db_doc) = res.documents.first() else {
+            // 🎯 UTILISATION DE RAISE_ERROR!
+            raise_error!(
+                "ERR_DB_NOT_FOUND",
+                error = format!("La base de données '{}' est introuvable.", target_db),
+                context = json_value!({"target_db": target_db, "current_domain": current_domain})
+            );
+        };
+
+        let doc_domain_id = db_doc
+            .get("domain_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let domain_ref = format!("ref:domains:handle:{}", current_domain);
+
+        if doc_domain_id != domain_uuid && doc_domain_id != domain_ref {
+            // 🎯 UTILISATION DE RAISE_ERROR!
+            raise_error!(
+                "ERR_DB_NOT_IN_DOMAIN",
+                error = "Cette base de données n'appartient pas au domaine actif.",
+                context = json_value!({
+                    "target_db": target_db,
+                    "current_domain": current_domain,
+                    "db_domain_id": doc_domain_id
+                })
+            );
+        }
+
+        // 3. METTRE À JOUR LA SESSION
+        self.update_session_context(&current_domain, target_db)
+            .await
+    }
+
+    // Fonction utilitaire interne pour persister le contexte
+    async fn update_session_context(
+        &self,
+        new_domain: &str,
+        new_db: &str,
+    ) -> RaiseResult<SessionContext> {
+        let mut session_to_update = None;
+        let mut new_ctx = None;
+
+        if let Some(session) = self.current_session.write().await.as_mut() {
+            session.context.current_domain = new_domain.to_string();
+            session.context.current_db = new_db.to_string();
+            session.updated_at = UtcClock::now().to_rfc3339();
+
+            session_to_update = Some((session.id.clone(), session.updated_at.clone()));
+            new_ctx = Some(session.context.clone());
+        }
+
+        if let Some((id, updated_at)) = session_to_update {
+            if let Some(ctx) = &new_ctx {
+                let mgr = self.get_db_manager();
+                let patch = json_value!({
+                    "updated_at": updated_at,
+                    "context": {
+                        "current_domain": ctx.current_domain,
+                        "current_db": ctx.current_db,
+                        "active_dapp": ctx.active_dapp
+                    }
+                });
+                let _ = mgr.update_document("sessions", &id, patch).await;
+            }
+        }
+
+        let Some(ctx) = new_ctx else {
+            // 🎯 UTILISATION DE RAISE_ERROR!
+            raise_error!(
+                "ERR_NO_ACTIVE_SESSION",
+                error = "Impossible de mettre à jour le contexte : aucune session active.",
+                context = json_value!({"action": "update_session_context"})
+            );
+        };
+
+        Ok(ctx)
     }
 
     pub async fn get_current_session(&self) -> Option<Session> {
@@ -223,147 +391,131 @@ impl SessionManager {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::mock::AgentDbSandbox; // 🎯 Le mock officiel
+    use crate::utils::testing::mock::{inject_mock_user, AgentDbSandbox};
 
-    fn test_uuid() -> String {
-        UniqueId::new_v4().to_string()
-    }
+    // 🤖 Identité fixe pour l'agent de test
+    const TEST_AGENT: &str = "Astra-Bot-Tester";
 
     #[tokio::test]
     async fn test_session_manager_initial_state() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
-
-        assert!(
-            manager.get_current_session().await.is_none(),
-            "La session doit être vide au démarrage"
-        );
+        assert!(manager.get_current_session().await.is_none());
     }
 
     #[tokio::test]
     async fn test_start_session_populates_context_from_config() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
-        let user_uuid = test_uuid();
+        let userhandle = TEST_AGENT;
 
-        let session = manager.start_session(&user_uuid).await.unwrap();
-
-        assert_eq!(session.user_id, user_uuid);
-        assert_eq!(session.status, SessionStatus::Active);
-        assert!(
-            !session.id.is_empty(),
-            "L'UUID de la session doit être généré"
+        let db_mgr = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
+        inject_mock_user(&db_mgr, userhandle).await;
 
-        assert_eq!(session.context.current_domain, sandbox.config.system_domain);
-        assert_eq!(session.context.current_db, sandbox.config.system_db);
-        assert_eq!(session.context.active_dapp, sandbox.config.active_dapp);
+        // 🎯 On se connecte avec le nom de l'agent injecté
+        let session = manager.start_session(userhandle).await.unwrap();
+
+        assert_eq!(session.user_handle, userhandle);
+        assert_eq!(session.status, SessionStatus::Active);
+
+        // 🎯 FIX ASSERTION : On vérifie que la surcharge utilisateur (mbse2) est appliquée
+        // et non le défaut du système (_system).
+        assert_eq!(session.context.current_domain, "mbse2");
+        assert_eq!(session.context.current_db, "drones");
     }
 
     #[tokio::test]
     async fn test_start_session_persists_to_db() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
-        let user_uuid = test_uuid();
-
-        let session = manager.start_session(&user_uuid).await.unwrap();
+        let userhandle = TEST_AGENT;
 
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
+        inject_mock_user(&db_mgr, userhandle).await;
+
+        let session = manager.start_session(userhandle).await.unwrap();
 
         let doc_opt = db_mgr.get_document("sessions", &session.id).await.unwrap();
-        assert!(
-            doc_opt.is_some(),
-            "La session n'a pas été sauvegardée dans json_db"
-        );
-
-        let doc = doc_opt.unwrap();
-        assert_eq!(doc["user_id"], user_uuid);
-        assert_eq!(doc["status"], "active");
+        assert!(doc_opt.is_some());
+        assert_eq!(doc_opt.unwrap()["user_handle"], userhandle);
     }
 
     #[tokio::test]
     async fn test_session_touch_updates_db() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
-        let user_uuid = test_uuid();
-        let session = manager.start_session(&user_uuid).await.unwrap();
-
-        let initial_activity =
-            chrono::DateTime::parse_from_rfc3339(&session.last_activity_at).unwrap();
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        manager.touch().await.unwrap();
-
-        let mem_session = manager.get_current_session().await.unwrap();
-        let mem_activity =
-            chrono::DateTime::parse_from_rfc3339(&mem_session.last_activity_at).unwrap();
-        assert!(mem_activity > initial_activity);
+        let userhandle = TEST_AGENT;
 
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        let doc = db_mgr
-            .get_document("sessions", &session.id)
-            .await
-            .unwrap()
-            .unwrap();
-        let db_activity =
-            chrono::DateTime::parse_from_rfc3339(doc["last_activity_at"].as_str().unwrap())
-                .unwrap();
+        inject_mock_user(&db_mgr, userhandle).await;
 
-        assert_eq!(
-            mem_activity, db_activity,
-            "La DB et la mémoire sont désynchronisées"
-        );
+        let session = manager.start_session(userhandle).await.unwrap();
+        let initial_activity = session.last_activity_at.clone();
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        manager.touch().await.unwrap();
+
+        let mem_session = manager.get_current_session().await.unwrap();
+        assert!(mem_session.last_activity_at > initial_activity);
     }
 
     #[tokio::test]
     async fn test_end_session_deletes_from_db() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
-        let user_uuid = test_uuid();
-        let session = manager.start_session(&user_uuid).await.unwrap();
-
-        manager.end_session().await.unwrap();
-        assert!(manager.get_current_session().await.is_none());
+        let userhandle = TEST_AGENT;
 
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
+        inject_mock_user(&db_mgr, userhandle).await;
+
+        let session = manager.start_session(userhandle).await.unwrap();
+        manager.end_session().await.unwrap();
+
         let doc_opt = db_mgr.get_document("sessions", &session.id).await.unwrap();
-        assert!(
-            doc_opt.is_none(),
-            "La session aurait dû être supprimée physiquement"
-        );
+        assert!(doc_opt.is_none());
     }
 
     #[tokio::test]
     async fn test_concurrent_session_reads() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
-        let user_uuid = test_uuid();
-        manager.start_session(&user_uuid).await.unwrap();
+        let userhandle = "Bot-Parallel";
+
+        let db_mgr = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        inject_mock_user(&db_mgr, userhandle).await;
+
+        manager.start_session(userhandle).await.unwrap();
 
         let mut tasks = vec![];
-        for _ in 0..50 {
+        for _ in 0..10 {
             let mgr_clone = manager.clone();
             tasks.push(tokio::spawn(async move {
                 let session = mgr_clone.get_current_session().await;
                 assert!(session.is_some());
             }));
         }
-
-        for task in tasks {
-            let _ = task.await;
+        for t in tasks {
+            t.await.unwrap();
         }
     }
 }

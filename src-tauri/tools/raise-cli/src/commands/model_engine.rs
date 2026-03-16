@@ -40,8 +40,12 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
     match args.command {
         ModelCommands::Load { path } => {
             user_info!(
-                "MODEL_LOAD_START",
-                json_value!({ "path": path, "type": "source_file" })
+                "VALIDATION_START",
+                json_value!({
+                    "action": "Démarrage du ConsistencyChecker...",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
             let path_ref = Path::new(&path);
 
@@ -66,9 +70,12 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte avec JSON
             user_info!(
                 "VALIDATION_START",
-                json_value!({"action": "Démarrage du ConsistencyChecker..."})
+                json_value!({
+                    "action": "Démarrage du ConsistencyChecker...",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
-
             // On utilise le checker ré-exporté par la façade
             let _checker = ConsistencyChecker;
 
@@ -94,7 +101,11 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
                 // Info : On trace le début de la transformation
                 user_info!(
                     "TRANSFORM_START",
-                    json_value!({ "domain": format!("{:?}", d) })
+                    json_value!({
+                        "target_domain": format!("{:?}", d),
+                        "active_domain": ctx.active_domain,
+                        "active_user": ctx.active_user
+                    })
                 );
 
                 // Success : On confirme la projection réussie
@@ -134,11 +145,7 @@ mod tests {
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr,
-            storage,
-        };
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
 
         let args = ModelArgs {
             command: ModelCommands::Validate,

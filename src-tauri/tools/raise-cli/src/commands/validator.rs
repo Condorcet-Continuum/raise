@@ -79,7 +79,9 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
         json_value!({
             "space": space,
             "db": db_name,
-            "action": "schema_fetch"
+            "action": "schema_fetch",
+            "active_domain": ctx.active_domain,
+            "active_user": ctx.active_user
         })
     );
 
@@ -111,7 +113,12 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
 
     user_info!(
         "VALIDATOR_START",
-        json_value!({ "uri": full_uri, "protocol": "https" })
+        json_value!({
+            "uri": full_uri,
+            "protocol": "https",
+            "active_domain": ctx.active_domain,
+            "active_user": ctx.active_user
+        })
     );
 
     let validator = match SchemaValidator::compile_with_registry(&full_uri, &registry) {

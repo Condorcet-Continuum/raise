@@ -42,7 +42,11 @@ pub async fn handle(args: PluginsArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "PLUGINS_LIST_START",
-                json_value!({"action": "Interrogation du catalogue actif..."})
+                json_value!({
+                    "action": "Interrogation du catalogue actif...",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
 
             // Simulation des capacités du PluginManager
@@ -59,7 +63,14 @@ pub async fn handle(args: PluginsArgs, ctx: CliContext) -> RaiseResult<()> {
 
         PluginsCommands::Load { id, path } => {
             // Début du chargement : on identifie le bloc cognitif
-            user_info!("PLUGIN_LOAD_START", json_value!({ "id": id }));
+            user_info!(
+                "PLUGIN_LOAD_START",
+                json_value!({
+                    "id": id,
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
+            );
 
             // Étape Système de Fichiers (FS)
             user_info!("PLUGIN_FS_READ", json_value!({ "path": path }));
@@ -73,7 +84,14 @@ pub async fn handle(args: PluginsArgs, ctx: CliContext) -> RaiseResult<()> {
 
         PluginsCommands::Info { name } => {
             // Inspection détaillée
-            user_info!("PLUGIN_INSPECT", json_value!({ "plugin_name": name }));
+            user_info!(
+                "PLUGIN_INSPECT",
+                json_value!({
+                    "plugin_name": name,
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
+            );
 
             // Métadonnées sur le runtime
             user_info!(
@@ -108,11 +126,7 @@ mod tests {
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr,
-            storage,
-        };
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
 
         let args = PluginsArgs {
             command: PluginsCommands::List,

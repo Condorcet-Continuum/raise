@@ -61,7 +61,12 @@ pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
             let target: TargetLanguage = lang.into();
             user_info!(
                 "FORGE_START",
-                json_value!({ "element_id": element_id, "stage": "init" })
+                json_value!({
+                    "element_id": element_id,
+                    "stage": "init",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
             user_info!(
                 "TARGET_RESOLVED",
@@ -105,11 +110,7 @@ mod tests {
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr,
-            storage,
-        };
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
 
         let args = CodeGenArgs {
             command: CodeGenCommands::Generate {

@@ -83,6 +83,27 @@ pub const SESSION_SCHEMA_MOCK: &str = r#"{
     "required": ["_id", "_created_at", "_updated_at", "user_id", "status", "expires_at", "context"]
 }"#;
 
+pub const USER_SCHEMA_MOCK: &str = r#"{
+    "type": "object",
+    "properties": {
+        "_id": {
+            "type": "string",
+            "x_compute": {
+                "engine": "plan/v1",
+                "scope": "root",
+                "update": "if_missing",
+                "plan": { "op": "uuid_v4" }
+            }
+        },
+        "handle": { "type": "string" },
+        "name": { "type": "object" },
+        "default_domain": { "type": "string" },
+        "default_db": { "type": "string" },
+        "role": { "type": "string" }
+    },
+    "required": ["_id", "handle",  "name", "default_domain", "default_db"]
+}"#;
+
 // =========================================================================
 // 🔧 UTILS DE CONFIGURATION DE TEST
 // =========================================================================
@@ -189,10 +210,24 @@ pub fn load_test_sandbox() -> RaiseResult<AppConfig> {
 
 // --- FONCTIONS MOCKS ---
 
+pub async fn inject_mock_user(manager: &CollectionsManager<'_>, userhandle: &str) {
+    let user_doc = json_value!({
+        "handle": userhandle,
+        "name": { "fr": userhandle, "en": userhandle },
+        "default_domain": "mbse2",
+        "default_db": "drones",
+        "role": "engineer"
+    });
+
+    manager
+        .insert_with_schema("users", user_doc)
+        .await
+        .expect("Échec injection agent de test");
+}
 pub async fn inject_mock_component(
     manager: &CollectionsManager<'_>,
     comp_id: &str,
-    settings: JsonValue, // 🎯 JsonValue au lieu de Value
+    settings: JsonValue,
 ) {
     let _ = manager
         .create_collection(
@@ -398,16 +433,39 @@ impl DbSandbox {
         );
 
         let db_cfg = JsonDbConfig::new(root_path.clone());
-
         inject_schema_to_path(&db_cfg).await;
+
+        // 🎯 1. Préparation physique des schémas de mocks
         inject_collection_schema(&root_path, "sessions", SESSION_SCHEMA_MOCK).await;
+        inject_collection_schema(&root_path, "users", USER_SCHEMA_MOCK).await;
 
         let storage = StorageEngine::new(db_cfg);
-        Self {
+        let sandbox = Self {
             _dir: dir,
             storage,
             config,
-        }
+        };
+
+        // 🎯 2. Déclaration officielle des collections dans l'index système
+        let mgr = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        let _ = mgr.init_db().await;
+        let _ = mgr
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/mock/users.schema.json",
+            )
+            .await;
+        let _ = mgr
+            .create_collection(
+                "sessions",
+                "db://_system/_system/schemas/v1/mock/sessions.schema.json",
+            )
+            .await;
+        sandbox
     }
 }
 

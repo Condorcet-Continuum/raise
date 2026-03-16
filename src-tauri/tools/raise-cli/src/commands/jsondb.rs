@@ -6,7 +6,6 @@ use clap::{Args, Subcommand};
 use raise::json_db::{
     collections::manager::{CollectionsManager, EntityIdentity},
     indexes::manager::IndexManager,
-    jsonld::VocabularyRegistry,
     query::{Condition, FilterOperator, Projection, Query, QueryEngine, QueryFilter},
     transactions::{manager::TransactionManager, TransactionRequest},
 };
@@ -19,12 +18,6 @@ use crate::CliContext;
 
 #[derive(Args, Debug, Clone)]
 pub struct JsondbArgs {
-    #[arg(short, long, default_value = "default_space")]
-    pub space: String,
-
-    #[arg(short, long, default_value = "default_db")]
-    pub db: String,
-
     #[arg(long, env = "PATH_RAISE_DOMAIN")]
     pub root: Option<PathBuf>,
 
@@ -203,11 +196,12 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
     let storage = &ctx.storage;
     let root_dir = storage.config.data_root.clone();
 
-    bootstrap_ontologies(&root_dir, &args.space).await;
+    let active_domain = &ctx.active_domain;
+    let active_db = &ctx.active_db;
 
-    let col_mgr = CollectionsManager::new(storage, &args.space, &args.db);
-    let mut idx_mgr = IndexManager::new(storage, &args.space, &args.db);
-    let tx_mgr = TransactionManager::new(storage, &args.space, &args.db);
+    let col_mgr = CollectionsManager::new(storage, active_domain, active_db);
+    let mut idx_mgr = IndexManager::new(storage, active_domain, active_db);
+    let tx_mgr = TransactionManager::new(storage, active_domain, active_db);
 
     // Feedback contextuel
     if ctx.config.core.log_level == "debug" || ctx.config.core.log_level == "trace" {
@@ -215,8 +209,8 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
         user_info!(
             "JSONDB_CTX_SPACE",
             json_value!({
-                "space": args.space,
-                "db": args.db,
+                "space": active_domain,
+                "db": active_db,
                 "action": "load_context"
             })
         );
@@ -225,7 +219,7 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
     if !matches!(
         args.command,
         JsondbCommands::CreateDb | JsondbCommands::DropDb { .. }
-    ) && !storage.config.db_root(&args.space, &args.db).exists()
+    ) && !storage.config.db_root(active_domain, active_db).exists()
     {
         user_info!("JSONDB_BOOTSTRAP_AUTO", json_value!({"status": "starting"}));
         let _ = col_mgr.init_db().await;
@@ -239,7 +233,7 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
             let schemas = col_mgr.list_schemas().await?;
             user_success!(
                 "JSONDB_SCHEMAS_LISTED",
-                json_value!({ "space": args.space, "db": args.db, "count": schemas.len() })
+                json_value!({ "space": active_domain, "db": active_db, "count": schemas.len() })
             );
             println!("{}", json::serialize_to_string_pretty(&schemas)?);
         }
@@ -298,12 +292,12 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
             if col_mgr.init_db().await? {
                 user_success!(
                     "JSONDB_INIT_SUCCESS",
-                    json_value!({ "space": args.space, "db": args.db })
+                    json_value!({ "space": active_domain, "db": active_db })
                 );
             } else {
                 user_info!(
                     "JSONDB_EXISTS",
-                    json_value!({ "space": args.space, "db": args.db })
+                    json_value!({ "space": active_domain, "db": active_db })
                 );
             }
         }
@@ -314,12 +308,12 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
             } else if col_mgr.drop_db().await? {
                 user_success!(
                     "JSONDB_DROP_SUCCESS",
-                    json_value!({ "space": args.space, "db": args.db, "action": "permanent_deletion" })
+                    json_value!({ "space": active_domain, "db": active_db, "action": "permanent_deletion" })
                 );
             } else {
                 user_error!(
                     "JSONDB_DROP_NOT_FOUND",
-                    json_value!({ "space": args.space, "db": args.db })
+                    json_value!({ "space": active_domain, "db": active_db })
                 );
             }
         }
@@ -338,7 +332,10 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
             let schema_uri = if raw_schema.starts_with("db://") {
                 raw_schema
             } else {
-                format!("db://{}/{}/schemas/v1/{}", args.space, args.db, raw_schema)
+                format!(
+                    "db://{}/{}/schemas/v1/{}",
+                    active_domain, active_db, raw_schema
+                )
             };
             col_mgr.create_collection(&name, &schema_uri).await?;
             user_success!(
@@ -578,18 +575,6 @@ async fn parse_data(input: &str) -> RaiseResult<JsonValue> {
         Ok(data)
     } else {
         Ok(json::deserialize_from_str(input)?)
-    }
-}
-
-async fn bootstrap_ontologies(root_dir: &Path, _space: &str) {
-    // L'ontologie est désormais centralisée
-    let ontology_root = root_dir.join("_system/ontology");
-
-    if ontology_root.exists() {
-        // init() gère sa propre mutabilité et popule le registre dynamique global
-        if let Err(e) = VocabularyRegistry::init(&ontology_root).await {
-            eprintln!("⚠️ [CLI] Erreur d'initialisation sémantique : {}", e);
-        }
     }
 }
 

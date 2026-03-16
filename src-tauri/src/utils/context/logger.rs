@@ -158,42 +158,5 @@ mod tests {
         );
 
         println!("✅ Structure JSON validée de manière résiliente.");
-        /*
-        assert_eq!(log.get("level").and_then(|v| v.as_str()), Some("ERROR"));
-
-        let find_meta = |key: &str| {
-            log.get(key)
-                .or_else(|| log.get("fields").and_then(|f| f.get(key)))
-                .or_else(|| log.get("context").and_then(|c| c.get(key)))
-                // Gère aussi l'imbrication fields.context (standard dans certaines versions)
-                .or_else(|| {
-                    log.get("fields")
-                        .and_then(|f| f.get("context").and_then(|c| c.get(key)))
-                })
-                .and_then(|v| v.as_str())
-        };
-
-        // 1. Validation de l'identifiant d'erreur (Vérifie 'key' ou 'event_id')
-        let error_id = find_meta("key").or_else(|| find_meta("event_id"));
-        assert_eq!(
-            error_id,
-            Some("ERR_TEST_STRUCTURE"),
-            "L'identifiant d'erreur (key ou event_id) est introuvable dans le JSON"
-        );
-
-        // 2. Validation du contexte personnalisé
-        assert_eq!(
-            find_meta("action"),
-            Some("VALIDATE_JSON"),
-            "La métadonnée 'action' est introuvable ou incorrecte"
-        );
-
-        // 3. Validation du niveau (généralement à la racine)
-        assert_eq!(
-            log.get("level").and_then(|v| v.as_str()),
-            Some("ERROR"),
-            "Le niveau de log doit être 'ERROR'"
-        );
-        */
     }
 }

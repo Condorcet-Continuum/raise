@@ -255,8 +255,10 @@ macro_rules! require_session {
 #[cfg(test)]
 mod tests {
 
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::core::error::{AppError, RaiseResult};
     use crate::utils::data::json::json_value;
+    use crate::utils::testing::mock::inject_mock_user;
 
     // Fonction bouchon pour simuler i18n dans les tests (si besoin)
     // On assume que utils::i18n::t(key) retourne au moins la clé si non trouvée.
@@ -323,7 +325,6 @@ mod tests {
     #[tokio::test]
     async fn test_require_session_guard() {
         use crate::utils::context::session::{Session, SessionManager}; // 🎯 Mise à jour du chemin
-        use crate::utils::core::UniqueId;
         use crate::utils::testing::mock::AgentDbSandbox; // 🎯 Mise à jour du chemin
 
         // Fonction bouchon simulant une commande Tauri
@@ -350,8 +351,18 @@ mod tests {
         );
 
         // 2. Cas de succès : Session active
-        let valid_uuid = UniqueId::new_v4().to_string();
-        let _ = manager.start_session(&valid_uuid).await.unwrap();
+        let test_user = "agent-macro";
+
+        // 🎯 INJECTION DE L'UTILISATEUR
+        let db_mgr = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        inject_mock_user(&db_mgr, test_user).await;
+
+        // 🎯 DÉMARRAGE DE LA SESSION AVEC LE HANDLE
+        let _ = manager.start_session(test_user).await.unwrap();
 
         let success_result = mock_protected_command(&manager).await;
         assert!(
@@ -360,7 +371,7 @@ mod tests {
         );
 
         let session = success_result.unwrap();
-        assert_eq!(session.user_id, valid_uuid);
-        assert_eq!(session.user_name, valid_uuid);
+        // 🎯 On vérifie le handle (L'ID est auto-généré par la BD de test)
+        assert_eq!(session.user_handle, test_user);
     }
 }

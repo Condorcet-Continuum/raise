@@ -58,7 +58,11 @@ pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
             // 🎯 Mise en conformité stricte JSON
             user_info!(
                 "GENETICS_START",
-                json_value!({"action": "Initialisation du moteur NSGA-II..."})
+                json_value!({
+                    "action": "Initialisation du moteur NSGA-II...",
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user
+                })
             );
 
             // 1. Création de la configuration réelle du Core
@@ -129,11 +133,7 @@ mod tests {
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
-        let ctx = CliContext {
-            config: AppConfig::get(),
-            session_mgr,
-            storage,
-        };
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
 
         let args = GeneticsArgs {
             command: GeneticsCommands::Evolve {

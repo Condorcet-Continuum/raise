@@ -268,7 +268,7 @@ mod tests {
             .where_eq("active", json_value!(true))
             .limit(5)
             .sort("created_at", SortOrder::Desc)
-            .select(vec!["username".into()])
+            .select(vec!["handle".into()])
             .unwrap()
             .build();
 

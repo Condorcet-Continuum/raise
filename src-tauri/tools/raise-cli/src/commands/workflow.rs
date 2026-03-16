@@ -56,11 +56,8 @@ pub enum WorkflowCommands {
 
 // --- HELPER D'INITIALISATION DU MOTEUR ---
 // 🎯 On utilise le contexte existant sans recréer de StorageEngine !
-async fn init_cli_engine(ctx: &CliContext) -> RaiseResult<(WorkflowScheduler, String, String)> {
-    let domain = ctx.config.system_domain.clone();
-    let db = ctx.config.system_db.clone();
-
-    // Initialisation du moteur (Léger pour le CLI)
+async fn init_cli_engine(ctx: &CliContext) -> RaiseResult<WorkflowScheduler> {
+    // Initialisation du moteur IA via le contexte
     let orch = match AiOrchestrator::new(ProjectModel::default(), None).await {
         Ok(instance) => instance,
         Err(e) => raise_error!(
@@ -68,19 +65,16 @@ async fn init_cli_engine(ctx: &CliContext) -> RaiseResult<(WorkflowScheduler, St
             error = e,
             context = json_value!({
                 "action": "startup_ai_engine",
-                "model_type": "ProjectModel::default",
-                "hint": "Vérifiez la présence des fichiers de poids du modèle et la disponibilité de la VRAM."
+                "hint": "Vérifiez la VRAM et les poids du modèle."
             })
         ),
     };
 
-    // 🎯 Utilisation du storage global partagé
+    // Utilisation du storage global partagé
     let pm = SharedRef::new(PluginManager::new(&ctx.storage, None));
-
     let executor = WorkflowExecutor::new(SharedRef::new(AsyncMutex::new(orch)), pm);
-    let scheduler = WorkflowScheduler::new(executor);
 
-    Ok((scheduler, domain, db))
+    Ok(WorkflowScheduler::new(executor))
 }
 
 // --- POINT D'ENTRÉE PRINCIPAL ---
@@ -109,7 +103,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 );
             }
 
-            let content = match tokio::fs::read_to_string(path_ref).await {
+            let content = match fs::read_to_string_async(path_ref).await {
                 Ok(c) => c,
                 Err(e) => raise_error!(
                     "ERR_FS_READ_CONTENT",
@@ -139,13 +133,9 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             let definition = WorkflowCompiler::compile(&mandate);
 
             // 2. Connexion à la base de données via le contexte !
-            let manager = CollectionsManager::new(
-                &ctx.storage,
-                &ctx.config.system_domain,
-                &ctx.config.system_db,
-            );
+            let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-            let json_mandate = serde_json::to_value(&mandate).unwrap();
+            let json_mandate = json::serialize_to_value(&mandate).unwrap();
 
             manager.insert_raw("mandates", &json_mandate).await?;
 
@@ -155,7 +145,9 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                     "author": mandate.meta.author,
                     "version": mandate.meta.version,
                     "graph_id": definition.id,
-                    "status": "persisted"
+                    "active_domain": ctx.active_domain,
+                    "active_user": ctx.active_user,
+                    "status": "persisted",
                 })
             );
         }
@@ -171,8 +163,8 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             );
 
             // 🎯 Injection du contexte dans le helper
-            let (mut scheduler, domain, db) = init_cli_engine(&ctx).await?;
-            let manager = CollectionsManager::new(&ctx.storage, &domain, &db);
+            let mut scheduler = init_cli_engine(&ctx).await?;
+            let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
             // Hack CLI: On "charge" la définition dans le scheduler courant en feignant le mandate_id
             let mandate_id = workflow_id.replace("wf_", "");
@@ -236,8 +228,8 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             );
 
             // 🎯 Injection du contexte
-            let (mut scheduler, domain, db) = init_cli_engine(&ctx).await?;
-            let manager = CollectionsManager::new(&ctx.storage, &domain, &db);
+            let mut scheduler = init_cli_engine(&ctx).await?;
+            let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
             // On a besoin de charger la définition pour exécuter la boucle
             let doc = manager
@@ -330,12 +322,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
         }
 
         WorkflowCommands::SetSensor { value } => {
-            // 🎯 Plus d'AppConfig::get()
-            let manager = CollectionsManager::new(
-                &ctx.storage,
-                &ctx.config.system_domain,
-                &ctx.config.system_db,
-            );
+            let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
             // 2. Création de l'entité Jumeau Numérique
             let sensor_doc = json_value!({
@@ -388,12 +375,16 @@ mod tests {
             )
             .await
             .unwrap();
-        // 🎯 On construit le contexte
-        let ctx = CliContext {
-            config: sandbox.config,
-            session_mgr: SessionManager::new(sandbox.db.clone()),
-            storage: sandbox.db.clone(),
-        };
+
+        let ctx = CliContext::mock(
+            AppConfig::get(),
+            SessionManager::new(sandbox.db.clone()),
+            sandbox.db.clone(),
+        );
+
+        let mut ctx = ctx;
+        ctx.active_domain = sandbox.config.system_domain.clone();
+        ctx.active_db = sandbox.config.system_db.clone();
 
         let args = WorkflowArgs {
             command: WorkflowCommands::SetSensor { value: 42.5 },
@@ -437,12 +428,16 @@ mod tests {
             )
             .await
             .unwrap();
-        // 🎯 On construit le contexte
-        let ctx = CliContext {
-            config: sandbox.config,
-            session_mgr: SessionManager::new(sandbox.db.clone()),
-            storage: sandbox.db.clone(),
-        };
+
+        let ctx = CliContext::mock(
+            AppConfig::get(),
+            SessionManager::new(sandbox.db.clone()),
+            sandbox.db.clone(),
+        );
+
+        let mut ctx = ctx;
+        ctx.active_domain = sandbox.config.system_domain.clone();
+        ctx.active_db = sandbox.config.system_db.clone();
 
         let valid_mandate = json_value!({
             "_id": "mandate_cli_test_123",
@@ -494,12 +489,11 @@ mod tests {
     async fn test_cli_submit_mandate_invalid_path_fails_safely() {
         let sandbox = GlobalDbSandbox::new().await;
 
-        // 🎯 On construit le contexte
-        let ctx = CliContext {
-            config: sandbox.config,
-            session_mgr: SessionManager::new(sandbox.db.clone()),
-            storage: sandbox.db.clone(),
-        };
+        let ctx = CliContext::mock(
+            AppConfig::get(),
+            SessionManager::new(sandbox.db.clone()),
+            sandbox.db.clone(),
+        );
 
         let fake_path = "path/to/nothing.yaml";
         let args = WorkflowArgs {
