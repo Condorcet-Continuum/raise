@@ -355,11 +355,11 @@ impl AppConfig {
         }
 
         let userhandle = RuntimeEnv::var("USER")
-            .or_else(|_| RuntimeEnv::var("USERHANDLE"))
+            .or_else(|_| RuntimeEnv::var("USERNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
 
         if let Some(user_json) = Self::load_collection_doc("users", |v| {
-            v.get("userhandle").and_then(|u| u.as_str()) == Some(userhandle.as_str())
+            v.get("handle").and_then(|u| u.as_str()) == Some(userhandle.as_str())
         }) {
             config.user = Some(ScopeConfig {
                 id: userhandle,

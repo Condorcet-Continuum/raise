@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/ai/nlp/embeddings/candle.rs
+
 use crate::utils::prelude::*;
 
 use candle_core::{DType, Device, Tensor};
@@ -15,15 +17,14 @@ impl CandleEngine {
     pub async fn new(
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
-        // 1. DÉTECTION DYNAMIQUE DU MATÉRIEL (GPU > CPU)
         let device = AppConfig::device().clone();
+        user_info!(
+            "🕯️ [Candle NLP] Moteur initialisé sur : {:?}",
+            json_value!(format!("{:?}", device))
+        );
 
-        println!("🕯️ [Candle NLP] Moteur initialisé sur : {:?}", device);
-
-        // 2. RÉCUPÉRATION DE LA CONFIGURATION DEPUIS LA DB
         let settings = AppConfig::get_component_settings(manager, "nlp").await?;
 
-        // Extraction des noms de fichiers (avec fallbacks)
         let model_dir = settings
             .get("model_name")
             .and_then(|v| v.as_str())
@@ -41,7 +42,6 @@ impl CandleEngine {
             .and_then(|v| v.as_str())
             .unwrap_or("model.safetensors");
 
-        // 3. CONSTRUCTION DES CHEMINS LOCAUX ABSOLUS
         let Some(home) = dirs::home_dir() else {
             raise_error!(
                 "ERR_OS_HOME_NOT_FOUND",
@@ -50,17 +50,14 @@ impl CandleEngine {
             );
         };
 
-        // On cible dynamiquement le dossier du modèle (ex: embeddings/minilm)
         let base_path = home.join(format!(
             "raise_domain/_system/ai-assets/embeddings/{}",
             model_dir
         ));
-
         let config_path = base_path.join(config_filename);
         let tokenizer_path = base_path.join(tokenizer_filename);
         let weights_path = base_path.join(weights_filename);
 
-        // 3. Vérification de sécurité stricte
         if !weights_path.exists() || !config_path.exists() || !tokenizer_path.exists() {
             raise_error!(
                 "ERR_AI_EMBEDDING_ASSETS_MISSING",
@@ -76,85 +73,51 @@ impl CandleEngine {
             );
         }
 
-        // 4. Chargement de la configuration
         let config_str = match fs::read_to_string_sync(&config_path) {
             Ok(content) => content,
             Err(e) => raise_error!(
                 "ERR_CONFIG_READ",
                 error = e,
-                context = json_value!({
-                    "action": "read_config_file",
-                    // Info CRITIQUE : on logue le chemin exact qui a causé l'échec !
-                    "path": config_path.to_string_lossy()
-                })
+                context = json_value!({"path": config_path.to_string_lossy()})
             ),
         };
 
-        // Utilisation de serde_json (ou json::deserialize_from_str) pour lire la config Bert
         let config: Config = match json::deserialize_from_str(&config_str) {
             Ok(c) => c,
             Err(e) => raise_error!(
                 "ERR_CONFIG_PARSE",
                 error = e,
-                context = json_value!({
-                    "action": "parse_config_json",
-                    // Info Magique : On capture les 100 premiers caractères du fichier pour voir si
-                    // le contenu est complètement corrompu ou vide, sans inonder les logs !
-                    "config_preview": config_str.chars().take(100).collect::<String>()
-                })
+                context = json_value!({"config_preview": config_str.chars().take(100).collect::<String>()})
             ),
         };
 
-        // 5. Chargement du Tokenizer
         let tokenizer = match Tokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,
             Err(e) => raise_error!(
                 "ERR_TOKENIZER_LOAD",
                 error = e,
-                context = json_value!({
-                    "action": "load_tokenizer_file",
-                    // Info Vitale : On enregistre le chemin exact où le moteur IA cherchait le fichier
-                    "path": tokenizer_path.to_string_lossy()
-                })
+                context = json_value!({"path": tokenizer_path.to_string_lossy()})
             ),
         };
 
-        // 6. Chargement des poids (Safetensors)
         let vb = unsafe {
             match VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device) {
                 Ok(builder) => builder,
-                Err(e) => {
-                    // Pas de 'return' devant la macro, elle s'en charge.
-                    raise_error!(
-                        "ERR_AI_WEIGHTS_LOAD_FAILED",
-                        error = e,
-                        context = json_value!({
-                            "action": "mmap_safetensors",
-                            "path": weights_path.to_string_lossy(),
-                            "device": format!("{:?}", device),
-                            "hint": "Échec du chargement des poids du modèle. Vérifiez que le fichier n'est pas utilisé par un autre processus ou qu'il n'est pas corrompu."
-                        })
-                    )
-                }
+                Err(e) => raise_error!(
+                    "ERR_AI_WEIGHTS_LOAD_FAILED",
+                    error = e,
+                    context = json_value!({"path": weights_path.to_string_lossy()})
+                ),
             }
         };
 
-        // 7. Initialisation du modèle Bert
         let model = match BertModel::load(vb, &config) {
             Ok(m) => m,
-            Err(e) => {
-                raise_error!(
-                    "ERR_AI_MODEL_INSTANTIATION_FAILED",
-                    error = e,
-                    context = json_value!({
-                        "action": "load_bert_model",
-                        "model_type": "BERT",
-                        // On utilise format! pour convertir la config en String
-                        "config_debug": format!("{:?}", config),
-                        "hint": "Incohérence entre la configuration et les poids du modèle."
-                    })
-                )
-            }
+            Err(e) => raise_error!(
+                "ERR_AI_MODEL_INSTANTIATION_FAILED",
+                error = e,
+                context = json_value!({"model_type": "BERT"})
+            ),
         };
 
         Ok(Self {
@@ -164,88 +127,97 @@ impl CandleEngine {
         })
     }
 
-    fn forward_one(&self, text: &str) -> RaiseResult<Vec<f32>> {
-        // 1. Tokenisation
-        let tokens = match self.tokenizer.encode(text, true) {
-            Ok(t) => t,
+    /// 🎯 VRAI BATCHING GPU : Tokenise et infère un lot entier en une seule passe tensorielle
+    pub fn embed_batch(&mut self, texts: Vec<String>) -> RaiseResult<Vec<Vec<f32>>> {
+        let batch_size = texts.len();
+        if batch_size == 0 {
+            return Ok(Vec::new());
+        }
+
+        // 1. Tokenisation en masse
+        let encodings = match self.tokenizer.encode_batch(texts.clone(), true) {
+            Ok(e) => e,
             Err(e) => raise_error!(
-                "ERR_NLP_TOKENIZATION_FAILED",
+                "ERR_NLP_BATCH_TOKENIZATION_FAILED",
                 error = e,
-                context =
-                    json_value!({ "text_preview": text.chars().take(30).collect::<String>() })
+                context = json_value!({"batch_size": batch_size})
             ),
         };
 
-        // 2. Préparation des Tenseurs
-        let token_ids = match Tensor::new(tokens.get_ids(), &self.device) {
-            Ok(t) => match t.unsqueeze(0) {
-                Ok(u) => u,
-                Err(e) => raise_error!("ERR_NLP_TENSOR_SHAPE", error = e),
-            },
-            Err(e) => raise_error!("ERR_NLP_TENSOR_CREATION", error = e),
+        // 2. Padding dynamique : Trouver la séquence la plus longue du lot
+        let max_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0);
+
+        // 3. Préparation des vecteurs plats pour le constructeur Tensor
+        let mut batch_ids = Vec::with_capacity(batch_size * max_len);
+        let batch_type_ids = vec![0u32; batch_size * max_len]; // Les type_ids sont toujours 0 pour MiniLM
+
+        for enc in &encodings {
+            let ids = enc.get_ids();
+            batch_ids.extend_from_slice(ids);
+            // On pad avec des zéros (le token PAD de BERT) jusqu'à max_len
+            batch_ids.resize(batch_ids.len() + (max_len - ids.len()), 0);
+        }
+
+        // 4. Création des Tenseurs [Batch_Size, Sequence_Length]
+        let token_ids = match Tensor::from_vec(batch_ids, (batch_size, max_len), &self.device) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_NLP_BATCH_TENSOR_CREATION", error = e),
         };
 
-        let token_type_ids = match token_ids.zeros_like() {
-            Ok(z) => z,
-            Err(e) => raise_error!("ERR_NLP_TENSOR_ZEROS", error = e),
-        };
+        let token_type_ids =
+            match Tensor::from_vec(batch_type_ids, (batch_size, max_len), &self.device) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_NLP_BATCH_TYPE_TENSOR", error = e),
+            };
 
-        // 3. Inférence BERT
+        // 5. INFÉRENCE DE MASSE (Le GPU travaille à 100%)
         let embeddings = match self.model.forward(&token_ids, &token_type_ids, None) {
             Ok(emb) => emb,
             Err(e) => raise_error!(
-                "ERR_NLP_FORWARD_PASS_FAILED",
+                "ERR_NLP_BATCH_FORWARD",
                 error = e,
-                context = json_value!({ "token_count": tokens.get_ids().len() })
+                context = json_value!({"batch_size": batch_size, "seq_len": max_len})
             ),
         };
 
-        // 4. Pooling et Calculs de dimensions
-        let (_n_sentence, n_tokens, _hidden_size) = match embeddings.dims3() {
-            Ok(d) => d,
-            Err(e) => raise_error!("ERR_NLP_DIM_MISMATCH", error = e),
-        };
-
+        // 6. Pooling (Moyenne sur la dimension des tokens -> dim 1)
         let sum_embeddings = match embeddings.sum(1) {
             Ok(s) => s,
-            Err(e) => raise_error!("ERR_NLP_SUM_FAILED", error = e),
+            Err(e) => raise_error!("ERR_NLP_BATCH_SUM", error = e),
         };
 
-        let pooled = match sum_embeddings / (n_tokens as f64) {
+        let pooled = match sum_embeddings / (max_len as f64) {
             Ok(p) => p,
-            Err(e) => raise_error!("ERR_NLP_POOLING_DIV_FAILED", error = e),
+            Err(e) => raise_error!("ERR_NLP_BATCH_POOLING", error = e),
         };
 
-        // 5. Normalisation et Conversion finale
+        // 7. Normalisation avec Epsilon
         let normalized = normalize_l2(&pooled)?;
 
-        let vec = match normalized.squeeze(0) {
-            Ok(s) => match s.to_vec1::<f32>() {
-                Ok(v) => v,
-                Err(e) => raise_error!("ERR_NLP_VEC_CONVERSION", error = e),
-            },
-            Err(e) => raise_error!("ERR_NLP_SQUEEZE_FAILED", error = e),
-        };
-
-        Ok(vec)
-    }
-
-    pub fn embed_batch(&mut self, texts: Vec<String>) -> RaiseResult<Vec<Vec<f32>>> {
-        // Note: Pour une optimisation future, on pourrait tokeniser tout le batch
-        // et faire un seul appel forward(), mais cela demande de gérer le Padding manuellement.
-        // Avec le GPU activé, cette boucle sera déjà très rapide pour des petits lots.
-        let mut results = Vec::new();
-        for text in texts {
-            results.push(self.forward_one(&text)?);
+        // 8. Conversion [Batch, Hidden] -> Vec<Vec<f32>>
+        match normalized.to_vec2::<f32>() {
+            Ok(matrix) => Ok(matrix),
+            Err(e) => raise_error!("ERR_NLP_BATCH_VEC_CONVERSION", error = e),
         }
-        Ok(results)
     }
 
+    /// Rétrocompatibilité pour une seule requête
     pub fn embed_query(&mut self, text: &str) -> RaiseResult<Vec<f32>> {
-        self.forward_one(text)
+        let mut batch_res = self.embed_batch(vec![text.to_string()])?;
+        batch_res.pop().ok_or_else(|| {
+            build_error!(
+                "ERR_NLP_EMPTY_BATCH_RESULT",
+                error = "embed_batch a retourné un vecteur vide"
+            )
+        })
     }
 }
 
+/// 🎯 CORRECTION MATHÉMATIQUE : Normalisation L2 robuste avec Epsilon
 fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
     // 1. Calcul de la somme des carrés (Sum of Squares)
     let sum_sq = match v.sqr() {
@@ -256,27 +228,26 @@ fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
         Err(e) => raise_error!("ERR_NLP_NORM_SQR_FAILED", error = e),
     };
 
-    // 2. Calcul de la racine carrée (Norme)
-    let norm = match sum_sq.sqrt() {
-        Ok(n) => n,
-        Err(e) => raise_error!(
-            "ERR_NLP_NORM_SQRT_FAILED",
-            error = e,
-            context = json_value!({ "hint": "Vérifiez si le vecteur d'entrée contient des valeurs négatives invalides avant sqrt." })
-        ),
+    // 2. 🎯 Epsilon de sécurité (1e-8) pour éviter les divisions par zéro
+    let epsilon = match Tensor::new(&[1e-8f32], v.device()) {
+        Ok(t) => t,
+        Err(e) => raise_error!("ERR_NLP_NORM_EPSILON", error = e),
     };
 
-    // 3. Division par diffusion (Broadcasting)
+    let safe_sum_sq = match sum_sq.broadcast_add(&epsilon) {
+        Ok(t) => t,
+        Err(e) => raise_error!("ERR_NLP_NORM_ADD", error = e),
+    };
+
+    let norm = match safe_sum_sq.sqrt() {
+        Ok(n) => n,
+        Err(e) => raise_error!("ERR_NLP_NORM_SQRT_FAILED", error = e),
+    };
+
+    // 3. Division finale
     match v.broadcast_div(&norm) {
         Ok(normalized) => Ok(normalized),
-        Err(e) => raise_error!(
-            "ERR_NLP_NORM_DIV_FAILED",
-            error = e,
-            context = json_value!({
-                "v_shape": format!("{:?}", v.shape()),
-                "norm_shape": format!("{:?}", norm.shape())
-            })
-        ),
+        Err(e) => raise_error!("ERR_NLP_NORM_DIV_FAILED", error = e),
     }
 }
 
@@ -297,22 +268,12 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        inject_mock_component(
-            &manager,
-            "nlp",
-            json_value!({
-                "model_name": "minilm",
-                "rust_config_file": "config.json",
-                "rust_tokenizer_file": "tokenizer.json",
-                "rust_safetensors_file": "model.safetensors"
-            }),
-        )
-        .await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors"})).await;
 
         let engine = CandleEngine::new(&manager).await;
         assert!(
             engine.is_ok(),
-            "Le modèle MiniLM doit se charger correctement via HF Hub"
+            "Le modèle MiniLM doit se charger correctement"
         );
     }
 
@@ -326,23 +287,24 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-
-        inject_mock_component(
-            &manager,
-            "nlp",
-            crate::utils::json::json_value!({
-                "model_name": "minilm",
-                "rust_config_file": "config.json",
-                "rust_tokenizer_file": "tokenizer.json",
-                "rust_safetensors_file": "model.safetensors"
-            }),
-        )
-        .await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors"})).await;
 
         let mut engine = CandleEngine::new(&manager).await.expect("Init failed");
-        let vec = engine.embed_query("Test dimensions").expect("Embed failed");
 
-        assert_eq!(vec.len(), 384);
+        // Test Batching
+        let batch = vec![
+            "Phrase 1".to_string(),
+            "Une phrase beaucoup plus longue pour tester le padding dynamique du batch".to_string(),
+        ];
+        let vecs = engine.embed_batch(batch).expect("Batch Embed failed");
+
+        assert_eq!(vecs.len(), 2, "Doit retourner 2 vecteurs");
+        assert_eq!(vecs[0].len(), 384, "La dimension doit être 384");
+        assert_eq!(
+            vecs[1].len(),
+            384,
+            "La dimension doit être 384 (même avec du padding)"
+        );
     }
 
     #[async_test]
@@ -355,18 +317,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-
-        inject_mock_component(
-            &manager,
-            "nlp",
-            crate::utils::json::json_value!({
-                "model_name": "minilm",
-                "rust_config_file": "config.json",
-                "rust_tokenizer_file": "tokenizer.json",
-                "rust_safetensors_file": "model.safetensors"
-            }),
-        )
-        .await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors"})).await;
 
         let mut engine = CandleEngine::new(&manager).await.expect("Init failed");
         let vec = engine.embed_query("Mathematiques").expect("Embed failed");

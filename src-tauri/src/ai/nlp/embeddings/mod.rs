@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/ai/nlp/embeddings/mod.rs
+
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*;
 
@@ -20,30 +22,37 @@ enum EngineImplementation {
 
 impl EmbeddingEngine {
     pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
-        println!("🧠 Init NLP Engine: Tentative Candle (GPU)...");
+        user_info!("🧠 [NLP] Initialisation du moteur: Tentative Candle (GPU)...");
+
         match Self::new_with_type(EngineType::Candle, manager).await {
             Ok(engine) => Ok(engine),
             Err(e) => {
-                eprintln!("⚠️ Echec Candle ({}), bascule sur FastEmbed (CPU)", e);
+                // 🎯 OPTIMISATION : On utilise le système de logs de Raise au lieu de eprintln!
+                user_warn!(
+                    "WRN_NLP_CANDLE_FALLBACK",
+                    json_value!({
+                        "error": e.to_string(),
+                        "action": "fallback_to_fastembed",
+                        "hint": "Candle a échoué (souvent dû à l'absence des poids ou de CUDA). Bascule automatique sur FastEmbed (CPU)."
+                    })
+                );
                 Self::new_with_type(EngineType::FastEmbed, manager).await
             }
         }
     }
 
-    // 🎯 NOUVEAU : Asynchrone et demande le manager
     pub async fn new_with_type(
         engine_type: EngineType,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
         let inner = match engine_type {
             EngineType::FastEmbed => {
-                println!("🧠 Init NLP Engine: FastEmbed (ONNX)");
-                // FastEmbed n'utilise potentiellement pas la BDD, on l'appelle tel quel (ou on l'adapte si besoin)
+                user_info!("🧠 [NLP] Moteur activé : FastEmbed (CPU/ONNX)");
                 let fast_engine = fast::FastEmbedEngine::new()?;
                 EngineImplementation::Fast(Box::new(fast_engine))
             }
             EngineType::Candle => {
-                println!("🕯️ Init NLP Engine: Candle (BERT Pure Rust)");
+                user_info!("🕯️ [NLP] Moteur activé : Candle (BERT Pure Rust)");
                 let candle_engine = candle::CandleEngine::new(manager).await?;
                 EngineImplementation::Candle(Box::new(candle_engine))
             }
@@ -55,12 +64,11 @@ impl EmbeddingEngine {
         match &mut self.inner {
             EngineImplementation::Fast(e) => {
                 let batch_size = texts.len();
-                // On transforme l'erreur Anyhow en erreur typée RAISE immédiatement
                 match e.embed_batch(texts) {
                     Ok(res) => Ok(res),
-                    Err(e) => raise_error!(
+                    Err(err) => raise_error!(
                         "ERR_AI_ENGINE_FAST_BATCH_FAILED",
-                        error = e,
+                        error = err,
                         context = json_value!({
                             "action": "batch_embedding_dispatch",
                             "engine": "fast_cpu_implementation",
@@ -69,11 +77,7 @@ impl EmbeddingEngine {
                     ),
                 }
             }
-
-            EngineImplementation::Candle(e) => {
-                // On délègue car Candle suit déjà notre standard RAISE
-                e.embed_batch(texts)
-            }
+            EngineImplementation::Candle(e) => e.embed_batch(texts),
         }
     }
 
@@ -91,8 +95,6 @@ impl EmbeddingEngine {
                     })
                 ),
             },
-
-            // Candle renvoie déjà un RaiseResult (AppError)
             EngineImplementation::Candle(e) => e.embed_query(text),
         }
     }
@@ -153,7 +155,6 @@ mod tests {
         )
         .await;
 
-        // Test FastEmbed
         let mut fast_engine = EmbeddingEngine::new_with_type(EngineType::FastEmbed, &manager)
             .await
             .expect("FastEmbed init failed");
@@ -164,7 +165,6 @@ mod tests {
             "FastEmbed (BGE-Small) doit sortir 384 dims"
         );
 
-        // Test Candle
         if let Ok(mut candle_engine) =
             EmbeddingEngine::new_with_type(EngineType::Candle, &manager).await
         {
@@ -176,8 +176,6 @@ mod tests {
                 384,
                 "Candle (MiniLM) doit sortir 384 dims"
             );
-        } else {
-            println!("⚠️ Candle Engine skipped in tests (might be network/setup related)");
         }
     }
 }

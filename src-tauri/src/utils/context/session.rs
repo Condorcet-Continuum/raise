@@ -57,6 +57,8 @@ pub struct Session {
     #[serde(rename = "@type", default = "fallback_session_type")]
     pub semantic_type: Vec<String>,
 
+    pub handle: String,
+
     pub user_id: String,
     pub user_handle: String,
     pub status: SessionStatus,
@@ -149,16 +151,41 @@ impl SessionManager {
         };
 
         let now = UtcClock::now();
-        let payload = json_value!({
-            "user_id": user_id,
-            "user_handle": target_user,
-            "status": "active",
-            "last_activity_at": now.to_rfc3339(),
-            "context": ctx,
+        let session_handle = format!("session_{}_active", target_user);
+
+        // 3. RECHERCHE D'UNE SESSION EXISTANTE (Pour éviter les doublons CLI)
+        let mut session_query = Query::new("sessions");
+        session_query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("handle", json_value!(&session_handle))],
         });
 
-        // 3. CRÉATION EN BASE
-        let hydrated_doc = mgr.insert_with_schema("sessions", payload).await?;
+        let existing_doc = QueryEngine::new(&mgr)
+            .execute_query(session_query)
+            .await
+            .ok()
+            .and_then(|res| res.documents.into_iter().next());
+
+        let hydrated_doc = if let Some(doc) = existing_doc {
+            // 🎯 METTRE À JOUR LA SESSION EXISTANTE (Évite les doublons)
+            let id = doc.get("_id").unwrap().as_str().unwrap().to_string();
+            let patch = json_value!({
+                "last_activity_at": now.to_rfc3339(),
+                "context": ctx,
+            });
+            mgr.update_document("sessions", &id, patch).await?
+        } else {
+            // 🎯 CRÉER LA SESSION SI ELLE N'EXISTE PAS
+            let payload = json_value!({
+                "handle": session_handle,
+                "user_id": user_id,
+                "user_handle": target_user,
+                "status": "active",
+                "last_activity_at": now.to_rfc3339(),
+                "context": ctx,
+            });
+            mgr.insert_with_schema("sessions", payload).await?
+        };
 
         let session: Session = match json::deserialize_from_value(hydrated_doc) {
             Ok(s) => s,

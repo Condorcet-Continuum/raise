@@ -12,16 +12,11 @@ use raise::ai::agents::{
 };
 use raise::ai::llm::client::LlmClient;
 use raise::ai::training::ai_train_domain_native;
-use raise::json_db::collections::manager::CollectionsManager;
 
-use raise::{
-    user_error,
-    user_info,
-    user_success,
-    utils::prelude::*, // AppConfig n'est plus importé, on l'a via CliContext !
-};
+use raise::{user_error, user_info, user_success, utils::prelude::*};
 
-// 🎯 NOUVEAU : Import du contexte global CLI
+use raise::commands::ai_commands::validate_arcadia_gnn;
+
 use crate::CliContext;
 
 #[derive(Args, Debug, Clone)]
@@ -70,11 +65,19 @@ pub enum AiCommands {
         #[arg(short, long)]
         lr: Option<f64>,
     },
+
+    /// 🕸️ Valide mathématiquement une allocation MBSE via le GNN
+    #[command(visible_alias = "v")]
+    Validate {
+        /// URI du premier composant (ex: la:Function_A)
+        uri_a: String,
+        /// URI du second composant (ex: sa:System_B)
+        uri_b: String,
+    },
 }
 
-// 🎯 La signature intègre le CliContext
 pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
-    // 🎯 Heartbeat automatique
+    // 1. GESTION DE SESSION OBLIGATOIRE (Heartbeat global pour toutes les commandes)
     let _ = ctx.session_mgr.touch().await;
 
     let domain_path = ctx
@@ -88,49 +91,20 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         .unwrap_or_else(|| domain_path.join("dataset"));
 
     fs::ensure_dir_async(&domain_path).await?;
-    // 2. MOTEURS ET CONTEXTE (OPTIMISÉ)
     let storage = ctx.storage.clone();
 
-    // 🎯 PLUS DE DEVINETTE : On utilise directement le contexte résolu !
-    let manager = CollectionsManager::new(&storage, &ctx.active_domain, &ctx.active_db);
-    let client = LlmClient::new(&manager).await?;
+    let command = args.command.unwrap_or(AiCommands::Interactive);
 
-    // On récupère juste l'ID de session
-    let current_session = ctx.session_mgr.get_current_session().await;
-    let session_id = current_session
-        .as_ref()
-        .map(|s| s.id.clone())
-        .unwrap_or_else(|| "cli_session".to_string());
-
-    // Instanciation asynchrone du Contexte Agent avec le vrai User résolu
-    let agent_ctx = AgentContext::new(
-        &ctx.active_user,
-        &session_id,
-        storage.clone(),
-        client.clone(),
-        domain_path.clone(),
-        dataset_path,
-    )
-    .await;
-
-    // 3. EXÉCUTION
-    match args.command.unwrap_or(AiCommands::Interactive) {
-        AiCommands::Interactive => run_interactive_mode(&agent_ctx, &ctx, client).await?,
-        AiCommands::Classify { input, execute } => {
-            process_input(&agent_ctx, &input, client, execute).await
-        }
-        AiCommands::Inspect { reference } => {
-            inspect_agent_logic(&agent_ctx, &reference, &ctx.active_domain, &ctx.active_db).await?;
-        }
+    // 2. EXÉCUTION DES COMMANDES SANS LLM (GNN et Entraînement Local)
+    match &command {
         AiCommands::Train {
             domain,
             db: target_db,
             epochs,
             lr,
         } => {
-            let final_domain = domain.unwrap_or_else(|| ctx.active_domain.clone());
-            let final_db = target_db.unwrap_or_else(|| ctx.active_db.clone());
-
+            let final_domain = domain.clone().unwrap_or_else(|| ctx.active_domain.clone());
+            let final_db = target_db.clone().unwrap_or_else(|| ctx.active_db.clone());
             let final_epochs = epochs.unwrap_or(3);
             let final_lr = lr.unwrap_or(ctx.config.deep_learning.learning_rate);
 
@@ -141,7 +115,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
 
             match ai_train_domain_native(
                 &storage,
-                &ctx.active_domain, // L'espace d'exécution principal
+                &ctx.active_domain,
                 &final_db,
                 &final_domain,
                 final_epochs,
@@ -155,12 +129,57 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
                     json_value!({ "error": e.to_string(), "action": "neural_network_training" })
                 ),
             }
+            return Ok(());
         }
+        AiCommands::Validate { uri_a, uri_b } => {
+            // L'orchestrateur GNN gère ses propres embeddings sans avoir besoin du LLM génératif
+            run_gnn_validation(&domain_path, uri_a, uri_b).await?;
+            return Ok(());
+        }
+        _ => {} // Si c'est une autre commande, on passe à la suite pour charger le LLM
+    }
+
+    // 3. CHARGEMENT TARDIF DU LLM ET DU CONTEXTE AGENT (Mode Interactif & NLP)
+    let manager = raise::json_db::collections::manager::CollectionsManager::new(
+        &storage,
+        &ctx.active_domain,
+        &ctx.active_db,
+    );
+
+    // Le crash précédent s'arrêtera ici SI on appelle Interactive sans avoir configuré le composant LLM
+    let client = LlmClient::new(&manager).await?;
+
+    // Récupération complète de la session pour injecter l'historique aux agents
+    let current_session = ctx.session_mgr.get_current_session().await;
+    let session_id = current_session
+        .as_ref()
+        .map(|s| s.id.clone())
+        .unwrap_or_else(|| "cli_session".to_string());
+
+    let agent_ctx = AgentContext::new(
+        &ctx.active_user,
+        &session_id,
+        storage.clone(),
+        client.clone(),
+        domain_path.clone(),
+        dataset_path,
+    )
+    .await;
+
+    // 4. EXÉCUTION DES COMMANDES AGENTS/LLM
+    match command {
+        AiCommands::Interactive => run_interactive_mode(&agent_ctx, &ctx, client).await?,
+        AiCommands::Classify { input, execute } => {
+            process_input(&agent_ctx, &input, client, execute).await
+        }
+        AiCommands::Inspect { reference } => {
+            inspect_agent_logic(&agent_ctx, &reference, &ctx.active_domain, &ctx.active_db).await?;
+        }
+        _ => unreachable!(), // Train et Validate sont déjà traités plus haut
     }
 
     Ok(())
 }
-
 async fn run_interactive_mode(
     ctx: &AgentContext,
     cli_ctx: &CliContext,
@@ -293,6 +312,46 @@ async fn run_agent<A: Agent>(
     } else {
         user_info!("AI_SIMULATION_MODE", json_value!({}));
     }
+}
+/// Orchestre le GNN et affiche le résultat dans le CLI
+async fn run_gnn_validation(domain_path: &Path, uri_a: &str, uri_b: &str) -> RaiseResult<()> {
+    // On passe le domaine racine, l'orchestrateur s'occupe de l'arborescence (ex: /collections)
+    let root_path_str = domain_path.to_string_lossy().to_string();
+
+    // 1. Appel au backend (Zéro Dette: le CLI ne manipule pas de tenseurs, il appelle le service applicatif)
+    let result = validate_arcadia_gnn(root_path_str, uri_a.to_string(), uri_b.to_string()).await?;
+
+    // 2. Extraction des métriques
+    let metrics = &result["metrics"];
+    let sim_initial = metrics["nlp_similarity"].as_f64().unwrap_or(0.0);
+    let sim_final = metrics["gnn_similarity"].as_f64().unwrap_or(0.0);
+    let delta = metrics["improvement"].as_f64().unwrap_or(0.0);
+    let confirmed = result["hypothesis_confirmed"].as_bool().unwrap_or(false);
+
+    println!("\n📊 --- RÉSULTAT DE L'EXPÉRIENCE GNN ---");
+    println!("Composant A : {}", uri_a);
+    println!("Composant B : {}", uri_b);
+    println!("Similarité Sémantique (NLP pur) : {:.4}", sim_initial);
+    println!("Similarité Structurelle (GNN)   : {:.4}", sim_final);
+
+    if confirmed {
+        user_success!(
+            "✅ [MBSE] Hypothèse confirmée",
+            json_value!({"improvement_pct": delta * 100.0})
+        );
+        println!(
+            "Conclusion : La topologie du système renforce le lien entre ces composants (+{:.2}%).",
+            delta * 100.0
+        );
+    } else {
+        user_warn!(
+            "⚠️ [MBSE] Hypothèse rejetée",
+            json_value!({"improvement_pct": delta * 100.0})
+        );
+        println!("Conclusion : La structure globale ne justifie pas une allocation forte entre ces composants.");
+    }
+
+    Ok(())
 }
 
 async fn inspect_agent_logic(

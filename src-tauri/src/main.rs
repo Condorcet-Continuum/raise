@@ -265,6 +265,7 @@ fn main() {
             ai_commands::ai_reset,
             ai_commands::ask_native_llm,
             ai_commands::ai_learn_text,
+            //ai_commands::validate_arcadia_gnn,
             ai_commands::init_dl_model,
             ai_commands::run_dl_prediction,
             ai_commands::train_dl_step,

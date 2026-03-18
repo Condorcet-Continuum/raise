@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/ai/memory/mod.rs
+
 use crate::utils::prelude::*;
 
 pub mod candle_store;

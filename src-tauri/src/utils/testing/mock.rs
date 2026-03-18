@@ -236,7 +236,6 @@ pub async fn inject_mock_component(
         )
         .await;
 
-    // 🎯 json_value! au lieu de json!
     let doc = json_value!({
         "_id": format!("mock-{}", comp_id),
         "identity": { "component_id": comp_id },
