@@ -51,10 +51,12 @@ impl<'a> CollectionsManager<'a> {
         let mut system_doc = existing_doc.unwrap_or_else(|| {
             json_value!({
                 "$schema": expected_uri,
+                "handle": format!("{}_{}", self.space, self.db),
                 "name": format!("{}_{}", self.space, self.db),
                 "space": self.space,
                 "database": self.db,
                 "version": 1,
+                "_p2p": { "revision": 1 },
                 "collections": {},
                 "rules": {},
                 "schemas": { "v1": {} }
@@ -1212,7 +1214,6 @@ fn resolve_refs_recursive<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    // 🎯 Import de notre Sandbox magique !
     use crate::utils::testing::DbSandbox;
 
     #[async_test]

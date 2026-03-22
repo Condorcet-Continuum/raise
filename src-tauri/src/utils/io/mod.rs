@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/utils/io/mod.rs
 
+pub mod audio;
 pub mod compression;
 pub mod fs;
 pub mod io_traits;

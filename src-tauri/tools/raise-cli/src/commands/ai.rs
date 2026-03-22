@@ -12,6 +12,8 @@ use raise::ai::agents::{
 };
 use raise::ai::llm::client::LlmClient;
 use raise::ai::training::ai_train_domain_native;
+use raise::ai::voice::stt::WhisperEngine;
+use raise::utils::io::audio::AudioListener;
 
 use raise::{user_error, user_info, user_success, utils::prelude::*};
 
@@ -30,6 +32,9 @@ pub enum AiCommands {
     /// Mode interactif avec le cerveau RAISE
     #[command(visible_alias = "i")]
     Interactive,
+
+    #[command(visible_alias = "l")]
+    Listen,
 
     /// Classifier une intention et éventuellement l'exécuter
     #[command(visible_alias = "x")]
@@ -169,6 +174,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
     // 4. EXÉCUTION DES COMMANDES AGENTS/LLM
     match command {
         AiCommands::Interactive => run_interactive_mode(&agent_ctx, &ctx, client).await?,
+        AiCommands::Listen => run_voice_mode(&agent_ctx, client, &manager).await?,
         AiCommands::Classify { input, execute } => {
             process_input(&agent_ctx, &input, client, execute).await
         }
@@ -213,6 +219,64 @@ async fn run_interactive_mode(
 
         process_input(ctx, &input, client.clone(), true).await;
     }
+    Ok(())
+}
+
+async fn run_voice_mode(
+    ctx: &AgentContext,
+    client: LlmClient,
+    manager: &raise::json_db::collections::manager::CollectionsManager<'_>,
+) -> RaiseResult<()> {
+    user_info!("AI_VOICE_INIT", json_value!({"status": "loading"}));
+    println!("⏳ Chargement du modèle vocal Whisper (Hors-ligne)...");
+
+    // 1. Initialiser Whisper
+    let mut engine = WhisperEngine::new(manager).await?;
+
+    // 2. Démarrer le micro
+    let (_listener, mut rx) = AudioListener::start()?;
+
+    user_success!(
+        "AI_VOICE_READY",
+        json_value!({"message": "Microphone activé."})
+    );
+
+    println!("--------------------------------------------------");
+    println!("🎤 Le micro est ouvert. Parlez naturellement !");
+    println!("   (Appuyez sur Ctrl+C pour quitter)");
+    println!("--------------------------------------------------\n");
+
+    // 3. Boucle d'écoute VAD
+    while let Some(audio_chunk) = rx.recv().await {
+        print!("⏳ Transcription en cours... ");
+        let _ = os::flush_stdout(); // Force l'affichage immédiat dans le terminal
+
+        match engine.transcribe(&audio_chunk) {
+            Ok(text) => {
+                let text = text.trim();
+                // On ignore les petits bruits de fond traduits en chaîne vide
+                if text.is_empty() {
+                    println!("\r🎤 Écoute en cours...               ");
+                    continue;
+                }
+
+                // Efface la ligne de chargement et affiche le texte
+                println!("\r🗣️  Vous : {}                    ", text);
+                user_info!("AI_VOICE_HEARD", json_value!({"text": text}));
+
+                // 4. Exécuter l'intention (Réutilise EXACTEMENT ton code CLI !)
+                process_input(ctx, text, client.clone(), true).await;
+
+                println!("\n🎤 Écoute en cours...");
+            }
+            Err(e) => {
+                user_error!("AI_VOICE_ERROR", json_value!({"error": e.to_string()}));
+                println!("\r❌ Erreur de transcription : {}               ", e);
+                println!("\n🎤 Écoute en cours...");
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -536,6 +600,29 @@ mod tests {
             assert!(lr.is_none());
         } else {
             panic!("Échec du parsing de la commande Train");
+        }
+    }
+
+    #[async_test]
+    async fn test_ai_listen_parsing() {
+        mock::inject_mock_config().await;
+
+        // 1. Test avec la commande complète "listen"
+        let cli = TestCli::parse_from(vec!["test", "listen"]);
+
+        if let Some(AiCommands::Listen) = cli.args.command {
+            assert!(true); // Le parsing a réussi
+        } else {
+            panic!("Échec du parsing de la commande complète 'listen'");
+        }
+
+        // 2. Test avec l'alias court "l"
+        let cli_alias = TestCli::parse_from(vec!["test", "l"]);
+
+        if let Some(AiCommands::Listen) = cli_alias.args.command {
+            assert!(true); // Le parsing de l'alias a réussi
+        } else {
+            panic!("Échec du parsing de l'alias 'l'");
         }
     }
 }

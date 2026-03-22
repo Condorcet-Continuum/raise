@@ -18,7 +18,7 @@ impl CandleLlmEngine {
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
         // 1. Récupération de la configuration globale dynamique
-        let settings = AppConfig::get_component_settings(manager, "llm").await?;
+        let settings = AppConfig::get_component_settings(manager, "ai_llm").await?;
 
         // 2. Lecture simple des paramètres
         let model_filename = settings

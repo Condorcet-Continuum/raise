@@ -224,29 +224,47 @@ pub async fn inject_mock_user(manager: &CollectionsManager<'_>, userhandle: &str
         .await
         .expect("Échec injection agent de test");
 }
+
 pub async fn inject_mock_component(
     manager: &CollectionsManager<'_>,
     comp_id: &str,
     settings: JsonValue,
 ) {
+    // 🎯 Compatibilité ascendante : on redirige les vieux appels des tests vers la nouvelle nomenclature
+    let real_handle = match comp_id {
+        "llm" => "ai_llm",
+        "voice" => "ai_voice",
+        "nlp" => "ai_nlp",
+        _ => comp_id,
+    };
+
+    // On reconstruit le Smart Link attendu par la nouvelle architecture
+    let ref_id = format!("ref:components:handle:{}", real_handle);
+
+    // On s'assure que la nouvelle collection de test existe
+    // On utilise generic.schema.json pour éviter d'avoir à moquer tous les schémas annexes dans la sandbox
     let _ = manager
         .create_collection(
-            "components",
+            "service_configs",
             "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await;
 
+    // On crée un document de test 100% conforme à l'attente de config.rs
     let doc = json_value!({
-        "_id": format!("mock-{}", comp_id),
-        "identity": { "component_id": comp_id },
-        "settings": settings,
-        "$schema": "db://_system/_system/schemas/v1/db/generic.schema.json"
+        "_id": format!("mock_config_{}", real_handle),
+        "handle": format!("mock_config_{}", real_handle),
+        "service_id": "ref:services:handle:ai",
+        "environment": "test",
+        "component_settings": {
+            ref_id: settings
+        }
     });
 
     manager
-        .insert_raw("components", &doc)
+        .insert_raw("service_configs", &doc)
         .await
-        .expect("Échec de l'injection du composant Mock à cause du schéma strict");
+        .expect("Échec de l'injection de la configuration Mock dans service_configs");
 }
 
 /// Injecte le schéma racine index.schema.json et les passe-partouts
@@ -537,7 +555,6 @@ impl GlobalDbSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // 🎯 Plus besoin d'importer explicitement exists ou read_to_string,
 
     #[tokio::test]
     async fn test_inject_schema_to_path_creates_valid_file() {

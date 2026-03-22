@@ -42,7 +42,7 @@ tempfile = "3.10"
 zstd = "0.13"
 
 
-wasmtime = "42.0.1" # --- Plugins & Runtime WASM  ---
+wasmtime = "43.0.0" # --- Plugins & Runtime WASM  ---
 
 # Requis pour l'embarquement des schémas (file_storage.rs)
 include_dir = "0.7"
@@ -92,6 +92,14 @@ safetensors = "0.7.0"
 
 tokenizers = { version = "0.22.2", features = ["http"] }
 fastembed = "5.5.0"
+
+
+# --- LA CAPTATION AUDIO ---
+cpal = "0.17.2"       # Accès au microphone (Windows/Mac/Linux)
+rubato = "1.0.1"     # Pour convertir le son en 16kHz proprement
+audioadapter = "2.0.0"  # Requis par la nouvelle API de rubato
+ringbuf = "0.4.7"     # Buffer Lock-free pour le flux audio temps réel
+
 
 # --- BASE DE DONNÉES & QUERY ---
 sqlparser = { version = "0.61.0", features = ["serde"] }

@@ -2,7 +2,7 @@
 
 // 1. Base de données (AI-Ready Queries)
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
+use crate::json_db::query::{Query, QueryEngine};
 
 // 2. Core : Environnement, Concurrence et Erreurs
 use crate::raise_error;
@@ -265,43 +265,41 @@ impl AppConfig {
 
     pub async fn get_component_settings(
         manager: &CollectionsManager<'_>,
-        component_id: &str,
+        component_handle: &str,
     ) -> RaiseResult<JsonValue> {
-        let mut query = Query::new("components");
-        query.filter = Some(QueryFilter {
-            operator: FilterOperator::And,
-            conditions: vec![Condition::eq(
-                "identity.component_id",
-                JsonValue::String(component_id.to_string()), // 🎯 Remplacé
-            )],
-        });
+        // 1. On reconstruit l'ID sémantique exact stocké dans la DB (ex: ref:components:handle:ai_llm)
+        let ref_id = format!("ref:components:handle:{}", component_handle);
+
+        // 2. On interroge la nouvelle collection des configurations
+        let query = Query::new("service_configs");
 
         let result = match QueryEngine::new(manager).execute_query(query).await {
             Ok(res) => res,
             Err(e) => raise_error!(
                 "ERR_CONFIG_DB_QUERY",
                 error = e,
-                context = json_value!({ "requested_id": component_id })
+                context = json_value!({ "requested_handle": component_handle })
             ),
         };
 
-        let Some(comp_doc) = result.documents.first() else {
-            raise_error!(
-                "ERR_CONFIG_COMPONENT_MISSING",
-                error = "Composant introuvable en base de données",
-                context = json_value!({ "requested_id": component_id })
-            );
-        };
+        // 3. On cherche notre composant dans les surcharges (component_settings)
+        for doc in result.documents {
+            if let Some(comp_settings) = doc.get("component_settings").and_then(|v| v.as_object()) {
+                if let Some(settings) = comp_settings.get(&ref_id) {
+                    return Ok(settings.clone());
+                }
+            }
+        }
 
-        let Some(settings) = comp_doc.get("settings").cloned() else {
-            raise_error!(
-                "ERR_CONFIG_SETTINGS_MISSING",
-                error = "Champ 'settings' manquant dans le document",
-                context = json_value!({ "requested_id": component_id })
-            );
-        };
-
-        Ok(settings)
+        // Si on arrive ici, c'est que la configuration n'existe vraiment pas
+        raise_error!(
+            "ERR_CONFIG_COMPONENT_MISSING",
+            error = "Configuration du composant introuvable dans les 'service_configs'",
+            context = json_value!({
+                "requested_handle": component_handle,
+                "expected_ref": ref_id
+            })
+        );
     }
 
     fn load_production_config(env: &str) -> RaiseResult<Self> {

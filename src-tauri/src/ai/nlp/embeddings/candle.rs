@@ -23,7 +23,7 @@ impl CandleEngine {
             json_value!(format!("{:?}", device))
         );
 
-        let settings = AppConfig::get_component_settings(manager, "nlp").await?;
+        let settings = AppConfig::get_component_settings(manager, "ai_nlp").await?;
 
         let model_dir = settings
             .get("model_name")

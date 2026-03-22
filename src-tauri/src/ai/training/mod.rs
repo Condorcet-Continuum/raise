@@ -28,7 +28,7 @@ pub async fn ai_train_domain_native(
         &config_app.system_db,
     );
 
-    let settings = AppConfig::get_component_settings(&manager, "llm").await?;
+    let settings = AppConfig::get_component_settings(&manager, "ai_llm").await?;
 
     let tokenizer_filename = settings
         .get("rust_tokenizer_file")

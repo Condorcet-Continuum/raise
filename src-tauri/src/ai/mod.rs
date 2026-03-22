@@ -10,4 +10,5 @@ pub mod orchestrator;
 pub mod protocols;
 pub mod tools;
 pub mod training;
+pub mod voice;
 pub mod world_model;

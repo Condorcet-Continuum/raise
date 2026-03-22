@@ -92,51 +92,88 @@ impl<'a> QueryEngine<'a> {
         let optimizer = QueryOptimizer::new();
         query = optimizer.optimize(query)?;
 
-        // 1. CHARGEMENT (Index vs Scan avec Résolution Fractale)
         let collection_paths = self.resolve_collection_path(&query.collection).await?;
         let mut documents = Vec::new();
 
+        // 🎯 INTERCEPTION DE LA CLÉ PRIMAIRE (O(1))
+        // Si la requête cherche un "_id" ou un "@id", on ne sollicite pas le moteur d'index secondaire.
+        let mut primary_key_val = None;
+        if let Some(filter) = &query.filter {
+            for cond in &filter.conditions {
+                if cond.operator == ComparisonOperator::Eq
+                    && (cond.field == "_id" || cond.field == "@id")
+                {
+                    if let Some(s) = cond.value.as_str() {
+                        primary_key_val = Some(s.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
         for actual_collection_path in collection_paths {
+            // 🚀 CAS 1 : C'est une recherche par Clé Primaire ! Temps d'accès : O(1)
+            if let Some(ref pk) = primary_key_val {
+                #[cfg(debug_assertions)]
+                println!(
+                    "⚡ QueryEngine: Primary Key Hit sur {} -> {}",
+                    actual_collection_path, pk
+                );
+
+                if let Ok(Some(doc)) = self.manager.get_document(&actual_collection_path, pk).await
+                {
+                    documents.push(doc);
+                }
+                continue; // On passe à la collection suivante sans scanner
+            }
+
+            // 🔍 CAS 2 : C'est une requête complexe, on utilise les index secondaires
             let mut sub_query = query.clone();
             sub_query.collection = actual_collection_path.clone();
 
             let index_candidate = self.find_index_candidate(&sub_query).await;
 
             let mut batch_docs = match index_candidate {
-                Some((field, value)) => {
+                Some((_field, value, index_field_name)) => {
                     let clean_val = self.strip_quotes(&value);
-                    let clean_field = self.resolve_index_field(&field, &actual_collection_path);
 
-                    #[cfg(debug_assertions)]
-                    println!(
-                        "⚡ QueryEngine: Index Hit sur {}.{}",
-                        actual_collection_path, clean_field
-                    );
-
-                    let ids = self
+                    // La vérification `has_index` a eu lieu, on peut chercher en sécurité.
+                    match self
                         .index_provider
-                        .search(&actual_collection_path, &clean_field, &clean_val)
-                        .await?;
+                        .search(&actual_collection_path, &index_field_name, &clean_val)
+                        .await
+                    {
+                        Ok(ids) => {
+                            #[cfg(debug_assertions)]
+                            println!(
+                                "⚡ QueryEngine: Index Hit sur {}.{}",
+                                actual_collection_path, index_field_name
+                            );
 
-                    self.manager
-                        .read_many(&actual_collection_path, &ids)
-                        .await?
+                            self.manager
+                                .read_many(&actual_collection_path, &ids)
+                                .await?
+                        }
+                        Err(_) => {
+                            // Repli silencieux
+                            self.manager.list_all(&actual_collection_path).await?
+                        }
+                    }
                 }
                 None => {
-                    #[cfg(debug_assertions)]
-                    println!("🐢 QueryEngine: Full Scan sur {}", actual_collection_path);
+                    // Repli silencieux
                     self.manager.list_all(&actual_collection_path).await?
                 }
             };
             documents.append(&mut batch_docs);
         }
 
-        // 2. FILTRAGE
+        // 2. FILTRAGE (Post-chargement)
         if let Some(filter) = &query.filter {
             documents.retain(|doc| self.evaluate_filter(doc, filter, &query.collection));
         }
 
-        // 3. TRI
+        // 3. TRI, PAGINATION, PROJECTION
         if let Some(sort_fields) = &query.sort {
             documents.sort_by(|a, b| self.compare_docs(a, b, sort_fields, &query.collection));
         }
@@ -145,11 +182,9 @@ impl<'a> QueryEngine<'a> {
         let offset = query.offset.unwrap_or(0);
         let limit = query.limit.unwrap_or(documents.len());
 
-        // 4. PAGINATION
         let mut paged_docs: Vec<JsonValue> =
             documents.into_iter().skip(offset).take(limit).collect();
 
-        // 5. PROJECTION
         if let Some(projection) = &query.projection {
             for doc in &mut paged_docs {
                 *doc = self.project_fields(doc, projection, &query.collection);
@@ -164,46 +199,37 @@ impl<'a> QueryEngine<'a> {
         })
     }
 
-    async fn find_index_candidate(&self, query: &Query) -> Option<(String, JsonValue)> {
-        if let Some(filter) = &query.filter {
-            if filter.operator == FilterOperator::And {
-                for cond in &filter.conditions {
-                    let clean_field = self.normalize_field_path(&cond.field, &query.collection);
+    /// 🎯 RECHERCHE D'INDEX ROBUSTE
+    /// Retourne : (Nom du champ dans le document, Valeur cherchée, Nom de l'index à utiliser)
+    async fn find_index_candidate(&self, query: &Query) -> Option<(String, JsonValue, String)> {
+        let filter = query.filter.as_ref()?;
 
-                    if cond.operator == ComparisonOperator::Eq {
-                        let has = self
-                            .index_provider
-                            .has_index(&query.collection, &clean_field)
-                            .await;
+        for cond in &filter.conditions {
+            if cond.operator != ComparisonOperator::Eq {
+                continue;
+            }
 
-                        if has {
-                            return Some((cond.field.clone(), cond.value.clone()));
-                        }
-                    }
+            let clean_field = self.normalize_field_path(&cond.field, &query.collection);
+            let leaf = cond.field.split('.').next_back().unwrap_or(&cond.field);
 
-                    let leaf = cond.field.split('.').next_back().unwrap_or(&cond.field);
-                    if leaf != clean_field && cond.operator == ComparisonOperator::Eq {
-                        let has_leaf = self.index_provider.has_index(&query.collection, leaf).await;
+            // On VÉRIFIE systématiquement l'existence de l'index avant de valider le candidat
+            if self
+                .index_provider
+                .has_index(&query.collection, &clean_field)
+                .await
+            {
+                return Some((cond.field.clone(), cond.value.clone(), clean_field));
+            }
 
-                        if has_leaf {
-                            return Some((cond.field.clone(), cond.value.clone()));
-                        }
-                    }
-                }
+            if leaf != clean_field && self.index_provider.has_index(&query.collection, leaf).await {
+                return Some((cond.field.clone(), cond.value.clone(), leaf.to_string()));
             }
         }
+
         None
     }
 
-    // --- LOGIQUE MÉTIER ---
-
-    fn resolve_index_field(&self, raw_field: &str, collection: &str) -> String {
-        let norm = self.normalize_field_path(raw_field, collection);
-        if norm.contains('.') {
-            return norm.split('.').next_back().unwrap_or(&norm).to_string();
-        }
-        norm
-    }
+    // --- LOGIQUE MÉTIER ET NORMALISATION ---
 
     fn evaluate_filter(
         &self,

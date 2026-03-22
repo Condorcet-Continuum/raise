@@ -71,7 +71,7 @@ pub struct Session {
 }
 
 fn fallback_session_type() -> Vec<String> {
-    vec!["Session".to_string(), "cfg:Session".to_string()]
+    vec!["Session".to_string()]
 }
 
 fn fallback_cached_permissions() -> Option<UnorderedMap<String, CrudPolicy>> {

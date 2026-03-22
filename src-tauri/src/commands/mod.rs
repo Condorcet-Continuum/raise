@@ -9,4 +9,5 @@ pub mod rules_commands;
 pub mod traceability_commands;
 pub mod training_commands;
 pub mod utils_commands;
+pub mod voice_commands;
 pub mod workflow_commands;
