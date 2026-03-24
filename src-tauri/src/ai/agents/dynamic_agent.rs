@@ -201,6 +201,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_dynamic_agent_missing_in_db() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
@@ -252,6 +254,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_dynamic_agent_missing_prompt() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
