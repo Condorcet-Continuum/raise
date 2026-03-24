@@ -1,59 +1,95 @@
+// FICHIER : src-tauri/tests/ai_suite/business_agent_tests.rs
+
 use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
-use raise::ai::agents::{business_agent::BusinessAgent, Agent, AgentContext};
-
-// 👇 Ajout de l'import du manager
+// 🎯 FIX : On remplace BusinessAgent par DynamicAgent
+use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
 
 #[async_test]
-#[serial_test::serial] // Protection RTX 5060 en local
+#[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_business_agent_generates_oa_entities() {
     let env = setup_test_env(LlmMode::Enabled).await;
     let test_root = env.sandbox.storage.config.data_root.clone();
 
-    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
-    let oa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "oa");
+    // --- 🎯 1. SETUP SYSTEM (Injection de l'agent dynamique) ---
+    let sys_mgr = CollectionsManager::new(
+        &env.sandbox.storage,
+        &env.sandbox.config.system_domain,
+        &env.sandbox.config.system_db,
+    );
+    let _ = sys_mgr
+        .create_collection(
+            "prompts",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = sys_mgr
+        .create_collection(
+            "agents",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
 
-    // 1. Initialisation de la collection 'capabilities' (avec un schéma générique de fallback)
+    sys_mgr.upsert_document("prompts", json_value!({
+        "_id": "ref:prompts:handle:prompt_business",
+        "role": "Analyste Métier",
+        "identity": { "persona": "Tu es un Business Analyst expert en Operational Analysis (OA)." },
+        "directives": ["Génère les entités métier demandées en format JSON."]
+    })).await.unwrap();
+
+    let agent_urn = "ref:agents:handle:agent_business";
+    sys_mgr.upsert_document("agents", json_value!({
+        "_id": agent_urn,
+        "base": {
+            "name": { "fr": "Business Analyst" },
+            "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_business", "temperature": 0.1 }
+        }
+    })).await.unwrap();
+
+    // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST (OA) ---
+    let oa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "oa");
     oa_mgr
         .create_collection(
             "capabilities",
             "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
-        .expect("Initialisation de la collection capabilities impossible");
-
-    // 2. Initialisation de la collection 'actors' (avec ton schéma spécifique !)
+        .unwrap();
     oa_mgr
         .create_collection(
             "actors",
             "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
-        .expect("Initialisation de la collection actors impossible");
-    // -----------------------------------
+        .unwrap();
 
-    let agent_id = "business_agent_test";
-    let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_oa");
+    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_oa");
+    use candle_nn::VarMap;
+    let wm_config = raise::utils::data::config::WorldModelConfig::default();
+    let world_engine = SharedRef::new(
+        raise::ai::world_model::NeuroSymbolicEngine::new(wm_config, VarMap::new()).unwrap(),
+    );
 
     let ctx = AgentContext::new(
-        agent_id,
+        agent_urn,
         &session_id,
         SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),
+        world_engine,
         test_root.clone(),
         test_root.join("dataset"),
     )
     .await;
 
-    let agent = BusinessAgent::new();
+    // 🎯 FIX : Utilisation du DynamicAgent
+    let agent = DynamicAgent::new(agent_urn);
 
-    // INTENTION MÉTIER
     let intent = EngineeringIntent::DefineBusinessUseCase {
         domain: "Banque".to_string(),
         process_name: "Instruction Crédit Immo".to_string(),
@@ -63,7 +99,7 @@ async fn test_business_agent_generates_oa_entities() {
             .to_string(),
     };
 
-    println!("👔 Lancement du Business Agent...");
+    println!("👔 Lancement du Business Agent (Dynamique)...");
     let result = agent.process(&ctx, &intent).await;
 
     assert!(result.is_ok(), "L'agent a retourné une erreur interne");
@@ -71,21 +107,13 @@ async fn test_business_agent_generates_oa_entities() {
 
     println!("🤖 Message de l'Agent :\n{}", agent_response.message);
 
-    // --- VÉRIFICATIONS ROBUSTES (Multi-Agents) ---
-
-    // 1. CAS A : L'agent a décidé de déléguer la suite du travail
-    if let Some(msg) = &agent_response.outgoing_message {
-        println!(
-            "✅ SUCCÈS : Le BusinessAgent a analysé le texte et a intelligemment délégué la création à l'agent '{}'.", 
-            msg.receiver
-        );
-        return; // Le test est réussi, le comportement autonome est validé !
+    if let Some(_msg) = &agent_response.outgoing_message {
+        println!("✅ SUCCÈS : Le BusinessAgent a intelligemment délégué la création.");
+        return;
     }
 
-    // 2. CAS B : L'agent a fait le travail lui-même
     tokio::time::sleep(TimeDuration::from_millis(1500)).await;
 
-    // On s'assure qu'au moins la Capacité a été générée
     let capabilities_dir = test_root
         .join("un2")
         .join("oa")
@@ -113,7 +141,6 @@ async fn test_business_agent_generates_oa_entities() {
         "L'agent n'a ni délégué la tâche, ni généré la capacité attendue."
     );
 
-    // Vérification souple des acteurs (les petits modèles peuvent les fusionner)
     let actors_dir = test_root
         .join("un2")
         .join("oa")
@@ -125,7 +152,5 @@ async fn test_business_agent_generates_oa_entities() {
             "✅ SUCCÈS : L'agent a généré {} acteur(s) physique(s).",
             count
         );
-    } else {
-        println!("⚠️ La capacité a été créée, mais les acteurs sont manquants (Typique des modèles < 3B).");
     }
 }

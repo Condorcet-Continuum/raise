@@ -117,7 +117,7 @@ mod tests {
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
         // 2. 🎯 ATTENTION : On passe Some(storage.clone()) au lieu de None
-        let orch = AiOrchestrator::new(ProjectModel::default(), Some(storage.clone()))
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .unwrap();
 

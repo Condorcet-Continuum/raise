@@ -202,8 +202,12 @@ fn main() {
 
                 if let Ok(model) = loader.load_full_model().await {
                     let storage_arc = SharedRef::new(storage_state.inner().clone());
-
-                    match AiOrchestrator::new(model, Some(storage_arc)).await {
+                    let manager = CollectionsManager::new(
+                        &storage_arc,
+                        &global_cfg.system_domain,
+                        &global_cfg.system_db,
+                    );
+                    match AiOrchestrator::new(model, &manager, storage_arc.clone()).await {
                         Ok(orchestrator) => {
                             let shared_orch = SharedRef::new(AsyncMutex::new(orchestrator));
                             let ai_state = app_handle_clone.state::<AiState>();

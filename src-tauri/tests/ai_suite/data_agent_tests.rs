@@ -4,56 +4,97 @@ use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
-use raise::ai::agents::{data_agent::DataAgent, Agent, AgentContext};
-
-// 👇 Import indispensable du manager
+// 🎯 FIX : DynamicAgent
+use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
 
 #[async_test]
-#[serial_test::serial] // Protection RTX 5060 en local
+#[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_data_agent_creates_class_and_enum() {
     let env = setup_test_env(LlmMode::Enabled).await;
     let test_root = env.sandbox.storage.config.data_root.clone();
 
-    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
-    let data_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "data");
+    // --- 🎯 1. SETUP SYSTEM (Injection) ---
+    let sys_mgr = CollectionsManager::new(
+        &env.sandbox.storage,
+        &env.sandbox.config.system_domain,
+        &env.sandbox.config.system_db,
+    );
+    let _ = sys_mgr
+        .create_collection(
+            "prompts",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = sys_mgr
+        .create_collection(
+            "agents",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
 
-    // 1. Initialisation de la collection 'classes'
+    sys_mgr
+        .upsert_document(
+            "prompts",
+            json_value!({
+                "_id": "ref:prompts:handle:prompt_data",
+                "role": "Architecte Données",
+                "identity": { "persona": "Tu es un Data Architect spécialisé en modélisation." },
+                "directives": ["Génère les entités de données demandées en format JSON."]
+            }),
+        )
+        .await
+        .unwrap();
+
+    let agent_urn = "ref:agents:handle:agent_data";
+    sys_mgr.upsert_document("agents", json_value!({
+        "_id": agent_urn,
+        "base": {
+            "name": { "fr": "Data Architect" },
+            "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_data", "temperature": 0.1 }
+        }
+    })).await.unwrap();
+
+    // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST ---
+    let data_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "data");
     data_mgr
         .create_collection(
             "classes",
             "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
-        .expect("Initialisation de la collection classes impossible");
-
-    // 2. Initialisation de la collection 'types'
+        .unwrap();
     data_mgr
         .create_collection(
             "types",
             "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
-        .expect("Initialisation de la collection types impossible");
-    // -----------------------------------
+        .unwrap();
 
-    let agent_id = "data_agent_test";
-    let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_data");
+    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_data");
+    use candle_nn::VarMap;
+    let wm_config = raise::utils::data::config::WorldModelConfig::default();
+    let world_engine = SharedRef::new(
+        raise::ai::world_model::NeuroSymbolicEngine::new(wm_config, VarMap::new()).unwrap(),
+    );
 
     let ctx = AgentContext::new(
-        agent_id,
+        agent_urn,
         &session_id,
         SharedRef::new(env.sandbox.storage.clone()),
         env.client
             .clone()
             .expect("LlmClient must be enabled for tests"),
+        world_engine,
         test_root.clone(),
         test_root.join("dataset"),
     )
     .await;
 
-    let agent = DataAgent::new();
+    // 🎯 FIX : DynamicAgent
+    let agent = DynamicAgent::new(agent_urn);
 
     // 1. Test CLASSE
     let intent_class = EngineeringIntent::CreateElement {
@@ -83,62 +124,44 @@ async fn test_data_agent_creates_class_and_enum() {
         delegated_enum = res.outgoing_message.is_some();
     }
 
-    // --- VÉRIFICATION PHYSIQUE ---
     tokio::time::sleep(TimeDuration::from_millis(1500)).await;
 
-    // Check Class
     let classes_dir = test_root.join("un2/data/collections/classes");
     let mut found_class = false;
-
     if classes_dir.exists() {
         for e in fs::read_dir_sync(&classes_dir).unwrap().flatten() {
-            let content = fs::read_to_string_sync(&e.path())
+            if fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
-                .to_lowercase();
-
-            if content.contains("client") {
+                .to_lowercase()
+                .contains("client")
+            {
                 found_class = true;
-                println!(
-                    "✅ Classe validée : {:?} (Contenu: {})",
-                    e.file_name(),
-                    content
-                );
-            } else if content.contains("errorfallback") {
-                println!("❌ Fichier ERREUR trouvé : {:?}", e.file_name());
+                break;
             }
         }
     }
-    assert!(
-        found_class,
-        "Classe Client non trouvée ou mal formée (voir logs ci-dessus)."
-    );
+    assert!(found_class, "Classe Client non trouvée.");
 
-    // Check Enum
     let types_dir = test_root.join("un2/data/collections/types");
     let mut found_enum = false;
-
     if types_dir.exists() {
         for e in fs::read_dir_sync(&types_dir).unwrap().flatten() {
-            let content = fs::read_to_string_sync(&e.path())
+            if fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
-                .to_lowercase();
-
-            if content.contains("statutcommande") {
+                .to_lowercase()
+                .contains("statutcommande")
+            {
                 found_enum = true;
-                println!("✅ Enum validée : {:?}", e.file_name());
                 break;
             }
         }
     }
 
-    // 🎯 Tolérance pour la délégation
     if delegated_enum {
         println!("✅ SUCCÈS : L'agent a intelligemment délégué la création de l'Enum.");
     } else if found_enum {
         println!("✅ SUCCÈS : L'agent a généré l'Enum physiquement.");
     } else {
-        println!(
-            "⚠️ Enum non trouvée (Le modèle a répondu textuellement ou a fusionné la réponse)."
-        );
+        println!("⚠️ Enum non trouvée.");
     }
 }

@@ -34,14 +34,12 @@ pub enum EngineeringIntent {
         context: String,
         filename: String,
     },
-    // --- AJOUT ---
     #[serde(rename = "verify_quality")]
     VerifyQuality {
         #[serde(default = "default_scope")]
         scope: String, // "code", "model", "requirements"
         target: String, // Cible de la vérification
     },
-    // -------------
     #[serde(rename = "chat")]
     Chat,
     #[serde(rename = "unknown")]
@@ -53,31 +51,28 @@ fn default_scope() -> String {
 }
 
 impl EngineeringIntent {
-    /// Retourne l'ID de l'agent le plus qualifié pour traiter cette intention.
-    /// Centralise la logique de routage du système.
+    /// 🎯 NOUVEAU : Retourne l'URN (Universal Resource Name) de l'agent en base de données
     pub fn recommended_agent_id(&self) -> &'static str {
         match self {
-            Self::DefineBusinessUseCase { .. } => "business_agent",
+            Self::DefineBusinessUseCase { .. } => "ref:agents:handle:agent_business",
             Self::CreateElement { layer, .. } => match layer.as_str() {
-                "OA" => "business_agent",
-                "SA" => "system_agent",
-                "LA" => "software_agent",
-                "PA" => "hardware_agent",
-                "EPBS" => "epbs_agent",
-                "DATA" => "data_agent",
-                "TRANSVERSE" => "transverse_agent",
-                _ => "orchestrator_agent", // Fallback
+                "OA" => "ref:agents:handle:agent_business",
+                "SA" => "ref:agents:handle:agent_system",
+                "LA" => "ref:agents:handle:agent_software",
+                "PA" => "ref:agents:handle:agent_hardware",
+                "EPBS" => "ref:agents:handle:agent_epbs",
+                "DATA" => "ref:agents:handle:agent_data",
+                "TRANSVERSE" => "ref:agents:handle:agent_quality",
+                _ => "ref:agents:handle:agent_dispatcher", // Fallback
             },
-            Self::CreateRelationship { .. } => "system_agent", // Par défaut, souvent géré au niveau système
-            Self::GenerateCode { .. } => "software_agent",
-            // ROUTAGE VERS QUALITY MANAGER
-            Self::VerifyQuality { .. } => "transverse_agent",
-            Self::Chat | Self::Unknown => "orchestrator_agent",
+            Self::CreateRelationship { .. } => "ref:agents:handle:agent_system",
+            Self::GenerateCode { .. } => "ref:agents:handle:agent_software",
+            Self::VerifyQuality { .. } => "ref:agents:handle:agent_quality",
+            Self::Chat | Self::Unknown => "ref:agents:handle:agent_dispatcher",
         }
     }
 
     /// Définit le scope de session par défaut pour cette intention.
-    /// Utile pour savoir si on doit reprendre le contexte global ou créer une branche.
     pub fn default_session_scope(&self) -> &'static str {
         match self {
             Self::Chat => "global_chat",
@@ -98,30 +93,10 @@ impl IntentClassifier {
     pub async fn classify(&self, user_input: &str) -> EngineeringIntent {
         let lower_input = user_input.to_lowercase();
 
-        // On évite le LLM si l'intention est évidente via des mots-clés forts.
-
-        //DÉTECTION SALUTATIONS (Instantane)
-        let greetings = [
-            "bonjour",
-            "hello",
-            "salut",
-            "hi",
-            "hey",
-            "ça va",
-            "how are you",
-        ];
-        if greetings.iter().any(|&g| lower_input.contains(g)) && lower_input.len() < 20 {
-            return EngineeringIntent::Chat;
-        }
-
-        // --- 1. COURT-CIRCUIT (Optimisation CPU & Déterminisme) ---
-        // DÉTECTION QUALITÉ / TESTS
-        if lower_input.contains("vérifi") // vérifie, vérification
+        // 1. COURT-CIRCUIT (Heuristiques rapides)
+        if lower_input.contains("vérifi")
             || lower_input.contains("verify")
             || lower_input.contains("qualité")
-            || lower_input.contains("quality")
-            || lower_input.contains("lint") 
-            || lower_input.contains("analyse statique")
         {
             return EngineeringIntent::VerifyQuality {
                 scope: if lower_input.contains("code") {
@@ -133,152 +108,77 @@ impl IntentClassifier {
             };
         }
 
-        // TRANSVERSE (Exigences, Tests)
-        if lower_input.contains("exigence") || lower_input.contains("requirement") {
-            return EngineeringIntent::CreateElement {
-                layer: "TRANSVERSE".to_string(),
-                element_type: "Requirement".to_string(),
-                name: extract_name(user_input, "exigence"),
+        // 2. 🔄 BOUCLE DE RÉFLEXION POUR LA CLASSIFICATION LLM
+        let system_prompt = "Tu es le Dispatcher IA de RAISE. Tu convertis les demandes utilisateur en JSON STRICT.\n\
+                             SCHÉMAS :\n\
+                             - Création : { \"intent\": \"create_element\", \"layer\": \"SA|LA|PA|DATA|OA|TRANSVERSE\", \"element_type\": \"str\", \"name\": \"str\" }\n\
+                             - Code : { \"intent\": \"generate_code\", \"language\": \"str\", \"filename\": \"str\" }\n\
+                             - Chat : { \"intent\": \"chat\" }";
+
+        let mut current_feedback = String::new();
+        let max_retries = 2;
+
+        for attempt in 1..=max_retries {
+            let user_prompt = if attempt == 1 {
+                user_input.to_string()
+            } else {
+                format!(
+                    "La tentative précédente a échoué. {}\nDemande initiale : {}",
+                    current_feedback, user_input
+                )
             };
-        }
-        if lower_input.contains("procédure")
-            || (lower_input.contains("test") && lower_input.contains("procedure"))
-        {
-            return EngineeringIntent::CreateElement {
-                layer: "TRANSVERSE".to_string(),
-                element_type: "TestProcedure".to_string(),
-                name: extract_name(user_input, "procédure"),
+
+            let response = match self
+                .llm
+                .ask(LlmBackend::LocalLlama, system_prompt, &user_prompt)
+                .await
+            {
+                Ok(res) => res,
+                Err(_) => break,
             };
-        }
-        if lower_input.contains("campagne") || lower_input.contains("campaign") {
-            return EngineeringIntent::CreateElement {
-                layer: "TRANSVERSE".to_string(),
-                element_type: "TestCampaign".to_string(),
-                name: extract_name(user_input, "campagne"),
-            };
-        }
-        if lower_input.contains("scénario") || lower_input.contains("scenario") {
-            return EngineeringIntent::CreateElement {
-                layer: "TRANSVERSE".to_string(),
-                element_type: "ExchangeScenario".to_string(),
-                name: extract_name(user_input, "scénario"),
-            };
-        }
 
-        // DATA (Classes)
-        if lower_input.contains("classe") || lower_input.contains("class") {
-            return EngineeringIntent::CreateElement {
-                layer: "DATA".to_string(),
-                element_type: "Class".to_string(),
-                name: extract_name(user_input, "classe"),
-            };
-        }
+            let clean_json = extract_json_from_llm(&response);
+            let mut val: JsonValue =
+                json::deserialize_from_str(&clean_json).unwrap_or(json_value!({}));
 
-        // OA (Capacités)
-        if lower_input.contains("capacité") || lower_input.contains("capability") {
-            return EngineeringIntent::CreateElement {
-                layer: "OA".to_string(),
-                element_type: "OperationalCapability".to_string(),
-                name: extract_name(user_input, "capacité"),
-            };
-        }
+            // --- VALIDATION ET AUTO-CORRECTION DES CHAMPS CRITIQUES ---
+            if let Some(intent_name) = val["intent"].as_str() {
+                if intent_name == "create_element" {
+                    if val["layer"].is_null() {
+                        let h = heuristic_fallback(user_input);
+                        val["layer"] = h["layer"].clone();
+                        val["element_type"] = h["element_type"].clone();
+                    }
 
-        // --- 2. APPEL LLM (Fallback Intelligent) ---
-        let system_prompt = "Tu es le Dispatcher IA de RAISE.
-        Ton rôle est de classifier l'intention de l'utilisateur en JSON STRICT.
-        
-        FORMATS ATTENDUS :
-        1. Création : { \"intent\": \"create_element\", ... }
-        2. Chat/Salutation : { \"intent\": \"chat\" }  <-- UTILISE CECI pour 'Bonjour', 'Qui es-tu ?', etc.
-        3. Inconnu : { \"intent\": \"unknown\" }
+                    if val["layer"].is_null() {
+                        current_feedback =
+                            "ERREUR : Le champ 'layer' est obligatoire pour 'create_element'."
+                                .to_string();
+                        continue;
+                    }
+                }
 
-        IMPORTANT : Si l'utilisateur dit juste 'Bonjour' ou discute, réponds { \"intent\": \"chat\" }. 
-        Ne crée pas d'élément technique pour une simple salutation.";
-
-        let response = self
-            .llm
-            .ask(LlmBackend::LocalLlama, system_prompt, user_input)
-            .await
-            .unwrap_or_else(|_| "{}".to_string());
-
-        // UTILISATION DE LA TOOLBOX ICI (Plus de code dupliqué)
-        let clean_json = extract_json_from_llm(&response);
-        let mut json_value: JsonValue =
-            json::deserialize_from_str(&clean_json).unwrap_or(json_value!({}));
-
-        // --- MODE SECOURS (HEURISTIQUE) ---
-        // Si le LLM échoue à produire un JSON valide avec un "intent"
-        if json_value.get("intent").is_none() {
-            // println!("⚠️  LLM confus, activation du mode heuristique."); // Log optionnel
-            json_value = heuristic_fallback(user_input);
-        }
-
-        // --- CORRECTIONS IMPÉRATIVES (OVERRIDES POST-LLM) ---
-        // Corrige les erreurs fréquentes du LLM sur les couches
-        if let Some(intent) = json_value["intent"].as_str() {
-            if intent == "create_element" || intent == "create_system" {
-                if lower_input.contains("exigence") || lower_input.contains("requirement") {
-                    json_value["layer"] = json_value!("TRANSVERSE");
-                    json_value["element_type"] = json_value!("Requirement");
-                } else if lower_input.contains("classe")
-                    || lower_input.contains("donnée")
-                    || lower_input.contains("datatype")
-                {
-                    json_value["layer"] = json_value!("DATA");
-                    json_value["element_type"] = json_value!("Class");
-                } else if lower_input.contains("acteur") || lower_input.contains("rôle") {
-                    json_value["layer"] = json_value!("OA");
-                    json_value["element_type"] = json_value!("OperationalActor");
-                } else if lower_input.contains("configuration") || lower_input.contains("article") {
-                    json_value["layer"] = json_value!("EPBS");
-                    json_value["element_type"] = json_value!("ConfigurationItem");
+                match json::deserialize_from_value::<EngineeringIntent>(val) {
+                    Ok(intent) => return intent,
+                    Err(e) => {
+                        current_feedback = format!(
+                            "ERREUR JSON : {}. Assure-toi de fournir tous les champs requis.",
+                            e
+                        );
+                        continue;
+                    }
                 }
             }
         }
 
-        // Fix legacy intents
-        if json_value["intent"] == "create_system" {
-            json_value["intent"] = json_value!("create_element");
-            if json_value.get("layer").is_none() {
-                json_value["layer"] = json_value!("SA");
-            }
-            if json_value.get("element_type").is_none() {
-                json_value["element_type"] = json_value!("System");
-            }
-        }
-
-        // Nom par défaut si manquant
-        if json_value["intent"] == "create_element" && json_value.get("name").is_none() {
-            json_value["name"] =
-                json_value!(user_input.replace("Crée ", "").replace("le ", "").trim());
-        }
-
-        match json::deserialize_from_value::<EngineeringIntent>(json_value) {
-            Ok(intent) => intent,
-            Err(_) => EngineeringIntent::Unknown,
-        }
+        // 3. FALLBACK ULTIME (Si le LLM échoue 2 fois)
+        let fallback_val = heuristic_fallback(user_input);
+        json::deserialize_from_value::<EngineeringIntent>(fallback_val)
+            .unwrap_or(EngineeringIntent::Unknown)
     }
 }
 
 // --- HELPER FUNCTIONS ---
-
-fn extract_name(input: &str, keyword: &str) -> String {
-    let lower = input.to_lowercase();
-    if let Some(idx) = lower.find(keyword) {
-        let raw = &input[idx + keyword.len()..].trim();
-        let clean = raw
-            .trim_start_matches("de ")
-            .trim_start_matches("du ")
-            .trim_start_matches("la ")
-            .trim_start_matches("le ")
-            .trim_start_matches("l'")
-            .trim_start_matches("une ")
-            .trim_start_matches("un ")
-            .trim();
-        return clean.to_string();
-    }
-    input.to_string()
-}
 
 fn extract_target_heuristics(input: &str) -> String {
     let lower = input.to_lowercase();
@@ -294,14 +194,12 @@ fn extract_target_heuristics(input: &str) -> String {
             return input[idx + kw.len()..].trim().to_string();
         }
     }
-    // Fallback: retourne tout l'input si on ne trouve pas de séparateur propre
     input.to_string()
 }
 
 fn heuristic_fallback(input: &str) -> JsonValue {
     let lower = input.to_lowercase();
 
-    // AJOUT : Fallback Qualité
     if lower.contains("vérif") || lower.contains("check") {
         return json_value!({
             "intent": "verify_quality",
@@ -343,38 +241,64 @@ fn heuristic_fallback(input: &str) -> JsonValue {
 mod tests {
     use super::*;
 
+    fn extract_name(input: &str, keyword: &str) -> String {
+        let lower = input.to_lowercase();
+        if let Some(idx) = lower.find(keyword) {
+            let raw = &input[idx + keyword.len()..].trim();
+            let clean = raw
+                .trim_start_matches("de ")
+                .trim_start_matches("du ")
+                .trim_start_matches("la ")
+                .trim_start_matches("le ")
+                .trim_start_matches("l'")
+                .trim_start_matches("une ")
+                .trim_start_matches("un ")
+                .trim();
+            return clean.to_string();
+        }
+        input.to_string()
+    }
+
     #[test]
     fn test_recommended_agent_routing() {
-        // Test existant SA
         let intent_sa = EngineeringIntent::CreateElement {
             layer: "SA".to_string(),
             element_type: "System".to_string(),
             name: "Test".to_string(),
         };
-        assert_eq!(intent_sa.recommended_agent_id(), "system_agent");
+        assert_eq!(
+            intent_sa.recommended_agent_id(),
+            "ref:agents:handle:agent_system"
+        );
 
-        // Test existant LA
         let intent_la = EngineeringIntent::CreateElement {
             layer: "LA".to_string(),
             element_type: "Component".to_string(),
             name: "Test".to_string(),
         };
-        assert_eq!(intent_la.recommended_agent_id(), "software_agent");
+        assert_eq!(
+            intent_la.recommended_agent_id(),
+            "ref:agents:handle:agent_software"
+        );
 
-        // Test existant Code
         let intent_code = EngineeringIntent::GenerateCode {
             language: "rust".into(),
             context: "".into(),
             filename: "".into(),
         };
-        assert_eq!(intent_code.recommended_agent_id(), "software_agent");
+        assert_eq!(
+            intent_code.recommended_agent_id(),
+            "ref:agents:handle:agent_software"
+        );
 
-        // AJOUT : Test Routing Qualité
         let intent_qa = EngineeringIntent::VerifyQuality {
             scope: "code".into(),
             target: "MyComp".into(),
         };
-        assert_eq!(intent_qa.recommended_agent_id(), "transverse_agent");
+        assert_eq!(
+            intent_qa.recommended_agent_id(),
+            "ref:agents:handle:agent_quality"
+        );
     }
 
     #[test]
@@ -397,7 +321,7 @@ mod tests {
     fn test_heuristic_fallback_code() {
         let val = heuristic_fallback("Génère code python");
         assert_eq!(val["intent"], "generate_code");
-        assert_eq!(val["language"], "rust"); // Default hardcodé dans fallback
+        assert_eq!(val["language"], "rust");
     }
 
     #[test]
@@ -408,7 +332,6 @@ mod tests {
         assert_eq!(val["element_type"], "Component");
     }
 
-    // AJOUT : Test Fallback Verify
     #[test]
     fn test_heuristic_fallback_verify() {
         let val = heuristic_fallback("Check le module X");
@@ -416,7 +339,6 @@ mod tests {
         assert_eq!(val["scope"], "code");
     }
 
-    // AJOUT : Test Heuristique Target Extraction
     #[test]
     fn test_extract_target() {
         let t = extract_target_heuristics("Vérifie sur le Jetson");

@@ -1,37 +1,37 @@
-# Module `ai/agents` — Système Multi-Agents Neuro-Symbolique & Stateful
+# Module `ai/agents` — Système Multi-Agents Neuro-Symbolique & Data-Driven
 
-Ce module implémente la logique **exécutive** de l'IA de RAISE. Il transforme des requêtes en langage naturel en artefacts d'ingénierie formels (Arcadia), tout en maintenant une **mémoire conversationnelle persistante** et une capacité de **collaboration active** entre agents.
+Ce module implémente la logique **exécutive** de l'IA de RAISE. Il transforme des requêtes en langage naturel en artefacts d'ingénierie formels (Arcadia).
+
+Sa particularité absolue réside dans son architecture **Data-Driven (Zéro Dette)** : le moteur Rust est une coquille exécutive totalement agnostique. **Toute l'intelligence, les règles de routage, et la personnalité des agents sont définies dans le Graphe de Connaissances (JSON-LD).**
 
 ---
 
-## 🧠 Architecture Globale
+## 🧠 Architecture Globale (Le Paradigme Neuro-Symbolique)
 
-Le système repose sur un pipeline **Comprendre → Contextualiser → Agir → Déléguer**.
-Le Dispatcher (`ai_commands.rs`) agit comme un chef d'orchestre qui gère une boucle de résolution jusqu'à satisfaction complète de la demande.
+Le système repose sur le `DynamicAgent`, un agent universel qui charge sa personnalité et ses règles depuis la base de données système avant chaque exécution.
 
 ```mermaid
 graph TD
     User[Utilisateur] -->|Prompt| Dispatcher[Dispatcher / ai_chat]
     Dispatcher -->|Classify| Intent[Intent Classifier]
-    Intent -->|Recommended ID| Factory[Agent Factory]
+    Intent -->|Identifiant URN| Factory[Agent Factory]
 
-    subgraph "Cycle de Vie Agent (Stateful)"
-        Factory -->|Instantiate| Agent[Agent Spécialisé]
-        Agent -->|1. Load Session| DB[(JSON DB / Sessions)]
-        DB -->|History Context| Agent
-        Agent -->|2. Prompt + History| LLM[LLM Engine]
-        LLM -->|Response| Agent
-        Agent -->|3. Save Response| DB
-
-        %% NOUVEAU : Exécution via MCP
-        Agent -->|4. Select Tool| MCP[MCP Toolbox]
-        MCP -->|Generate Code| FS[File System / src-gen]
-        MCP -->|Read/Write Model| DB
+    subgraph "Exécution du DynamicAgent"
+        Factory -->|Instanciation| Agent[DynamicAgent]
+        Agent -->|1. Fetch Profil & Prompts| SystemDB[(DB '_system')]
+        Agent -->|2. Load Strict Session| SystemDB
+        Agent -->|3. LLM Request| LLM[LLM Engine]
+        
+        %% Utilisation de MCP et de l'Ontologie
+        LLM -->|JSON Output| Agent
+        Agent -->|4. Resolve Ontology| Router{Ontological Mapping}
+        Router -->|Find Layer & Collection| MCP[MCP Toolbox / QueryDbTool]
+        MCP -->|Read/Write Artifact| DomainDB[(DB Domaine 'un2')]
     end
 
     Agent -->|Return Result + ACL| Dispatcher
 
-    %% Boucle de rétroaction (Orchestration)
+    %% Boucle de rétroaction
     Dispatcher -->|Check Outgoing Message| ACL{Message ACL ?}
     ACL -->|Oui: Loop| Dispatcher
     ACL -->|Non: Final Response| User
@@ -39,135 +39,72 @@ graph TD
 
 ---
 
-## 👥 La "Squad" d'Agents (Stateful & Communicants)
+## 🧬 Le "Cerveau" Ontologique (Zéro Code en Dur)
 
-Chaque agent est expert dans sa couche d'abstraction Arcadia. Il sait **quoi produire** (Schémas) et **à qui transmettre la suite** (Transitions ACL).
+Contrairement aux architectures classiques, le code Rust ne contient aucun `match` ou dictionnaire associant une entité (ex: `OperationalCapability`) à un dossier de sauvegarde.
 
-| Agent             | Rôle            | Couche | Schémas gérés (Artefacts)   | Transitions Automatiques (Délégation) |
-| ----------------- | --------------- | ------ | --------------------------- | ------------------------------------- |
-| **BusinessAgent** | Analyste Métier | **OA** | `OperationalCapability`<br> |
+Tout passe par le **Mapping Ontologique** (`ref:configs:handle:ontological_mapping`) stocké en base :
 
-<br>`OperationalActor` | ➔ **SystemAgent**<br>
+1. L'Agent LLM génère un artefact (ex: `type: "Class"`).
+2. L'outil interroge le Graphe de Connaissances pour savoir où le ranger.
+3. Le Graphe répond : `layer: "data", collection: "classes"`.
+4. L'outil MCP sauvegarde la donnée.
 
-<br>_(Transition Besoin → Système)_ |
-| **SystemAgent** | Architecte Système | **SA** | `SystemFunction`<br>
-
-<br>`SystemComponent`<br>
-
-<br>`SystemActor` | ➔ **SoftwareAgent**<br>
-
-<br>_(Transition Archi → Design)_ |
-| **SoftwareAgent** | Architecte Logiciel | **LA** | `LogicalComponent`<br>
-
-<br>`SourceFile` (Code Gen) | ➔ **EpbsAgent** (Config)<br>
-
-<br>➔ **TransverseAgent** (Qualité) |
-| **HardwareAgent** | Architecte Matériel | **PA** | `PhysicalNode`<br>
-
-<br>_(Détection: Elec vs Infra)_ | ➔ **EpbsAgent**<br>
-
-<br>_(Création BOM / Part Number)_ |
-| **EpbsAgent** | Config Manager | **EPBS** | `ConfigurationItem`<br>
-
-<br>_(Gestion P/N, Version)_ | _Fin de chaîne_ |
-| **DataAgent** | Data Architect | **DATA** | `Class`, `DataType`<br>
-
-<br>`ExchangeItem` | ➔ **Routage Dynamique**<br>
-
-<br>_(Vers Business, Soft ou Hard)_ |
-| **TransverseAgent** | Qualité & IVVQ | **TRANS** | `Requirement`, `Scenario`<br>
-
-<br>`TestProcedure` | _Fin de chaîne_ |
+_Si une nouvelle norme ou couche d'ingénierie est ajoutée à RAISE demain, aucune ligne de Rust n'a besoin d'être recompilée !_
 
 ---
 
-## 🧠 Mémoire & Persistance
+## 👥 Les Profils d'Agents (Configurés en Base)
 
-Les agents disposent d'une mémoire persistante partagée au sein d'une même séquence d'orchestration.
+Il n'y a plus de structures Rust dédiées (`BusinessAgent`, etc.). Ce sont désormais des **Profils** chargés dynamiquement par le `DynamicAgent` à partir des URNs (`ref:agents:handle:...`).
 
-### Fonctionnement
-
-1. **Session Partagée** : Le Dispatcher génère un `global_session_id`. Tous les agents impliqués dans la chaîne (ex: Business puis System) lisent et écrivent dans le même fil historique.
-2. **Injection Contextuelle** : L'historique des échanges précédents (même ceux des autres agents) est injecté dans le prompt du LLM.
-3. **Sauvegarde** : Chaque interaction est persistée dans `un2/_system/agent_sessions/`.
-
-Cela permet au `SoftwareAgent` de "savoir" ce que le `SystemAgent` vient de décider sans que l'utilisateur ait besoin de le répéter.
-
----
-
-## 🛠️ Agent Toolbox & Protocoles
-
-### 1. Gestion de Session (`tools::load/save_session`)
-
-Fonctions asynchrones standardisées pour lire et écrire dans la collection `agent_sessions`.
-
-### 2. Protocole ACL (`protocols::acl`)
-
-Implémentation standardisée des messages Agent-to-Agent.
-
-- **Performative** : `Request`, `Inform`, `Propose`...
-- **Contenu** : Instructions en langage naturel pour l'agent destinataire.
-
-### 3. Parsing Robuste (`tools::extract_json_from_llm`)
-
-Nettoie les réponses LLM (suppression du Markdown, extraction du JSON pur) pour garantir la conformité des schémas.
-
-### 4. Moteur d'Exécution (MCP / AI Tools)
-
-Les agents utilisent désormais le **Model Context Protocol** pour interagir avec le monde réel de manière sécurisée et déterministe.
-
-- **CodeGenTool** : Orchestre la génération de code physique (Rust, C++, etc.) à partir des définitions du modèle.
-- _Round-Trip Engineering_ : Préserve le code manuel utilisateur via les balises `AI_INJECTION_POINT`.
-- _Smart Linking_ : Utilise l'UUID du composant pour retrouver sa configuration en base.
-
-- **FileWriteTool** : Permet l'écriture sécurisée (Sandbox) sur le disque.
+| Profil (Handle)      | Rôle (Couche)                | Schémas gérés (Artefacts)                   | Transitions Automatiques (ACL)   |
+| -------------------- | ---------------------------- | ------------------------------------------- | -------------------------------- |
+| **`agent_business`** | Analyste Métier (**OA**)     | `OperationalCapability`, `OperationalActor` | ➔ `agent_system`                 |
+| **`agent_system`**   | Architecte Système (**SA**)  | `SystemFunction`, `SystemComponent`         | ➔ `agent_software`               |
+| **`agent_software`** | Architecte Logiciel (**LA**) | `LogicalComponent`, `SourceFile` (Code Gen) | ➔ `agent_epbs` / `agent_quality` |
+| **`agent_hardware`** | Architecte Matériel (**PA**) | `PhysicalNode`, `Hardware`                  | ➔ `agent_epbs`                   |
+| **`agent_epbs`**     | Config Manager (**EPBS**)    | `ConfigurationItem` (BOM / Part Number)     | _Fin de chaîne_                  |
+| **`agent_data`**     | Data Architect (**DATA**)    | `Class`, `DataType`, `ExchangeItem`         | _Routage Dynamique_              |
+| **`agent_quality`**  | Qualité & IVVQ (**TRANS**)   | `Requirement`, `TestProcedure`              | _Fin de chaîne_                  |
 
 ---
 
-## 📦 Sortie Structurée
+## 🧠 Mémoire & Persistance (Schémas Stricts)
 
-L'interface avec le Frontend a évolué pour supporter la communication inter-agents :
+La gestion de session a été scindée pour respecter les bonnes pratiques des bases orientées document :
 
-```rust
-pub struct AgentResult {
-    pub message: String,                 // Feedback textuel (Markdown)
-    pub artifacts: Vec<CreatedArtifact>, // Liste des objets créés
+1. **Le Graphe Sémantique (`session-agent.schema.json`)** : La base de données ne stocke que les métadonnées d'état (Statut, Métriques de tokens, IDs de thread). Ce schéma est validé de manière **stricte** par le registre JSON-LD (`VocabularyRegistry`).
+2. **Le Disque Local (`chats/agents/*.json`)** : L'historique lourd des messages (contexte LLM complet) est déporté sur le système de fichiers local du domaine pour ne pas alourdir l'index de recherche du graphe.
+3. **Upsert Idempotent** : Chaque prise de parole de l'agent effectue une mise à jour (Upsert) de son document de session via son identifiant déterministe (`handle`).
 
-    // Canal de communication sortant (Délégation)
-    pub outgoing_message: Option<AclMessage>,
-}
+---
 
-```
+## 🛠️ Agent Toolbox & Protocoles MCP
 
-Si `outgoing_message` est présent, le Dispatcher intercepte la réponse et ne l'affiche pas tout de suite à l'utilisateur : il déclenche l'agent destinataire.
+Les agents utilisent le **Model Context Protocol (MCP)** pour interagir avec le monde de manière sécurisée et centralisée.
+
+- **`QueryDbTool`** : Outil fondamental permettant à l'agent de résoudre n'importe quelle URN (`ref:collection:champ:valeur`) dans le graphe système ou métier, avec support optionnel de l'export RDF/N-Triples.
+- **`CodeGenTool`** : Orchestre la génération de code physique (Rust, C++, etc.) avec _Round-Trip Engineering_ (préservation du code manuel via balises `AI_INJECTION_POINT`).
+- **Protocole ACL (`protocols::acl`)** : Gestion des messages Agent-to-Agent (Performative `Request`, `Inform`, etc.) pour la délégation de tâches.
 
 ---
 
 ## 🚀 Tests Unitaires & Intégration
 
-Les tests couvrent le cycle de vie complet, incluant la délégation ACL et la génération de code physique.
+Les tests d'intégration sont conçus autour de la `DbSandbox` qui isole un graphe de connaissances éphémère. Le registre de vocabulaire et les mocks sont injectés dynamiquement pour simuler la base système.
 
 ```bash
-cargo test ai::agents -- --nocapture
-
+cargo test -p raise --test ai_suite --features cuda
 ```
-
-### Couverture
-
-- **Identity** : Validation du routage.
-- **Workflow** : Vérification que `SystemAgent` déclenche bien `SoftwareAgent` lors de la création d'un composant.
-- **CodeGen Integration** : Test de bout en bout (Agent -> DB -> Tool -> Fichier Rust).
-- **Schémas** : Validation que les JSON produits respectent la structure attendue par la DB.
 
 ---
 
 ## 🔮 Roadmap Technique
 
-- [x] **Protocole MCP (Model Context Protocol)** : Standardisé via `ai::tools` (CodeGen, FS).
+- [x] **Protocole MCP (Model Context Protocol)** : Standardisé via `QueryDbTool` et `CodeGenTool`.
 - [x] **Round-Trip Engineering** : Préservation du code manuel (Implémenté).
-- [ ] **RAG (Retrieval Augmented Generation)** : Connecter la mémoire à une recherche vectorielle.
-- [ ] **Validation Schema** : Intégrer une validation JSON Schema stricte (Valico) avant la sauvegarde disque.
+- [x] **Validation Schema Stricte** : Validée via le `VocabularyRegistry` (`session-agent.schema.json`).
+- [ ] **RAG (Retrieval Augmented Generation)** : Connecter le "Court Terme" (fichiers de chat) à la "Mémoire Long Terme" Vectorielle (Qdrant).
 
-```
-
-```
+ 

@@ -9,17 +9,26 @@ pub use quantizer::VectorQuantizer;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::prelude::*;
     use candle_core::{DType, Device};
     use candle_nn::{VarBuilder, VarMap};
 
     #[test]
     fn test_representation_public_api() {
-        // Test d'intégration intra-module
-        // Vérifie qu'on peut instancier le Quantizer depuis l'extérieur du fichier
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
 
-        let vq = VectorQuantizer::new(10, 4, vb);
+        // 🎯 FIX : On crée une config locale pour le test
+        let config = WorldModelConfig {
+            vocab_size: 10,
+            embedding_dim: 4,
+            action_dim: 5,
+            hidden_dim: 32,
+            use_gpu: false,
+        };
+
+        // 🎯 FIX : On passe la référence à la config
+        let vq = VectorQuantizer::new(&config, vb);
         assert!(vq.is_ok(), "L'API VectorQuantizer doit être accessible.");
     }
 }

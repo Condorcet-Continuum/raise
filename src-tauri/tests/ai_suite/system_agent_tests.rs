@@ -4,74 +4,98 @@ use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
-use raise::ai::agents::{system_agent::SystemAgent, Agent, AgentContext};
+// 🎯 FIX : DynamicAgent
+use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
 
 #[async_test]
-#[serial_test::serial] // Protection RTX 5060 en local
+#[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_system_agent_creates_function_end_to_end() {
     let env = setup_test_env(LlmMode::Enabled).await;
-
     let test_root = env.sandbox.storage.config.data_root.clone();
 
-    // --- 🎯 SETUP SPÉCIFIQUE AU TEST ---
-    let sa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "sa");
+    // --- 🎯 1. SETUP SYSTEM (Injection) ---
+    let sys_mgr = CollectionsManager::new(
+        &env.sandbox.storage,
+        &env.sandbox.config.system_domain,
+        &env.sandbox.config.system_db,
+    );
+    let _ = sys_mgr
+        .create_collection(
+            "prompts",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = sys_mgr
+        .create_collection(
+            "agents",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
 
-    // Initialisation de la collection 'functions'
+    sys_mgr.upsert_document("prompts", json_value!({
+        "_id": "ref:prompts:handle:prompt_system",
+        "role": "Architecte Système",
+        "identity": { "persona": "Tu es un Ingénieur Système expert certifié Arcadia (Couche SA)." },
+        "directives": ["Génère la fonction système (SystemFunction) demandée en format JSON."]
+    })).await.unwrap();
+
+    let agent_urn = "ref:agents:handle:agent_system";
+    sys_mgr.upsert_document("agents", json_value!({
+        "_id": agent_urn,
+        "base": {
+            "name": { "fr": "System Architect" },
+            "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_system", "temperature": 0.1 }
+        }
+    })).await.unwrap();
+
+    // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST ---
+    let sa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "sa");
     sa_mgr
         .create_collection(
             "functions",
             "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await
-        .expect("Initialisation de la collection functions impossible");
-    // -----------------------------------
+        .unwrap();
 
-    let agent_id = "system_agent_test";
-    let session_id = AgentContext::generate_default_session_id(agent_id, "test_suite_sa");
+    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_sa");
+    use candle_nn::VarMap;
+    let wm_config = raise::utils::data::config::WorldModelConfig::default();
+    let world_engine = SharedRef::new(
+        raise::ai::world_model::NeuroSymbolicEngine::new(wm_config, VarMap::new()).unwrap(),
+    );
 
     let ctx = AgentContext::new(
-        agent_id,
+        agent_urn,
         &session_id,
         SharedRef::new(env.sandbox.storage.clone()),
-        env.client
-            .clone()
-            .expect("LlmClient must be enabled for SystemAgent tests"),
+        env.client.clone().expect("LlmClient must be enabled"),
+        world_engine,
         test_root.clone(),
         test_root.join("dataset"),
     )
     .await;
 
-    let agent = SystemAgent::new();
+    // 🎯 FIX : DynamicAgent
+    let agent = DynamicAgent::new(agent_urn);
 
-    // 2. SCÉNARIO : Création d'une Fonction Système (SA)
     let intent = EngineeringIntent::CreateElement {
         layer: "SA".to_string(),
         element_type: "Function".to_string(),
         name: "Calculer Vitesse".to_string(),
     };
 
-    println!("⚙️ Lancement du System Agent...");
     let result = agent.process(&ctx, &intent).await;
-
     assert!(result.is_ok(), "L'agent a retourné une erreur interne");
+
     let agent_response = result.unwrap().unwrap();
     let delegated = agent_response.outgoing_message.is_some();
 
-    println!("🤖 Message de l'Agent :\n{}", agent_response.message);
-
-    // 3. VÉRIFICATION PHYSIQUE (Dossier 'functions' dans 'sa')
-    let functions_dir = test_root
-        .join("un2")
-        .join("sa")
-        .join("collections")
-        .join("functions");
-
-    // Délai pour écriture disque
+    // --- VÉRIFICATION PHYSIQUE ---
+    let functions_dir = test_root.join("un2/sa/collections/functions");
     tokio::time::sleep(TimeDuration::from_millis(1500)).await;
-
-    println!("📂 Vérification dans : {:?}", functions_dir);
 
     let mut found = false;
     if functions_dir.exists() {
@@ -79,24 +103,18 @@ async fn test_system_agent_creates_function_end_to_end() {
             let content = fs::read_to_string_sync(&e.path())
                 .unwrap_or_default()
                 .to_lowercase();
-
-            // Recherche insensible à la casse
             if content.contains("calculer") && content.contains("vitesse") {
                 found = true;
-                println!("✅ Fonction Système trouvée : {:?}", e.file_name());
                 break;
             }
         }
     }
 
-    // 🎯 Tolérance Agent-Aware
     if delegated {
         println!("✅ SUCCÈS : L'agent a intelligemment délégué la création de la fonction.");
     } else if found {
         println!("✅ SUCCÈS : L'agent a généré la fonction physiquement.");
     } else {
-        println!(
-            "⚠️ Fichier non trouvé (Le modèle a répondu textuellement ou fusionné la réponse)."
-        );
+        println!("⚠️ Fonction non trouvée localement.");
     }
 }

@@ -3,8 +3,9 @@
 use crate::utils::prelude::*;
 
 use crate::ai::llm::client::LlmClient;
+use crate::ai::world_model::NeuroSymbolicEngine;
 use crate::code_generator::CodeGeneratorService;
-use crate::json_db::storage::StorageEngine;
+use crate::json_db::storage::StorageEngine; // 🎯 IMPORT DU CERVEAU
 
 /// Chemins structurels du projet RAISE
 #[derive(Clone)]
@@ -21,6 +22,7 @@ pub struct AgentContext {
     pub db: SharedRef<StorageEngine>,
     pub llm: LlmClient,
     pub codegen: SharedRef<CodeGeneratorService>,
+    pub world_engine: SharedRef<NeuroSymbolicEngine>, // 🎯 INJECTION DU CERVEAU
     pub paths: AgentPaths,
 }
 
@@ -30,6 +32,7 @@ impl AgentContext {
         session_id: &str,
         db: SharedRef<StorageEngine>,
         llm: LlmClient,
+        world_engine: SharedRef<NeuroSymbolicEngine>, // 🎯 NOUVEAU PARAMÈTRE
         domain_root: PathBuf,
         dataset_root: PathBuf,
     ) -> Self {
@@ -39,6 +42,7 @@ impl AgentContext {
             db,
             llm,
             codegen: SharedRef::new(CodeGeneratorService::new(domain_root.clone())),
+            world_engine, // 🎯 ASSIGNATION
             paths: AgentPaths {
                 domain_root,
                 dataset_root,
@@ -56,9 +60,10 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use candle_nn::VarMap; // 🎯 Import pour le mock du World Model
 
-    #[async_test] // 🎯 Les tests deviennent asynchrones
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[async_test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_context_initialization_with_session() {
         let sandbox = AgentDbSandbox::new().await;
@@ -68,7 +73,6 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        // Injection du composant LLM pour le test
         inject_mock_component(
             &manager,
             "llm", 
@@ -79,11 +83,17 @@ mod tests {
         let domain_path = PathBuf::from("/data/domain");
         let dataset_path = PathBuf::from("/data/dataset");
 
+        // 🎯 Mock du World Model pour le test
+        let wm_config = crate::utils::data::config::WorldModelConfig::default();
+        let world_engine =
+            SharedRef::new(NeuroSymbolicEngine::new(wm_config, VarMap::new()).unwrap());
+
         let ctx = AgentContext::new(
             "agent_001",
             "session_abc",
             sandbox.db.clone(),
             llm,
+            world_engine, // 🎯 Injection
             domain_path.clone(),
             dataset_path.clone(),
         )
@@ -93,8 +103,8 @@ mod tests {
         assert_eq!(ctx.session_id, "session_abc");
     }
 
-    #[async_test] // 🎯 Les tests deviennent asynchrones
-    #[serial_test::serial] // Protection RTX 5060 en local
+    #[async_test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_empty_identifiers_validation() {
         let sandbox = AgentDbSandbox::new().await;
@@ -111,11 +121,18 @@ mod tests {
         ).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();
+
+        // 🎯 Mock du World Model pour le test
+        let wm_config = crate::utils::data::config::WorldModelConfig::default();
+        let world_engine =
+            SharedRef::new(NeuroSymbolicEngine::new(wm_config, VarMap::new()).unwrap());
+
         let ctx = AgentContext::new(
             "",
             "",
             sandbox.db.clone(),
             llm,
+            world_engine, // 🎯 Injection
             PathBuf::new(),
             PathBuf::new(),
         )

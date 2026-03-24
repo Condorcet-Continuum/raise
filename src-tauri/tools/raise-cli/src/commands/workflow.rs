@@ -58,17 +58,19 @@ pub enum WorkflowCommands {
 // 🎯 On utilise le contexte existant sans recréer de StorageEngine !
 async fn init_cli_engine(ctx: &CliContext) -> RaiseResult<WorkflowScheduler> {
     // Initialisation du moteur IA via le contexte
-    let orch = match AiOrchestrator::new(ProjectModel::default(), None).await {
-        Ok(instance) => instance,
-        Err(e) => raise_error!(
-            "ERR_AI_ORCHESTRATOR_INIT",
-            error = e,
-            context = json_value!({
-                "action": "startup_ai_engine",
-                "hint": "Vérifiez la VRAM et les poids du modèle."
-            })
-        ),
-    };
+    let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
+    let orch =
+        match AiOrchestrator::new(ProjectModel::default(), &manager, ctx.storage.clone()).await {
+            Ok(instance) => instance,
+            Err(e) => raise_error!(
+                "ERR_AI_ORCHESTRATOR_INIT",
+                error = e,
+                context = json_value!({
+                    "action": "startup_ai_engine",
+                    "hint": "Vérifiez la VRAM et les poids du modèle."
+                })
+            ),
+        };
 
     // Utilisation du storage global partagé
     let pm = SharedRef::new(PluginManager::new(&ctx.storage, None));

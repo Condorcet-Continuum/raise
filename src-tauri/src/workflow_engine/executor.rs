@@ -145,9 +145,7 @@ mod tests {
 
         let model = ProjectModel::default();
 
-        // 2. 🎯 ATTENTION : On passe `Some(storage.clone())` à l'orchestrateur
-        // pour qu'il utilise bien la DB de la Sandbox et non une DB globale !
-        let orch = AiOrchestrator::new(model, Some(storage.clone()))
+        let orch = AiOrchestrator::new(model, &manager, storage.clone())
             .await
             .unwrap();
         let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));

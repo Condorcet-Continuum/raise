@@ -1,16 +1,10 @@
 // FICHIER : src-tauri/src/ai/agents/mod.rs
 
-pub mod business_agent;
 pub mod context;
-pub mod data_agent;
-pub mod epbs_agent;
-pub mod hardware_agent;
+pub mod dynamic_agent;
 pub mod intent_classifier;
-pub mod orchestrator_agent;
-pub mod software_agent;
-pub mod system_agent;
+pub mod prompt_engine;
 pub mod tools; // 🎯 Le nouveau module physique
-pub mod transverse_agent;
 
 pub use self::context::AgentContext;
 
@@ -117,14 +111,14 @@ impl AgentSession {
 
 #[async_interface]
 pub trait Agent: Send + Sync {
-    fn id(&self) -> &'static str;
+    fn id(&self) -> &str;
+
     async fn process(
         &self,
         ctx: &AgentContext,
         intent: &EngineeringIntent,
     ) -> RaiseResult<Option<AgentResult>>;
 }
-
 // =========================================================================
 // TESTS UNITAIRES
 // =========================================================================

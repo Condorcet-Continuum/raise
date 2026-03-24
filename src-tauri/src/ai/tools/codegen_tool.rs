@@ -145,6 +145,36 @@ impl McpTool for CodeGenTool {
                     .map(|p| p.to_string_lossy().to_string())
                     .collect();
 
+                // 🎯 4. VÉRIFICATION DE LA COMPILATION (RUST UNIQUEMENT)
+                if lang == TargetLanguage::Rust {
+                    // On récupère le chemin racine du domaine pour lancer cargo
+                    if let Some(first_file) = paths.first() {
+                        // On remonte jusqu'au dossier contenant le Cargo.toml (généralement src-gen)
+                        let mut crate_root = first_file.parent().unwrap();
+                        while crate_root.file_name().unwrap_or_default() != "src-gen"
+                            && crate_root.parent().is_some()
+                        {
+                            crate_root = crate_root.parent().unwrap();
+                        }
+
+                        if crate_root.join("Cargo.toml").exists() {
+                            let args = ["check", "--message-format=short"];
+                            match os::exec_command_sync("cargo", &args, Some(crate_root)) {
+                                Ok(_) => {
+                                    // Succès : Le code compile !
+                                }
+                                Err(e) => {
+                                    // ❌ Échec : On intercepte ton AppError et on la renvoie via MCP
+                                    return McpToolResult::error(
+                                        call.id,
+                                        &format!("Erreur de compilation Rustc:\n{}\nFichiers impliqués: {:?}", e, file_list)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let message = format!(
                     "Génération réussie pour '{}' ({}). {} fichiers écrits.",
                     component_doc["name"].as_str().unwrap_or("?"),

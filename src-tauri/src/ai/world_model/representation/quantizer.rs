@@ -13,19 +13,17 @@ pub struct VectorQuantizer {
 }
 
 impl VectorQuantizer {
-    /// Initialise un nouveau Quantizer
-    /// * `num_embeddings`: Taille du vocabulaire (K)
-    /// * `embedding_dim`: Dimension des vecteurs (D)
-    pub fn new(num_embeddings: usize, embedding_dim: usize, vb: VarBuilder) -> RaiseResult<Self> {
-        let embedding = match candle_nn::embedding(num_embeddings, embedding_dim, vb) {
+    /// Initialise un nouveau Quantizer via la configuration globale
+    pub fn new(config: &WorldModelConfig, vb: VarBuilder) -> RaiseResult<Self> {
+        let embedding = match candle_nn::embedding(config.vocab_size, config.embedding_dim, vb) {
             Ok(emb) => emb,
             Err(e) => {
                 raise_error!(
                     "ERR_AI_QUANTIZER_INIT_FAILED",
                     error = e,
                     context = json_value!({
-                        "num_embeddings": num_embeddings,
-                        "embedding_dim": embedding_dim,
+                        "vocab_size": config.vocab_size,
+                        "embedding_dim": config.embedding_dim,
                         "hint": "Échec de l'initialisation du dictionnaire d'embeddings. Vérifiez que la taille du vocabulaire et la dimension correspondent aux poids fournis."
                     })
                 )
@@ -116,13 +114,25 @@ mod tests {
     use candle_core::{DType, Device};
     use candle_nn::VarMap;
 
+    // Helper pour générer une config de test rapide
+    fn get_test_config() -> WorldModelConfig {
+        WorldModelConfig {
+            vocab_size: 2,
+            embedding_dim: 2,
+            action_dim: 5,
+            hidden_dim: 32,
+            use_gpu: false,
+        }
+    }
+
     #[test]
     fn test_quantizer_logic() {
         // 1. Setup : Un petit Codebook de 2 vecteurs en 2D
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+        let config = get_test_config();
 
-        let vq = VectorQuantizer::new(2, 2, vb.pp("vq")).unwrap();
+        let vq = VectorQuantizer::new(&config, vb.pp("vq")).unwrap();
 
         // --- Test de Dimensions ---
         let input = Tensor::randn(0f32, 1f32, (1, 2), &Device::Cpu).unwrap();
@@ -139,8 +149,9 @@ mod tests {
         let dev = Device::Cpu;
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &dev);
+        let config = get_test_config();
 
-        let vq = VectorQuantizer::new(2, 2, vb.pp("vq")).unwrap();
+        let vq = VectorQuantizer::new(&config, vb.pp("vq")).unwrap();
 
         // On récupère le vecteur #0 du codebook
         let codebook = vq.embedding.embeddings();

@@ -25,50 +25,100 @@ pub struct UnifiedTestEnv {
     pub db: String,
 }
 
+// FICHIER : src-tauri/tests/common/mod.rs
+
 pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     });
 
-    // 1. ISOLATION : DbSandbox prépare l'environnement de base (index.schema.json, config, db).
+    // 1. ISOLATION : On crée la Sandbox
     let sandbox = DbSandbox::new().await;
-
     let space = sandbox.config.system_domain.clone();
     let db = sandbox.config.system_db.clone();
     let domain_path = sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
-    // 2. INJECTION DES SCHÉMAS DE TEST
-    // Au lieu d'écraser l'index système, on utilise la méthode officielle de mock.rs
-    // qui va correctement créer les dossiers, les schémas ET les fichiers _meta.json.
+    // 🎯 CRÉATION DU MARQUEUR DE TEST (lu par tools.rs)
+    std::fs::write(domain_path.join(".is_test_env"), "1").unwrap();
+
+    // 2. INITIALISATION SIMPLE ET MOCKÉE
+    raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
+
+    // 3. PRÉPARATION PHYSIQUE DES SCHÉMAS DE TEST
     inject_custom_test_schemas(&domain_path).await;
 
-    // 3. INITIALISATION DB & MANAGER
+    // 4. INITIALISATION DU MANAGER
     let mgr = CollectionsManager::new(&sandbox.storage, &space, &db);
     mgr.init_db()
         .await
         .expect("❌ Échec de l'initialisation de l'index système");
 
-    // 4. INJECTION DU MOCK IA EN BASE (Requis pour l'init LLM)
+    // 5. INJECTION DES DOCUMENTS DE CONFIGURATION (Data-Driven)
+
+    // A. Config ai_agents
     inject_mock_component(
         &mgr,
-        "llm",
-        json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
-    ).await;
-    raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-    // 5. SATISFAIRE LLMCLIENT AVEC LE MANAGER
+        "ai_agents",
+        json_value!({
+            "target_domain": "un2",
+            "system_domain": "_system",
+            "system_db": "_system"
+        }),
+    )
+    .await;
+
+    // B. Mapping Ontologique
+    let _ = mgr
+        .create_collection(
+            "configs",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    mgr.upsert_document(
+        "configs",
+        json_value!({
+            "_id": "ref:configs:handle:ontological_mapping",
+            "handle": "ontological_mapping",
+            "mappings": {
+                "Class": { "layer": "data", "collection": "classes" },
+                "DataType": { "layer": "data", "collection": "types" },
+                "Function": { "layer": "sa", "collection": "functions" },
+                "SystemFunction": { "layer": "sa", "collection": "functions" },
+                "Component": { "layer": "la", "collection": "components" },
+                "LogicalComponent": { "layer": "la", "collection": "components" },
+                "OperationalActor": { "layer": "oa", "collection": "actors" },
+                "OperationalCapability": { "layer": "oa", "collection": "capabilities" },
+                "PhysicalNode": { "layer": "pa", "collection": "physical_nodes" },
+                "Hardware": { "layer": "pa", "collection": "physical_nodes" },
+                "Server": { "layer": "pa", "collection": "physical_nodes" },
+                "Requirement": { "layer": "transverse", "collection": "requirements" },
+                "TestProcedure": { "layer": "transverse", "collection": "test_procedures" },
+                "TestCampaign": { "layer": "transverse", "collection": "test_campaigns" },
+                "COTS": { "layer": "epbs", "collection": "configuration_items" },
+                "ConfigurationItem": { "layer": "epbs", "collection": "configuration_items" }
+            },
+            "search_spaces": [
+                { "layer": "pa", "collection": "physical_nodes" },
+                { "layer": "la", "collection": "components" },
+                { "layer": "sa", "collection": "functions" },
+                { "layer": "data", "collection": "classes" },
+                { "layer": "oa", "collection": "capabilities" },
+                { "layer": "oa", "collection": "actors" }
+            ]
+        }),
+    )
+    .await
+    .unwrap();
+
+    // 6. INITIALISATION LLM
+    inject_mock_component(&mgr, "llm", json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })).await;
+
     let client = match llm_mode {
         LlmMode::Enabled => {
             let mock_model_file = domain_path.join("_system/ai-assets/models/mock.gguf");
-            if let Some(parent) = mock_model_file.parent() {
-                let _ = fs::ensure_dir_sync(parent);
-            }
+            let _ = fs::ensure_dir_sync(mock_model_file.parent().unwrap());
             let _ = fs::write_sync(&mock_model_file, b"dummy content");
-
-            let isolated_client = LlmClient::new(&mgr)
-                .await
-                .expect("❌ Impossible d'initialiser le LlmClient isolé");
-
-            Some(isolated_client)
+            Some(LlmClient::new(&mgr).await.expect("❌ LlmClient failed"))
         }
         LlmMode::Disabled => None,
     };

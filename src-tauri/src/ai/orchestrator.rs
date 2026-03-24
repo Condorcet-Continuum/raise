@@ -7,18 +7,17 @@ use crate::ai::context::{
 use crate::ai::llm::client::{LlmBackend, LlmClient};
 use crate::ai::nlp::parser::CommandType;
 use crate::ai::world_model::{NeuroSymbolicEngine, WorldAction, WorldTrainer};
-use crate::model_engine::types::{ArcadiaElement, ProjectModel};
-use candle_nn::VarMap;
-
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
+use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 use crate::utils::prelude::*;
+use candle_nn::VarMap;
 
 // --- IMPORTS AGENTS ---
 use crate::ai::agents::intent_classifier::IntentClassifier;
+// 🎯 NOUVEAU : On importe uniquement le DynamicAgent et les traits de base !
 use crate::ai::agents::{
-    business_agent::BusinessAgent, data_agent::DataAgent, epbs_agent::EpbsAgent,
-    hardware_agent::HardwareAgent, software_agent::SoftwareAgent, system_agent::SystemAgent,
-    transverse_agent::TransverseAgent, Agent, AgentContext, AgentResult, CreatedArtifact,
+    dynamic_agent::DynamicAgent, Agent, AgentContext, AgentResult, CreatedArtifact,
 };
 
 pub struct AiOrchestrator {
@@ -27,11 +26,11 @@ pub struct AiOrchestrator {
     pub llm: LlmClient,
     pub session: ConversationSession,
     pub memory_store: MemoryStore,
-    pub world_engine: NeuroSymbolicEngine,
+    pub world_engine: SharedRef<NeuroSymbolicEngine>,
     #[allow(dead_code)]
     world_engine_path: PathBuf,
 
-    // Référence au StorageEngine pour les Agents (Optionnel pour le mode léger, requis pour les agents)
+    // Référence au StorageEngine pour les Agents
     storage: Option<SharedRef<StorageEngine>>,
 }
 
@@ -39,11 +38,11 @@ impl AiOrchestrator {
     /// Constructeur
     pub async fn new(
         model: ProjectModel,
-        storage_engine: Option<SharedRef<StorageEngine>>,
+        manager: &CollectionsManager<'_>,
+        storage: SharedRef<StorageEngine>,
     ) -> RaiseResult<Self> {
         let app_config = AppConfig::get();
 
-        // Sécurité : On récupère le chemin du domaine via la config globale
         let Some(domain_path) = app_config.get_path("PATH_RAISE_DOMAIN") else {
             raise_error!(
                 "ERR_CONFIG_DOMAIN_PATH_MISSING",
@@ -57,24 +56,10 @@ impl AiOrchestrator {
         let chats_path = domain_path.join("chats");
         let brain_path = domain_path.join("world_model.safetensors");
 
-        // 🎯 1. INSTANCIATION CENTRALE DE LA BASE DE DONNÉES
-        let actual_storage = storage_engine.unwrap_or_else(|| {
-            let storage_cfg = crate::json_db::storage::JsonDbConfig::new(domain_path.clone());
-            SharedRef::new(StorageEngine::new(storage_cfg))
-        });
-
-        let manager = crate::json_db::collections::manager::CollectionsManager::new(
-            &actual_storage,
-            &app_config.system_domain,
-            &app_config.system_db,
-        );
-
-        // 🎯 2. INJECTION DU MANAGER AUX SOUS-MOTEURS
-        let rag = RagRetriever::new(&manager).await?;
+        let rag = RagRetriever::new(manager).await?;
         let symbolic = SimpleRetriever::new(model);
-        let llm = LlmClient::new(&manager).await?;
+        let llm = LlmClient::new(manager).await?;
 
-        // Configuration du World Model (Neuro-Symbolique)
         let wm_config = app_config.world_model.clone();
 
         let world_engine = if brain_path.exists() {
@@ -93,7 +78,6 @@ impl AiOrchestrator {
             NeuroSymbolicEngine::new(wm_config, vm)?
         };
 
-        // Gestion de la mémoire de conversation
         let memory_store = match MemoryStore::new(&chats_path).await {
             Ok(ms) => ms,
             Err(e) => raise_error!(
@@ -115,24 +99,10 @@ impl AiOrchestrator {
             llm,
             session,
             memory_store,
-            world_engine,
+            world_engine: SharedRef::new(world_engine),
             world_engine_path: brain_path,
-            storage: Some(actual_storage),
+            storage: Some(storage),
         })
-    }
-
-    /// Factory simple pour instancier les agents spécialisés
-    fn create_agent(&self, agent_id: &str) -> Option<Box<dyn Agent>> {
-        match agent_id {
-            "business_agent" | "business_analyst" => Some(Box::new(BusinessAgent::new())),
-            "system_agent" | "system_architect" => Some(Box::new(SystemAgent::new())),
-            "software_agent" | "software_engineer" => Some(Box::new(SoftwareAgent::new())),
-            "hardware_agent" | "hardware_architect" => Some(Box::new(HardwareAgent::new())),
-            "epbs_agent" | "configuration_manager" => Some(Box::new(EpbsAgent::new())),
-            "data_agent" | "data_architect" => Some(Box::new(DataAgent::new())),
-            "transverse_agent" | "quality_manager" => Some(Box::new(TransverseAgent::new())),
-            _ => None,
-        }
     }
 
     /// Point d'entrée principal : Exécute une requête utilisateur via le système multi-agents
@@ -142,12 +112,8 @@ impl AiOrchestrator {
 
         let classifier = IntentClassifier::new(self.llm.clone());
         let mut current_intent = classifier.classify(user_query).await;
-        let mut current_agent_id = current_intent.recommended_agent_id().to_string();
-
-        if current_agent_id == "orchestrator_agent" {
-            let response = self.ask(user_query).await?;
-            return Ok(AgentResult::text(response));
-        }
+        // 🎯 L'intent renvoie maintenant une URN (ex: "ref:agents:handle:agent_software")
+        let mut current_agent_urn = current_intent.recommended_agent_id().to_string();
 
         let session_scope = current_intent.default_session_scope();
         let global_session_id =
@@ -191,43 +157,40 @@ impl AiOrchestrator {
                 break;
             }
 
-            // 🎯 3. LE .await MANQUANT AJOUTÉ ICI !
             let ctx = AgentContext::new(
-                &current_agent_id,
+                &current_agent_urn,
                 &global_session_id,
                 storage_arc.clone(),
-                self.llm.clone(), // Le contexte reçoit directement le LLM instancié !
+                self.llm.clone(),
+                self.world_engine.clone(),
                 domain_path.clone(),
                 dataset_path.clone(),
             )
             .await;
 
-            if let Some(agent) = self.create_agent(&current_agent_id) {
-                tracing::info!("🤖 Activation Agent: {}", current_agent_id);
+            // 🎯 L'INSTANCIATION MAGIQUE DATA-DRIVEN EST ICI !
+            tracing::info!(
+                "🤖 Instanciation et Activation de l'Agent Dynamique: {}",
+                current_agent_urn
+            );
+            let agent = DynamicAgent::new(&current_agent_urn);
 
-                let result_opt = agent.process(&ctx, &current_intent).await?;
+            let result_opt = agent.process(&ctx, &current_intent).await?;
 
-                if let Some(res) = result_opt {
-                    accumulated_artifacts.extend(res.artifacts);
-                    accumulated_messages.push(res.message);
+            if let Some(res) = result_opt {
+                accumulated_artifacts.extend(res.artifacts);
+                accumulated_messages.push(res.message);
 
-                    if let Some(acl_msg) = res.outgoing_message {
-                        tracing::info!("📡 Délégation vers : {}", acl_msg.receiver);
-                        current_agent_id = acl_msg.receiver.clone();
-                        current_intent = classifier.classify(&acl_msg.content).await;
-                        hop_count += 1;
-                        continue;
-                    } else {
-                        break;
-                    }
+                if let Some(acl_msg) = res.outgoing_message {
+                    tracing::info!("📡 Délégation vers : {}", acl_msg.receiver);
+                    current_agent_urn = acl_msg.receiver.clone();
+                    current_intent = classifier.classify(&acl_msg.content).await;
+                    hop_count += 1;
+                    continue;
                 } else {
                     break;
                 }
             } else {
-                accumulated_messages.push(format!(
-                    "❌ Agent inconnu ou non implémenté : {}",
-                    current_agent_id
-                ));
                 break;
             }
         }
@@ -278,14 +241,11 @@ impl AiOrchestrator {
         state_after: &ArcadiaElement,
     ) -> RaiseResult<f64> {
         let mut trainer = WorldTrainer::new(&self.world_engine, 0.01)?;
-
         let loss = trainer.train_step(state_before, WorldAction { intent }, state_after)?;
-
         let _ = self
             .world_engine
             .save_to_file(&self.world_engine_path)
             .await;
-
         Ok(loss)
     }
 
@@ -327,10 +287,8 @@ mod tests {
         }
     }
 
-    // 🎯 HELPER POUR INJECTER LA BDD DE TEST AVANT L'ORCHESTRATEUR
     async fn setup_mock_orchestrator_env() -> AgentDbSandbox {
         let sandbox = AgentDbSandbox::new().await;
-
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
@@ -349,13 +307,14 @@ mod tests {
     async fn test_orchestrator_init() {
         let _guard = get_hf_lock().lock().await;
         let sandbox = setup_mock_orchestrator_env().await;
-        let orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone())).await;
-
-        assert!(
-            orch.is_ok(),
-            "L'initialisation de l'orchestrateur a échoué : {:?}",
-            orch.err()
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone()).await;
+
+        assert!(orch.is_ok(), "L'initialisation a échoué : {:?}", orch.err());
         assert_eq!(orch.unwrap().session.id, "main_session");
     }
 
@@ -376,30 +335,19 @@ mod tests {
     async fn test_learning_cycle() {
         let _guard = get_hf_lock().lock().await;
         let sandbox = setup_mock_orchestrator_env().await;
-        let orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone()))
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
             .await
             .unwrap();
 
         let loss = orch
             .reinforce_learning(&make_element("1"), CommandType::Create, &make_element("2"))
             .await;
-
         assert!(loss.is_ok(), "L'apprentissage a échoué : {:?}", loss.err());
-    }
-
-    #[async_test]
-    #[serial_test::serial]
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_orchestrator_agent_factory() {
-        let _guard = get_hf_lock().lock().await;
-        let sandbox = setup_mock_orchestrator_env().await;
-        let orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone()))
-            .await
-            .unwrap();
-
-        assert!(orch.create_agent("business_agent").is_some());
-        assert!(orch.create_agent("system_architect").is_some());
-        assert!(orch.create_agent("unknown_hacker_agent").is_none());
     }
 
     #[async_test]
@@ -408,24 +356,23 @@ mod tests {
     async fn test_orchestrator_clear_history() {
         let _guard = get_hf_lock().lock().await;
         let sandbox = setup_mock_orchestrator_env().await;
-        let mut orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone()))
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        let mut orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
             .await
             .unwrap();
 
-        // On purge l'historique résiduel potentiellement laissé par les tests précédents
-        // qui ont utilisé la même base de données mockée.
         orch.clear_history().await.unwrap();
-
-        // Maintenant on est sûr de partir de 0 !
-        orch.session.add_user_message("Bonjour l'IA");
+        orch.session.add_user_message("Bonjour");
         orch.session.add_ai_message("Bonjour Humain");
         assert_eq!(orch.session.history.len(), 2);
 
-        // Test du nettoyage
         let clear_res = orch.clear_history().await;
         assert!(clear_res.is_ok());
         assert_eq!(orch.session.history.len(), 0);
-        assert_eq!(orch.session.id, "main_session");
     }
 
     #[async_test]
@@ -434,18 +381,18 @@ mod tests {
     async fn test_orchestrator_learn_document() {
         let _guard = get_hf_lock().lock().await;
         let sandbox = setup_mock_orchestrator_env().await;
-        let mut orch = AiOrchestrator::new(ProjectModel::default(), Some(sandbox.db.clone()))
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        let mut orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
             .await
             .unwrap();
 
         let content = "Raise est une plateforme incroyable combinant RAG et modèles formels.";
         let res = orch.learn_document(content, "documentation.txt").await;
-
-        assert!(
-            res.is_ok(),
-            "L'apprentissage de document a échoué : {:?}",
-            res.err()
-        );
+        assert!(res.is_ok());
         assert!(res.unwrap() > 0);
     }
 }

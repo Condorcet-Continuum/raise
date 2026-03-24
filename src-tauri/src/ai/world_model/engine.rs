@@ -57,9 +57,9 @@ impl NeuroSymbolicEngine {
     pub fn new(config: WorldModelConfig, varmap: VarMap) -> RaiseResult<Self> {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
 
-        // L'encodeur n'est pas encore refactoré, on lui passe les champs manuellement
-        let quantizer =
-            VectorQuantizer::new(config.vocab_size, config.embedding_dim, vb.pp("quantizer"))?;
+        // L'encodeur (ArcadiaEncoder) reste stateless pour le moment car ses dimensions
+        // sont intrinsèquement liées à l'ontologie MBSE (8+8=16).
+        let quantizer = VectorQuantizer::new(&config, vb.pp("quantizer"))?;
 
         // 🎯 Notre prédicteur prend enfin la config !
         let predictor = WorldModelPredictor::new(&config, vb.pp("dynamics"))?;
@@ -70,6 +70,11 @@ impl NeuroSymbolicEngine {
             predictor,
             config,
         })
+    }
+
+    pub fn new_empty(config: WorldModelConfig) -> RaiseResult<Self> {
+        let varmap = candle_nn::VarMap::new();
+        Self::new(config, varmap)
     }
 
     pub fn simulate(&self, element: &ArcadiaElement, action: WorldAction) -> RaiseResult<Tensor> {
