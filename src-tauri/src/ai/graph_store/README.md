@@ -86,7 +86,7 @@ L'interaction se fait via la struct `GraphStore` (défini dans `mod.rs`), et non
 
 ```rust
 use crate::graph_store::GraphStore;
-use std::path::PathBuf;
+ 
 
 // Initialise la DB et charge le modèle IA si activé dans .env
 let store = GraphStore::new(PathBuf::from("./data")).await?;

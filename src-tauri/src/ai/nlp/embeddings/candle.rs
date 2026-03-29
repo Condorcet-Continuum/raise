@@ -42,18 +42,15 @@ impl CandleEngine {
             .and_then(|v| v.as_str())
             .unwrap_or("model.safetensors");
 
-        let Some(home) = dirs::home_dir() else {
-            raise_error!(
-                "ERR_OS_HOME_NOT_FOUND",
-                error = "Impossible de localiser le répertoire personnel de l'utilisateur (home).",
-                context = json_value!({ "method": "dirs::home_dir" })
-            );
-        };
+        // 🎯 FIX : Utilisation du domaine configuré (Portabilité absolue)
+        let domain_path = AppConfig::get()
+            .get_path("PATH_RAISE_DOMAIN")
+            .unwrap_or_else(|| PathBuf::from("./raise_default_domain"));
 
-        let base_path = home.join(format!(
-            "raise_domain/_system/ai-assets/embeddings/{}",
-            model_dir
-        ));
+        let base_path = domain_path
+            .join("_system/ai-assets/embeddings")
+            .join(model_dir);
+
         let config_path = base_path.join(config_filename);
         let tokenizer_path = base_path.join(tokenizer_filename);
         let weights_path = base_path.join(weights_filename);
@@ -127,14 +124,12 @@ impl CandleEngine {
         })
     }
 
-    /// 🎯 VRAI BATCHING GPU : Tokenise et infère un lot entier en une seule passe tensorielle
     pub fn embed_batch(&mut self, texts: Vec<String>) -> RaiseResult<Vec<Vec<f32>>> {
         let batch_size = texts.len();
         if batch_size == 0 {
             return Ok(Vec::new());
         }
 
-        // 1. Tokenisation en masse
         let encodings = match self.tokenizer.encode_batch(texts.clone(), true) {
             Ok(e) => e,
             Err(e) => raise_error!(
@@ -144,25 +139,21 @@ impl CandleEngine {
             ),
         };
 
-        // 2. Padding dynamique : Trouver la séquence la plus longue du lot
         let max_len = encodings
             .iter()
             .map(|e| e.get_ids().len())
             .max()
             .unwrap_or(0);
 
-        // 3. Préparation des vecteurs plats pour le constructeur Tensor
         let mut batch_ids = Vec::with_capacity(batch_size * max_len);
-        let batch_type_ids = vec![0u32; batch_size * max_len]; // Les type_ids sont toujours 0 pour MiniLM
+        let batch_type_ids = vec![0u32; batch_size * max_len];
 
         for enc in &encodings {
             let ids = enc.get_ids();
             batch_ids.extend_from_slice(ids);
-            // On pad avec des zéros (le token PAD de BERT) jusqu'à max_len
             batch_ids.resize(batch_ids.len() + (max_len - ids.len()), 0);
         }
 
-        // 4. Création des Tenseurs [Batch_Size, Sequence_Length]
         let token_ids = match Tensor::from_vec(batch_ids, (batch_size, max_len), &self.device) {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_NLP_BATCH_TENSOR_CREATION", error = e),
@@ -174,7 +165,6 @@ impl CandleEngine {
                 Err(e) => raise_error!("ERR_NLP_BATCH_TYPE_TENSOR", error = e),
             };
 
-        // 5. INFÉRENCE DE MASSE (Le GPU travaille à 100%)
         let embeddings = match self.model.forward(&token_ids, &token_type_ids, None) {
             Ok(emb) => emb,
             Err(e) => raise_error!(
@@ -184,7 +174,6 @@ impl CandleEngine {
             ),
         };
 
-        // 6. Pooling (Moyenne sur la dimension des tokens -> dim 1)
         let sum_embeddings = match embeddings.sum(1) {
             Ok(s) => s,
             Err(e) => raise_error!("ERR_NLP_BATCH_SUM", error = e),
@@ -195,17 +184,14 @@ impl CandleEngine {
             Err(e) => raise_error!("ERR_NLP_BATCH_POOLING", error = e),
         };
 
-        // 7. Normalisation avec Epsilon
         let normalized = normalize_l2(&pooled)?;
 
-        // 8. Conversion [Batch, Hidden] -> Vec<Vec<f32>>
         match normalized.to_vec2::<f32>() {
             Ok(matrix) => Ok(matrix),
             Err(e) => raise_error!("ERR_NLP_BATCH_VEC_CONVERSION", error = e),
         }
     }
 
-    /// Rétrocompatibilité pour une seule requête
     pub fn embed_query(&mut self, text: &str) -> RaiseResult<Vec<f32>> {
         let mut batch_res = self.embed_batch(vec![text.to_string()])?;
         batch_res.pop().ok_or_else(|| {
@@ -217,9 +203,7 @@ impl CandleEngine {
     }
 }
 
-/// 🎯 CORRECTION MATHÉMATIQUE : Normalisation L2 robuste avec Epsilon
 fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
-    // 1. Calcul de la somme des carrés (Sum of Squares)
     let sum_sq = match v.sqr() {
         Ok(s) => match s.sum_keepdim(1) {
             Ok(sum) => sum,
@@ -228,7 +212,6 @@ fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
         Err(e) => raise_error!("ERR_NLP_NORM_SQR_FAILED", error = e),
     };
 
-    // 2. 🎯 Epsilon de sécurité (1e-8) pour éviter les divisions par zéro
     let epsilon = match Tensor::new(&[1e-8f32], v.device()) {
         Ok(t) => t,
         Err(e) => raise_error!("ERR_NLP_NORM_EPSILON", error = e),
@@ -244,7 +227,6 @@ fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
         Err(e) => raise_error!("ERR_NLP_NORM_SQRT_FAILED", error = e),
     };
 
-    // 3. Division finale
     match v.broadcast_div(&norm) {
         Ok(normalized) => Ok(normalized),
         Err(e) => raise_error!("ERR_NLP_NORM_DIV_FAILED", error = e),
@@ -258,11 +240,58 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
+    /// Helper : Copie les vrais poids du modèle vers le domaine virtuel dicté par AppConfig
+    async fn provide_assets_to_sandbox(model_name: &str) {
+        // 🎯 FIX : On utilise la même logique de résolution de chemin que le moteur
+        let domain_path = AppConfig::get()
+            .get_path("PATH_RAISE_DOMAIN")
+            .unwrap_or_else(|| PathBuf::from("./raise_default_domain"));
+
+        if let Some(home) = dirs::home_dir() {
+            let real_path = home.join(format!(
+                "raise_domain/_system/ai-assets/embeddings/{}",
+                model_name
+            ));
+            let target_path =
+                domain_path.join(format!("_system/ai-assets/embeddings/{}", model_name));
+
+            if fs::exists_sync(&real_path) {
+                fs::ensure_dir_async(&target_path)
+                    .await
+                    .expect("Impossible de créer le dossier cible");
+
+                // On ignore silencieusement les erreurs si plusieurs threads de test copient en même temps
+                let _ = fs::copy_async(
+                    real_path.join("config.json"),
+                    target_path.join("config.json"),
+                )
+                .await;
+                let _ = fs::copy_async(
+                    real_path.join("tokenizer.json"),
+                    target_path.join("tokenizer.json"),
+                )
+                .await;
+                let _ = fs::copy_async(
+                    real_path.join("model.safetensors"),
+                    target_path.join("model.safetensors"),
+                )
+                .await;
+            } else {
+                panic!(
+                    "❌ ERREUR DE TEST : Les assets réels n'existent pas dans : {:?}",
+                    real_path
+                );
+            }
+        }
+    }
+
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_mini_lm_loading() {
         let sandbox = AgentDbSandbox::new().await;
+        provide_assets_to_sandbox("minilm").await; // 🎯 FIX : Appel simplifié
+
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
@@ -282,6 +311,8 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_dimensions() {
         let sandbox = AgentDbSandbox::new().await;
+        provide_assets_to_sandbox("minilm").await;
+
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
@@ -291,7 +322,6 @@ mod tests {
 
         let mut engine = CandleEngine::new(&manager).await.expect("Init failed");
 
-        // Test Batching
         let batch = vec![
             "Phrase 1".to_string(),
             "Une phrase beaucoup plus longue pour tester le padding dynamique du batch".to_string(),
@@ -312,6 +342,8 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_candle_normalization() {
         let sandbox = AgentDbSandbox::new().await;
+        provide_assets_to_sandbox("minilm").await;
+
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,

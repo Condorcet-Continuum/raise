@@ -1,3 +1,4 @@
+// FICHIER : src-tauri/src/ai/context/rag.rs
 use crate::ai::memory::{candle_store::CandleLocalStore, MemoryRecord, VectorStore};
 use crate::ai::nlp::{embeddings::EmbeddingEngine, splitting};
 use crate::json_db::collections::manager::CollectionsManager;
@@ -37,7 +38,11 @@ impl RagRetriever {
         let device = Device::Cpu;
         let store_dir = storage_path.join("vector_store");
         let memory = CandleLocalStore::new(&store_dir, &device);
-        memory.init_collection(&collection_name, 384).await?;
+
+        // 🎯 FIX : On passe le manager à init_collection
+        memory
+            .init_collection(manager, &collection_name, 384)
+            .await?;
         memory.load().await?; // Charge l'historique s'il existe
 
         Ok(Self {
@@ -47,7 +52,12 @@ impl RagRetriever {
         })
     }
 
-    pub async fn index_document(&mut self, content: &str, source: &str) -> RaiseResult<usize> {
+    pub async fn index_document(
+        &mut self,
+        manager: &CollectionsManager<'_>, // 🎯 FIX : Ajout du manager
+        content: &str,
+        source: &str,
+    ) -> RaiseResult<usize> {
         let chunks = splitting::split_text_into_chunks(content, 512);
         if chunks.is_empty() {
             return Ok(0);
@@ -71,24 +81,31 @@ impl RagRetriever {
             });
         }
 
-        // 🎯 L'ajout et la sauvegarde se font directement sur le backend
+        // 🎯 FIX : On passe le manager à add_documents
         self.backend
-            .add_documents(&self.collection_name, records)
+            .add_documents(manager, &self.collection_name, records)
             .await?;
         self.backend.save().await?; // Persistance immédiate
 
         Ok(chunks.len())
     }
 
-    pub async fn retrieve(&mut self, query: &str, limit: u64) -> RaiseResult<String> {
+    pub async fn retrieve(
+        &mut self,
+        manager: &CollectionsManager<'_>, // 🎯 FIX : Ajout du manager
+        query: &str,
+        limit: u64,
+    ) -> RaiseResult<String> {
         let query_vector = self.embedder.embed_query(query)?;
 
         // Seuil ajusté pour le modèle multilingue
         let min_similarity = 0.65;
 
+        // 🎯 FIX : On passe le manager à search_similarity
         let docs = self
             .backend
             .search_similarity(
+                manager,
                 &self.collection_name,
                 &query_vector,
                 limit,
@@ -156,12 +173,16 @@ mod tests {
             .unwrap();
 
         let content = "Le module de sécurité requiert une validation cryptographique SHA-256.";
-        rag.index_document(content, "spec_secu_v2.pdf")
+
+        // 🎯 FIX : Passage de &manager
+        rag.index_document(&manager, content, "spec_secu_v2.pdf")
             .await
             .unwrap();
 
+        // 🎯 FIX : Passage de &manager
         let context = rag
             .retrieve(
+                &manager,
                 "Quelle validation cryptographique est requise pour le module de sécurité ?",
                 1,
             )
@@ -188,11 +209,14 @@ mod tests {
             .await
             .unwrap();
 
-        rag.index_document("Recette de la tarte aux pommes.", "cuisine.txt")
+        // 🎯 FIX : Passage de &manager
+        rag.index_document(&manager, "Recette de la tarte aux pommes.", "cuisine.txt")
             .await
             .unwrap();
+
+        // 🎯 FIX : Passage de &manager
         let context = rag
-            .retrieve("Comment configurer le réseau TCP ?", 1)
+            .retrieve(&manager, "Comment configurer le réseau TCP ?", 1)
             .await
             .unwrap();
         assert_eq!(context, "");
@@ -214,7 +238,9 @@ mod tests {
             let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager)
                 .await
                 .unwrap();
-            rag.index_document("La persistance Zstd est hyper rapide.", "doc_io")
+
+            // 🎯 FIX : Passage de &manager
+            rag.index_document(&manager, "La persistance Zstd est hyper rapide.", "doc_io")
                 .await
                 .unwrap();
         }
@@ -223,8 +249,10 @@ mod tests {
             let mut new_rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager)
                 .await
                 .unwrap();
+
+            // 🎯 FIX : Passage de &manager
             let context = new_rag
-                .retrieve("Est-ce que la persistance Zstd est rapide ?", 1)
+                .retrieve(&manager, "Est-ce que la persistance Zstd est rapide ?", 1)
                 .await
                 .unwrap();
             assert!(context.contains("hyper rapide"));
@@ -249,7 +277,12 @@ mod tests {
             .unwrap();
 
         let long_text = "Moteur ".repeat(1500);
-        let count = rag.index_document(&long_text, "stress_test").await.unwrap();
+
+        // 🎯 FIX : Passage de &manager
+        let count = rag
+            .index_document(&manager, &long_text, "stress_test")
+            .await
+            .unwrap();
         assert!(count > 1);
     }
 }

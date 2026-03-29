@@ -6,7 +6,7 @@ use candle_nn::{VarBuilder, VarMap};
 use raise::ai::deep_learning::models::sequence_net::SequenceNet;
 use raise::ai::deep_learning::serialization;
 use raise::ai::deep_learning::trainer::Trainer;
-use raise::commands::ai_commands::DlState;
+use raise::commands::dl_commands::DlState;
 use raise::utils::testing::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -58,8 +58,9 @@ async fn test_dl_e2e_integration() -> anyhow::Result<()> {
         let varmap_guard = state.varmap.lock().unwrap();
 
         if let (Some(model), Some(varmap)) = (&*model_guard, &*varmap_guard) {
-            // 🎯 Use the intelligent from_config constructor
-            let trainer = Trainer::from_config(varmap, config);
+            // 🎯 FIX : On ajoute `mut` et le `?` pour déballer le RaiseResult
+            let mut trainer = Trainer::from_config(varmap, config)?;
+
             let input = Tensor::randn(0f32, 1.0, (1, 1, config.input_size), &device)?;
             let target = Tensor::zeros((1, 1), DType::U32, &device)?;
 

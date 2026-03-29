@@ -238,6 +238,10 @@ impl<'a> WorkflowStateMachine<'a> {
 // TESTS UNITAIRES (ROBUSTESSE MAXIMALE)
 // =========================================================================
 
+// =========================================================================
+// TESTS UNITAIRES (ROBUSTESSE MAXIMALE)
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,7 +249,8 @@ mod tests {
 
     fn create_sequential_def() -> WorkflowDefinition {
         WorkflowDefinition {
-            id: "wf_seq".into(),
+            _id: None,
+            handle: "wf_seq".into(),
             entry: "start".into(),
             nodes: vec![
                 WorkflowNode {
@@ -286,7 +291,9 @@ mod tests {
     async fn test_sequential_flow() {
         let def = create_sequential_def();
         let sm = WorkflowStateMachine::new(&def);
-        let mut instance = WorkflowInstance::new("wf_seq", UnorderedMap::new());
+        // 🎯 FIX : On passe les 4 arguments (handle, workflow_id, mission_id, context)
+        let mut instance =
+            WorkflowInstance::new("test_handle", "wf_seq", "test_mission", UnorderedMap::new());
 
         // 1. Initial : Start doit être runnable
         let next = sm.next_runnable_nodes(&instance).await;
@@ -313,7 +320,8 @@ mod tests {
     async fn test_end_node_completes_workflow() {
         let def = create_sequential_def();
         let sm = WorkflowStateMachine::new(&def);
-        let mut instance = WorkflowInstance::new("wf_seq", UnorderedMap::new());
+        let mut instance =
+            WorkflowInstance::new("test_handle", "wf_seq", "test_mission", UnorderedMap::new());
 
         // L'exécution du nœud "end" (de type End) doit marquer l'instance comme Completed
         sm.transition(&mut instance, "end", ExecutionStatus::Completed)
@@ -325,7 +333,8 @@ mod tests {
     #[async_test]
     async fn test_legacy_conditional_branching() {
         let def = WorkflowDefinition {
-            id: "wf_branch".into(),
+            _id: None,
+            handle: "wf_branch".into(),
             entry: "start".into(),
             nodes: vec![
                 WorkflowNode {
@@ -352,7 +361,7 @@ mod tests {
         // Cas A : Condition remplie
         let mut ctx_ok = UnorderedMap::new();
         ctx_ok.insert("status".into(), json_value!("ok"));
-        let mut inst_ok = WorkflowInstance::new("wf_branch", ctx_ok);
+        let mut inst_ok = WorkflowInstance::new("test_handle", "wf_branch", "test_mission", ctx_ok);
         inst_ok
             .node_states
             .insert("start".into(), ExecutionStatus::Completed);
@@ -362,7 +371,7 @@ mod tests {
         // Cas B : Condition non remplie
         let mut ctx_ko = UnorderedMap::new();
         ctx_ko.insert("status".into(), json_value!("error"));
-        let mut inst_ko = WorkflowInstance::new("wf_branch", ctx_ko);
+        let mut inst_ko = WorkflowInstance::new("test_handle", "wf_branch", "test_mission", ctx_ko);
         inst_ko
             .node_states
             .insert("start".into(), ExecutionStatus::Completed);
@@ -379,7 +388,8 @@ mod tests {
         let ast_condition = json_value!({ "gt": [{"var": "score"}, {"val": 8.0}] }).to_string();
 
         let def = WorkflowDefinition {
-            id: "wf_ast".into(),
+            _id: None,
+            handle: "wf_ast".into(),
             entry: "start".into(),
             nodes: vec![
                 WorkflowNode {
@@ -406,7 +416,7 @@ mod tests {
         // Cas A : Condition remplie (10.0 > 8.0)
         let mut ctx_ok = UnorderedMap::new();
         ctx_ok.insert("score".into(), json_value!(10.0));
-        let mut inst_ok = WorkflowInstance::new("wf_ast", ctx_ok);
+        let mut inst_ok = WorkflowInstance::new("test_handle", "wf_ast", "test_mission", ctx_ok);
         inst_ok
             .node_states
             .insert("start".into(), ExecutionStatus::Completed);
@@ -416,7 +426,7 @@ mod tests {
         // Cas B : Condition non remplie (5.0 n'est pas > 8.0)
         let mut ctx_ko = UnorderedMap::new();
         ctx_ko.insert("score".into(), json_value!(5.0));
-        let mut inst_ko = WorkflowInstance::new("wf_ast", ctx_ko);
+        let mut inst_ko = WorkflowInstance::new("test_handle", "wf_ast", "test_mission", ctx_ko);
         inst_ko
             .node_states
             .insert("start".into(), ExecutionStatus::Completed);
@@ -428,7 +438,8 @@ mod tests {
     async fn test_parent_failure_blocks_execution() {
         let def = create_sequential_def();
         let sm = WorkflowStateMachine::new(&def);
-        let mut instance = WorkflowInstance::new("wf_seq", UnorderedMap::new());
+        let mut instance =
+            WorkflowInstance::new("test_handle", "wf_seq", "test_mission", UnorderedMap::new());
 
         // Si start échoue
         sm.transition(&mut instance, "start", ExecutionStatus::Failed)
@@ -445,7 +456,8 @@ mod tests {
     async fn test_instance_status_respected() {
         let def = create_sequential_def();
         let sm = WorkflowStateMachine::new(&def);
-        let mut instance = WorkflowInstance::new("wf_seq", UnorderedMap::new());
+        let mut instance =
+            WorkflowInstance::new("test_handle", "wf_seq", "test_mission", UnorderedMap::new());
 
         // On bloque manuellement l'instance
         instance.status = ExecutionStatus::Paused;

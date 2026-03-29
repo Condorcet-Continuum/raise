@@ -25,19 +25,26 @@ pub struct WorkflowArgs {
 
 #[derive(Subcommand, Clone, Debug)]
 pub enum WorkflowCommands {
-    /// Soumet un Mandat (Politique de gouvernance) pour compilation et persistance
+    /// Importe un Mandat (Politique de gouvernance) en base de données
     SubmitMandate {
         /// Chemin vers le fichier de mandat (.json)
         path: String,
+    },
+    /// Compile une mission métier en un graphe d'exécution
+    CompileMission {
+        /// ID de la mission
+        mission_id: String,
     },
     /// Met à jour une valeur de capteur (Jumeau Numérique local)
     SetSensor {
         /// Valeur f64 du capteur
         value: f64,
     },
-    /// Démarre une nouvelle instance à partir d'un Mandat compilé
+    /// Démarre une nouvelle instance à partir d'un graphe compilé
     Start {
-        /// ID du workflow (généralement "wf_" + mandate_id)
+        /// ID de la mission
+        mission_id: String,
+        /// ID du workflow compilé
         workflow_id: String,
     },
     /// Reprend un workflow en attente de validation (HITL)
@@ -131,22 +138,18 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 ),
             };
 
-            // 1. Compilation pour vérifier la validité
-            let definition = WorkflowCompiler::compile(&mandate);
-
-            // 2. Connexion à la base de données via le contexte !
+            // 1. Connexion à la base de données via le contexte !
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
+            // 2. Persistance (La compilation se fait désormais via la commande CompileMission)
             let json_mandate = json::serialize_to_value(&mandate).unwrap();
-
-            manager.insert_raw("mandates", &json_mandate).await?;
+            manager.upsert_document("mandates", json_mandate).await?;
 
             user_success!(
-                "MANDATE_COMPILE_SUCCESS",
+                "MANDATE_IMPORT_SUCCESS",
                 json_value!({
                     "author": mandate.meta.author,
                     "version": mandate.meta.version,
-                    "graph_id": definition.id,
                     "active_domain": ctx.active_domain,
                     "active_user": ctx.active_user,
                     "status": "persisted",
@@ -154,10 +157,33 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             );
         }
 
-        WorkflowCommands::Start { workflow_id } => {
+        WorkflowCommands::CompileMission { mission_id } => {
+            user_info!(
+                "MISSION_COMPILE_START",
+                json_value!({ "mission_id": mission_id })
+            );
+
+            let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
+            let definition = WorkflowCompiler::compile(&manager, &mission_id).await?;
+
+            user_success!(
+                "MISSION_COMPILE_SUCCESS",
+                json_value!({
+                    "mission_id": mission_id,
+                    "graph_handle": definition.handle, // 🎯 FIX : definition.id -> definition.handle
+                    "status": "compiled",
+                })
+            );
+        }
+
+        WorkflowCommands::Start {
+            mission_id,
+            workflow_id,
+        } => {
             user_info!(
                 "ENGINE_WORKFLOW_START",
                 json_value!({
+                    "mission_id": mission_id,
                     "workflow_id": workflow_id,
                     "mode": "initialization",
                     "timestamp": UtcClock::now().to_rfc3339()
@@ -168,21 +194,22 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             let mut scheduler = init_cli_engine(&ctx).await?;
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-            // Hack CLI: On "charge" la définition dans le scheduler courant en feignant le mandate_id
-            let mandate_id = workflow_id.replace("wf_", "");
-            scheduler.load_mission(&mandate_id, &manager).await?;
+            // 🎯 Data-Driven : on charge la mission
+            scheduler.load_mission(&mission_id, &manager).await?;
 
-            let instance = scheduler.create_instance(&workflow_id, &manager).await?;
+            let instance = scheduler
+                .create_instance(&mission_id, &workflow_id, &manager)
+                .await?;
             user_success!(
                 "INSTANCE_CREATION_SUCCESS",
                 json_value!({
-                    "instance_id": instance.id,
+                    "instance_handle": instance.handle, // 🎯 FIX : instance.id -> instance.handle
                     "status": "initialized",
                     "timestamp": UtcClock::now().to_rfc3339()
                 })
             );
             let final_status = scheduler
-                .execute_instance_loop(&instance.id, &manager)
+                .execute_instance_loop(&instance.handle, &manager) // 🎯 FIX : instance.id -> instance.handle
                 .await?;
 
             match final_status {
@@ -195,7 +222,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                         "WORKFLOW_PAUSED_HITL",
                         json_value!({
                             "reason": "manual_validation_required",
-                            "instance_id": instance.id
+                            "instance_handle": instance.handle // 🎯 FIX
                         })
                     );
                 }
@@ -240,9 +267,9 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 .unwrap()
                 .unwrap();
             let instance: WorkflowInstance = json::deserialize_from_value(doc).unwrap();
-            let mandate_id = instance.workflow_id.replace("wf_", "");
+            let mission_id = instance.mission_id.clone();
 
-            scheduler.load_mission(&mandate_id, &manager).await?;
+            scheduler.load_mission(&mission_id, &manager).await?;
 
             // Application de la décision humaine
             scheduler
@@ -276,7 +303,6 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
         }
 
         WorkflowCommands::Status { instance_id } => {
-            // 🎯 Plus d'AppConfig::get()
             let manager = CollectionsManager::new(
                 &ctx.storage,
                 &ctx.config.system_domain,
@@ -294,7 +320,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                         "INSTANCE_STATE_SYNC",
                         json_value!({
                             "status": format!("{:?}", instance.status),
-                            "instance_id": instance.id
+                            "instance_handle": instance.handle // 🎯 FIX : instance.id -> instance.handle
                         })
                     );
 
@@ -334,7 +360,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             });
 
             // 3. Persistance dans la collection 'digital_twin' (IPC par la donnée)
-            manager.insert_raw("digital_twin", &sensor_doc).await?;
+            manager.upsert_document("digital_twin", sensor_doc).await?;
 
             user_success!(
                 "SENSOR_UPDATED",
@@ -365,6 +391,9 @@ mod tests {
     #[serial_test::serial]
     async fn test_cli_set_sensor_writes_to_db() {
         let sandbox = GlobalDbSandbox::new().await;
+
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
+
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
@@ -415,8 +444,11 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
-    async fn test_cli_submit_mandate_compiles_and_persists() {
+    async fn test_cli_submit_mandate_persists() {
         let sandbox = GlobalDbSandbox::new().await;
+
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
+
         let mandate_path = sandbox.domain_root.join("test_mandate.json");
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -442,7 +474,7 @@ mod tests {
         ctx.active_db = sandbox.config.system_db.clone();
 
         let valid_mandate = json_value!({
-            "_id": "mandate_cli_test_123",
+            "handle": "mandate_cli_test_123",
             "name": { "fr": "Mandat de Test" },
             "meta": { "author": "CLI_Tester", "version": "1.0.0", "status": "ACTIVE" },
             "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": { "sec": 1.0 } },

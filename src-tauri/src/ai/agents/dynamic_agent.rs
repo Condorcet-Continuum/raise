@@ -157,14 +157,25 @@ impl Agent for DynamicAgent {
             }
 
             // Garantie d'intégrité des identifiants
-            if doc["id"].is_null() {
-                doc["id"] = json_value!(UniqueId::new_v4().to_string());
-            }
-            if doc["layer"].is_null() {
-                doc["layer"] = json_value!(layer.clone());
-            }
-            if doc["type"].is_null() || doc["type"].as_str().unwrap_or("").is_empty() {
-                doc["type"] = json_value!(element_type.clone());
+            if let Some(obj) = doc.as_object_mut() {
+                if !obj.contains_key("id") && !obj.contains_key("_id") {
+                    obj.insert(
+                        "id".to_string(),
+                        json_value!(UniqueId::new_v4().to_string()),
+                    );
+                }
+                if !obj.contains_key("layer") {
+                    obj.insert("layer".to_string(), json_value!(layer.clone()));
+                }
+                if !obj.contains_key("type")
+                    || obj
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .is_empty()
+                {
+                    obj.insert("type".to_string(), json_value!(element_type.clone()));
+                }
             }
             // Écriture finale dans la base de données
             if let Ok(artifact) = save_artifact(ctx, &doc).await {
@@ -341,6 +352,14 @@ mod tests {
         manager
             .create_collection(
                 "agents",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+
+        manager
+            .create_collection(
+                "session_agents",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
             .await

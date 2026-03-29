@@ -1,44 +1,40 @@
 // FICHIER : src-tauri/src/ai/context/tests.rs
 
+use crate::ai::context::retriever::SimpleRetriever;
+use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
 use crate::utils::prelude::*;
 
-use crate::ai::context::retriever::SimpleRetriever;
-// CORRECTION 1 : Ajout de NameType dans les imports
-use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
-
-// Helper pour créer un élément factice rapidement
+/// Helper pour créer un élément factice compatible avec l'architecture Pure Graph
 fn mock_element(name: &str, desc: &str) -> ArcadiaElement {
-    // Note : On n'a plus besoin d'insérer "description" dans les properties
-    // car elle a maintenant son propre champ dans la structure.
-    let props = UnorderedMap::new();
+    // 🎯 FIX : La description est maintenant une propriété dynamique
+    let mut props = UnorderedMap::new();
+    props.insert("description".to_string(), json_value!(desc));
 
     ArcadiaElement {
-        id: "uuid-test".to_string(),
-        // CORRECTION 2 : Enveloppement du nom dans NameType::String
+        id: format!("uuid-{}", name.replace(' ', "_")),
         name: NameType::String(name.to_string()),
-        kind: "mock:Type".to_string(),
-        // CORRECTION 3 : Initialisation du champ description
-        description: Some(desc.to_string()),
+        kind: "https://raise.io/ontology/arcadia/mock#Type".to_string(),
         properties: props,
     }
 }
 
 #[test]
 fn test_retriever_finds_relevant_info() {
-    // 1. Préparer un modèle mocké
+    // 1. Préparer un modèle "Pure Graph"
     let mut model = ProjectModel::default();
 
-    // On ajoute un acteur dans l'OA
-    model.oa.actors.push(mock_element(
-        "Pilote de Drone",
-        "Responsable du vol et de la sécurité.",
-    ));
+    // 🎯 FIX : Utilisation de add_element(layer, collection, element) au lieu des champs statiques
+    model.add_element(
+        "oa",
+        "actors",
+        mock_element("Pilote de Drone", "Responsable du vol et de la sécurité."),
+    );
 
-    // On ajoute une fonction dans le SA (qui ne devrait pas être trouvée si on cherche 'vol')
-    model.sa.functions.push(mock_element(
-        "Alimenter Secteur",
-        "Fournit l'énergie au système.",
-    ));
+    model.add_element(
+        "sa",
+        "functions",
+        mock_element("Alimenter Secteur", "Fournit l'énergie au système."),
+    );
 
     // 2. Instancier le retriever
     let retriever = SimpleRetriever::new(model);
@@ -47,8 +43,6 @@ fn test_retriever_finds_relevant_info() {
     let query = "Qui est responsable du vol ?";
     let context = retriever.retrieve_context(query);
 
-    println!("Contexte généré : \n{}", context);
-
     // 4. Assertions
     assert!(
         context.contains("Pilote de Drone"),
@@ -56,7 +50,7 @@ fn test_retriever_finds_relevant_info() {
     );
     assert!(
         context.contains("Responsable du vol"),
-        "Le contexte doit contenir la description"
+        "Le contexte doit contenir la description extraite des properties"
     );
 }
 
@@ -68,6 +62,6 @@ fn test_retriever_empty_search() {
     let context = retriever.retrieve_context("Rien à voir");
     assert!(
         context.contains("Aucun élément spécifique"),
-        "Doit gérer le cas vide"
+        "Doit gérer proprement l'absence de résultats"
     );
 }

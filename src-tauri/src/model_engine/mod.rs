@@ -15,8 +15,8 @@ pub mod validators; // Vérification de cohérence
 
 // Loader & Modèle
 pub use loader::ModelLoader;
-// MISE À JOUR : On expose tous les types nécessaires, y compris la nouvelle couche Transverse
-pub use types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel, TransverseModel};
+// 🎯 PURE GRAPH : Suppression de TransverseModel
+pub use types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
 
 // Transformers (Software, Hardware, System)
 pub use transformers::{
@@ -25,7 +25,6 @@ pub use transformers::{
 };
 
 // Validators (Règles métier)
-// MISE À JOUR : On expose les nouveaux validateurs (Compliance, Dynamic)
 pub use validators::{
     compliance_validator::ComplianceValidator, consistency_checker::ConsistencyChecker,
     dynamic_validator::DynamicValidator, ModelValidator, Severity, ValidationIssue,
@@ -43,20 +42,21 @@ pub use sysml2::{Sysml2Parser, Sysml2ToArcadiaMapper};
 mod tests {
     use super::*;
     use crate::utils::prelude::*;
+
     #[test]
     fn test_integration_facade() {
         // 1. Vérifie l'accès aux types de base
         let mut model = ProjectModel::default();
 
-        // Vérification de l'accès à la couche Transverse via la façade
+        // 🎯 PURE GRAPH : Utilisation des méthodes dynamiques pour le test
         let req = ArcadiaElement {
             id: "REQ-1".to_string(),
             name: NameType::String("Test".to_string()),
             kind: "Requirement".to_string(),
             ..Default::default()
         };
-        model.transverse.requirements.push(req);
-        assert_eq!(model.transverse.requirements.len(), 1);
+        model.add_element("transverse", "requirements", req);
+        assert_eq!(model.get_collection("transverse", "requirements").len(), 1);
 
         // 2. Vérifie l'accès à la Factory Transformer
         let transformer = get_transformer(TransformationDomain::Software);

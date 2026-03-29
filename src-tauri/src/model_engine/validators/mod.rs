@@ -102,7 +102,6 @@ mod tests {
             id: "1".to_string(),
             name: NameType::String("Invalid".to_string()),
             kind: "Test".to_string(),
-            description: None,
             properties: UnorderedMap::new(),
         };
 

@@ -104,10 +104,6 @@ ringbuf = "0.4.7"     # Buffer Lock-free pour le flux audio temps réel
 # --- BASE DE DONNÉES & QUERY ---
 sqlparser = { version = "0.61.0", features = ["serde"] }
 
-# --- GÉNÉRATION DE CODE ---
-tera = "1.19"
-heck = "0.5.0" # Indispensable pour camelCase, SnakeCase, etc.
-
 
 # --- CRYPTO ---
 ed25519-dalek = { version = "2.1", features = [

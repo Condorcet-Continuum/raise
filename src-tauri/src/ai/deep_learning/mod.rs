@@ -1,3 +1,4 @@
+pub mod api;
 pub mod layers;
 pub mod models;
 pub mod serialization;

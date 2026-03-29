@@ -63,7 +63,7 @@ mod tests {
         )?;
 
         // Entraînement rapide pour modifier les poids
-        let trainer = Trainer::new(&varmap_source, config.learning_rate);
+        let mut trainer = Trainer::new(&varmap_source, config.learning_rate)?; // 🎯 N'oublie pas `mut` et `?`
         let input = Tensor::randn(0f32, 1.0, (1, 5, config.input_size), &device)?;
         let target = Tensor::zeros((1, 5), DType::U32, &device)?;
         trainer.train_step(&model_source, &input, &target)?;

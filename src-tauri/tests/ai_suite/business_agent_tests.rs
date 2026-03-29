@@ -33,7 +33,12 @@ async fn test_business_agent_generates_oa_entities() {
             "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await;
-
+    let _ = sys_mgr
+        .create_collection(
+            "session_agents",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
     sys_mgr.upsert_document("prompts", json_value!({
         "_id": "ref:prompts:handle:prompt_business",
         "role": "Analyste Métier",

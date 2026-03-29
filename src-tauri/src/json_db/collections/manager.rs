@@ -62,13 +62,10 @@ impl<'a> CollectionsManager<'a> {
                 "schemas": { "v1": {} }
             })
         });
-        // 🎯 2. On compile le validateur avec le registre AMORCÉ
-        let validator = SchemaValidator::compile_with_registry(expected_uri, &reg)?;
 
-        // 🎯 3. Cette fois, le validateur TROUVE le schéma et injecte les 'default'
+        let validator = SchemaValidator::compile_with_registry(expected_uri, &reg)?;
         validator.compute_then_validate(&mut system_doc)?;
 
-        // 🎯 4. On crée physiquement les dossiers basés sur le document hydraté
         let created =
             file_storage::create_db(&self.storage.config, &self.space, &self.db, &system_doc)
                 .await?;
@@ -83,7 +80,6 @@ impl<'a> CollectionsManager<'a> {
                 let _ = fs::ensure_dir_async(&schemas_dir).await;
             }
 
-            // 🎯 5. On sauvegarde l'index avec toutes les collections système injectées
             file_storage::write_system_index(
                 &self.storage.config,
                 &self.space,
@@ -119,7 +115,6 @@ impl<'a> CollectionsManager<'a> {
             .join("_system.json");
 
         if !sys_path.exists() {
-            // 🎯 ERREUR SYSTÉMATIQUE : Pas de permissivité.
             raise_error!(
                 "ERR_DB_SYSTEM_INDEX_NOT_FOUND",
                 error = "Opération refusée : l'index de la base de données est introuvable. La base doit être explicitement initialisée via init_db().",
@@ -138,11 +133,9 @@ impl<'a> CollectionsManager<'a> {
     // GESTION DES SCHÉMAS (DDL)
     // ============================================================================
     async fn get_registry_for_uri(&self, _uri: &str) -> RaiseResult<SchemaRegistry> {
-        // Le registre charge désormais toute la hiérarchie par lui-même
         SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await
     }
 
-    /// Construit l'URI standardisée en utilisant le space et la db du manager
     pub fn build_schema_uri(&self, schema_name: &str) -> String {
         if schema_name.starts_with("db://")
             || schema_name.starts_with("http://")
@@ -210,25 +203,57 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub async fn list_schemas(&self) -> RaiseResult<Vec<String>> {
-        // On charge le registre complet pour l'espace et la base de données actuels
         let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await?;
-
-        // On récupère toutes les URIs et on les trie par ordre alphabétique
         let mut uris = reg.list_uris();
         uris.sort();
-
         Ok(uris)
     }
-    // --- MÉTHODES DE LECTURE ---
 
-    pub async fn get_document(&self, collection: &str, id: &str) -> RaiseResult<Option<JsonValue>> {
-        self.storage
-            .read_document(&self.space, &self.db, collection, id)
+    // ============================================================================
+    // MÉTHODES DE LECTURE
+    // ============================================================================
+
+    // 🎯 FIX : Utilisation de async_recursive pour autoriser l'arbre des appels asynchrones
+    #[async_recursive]
+    pub async fn get_document(
+        &self,
+        collection: &str,
+        id_or_handle: &str,
+    ) -> RaiseResult<Option<JsonValue>> {
+        // 1. Tentative rapide par clé physique O(1)
+        if let Ok(Some(doc)) = self
+            .storage
+            .read_document(&self.space, &self.db, collection, id_or_handle)
             .await
+        {
+            return Ok(Some(doc));
+        }
+
+        // 2. Fallback sémantique : On interroge le moteur de requête (qui parse la collection)
+        let mut query = Query::new(collection);
+        query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq(
+                "handle",
+                crate::utils::data::json::json_value!(id_or_handle),
+            )],
+        });
+        query.limit = Some(1);
+
+        if let Ok(result) = QueryEngine::new(self).execute_query(query).await {
+            return Ok(result.documents.into_iter().next());
+        }
+
+        Ok(None)
     }
 
-    pub async fn get(&self, collection: &str, id: &str) -> RaiseResult<Option<JsonValue>> {
-        self.get_document(collection, id).await
+    #[async_recursive]
+    pub async fn get(
+        &self,
+        collection: &str,
+        id_or_handle: &str,
+    ) -> RaiseResult<Option<JsonValue>> {
+        self.get_document(collection, id_or_handle).await
     }
 
     pub async fn read_many(&self, collection: &str, ids: &[String]) -> RaiseResult<Vec<JsonValue>> {
@@ -258,13 +283,10 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub async fn list_all(&self, collection: &str) -> RaiseResult<Vec<JsonValue>> {
-        // ✅ CORRECTION : On passe self.storage au lieu de &self.storage.config
-        // Cela permet à list_documents de taper dans le cache.
         collection::list_documents(self.storage, &self.space, &self.db, collection).await
     }
 
     pub async fn list_collections(&self) -> RaiseResult<Vec<String>> {
-        // Reste inchangé car c'est une lecture de métadonnées de dossier
         collection::list_collection_names_fs(&self.storage.config, &self.space, &self.db).await
     }
 
@@ -289,12 +311,12 @@ impl<'a> CollectionsManager<'a> {
                 })
             );
         }
-        // ✅ 1. Le Rules Engine a la priorité
+
         if let Err(e) =
             apply_business_rules(self, "_system_index", doc, None, &reg, &expected_uri).await
         {
             user_warn!(
-                "WRN_SYSTEM_RULE_INDEX_FAIL", // 🎯 Identifiant i18n et Event ID unique
+                "WRN_SYSTEM_RULE_INDEX_FAIL",
                 json_value!({
                     "component": "INDEX_ENGINE",
                     "technical_error": e.to_string(),
@@ -304,11 +326,10 @@ impl<'a> CollectionsManager<'a> {
             );
         }
 
-        // ✅ 2. Le Validator (avec x_compute) calcule ce qui manque (_id, dates)
         if let Ok(validator) = SchemaValidator::compile_with_registry(&expected_uri, &reg) {
             if let Err(e) = validator.compute_then_validate(doc) {
                 user_warn!(
-                    "WRN_SYSTEM_INDEX_INVALID_RECOVER", // 🎯 Identifiant i18n et Event ID unique
+                    "WRN_SYSTEM_INDEX_INVALID_RECOVER",
                     json_value!({
                         "component": "INDEX_ENGINE",
                         "action": "FORCE_SAVE",
@@ -368,7 +389,7 @@ impl<'a> CollectionsManager<'a> {
 
     async fn resolve_schema_from_index(&self, col_name: &str) -> RaiseResult<String> {
         let sys_json = self.load_index().await?;
-        // 1. 🎯 Vérification de l'intégrité du schéma de l'index (Strict Trust Root)
+
         let current_schema = sys_json
             .get("$schema")
             .and_then(|v| v.as_str())
@@ -382,14 +403,12 @@ impl<'a> CollectionsManager<'a> {
             );
         }
 
-        // 2. 🎯 RECHERCHE BI-MODALE (Collections OU Rules)
-        // On cherche d'abord dans les collections de données, puis dans les collections de règles
         let col_ptr = format!("/collections/{}/schema", col_name);
         let rule_ptr = format!("/rules/{}/schema", col_name);
 
         let raw_path = sys_json
             .pointer(&col_ptr)
-            .or_else(|| sys_json.pointer(&rule_ptr)) // Si pas trouvé dans collections, regarde dans rules
+            .or_else(|| sys_json.pointer(&rule_ptr))
             .and_then(|v| v.as_str());
 
         let Some(path) = raw_path else {
@@ -410,7 +429,6 @@ impl<'a> CollectionsManager<'a> {
             return Ok(String::new());
         }
 
-        // 3. Résolution de l'URI finale (db://...)
         Ok(self.build_schema_uri(path))
     }
 
@@ -419,7 +437,7 @@ impl<'a> CollectionsManager<'a> {
         col_name: &str,
         schema_uri: &str,
     ) -> RaiseResult<()> {
-        let mut system_doc = self.load_index().await?; // 🎯 Douane stricte
+        let mut system_doc = self.load_index().await?;
 
         if system_doc.get("collections").is_none() {
             system_doc["collections"] = json_value!({});
@@ -443,7 +461,6 @@ impl<'a> CollectionsManager<'a> {
         let mut system_doc = self.load_index().await?;
         let mut changed = false;
 
-        // 2. Logique de suppression
         if let Some(cols) = system_doc
             .get_mut("collections")
             .and_then(|c| c.as_object_mut())
@@ -453,7 +470,6 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        // 3. Sauvegarde centralisée uniquement en cas de modification
         if changed {
             self.save_system_index(&mut system_doc).await?;
         }
@@ -462,7 +478,7 @@ impl<'a> CollectionsManager<'a> {
     }
 
     async fn add_item_to_index(&self, col_name: &str, id: &str) -> RaiseResult<()> {
-        let mut system_doc = self.load_index().await?; // 🎯 Douane stricte
+        let mut system_doc = self.load_index().await?;
 
         if system_doc.get("collections").is_none() {
             system_doc["collections"] = json_value!({});
@@ -500,13 +516,11 @@ impl<'a> CollectionsManager<'a> {
     }
 
     async fn remove_item_from_index(&self, col_name: &str, id: &str) -> RaiseResult<()> {
-        // 🎯 1. Douane stricte : lecture sécurisée de l'index
         let mut system_doc = self.load_index().await?;
 
         let filename = format!("{}.json", id);
         let mut changed = false;
 
-        // 2. Logique de suppression
         if let Some(cols) = system_doc
             .get_mut("collections")
             .and_then(|c| c.as_object_mut())
@@ -515,10 +529,8 @@ impl<'a> CollectionsManager<'a> {
                 if let Some(items) = col_entry.get_mut("items").and_then(|i| i.as_array_mut()) {
                     let initial_len = items.len();
 
-                    // On filtre pour garder tous les items SAUF celui qu'on supprime
                     items.retain(|i| i.get("file").and_then(|f| f.as_str()) != Some(&filename));
 
-                    // Si la taille du tableau a diminué, c'est qu'on a bien supprimé l'item
                     if items.len() < initial_len {
                         changed = true;
                     }
@@ -526,7 +538,6 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        // 3. Sauvegarde via la méthode centralisée
         if changed {
             self.save_system_index(&mut system_doc).await?;
         }
@@ -574,7 +585,7 @@ impl<'a> CollectionsManager<'a> {
         if let Err(_e) = idx_mgr.index_document(collection, doc).await {
             #[cfg(debug_assertions)]
             user_warn!(
-                "WRN_SECONDARY_INDEX_FAILED", // 🎯 Identifiant i18n et Event ID unique
+                "WRN_SECONDARY_INDEX_FAILED",
                 json_value!({
                     "component": "INDEX_ENGINE",
                     "index_type": "secondary",
@@ -617,9 +628,7 @@ impl<'a> CollectionsManager<'a> {
         json_merge(&mut doc, resolved_patch);
 
         if let Some(obj) = doc.as_object_mut() {
-            // 1. SÉCURITÉ : On verrouille la clé primaire pour empêcher la mutation de l'ID
             obj.insert("_id".to_string(), JsonValue::String(id.to_string()));
-            // 2. LOGIQUE D'ÉTAT P2P : On incrémente la révision (seul le code DB connaît l'ancien état)
             if let Some(p2p) = obj.get_mut("_p2p").and_then(|v| v.as_object_mut()) {
                 if let Some(rev) = p2p.get("revision").and_then(|v| v.as_i64()) {
                     p2p.insert("revision".to_string(), json_value!(rev + 1));
@@ -647,7 +656,6 @@ impl<'a> CollectionsManager<'a> {
     ) -> RaiseResult<String> {
         data = self.resolve_document_references(data).await?;
 
-        // 🎯 1. EXTRACTION DE TOUTES LES CLÉS D'IDENTITÉ POSSIBLES
         let id_opt = data
             .get("_id")
             .and_then(|v| v.as_str())
@@ -668,7 +676,6 @@ impl<'a> CollectionsManager<'a> {
 
         let mut target_id = None;
 
-        // 🎯 2. RECHERCHE DIRECTE PAR ID (O(1))
         if let Some(ref id) = id_opt {
             if let Ok(Some(_)) = self.get_document(collection, id).await {
                 target_id = Some(id.clone());
@@ -676,14 +683,12 @@ impl<'a> CollectionsManager<'a> {
         }
 
         if target_id.is_none() {
-            // FIX : On priorise 'handle', puis 'name'
             let search_param = if let Some(v) = handle_opt {
                 Some(("handle", v))
             } else {
                 name_opt.map(|v| ("name", v))
             };
 
-            // Si un champ alternatif existe, on interroge la base
             if let Some((field, value)) = search_param {
                 let mut query = Query::new(collection);
                 query.filter = Some(QueryFilter {
@@ -702,7 +707,6 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        // 🎯 4. EXÉCUTION DE L'ACTION DÉFINITIVE
         match target_id {
             Some(id) => {
                 self.update_document(collection, &id, data).await?;
@@ -731,7 +735,6 @@ impl<'a> CollectionsManager<'a> {
 
     #[async_recursive]
     pub async fn prepare_document(&self, collection: &str, doc: &mut JsonValue) -> RaiseResult<()> {
-        // 1. DÉTERMINATION DU SCHÉMA
         let mut resolved_uri: Option<String> = None;
 
         let meta_path = self
@@ -760,7 +763,6 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        // 2. INJECTION, CALCULS & VALIDATION (SSOT via Validator)
         if let Some(uri) = &resolved_uri {
             if let Some(obj) = doc.as_object_mut() {
                 obj.insert("$schema".to_string(), JsonValue::String(uri.clone()));
@@ -770,7 +772,7 @@ impl<'a> CollectionsManager<'a> {
 
             if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, uri).await {
                 user_warn!(
-                    "WRN_BUSINESS_RULE_FAILURE", // 🎯 Identifiant i18n et Event ID unique
+                    "WRN_BUSINESS_RULE_FAILURE",
                     json_value!({
                         "component": "RULES_ENGINE",
                         "severity": "non_blocking",
@@ -783,7 +785,6 @@ impl<'a> CollectionsManager<'a> {
             let validator = SchemaValidator::compile_with_registry(uri, &reg)?;
             validator.compute_then_validate(doc)?;
 
-            // 3. 🛡️ CALCUL DU CHECKSUM P2P & ORIGIN_NODE
             if let Some(obj) = doc.as_object_mut() {
                 let ws_id = AppConfig::get()
                     .workstation
@@ -812,7 +813,6 @@ impl<'a> CollectionsManager<'a> {
             );
         }
 
-        // 4. 🎯 LOGIQUE SÉMANTIQUE JSON-LD (AVEC raise_error!)
         if let Err(e) = self.apply_semantic_logic(doc, resolved_uri.as_deref()) {
             raise_error!(
                 "ERR_AI_SEMANTIC_VALIDATION_FAIL",
@@ -829,7 +829,6 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    // --- OPTIMISATION SEMANTIQUE ---
     fn apply_semantic_logic(
         &self,
         doc: &mut JsonValue,
@@ -952,7 +951,6 @@ impl<'a> CollectionsManager<'a> {
 
     fn compute_document_checksum(&self, doc: &JsonValue) -> String {
         use sha2::{Digest, Sha256};
-        // Sérialisation du JSON en vecteur d'octets
         let content = serde_json::to_vec(doc).unwrap_or_default();
         let mut hasher = Sha256::new();
         hasher.update(content);
@@ -985,12 +983,12 @@ pub async fn apply_business_rules(
 
     if let Err(e) = store.sync_from_db().await {
         user_warn!(
-            "WRN_SYSTEM_RULES_LOAD_FAILED", // 🎯 Identifiant i18n et Event ID unique
+            "WRN_SYSTEM_RULES_LOAD_FAILED",
             json_value!({
                 "component": "RULES_ENGINE",
                 "scope": "system_rules",
                 "technical_error": e.to_string(),
-                "hint": "Le moteur de règles fonctionnera avec les paramètres par défaut, mais certaines contraintes système pourraient être absentes."
+                "hint": "Le moteur de règles fonctionnera avec les paramètres par défaut."
             })
         );
     }
@@ -1002,24 +1000,22 @@ pub async fn apply_business_rules(
                     Ok(rule) => {
                         if let Err(e) = store.register_rule(collection_name, rule).await {
                             user_warn!(
-                                "WRN_RULE_REGISTRATION_FAILED", // 🎯 Identifiant i18n et Event ID unique
+                                "WRN_RULE_REGISTRATION_FAILED",
                                 json_value!({
                                     "component": "RULES_ENGINE",
                                     "item_index": index,
-                                    "technical_error": e.to_string(),
-                                    "hint": "Une règle spécifique n'a pas pu être enregistrée dans l'index. L'intégrité globale est maintenue."
+                                    "technical_error": e.to_string()
                                 })
                             );
                         }
                     }
                     Err(e) => {
                         user_warn!(
-                            "WRN_SCHEMA_RULE_INVALID", // 🎯 Identifiant i18n et Event ID unique
+                            "WRN_SCHEMA_RULE_INVALID",
                             json_value!({
                                 "component": "RULES_ENGINE",
                                 "item_index": index,
-                                "technical_error": e.to_string(),
-                                "hint": "Une règle du schéma JSON-LD est syntaxiquement incorrecte et a été ignorée."
+                                "technical_error": e.to_string()
                             })
                         );
                     }
@@ -1028,7 +1024,6 @@ pub async fn apply_business_rules(
         }
     }
 
-    // ✅ ANTICIPATION : On passe directement le StorageEngine au lieu du JsonDbConfig !
     let provider = CachedDataProvider::new(manager.storage, &manager.space, &manager.db);
     let mut current_changes = compute_diff(doc, old_doc);
     let mut passes = 0;
@@ -1147,10 +1142,6 @@ fn set_value_by_path(doc: &mut JsonValue, path: &str, value: JsonValue) -> bool 
     false
 }
 
-// ============================================================================
-// RÉSOLUTION DE RÉFÉRENCES (SMART LINKS)
-// ============================================================================
-
 fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
     if !s.starts_with("ref:") {
         return None;
@@ -1210,6 +1201,10 @@ fn resolve_refs_recursive<'a>(
         }
     })
 }
+
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {

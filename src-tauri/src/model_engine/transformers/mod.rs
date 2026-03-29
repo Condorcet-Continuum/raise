@@ -1,51 +1,152 @@
-pub mod dialogue_to_model;
-pub mod hardware_transformer;
-pub mod software_transformer;
-pub mod system_transformer;
+// FICHIER : src-tauri/src/model_engine/transformers/mod.rs
 
+use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 use crate::utils::prelude::*;
+pub mod dialogue_to_model;
 
-/// Domaine cible de la transformation
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TransformationDomain {
-    Software, // Rust, C++, Python -> Classes
-    Hardware, // VHDL, Verilog -> Modules
-    System,   // Vue d'ensemble -> Docs/Configs
+/// Configuration pour piloter la transformation sémantique
+#[derive(Clone)]
+pub struct TransformerConfig {
+    pub domain: String,
+    pub relation_key: String, // ex: "ownedFunctionalAllocation"
+    pub target_layer: String, // ex: "la"
+    pub target_col: String,   // ex: "functions"
 }
 
-/// Trait implémenté par tous les transformateurs de domaine.
-/// Il prend un élément brut Arcadia (JSON hydraté) et retourne une structure JSON
-/// sémantique optimisée pour le moteur de template.
-pub trait ModelTransformer {
+pub trait ModelTransformer: Send + Sync {
     fn transform(&self, element: &JsonValue) -> RaiseResult<JsonValue>;
+
+    fn transform_with_context(
+        &self,
+        element: &ArcadiaElement,
+        model: &ProjectModel,
+    ) -> RaiseResult<JsonValue>;
 }
 
-/// Factory pour instancier le bon transformateur
-pub fn get_transformer(domain: TransformationDomain) -> Box<dyn ModelTransformer> {
-    match domain {
-        TransformationDomain::Software => Box::new(software_transformer::SoftwareTransformer),
-        TransformationDomain::Hardware => Box::new(hardware_transformer::HardwareTransformer),
-        TransformationDomain::System => Box::new(system_transformer::SystemTransformer),
+pub struct UniversalTransformer {
+    config: TransformerConfig,
+}
+
+impl UniversalTransformer {
+    pub fn new(config: TransformerConfig) -> Self {
+        Self { config }
     }
+}
+
+impl ModelTransformer for UniversalTransformer {
+    fn transform(&self, element: &JsonValue) -> RaiseResult<JsonValue> {
+        Ok(json_value!({
+            "domain": self.config.domain,
+            "entity": element
+        }))
+    }
+
+    fn transform_with_context(
+        &self,
+        element: &ArcadiaElement,
+        model: &ProjectModel,
+    ) -> RaiseResult<JsonValue> {
+        let mut related_data = Vec::new();
+
+        // 🎯 NAVIGATION GÉNÉRIQUE
+        let targets = model.get_collection(&self.config.target_layer, &self.config.target_col);
+
+        if let Some(links) = element
+            .properties
+            .get(&self.config.relation_key)
+            .and_then(|v| v.as_array())
+        {
+            for link in links {
+                if let Some(id) = link.get("id").and_then(|v| v.as_str()) {
+                    if let Some(found) = targets.iter().find(|t| t.id == id) {
+                        related_data.push(json_value!({
+                            "name": found.name.as_str(),
+                            "kind": found.kind,
+                            "id": found.id
+                        }));
+                    }
+                }
+            }
+        }
+
+        Ok(json_value!({
+            "domain": self.config.domain,
+            "entity": {
+                "name": element.name.as_str(),
+                "kind": element.kind,
+                "relations": related_data
+            },
+            "generated_at": UtcClock::now().to_rfc3339()
+        }))
+    }
+}
+
+pub enum TransformationDomain {
+    Software,
+    Hardware,
+    System,
+}
+
+/// 🎯 FACTORY : Centralise la création des transformers avec leurs configs
+pub fn get_transformer(domain: TransformationDomain) -> Box<dyn ModelTransformer> {
+    let config = match domain {
+        TransformationDomain::Software => TransformerConfig {
+            domain: "software".into(),
+            relation_key: "ownedFunctionalAllocation".into(),
+            target_layer: "la".into(),
+            target_col: "functions".into(),
+        },
+        TransformationDomain::Hardware => TransformerConfig {
+            domain: "hardware".into(),
+            relation_key: "ownedPhysicalPorts".into(),
+            target_layer: "pa".into(),
+            target_col: "links".into(),
+        },
+        TransformationDomain::System => TransformerConfig {
+            domain: "system".into(),
+            relation_key: "parts".into(),
+            target_layer: "oa".into(),
+            target_col: "entities".into(),
+        },
+    };
+    Box::new(UniversalTransformer::new(config))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_engine::types::NameType;
 
     #[test]
-    fn test_factory_returns_correct_instances() {
-        // Test Software
-        let soft = get_transformer(TransformationDomain::Software);
-        // On vérifie juste que ça ne panic pas et retourne un trait object
-        assert!(soft.transform(&json_value!({})).is_ok());
+    fn test_universal_transformer_logic() {
+        let mut model = ProjectModel::default();
+        let config = TransformerConfig {
+            domain: "test".into(),
+            relation_key: "links".into(),
+            target_layer: "layer1".into(),
+            target_col: "col1".into(),
+        };
+        let transformer = UniversalTransformer::new(config);
 
-        // Test Hardware
-        let hard = get_transformer(TransformationDomain::Hardware);
-        assert!(hard.transform(&json_value!({})).is_ok());
+        // Ajout d'une cible
+        let target = ArcadiaElement {
+            id: "T1".into(),
+            name: NameType::String("Target".into()),
+            ..Default::default()
+        };
+        model.add_element("layer1", "col1", target);
 
-        // Test System
-        let sys = get_transformer(TransformationDomain::System);
-        assert!(sys.transform(&json_value!({})).is_ok());
+        // Élément source avec lien
+        let mut source = ArcadiaElement {
+            id: "S1".into(),
+            ..Default::default()
+        };
+        source
+            .properties
+            .insert("links".into(), json_value!([{"id": "T1"}]));
+
+        let result = transformer.transform_with_context(&source, &model).unwrap();
+        assert_eq!(result["domain"], "test");
+        assert_eq!(result["entity"]["relations"][0]["name"], "Target");
     }
 }

@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/model_engine/capella/xmi_parser.rs
 
-use crate::model_engine::arcadia::ArcadiaOntology; // 🎯 Utilisation de l'ontologie dynamique
+use crate::model_engine::arcadia::ArcadiaOntology;
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
 use crate::utils::prelude::*;
 
@@ -10,7 +10,9 @@ use quick_xml::reader::Reader;
 pub struct CapellaXmiParser;
 
 impl CapellaXmiParser {
+    /// Point d'entrée principal pour le parsing d'un fichier Capella
     pub fn parse_file(path: &Path, model: &mut ProjectModel) -> RaiseResult<()> {
+        // 🎯 FIX : Utilisation d'un match explicite pour la compatibilité AppError
         let mut reader = match Reader::from_file(path) {
             Ok(r) => r,
             Err(e) => raise_error!(
@@ -18,8 +20,7 @@ impl CapellaXmiParser {
                 error = e,
                 context = json_value!({
                     "path": path.display().to_string(),
-                    "format": "XMI/XML",
-                    "action": "initialize_reader"
+                    "format": "XMI/XML"
                 })
             ),
         };
@@ -27,6 +28,7 @@ impl CapellaXmiParser {
         Self::parse_xml(&mut reader, model)
     }
 
+    /// Boucle de parsing XML
     fn parse_xml<B: BufferedRead>(
         reader: &mut Reader<B>,
         model: &mut ProjectModel,
@@ -50,6 +52,7 @@ impl CapellaXmiParser {
                             "name" => name = value,
                             "xsi:type" => xsi_type = value,
                             _ => {
+                                // 🎯 PURE GRAPH : Toutes les autres propriétés XML vont dans la map
                                 properties.insert(key, JsonValue::String(value));
                             }
                         }
@@ -64,7 +67,7 @@ impl CapellaXmiParser {
                                 name
                             }),
                             kind: xsi_type.clone(),
-                            description: None,
+                            // 🎯 PURE GRAPH : Plus de champ description statique ici
                             properties,
                         };
 
@@ -76,7 +79,7 @@ impl CapellaXmiParser {
                     let pos = reader.buffer_position();
                     raise_error!(
                         "ERR_XML_PARSE_FAILURE",
-                        error = format!("Erreur XML à {} : {}", pos, e)
+                        error = format!("Erreur XML à la position {} : {}", pos, e)
                     );
                 }
                 _ => (),
@@ -86,56 +89,69 @@ impl CapellaXmiParser {
         Ok(())
     }
 
-    /// Trie les éléments en résolvant dynamiquement les URIs Raise
+    /// 🎯 PURE GRAPH DISPATCH : Identifie la destination de l'élément et l'insère dynamiquement
     fn dispatch(model: &mut ProjectModel, mut element: ArcadiaElement, xsi_type: &str) {
-        // Fonction helper pour résoudre l'URI via l'ontologie dynamique
+        // Fonction helper pour résoudre l'URI via l'ontologie dynamique Arcadia
         let resolve = |prefix: &str, name: &str| -> String {
             ArcadiaOntology::get_uri(prefix, name).unwrap_or_else(|| xsi_type.to_string())
         };
 
+        let layer;
+        let collection;
+
         // --- OPERATIONAL ANALYSIS (OA) ---
         if xsi_type.contains("oa:OperationalActor") {
             element.kind = resolve("oa", "OperationalActor");
-            model.oa.actors.push(element);
+            layer = "oa";
+            collection = "actors";
         } else if xsi_type.contains("oa:OperationalActivity") {
             element.kind = resolve("oa", "OperationalActivity");
-            model.oa.activities.push(element);
-        } else if xsi_type.contains("oa:OperationalCapability") {
-            element.kind = resolve("oa", "OperationalCapability");
-            model.oa.capabilities.push(element);
+            layer = "oa";
+            collection = "activities";
         } else if xsi_type.contains("oa:Entity") || xsi_type.contains("oa:OperationalEntity") {
             element.kind = resolve("oa", "OperationalEntity");
-            model.oa.entities.push(element);
+            layer = "oa";
+            collection = "entities";
 
         // --- SYSTEM ANALYSIS (SA) ---
         } else if xsi_type.contains("ctx:SystemFunction") {
             element.kind = resolve("sa", "SystemFunction");
-            model.sa.functions.push(element);
+            layer = "sa";
+            collection = "functions";
         } else if xsi_type.contains("ctx:SystemComponent") || xsi_type.contains("ctx:System") {
             element.kind = resolve("sa", "SystemComponent");
-            model.sa.components.push(element);
-        } else if xsi_type.contains("ctx:Actor") {
-            element.kind = resolve("sa", "SystemActor");
-            model.sa.actors.push(element);
+            layer = "sa";
+            collection = "components";
 
         // --- LOGICAL ARCHITECTURE (LA) ---
         } else if xsi_type.contains("la:LogicalFunction") {
             element.kind = resolve("la", "LogicalFunction");
-            model.la.functions.push(element);
+            layer = "la";
+            collection = "functions";
         } else if xsi_type.contains("la:LogicalComponent") {
             element.kind = resolve("la", "LogicalComponent");
-            model.la.components.push(element);
+            layer = "la";
+            collection = "components";
 
         // --- PHYSICAL ARCHITECTURE (PA) ---
-        } else if xsi_type.contains("pa:PhysicalFunction") {
-            element.kind = resolve("pa", "PhysicalFunction");
-            model.pa.functions.push(element);
         } else if xsi_type.contains("pa:PhysicalComponent") {
             element.kind = resolve("pa", "PhysicalComponent");
-            model.pa.components.push(element);
+            layer = "pa";
+            collection = "components";
+        } else {
+            // Types non mappés ou transverses
+            layer = "unmapped";
+            collection = "elements";
         }
+
+        // Insertion dans le graphe dynamique
+        model.add_element(layer, collection, element);
     }
 }
+
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -143,11 +159,12 @@ mod tests {
     use crate::model_engine::arcadia::ArcadiaOntology;
 
     #[test]
-    fn test_parse_capella_fragment_and_normalize() {
+    fn test_parse_capella_fragment_pure_graph() {
         let xml = r#"
             <root>
                 <ownedArchitectures xsi:type="org.polarsys.capella.core.data.la:LogicalArchitecture">
-                    <ownedLogicalComponents xsi:type="org.polarsys.capella.core.data.la:LogicalComponent" id="LC_1" name="EngineController" />
+                    <ownedLogicalComponents xsi:type="org.polarsys.capella.core.data.la:LogicalComponent" 
+                                           id="LC_1" name="EngineController" description="Main controller" />
                 </ownedArchitectures>
             </root>
         "#;
@@ -156,12 +173,30 @@ mod tests {
         reader.config_mut().trim_text(true);
 
         let mut model = ProjectModel::default();
-        CapellaXmiParser::parse_xml(&mut reader, &mut model).expect("Parsing failed");
+        CapellaXmiParser::parse_xml(&mut reader, &mut model).expect("Le parsing a échoué");
 
-        let comp = &model.la.components[0];
+        // 🎯 Vérification de l'insertion dans la map dynamique
+        let components = model.get_collection("la", "components");
+        assert_eq!(
+            components.len(),
+            1,
+            "Le composant doit être dans la collection dynamique"
+        );
+
+        let comp = &components[0];
         assert_eq!(comp.name.as_str(), "EngineController");
 
-        // 🎯 Vérification : Le type doit correspondre à ce que le registre renvoie dynamiquement
+        // Vérification de la propriété description (Pure Graph)
+        assert_eq!(
+            comp.properties
+                .get("description")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "Main controller"
+        );
+
+        // Vérification de la résolution du type URI
         let expected_uri = ArcadiaOntology::get_uri("la", "LogicalComponent").unwrap();
         assert_eq!(comp.kind, expected_uri);
     }

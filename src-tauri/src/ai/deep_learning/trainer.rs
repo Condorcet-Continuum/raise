@@ -1,66 +1,83 @@
 // FICHIER : src-tauri/src/ai/deep_learning/trainer.rs
 use crate::utils::prelude::*;
 
-use crate::ai::deep_learning::models::sequence_net::SequenceNet; // 🎯 Nouvel import
+use crate::ai::deep_learning::models::sequence_net::SequenceNet;
 use candle_core::Tensor;
+use candle_nn::optim::{AdamW, Optimizer, ParamsAdamW};
 use candle_nn::VarMap;
 
-/// Gère l'apprentissage du réseau.
-pub struct Trainer<'a> {
-    varmap: &'a VarMap,
-    learning_rate: f64,
+/// Gère l'apprentissage du réseau avec l'optimiseur accéléré AdamW.
+pub struct Trainer {
+    optimizer: AdamW,
 }
 
-impl<'a> Trainer<'a> {
-    /// 🎯 NOUVEAU : Crée un Trainer à partir de la configuration centralisée
-    pub fn from_config(varmap: &'a VarMap, config: &DeepLearningConfig) -> Self {
-        Self {
-            varmap,
-            learning_rate: config.learning_rate,
-        }
+impl Trainer {
+    /// 🎯 Crée un Trainer à partir de la configuration centralisée
+    pub fn from_config(varmap: &VarMap, config: &DeepLearningConfig) -> RaiseResult<Self> {
+        Self::new(varmap, config.learning_rate)
     }
 
-    /// Constructeur classique (conservé pour la flexibilité)
-    pub fn new(varmap: &'a VarMap, learning_rate: f64) -> Self {
-        Self {
-            varmap,
-            learning_rate,
-        }
+    /// Constructeur avec paramètres de base (AdamW)
+    pub fn new(varmap: &VarMap, learning_rate: f64) -> RaiseResult<Self> {
+        let params = ParamsAdamW {
+            lr: learning_rate,
+            ..Default::default()
+        };
+
+        let optimizer = match AdamW::new(varmap.all_vars(), params) {
+            Ok(opt) => opt,
+            Err(e) => raise_error!("ERR_OPTIMIZER_INIT", error = e.to_string()),
+        };
+
+        Ok(Self { optimizer })
     }
 
-    /// Exécute un pas d'entraînement complet : Forward -> Loss -> Backward -> Update.
+    /// Exécute un pas d'entraînement complet : Forward -> Loss -> Backward -> Update (AdamW).
     pub fn train_step(
-        &self,
+        &mut self, // 🎯 L'optimiseur a besoin d'être mutable pour garder son Momentum !
         model: &SequenceNet,
         input: &Tensor,
         targets: &Tensor,
     ) -> RaiseResult<f64> {
-        let logits = model.forward(input)?;
-        let loss = self.cross_entropy_loss(&logits, targets)?;
-        let grads = loss.backward()?;
+        // 1. Forward Pass
+        let logits = match model.forward(input) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_TRAINING_FORWARD", error = e.to_string()),
+        };
 
-        for var in self.varmap.all_vars() {
-            if let Some(grad) = grads.get(&var) {
-                let lr_tensor = Tensor::new(self.learning_rate as f32, grad.device())?;
-                let delta = grad.broadcast_mul(&lr_tensor)?;
-                let new_val = var.as_tensor().sub(&delta)?;
-                var.set(&new_val)?;
-            }
+        // 2. Préparation des dimensions pour la Cross-Entropy
+        let (b, s, v) = match logits.dims3() {
+            Ok(dims) => dims,
+            Err(e) => raise_error!("ERR_TENSOR_DIMS", error = e.to_string()),
+        };
+
+        let flat_logits = match logits.reshape((b * s, v)) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_TENSOR_RESHAPE", error = e.to_string()),
+        };
+
+        let flat_targets = match targets.reshape(b * s) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_TENSOR_RESHAPE", error = e.to_string()),
+        };
+
+        // 3. Calcul de la perte avec la fonction native Candle (Ultra optimisée)
+        let loss = match candle_nn::loss::cross_entropy(&flat_logits, &flat_targets) {
+            Ok(t) => t,
+            Err(e) => raise_error!("ERR_LOSS_CALC", error = e.to_string()),
+        };
+
+        // 4. Backward pass & Weight Update intégrés en une seule passe !
+        match self.optimizer.backward_step(&loss) {
+            Ok(_) => (),
+            Err(e) => raise_error!("ERR_BACKWARD_STEP", error = e.to_string()),
+        };
+
+        // 5. Rapatriement du scalaire de loss pour ton monitoring
+        match loss.to_scalar::<f32>() {
+            Ok(val) => Ok(val as f64),
+            Err(e) => raise_error!("ERR_LOSS_SCALAR", error = e.to_string()),
         }
-
-        Ok(loss.to_scalar::<f32>().map(|v| v as f64)?)
-    }
-
-    fn cross_entropy_loss(&self, logits: &Tensor, targets: &Tensor) -> RaiseResult<Tensor> {
-        let (b, s, v) = logits.dims3()?;
-        let flat_logits = logits.reshape((b * s, v))?;
-        let flat_targets = targets.reshape(b * s)?;
-
-        let log_probs = candle_nn::ops::log_softmax(&flat_logits, 1)?;
-        let target_indexes = flat_targets.unsqueeze(1)?;
-        let selected_log_probs = log_probs.gather(&target_indexes, 1)?;
-
-        Ok(selected_log_probs.mean_all()?.neg()?)
     }
 }
 
@@ -73,7 +90,6 @@ mod tests {
 
     #[async_test]
     async fn test_training_convergence() -> RaiseResult<()> {
-        // 1. Initialisation via le Singleton (Moule de test : 10, 20, 5)
         let sandbox = DbSandbox::new().await;
         let config = &sandbox.config.deep_learning;
         let device = config.to_device();
@@ -81,7 +97,6 @@ mod tests {
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
-        // 🎯 2. Utilisation des dimensions du Singleton (Alignement SSOT)
         let model = SequenceNet::new(
             config.input_size,
             config.hidden_size,
@@ -89,10 +104,10 @@ mod tests {
             vb,
         )?;
 
-        // On utilise le constructeur intelligent
-        let trainer = Trainer::from_config(&varmap, config);
+        // 🎯 FIX : Initialisation asynchrone (? car from_config retourne un RaiseResult maintenant)
+        // et mot-clé `mut` car le Trainer met à jour son état interne.
+        let mut trainer = Trainer::from_config(&varmap, config)?;
 
-        // Données d'entrée alignées sur la config (input_size)
         let input = Tensor::randn(0f32, 1.0, (1, 1, config.input_size), &device)?;
         let target = Tensor::zeros((1, 1), DType::U32, &device)?;
 

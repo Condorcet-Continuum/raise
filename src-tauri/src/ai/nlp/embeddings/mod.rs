@@ -48,7 +48,8 @@ impl EmbeddingEngine {
         let inner = match engine_type {
             EngineType::FastEmbed => {
                 user_info!("🧠 [NLP] Moteur activé : FastEmbed (CPU/ONNX)");
-                let fast_engine = fast::FastEmbedEngine::new()?;
+                // 🎯 FIX : Passage du manager pour la lecture dynamique et de .await
+                let fast_engine = fast::FastEmbedEngine::new(manager).await?;
                 EngineImplementation::Fast(Box::new(fast_engine))
             }
             EngineType::Candle => {

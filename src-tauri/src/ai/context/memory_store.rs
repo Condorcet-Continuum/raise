@@ -1,93 +1,114 @@
-use crate::utils::prelude::*;
+// FICHIER : src-tauri/src/ai/context/memory_store.rs
 
 use super::conversation_manager::ConversationSession;
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::utils::prelude::*;
 
-/// Gère la sauvegarde/chargement des sessions de chat sur disque
+/// Gère la sauvegarde/chargement des sessions de chat via le Graphe de Connaissances (JSON-DB)
 pub struct MemoryStore {
-    storage_path: PathBuf,
+    pub collection_name: String,
 }
 
 impl MemoryStore {
-    /// Initialise le store dans un dossier donné (ex: .raise/chats/)
-    pub async fn new(base_path: &Path) -> RaiseResult<Self> {
-        if !base_path.exists() {
-            fs::create_dir_all_async(base_path).await?;
-        }
-        Ok(Self {
-            storage_path: base_path.to_path_buf(),
-        })
+    /// Initialise le store documentaire (collection `chat_sessions`)
+    pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
+        let collection_name = "chat_sessions".to_string();
+
+        // 🎯 Création automatique de la collection si elle n'existe pas
+        let _ = manager
+            .create_collection(
+                &collection_name,
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await;
+
+        Ok(Self { collection_name })
     }
 
     /// Sauvegarde une session
-    pub async fn save_session(&self, session: &ConversationSession) -> RaiseResult<()> {
-        let file_path = self.get_path(&session.id);
-        let json = json::serialize_to_string_pretty(session)?;
-        fs::write_async(file_path, json).await?;
+    pub async fn save_session(
+        &self,
+        manager: &CollectionsManager<'_>,
+        session: &ConversationSession,
+    ) -> RaiseResult<()> {
+        let mut doc = json::serialize_to_value(session)?;
+
+        // 🎯 On s'assure que _id est bien défini pour l'upsert
+        doc["_id"] = json_value!(session.id.clone());
+
+        manager.upsert_document(&self.collection_name, doc).await?;
         Ok(())
     }
 
     /// Charge une session existante ou en crée une nouvelle si absente
-    pub async fn load_or_create(&self, session_id: &str) -> RaiseResult<ConversationSession> {
-        let file_path = self.get_path(session_id);
-
-        if file_path.exists() {
-            let content = fs::read_to_string_async(&file_path).await?;
-            let session: ConversationSession = json::deserialize_from_str(&content)?;
-            Ok(session)
-        } else {
-            Ok(ConversationSession::new(session_id.to_string()))
+    pub async fn load_or_create(
+        &self,
+        manager: &CollectionsManager<'_>,
+        session_id: &str,
+    ) -> RaiseResult<ConversationSession> {
+        if let Ok(Some(doc)) = manager
+            .get_document(&self.collection_name, session_id)
+            .await
+        {
+            if let Ok(session) = json::deserialize_from_value::<ConversationSession>(doc) {
+                return Ok(session);
+            }
         }
+        Ok(ConversationSession::new(session_id.to_string()))
     }
 
     /// Liste toutes les sessions disponibles
-    pub async fn list_sessions(&self) -> RaiseResult<Vec<String>> {
+    pub async fn list_sessions(
+        &self,
+        manager: &CollectionsManager<'_>,
+    ) -> RaiseResult<Vec<String>> {
         let mut sessions = Vec::new();
-        if self.storage_path.exists() {
-            let mut dir = fs::read_dir_async(&self.storage_path).await?;
-            while let Ok(Some(entry)) = dir.next_entry().await {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        sessions.push(stem.to_string());
-                    }
+        if let Ok(docs) = manager.list_all(&self.collection_name).await {
+            for doc in docs {
+                if let Some(id) = doc.get("_id").and_then(|v| v.as_str()) {
+                    sessions.push(id.to_string());
                 }
             }
         }
         Ok(sessions)
-    }
-
-    fn get_path(&self, session_id: &str) -> PathBuf {
-        self.storage_path.join(format!("{}.json", session_id))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[test]
-    fn test_context_formatting() {
-        let mut session = ConversationSession::new("test".to_string());
-        session.add_user_message("Bonjour");
-        session.add_ai_message("Salut");
+    #[async_test]
+    async fn test_memory_store_lifecycle() {
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+        manager.init_db().await.unwrap();
 
-        let ctx = session.to_context_string();
-        assert!(ctx.contains("User: Bonjour"));
-        assert!(ctx.contains("Assistant: Salut"));
-    }
+        let store = MemoryStore::new(&manager).await.unwrap();
+        let session_id = "test_session_123";
 
-    #[test]
-    fn test_sliding_window() {
-        // On force une limite de 2 messages
-        let mut session = ConversationSession::new("test".to_string());
-        session.max_history_len = 2;
+        // 1. Création d'une session vierge
+        let mut session = store.load_or_create(&manager, session_id).await.unwrap();
+        assert_eq!(session.id, session_id);
+        assert!(session.history.is_empty());
 
-        session.add_user_message("1");
-        session.add_ai_message("2");
-        session.add_user_message("3"); // Devrait éjecter "1"
+        // 2. Modification et Sauvegarde documentaire !
+        session.add_user_message("Hello AI");
+        session.add_ai_message("Hello Human");
+        store.save_session(&manager, &session).await.unwrap();
 
-        assert_eq!(session.history.len(), 2);
-        assert_eq!(session.history[0].content, "2");
-        assert_eq!(session.history[1].content, "3");
+        // 3. Rechargement
+        let reloaded = store.load_or_create(&manager, session_id).await.unwrap();
+        assert_eq!(reloaded.history.len(), 2);
+        assert_eq!(reloaded.history[0].content, "Hello AI");
+
+        // 4. Liste
+        let sessions = store.list_sessions(&manager).await.unwrap();
+        assert!(sessions.contains(&session_id.to_string()));
     }
 }

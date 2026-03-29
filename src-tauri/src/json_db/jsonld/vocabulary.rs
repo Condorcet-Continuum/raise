@@ -447,7 +447,7 @@ mod tests {
         };
 
         // Fichier JSON-LD simulé
-        let mock_file_path = crate::utils::io::fs::PathBuf::from("/tmp/mock.jsonld");
+        let mock_file_path = fs::PathBuf::from("/tmp/mock.jsonld");
         crate::utils::io::fs::write_json_atomic_async(
             &mock_file_path,
             &json_value!({

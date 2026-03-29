@@ -3,7 +3,6 @@ use crate::utils::prelude::*;
 use self::candle_engine::CandleLlmEngine;
 pub mod candle_engine;
 pub mod client;
-pub mod prompts;
 pub mod response_parser;
 
 #[cfg(test)]

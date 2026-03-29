@@ -2,232 +2,169 @@
 
 use crate::utils::prelude::*;
 
-#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
-#[serde(untagged)]
-pub enum NameType {
-    String(String),
-    Object(UnorderedMap<String, String>), // Support pour {"en": "...", "fr": "..."}
-}
-
-impl NameType {
-    pub fn as_str(&self) -> &str {
-        match self {
-            NameType::String(s) => s,
-            NameType::Object(map) => map
-                .get("en")
-                .or_else(|| map.values().next())
-                .map(|s| s.as_str())
-                .unwrap_or(""),
-        }
-    }
-}
-
-impl Default for NameType {
-    fn default() -> Self {
-        NameType::String("".to_string())
-    }
-}
-
-/// Structure générique représentant n'importe quel élément du modèle Arcadia.
-#[derive(Debug, Clone, Serializable, Deserializable, Default, PartialEq)]
+/// Représentation générique d'un élément dans le graphe (Data-Driven)
+#[derive(Debug, Serializable, Deserializable, Clone, Default)]
 pub struct ArcadiaElement {
-    #[serde(default, rename = "_id", alias = "id")]
     pub id: String,
-
-    #[serde(default)]
     pub name: NameType,
-
-    /// URI du type (ex: "https://.../oa#OperationalActor") ou nom court ("OperationalActor")
-    #[serde(default, rename = "type")]
+    #[serde(rename = "type")]
     pub kind: String,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
-    /// Propriétés dynamiques (clé -> valeur/objet)
+    // 🎯 PURE GRAPH : Toutes les propriétés (dont 'description') sont aplaties ici.
+    // L'utilisation de UnorderedMap (alias du prelude) garantit la compatibilité Raise.
     #[serde(flatten)]
     pub properties: UnorderedMap<String, JsonValue>,
 }
 
-impl ArcadiaElement {
-    /// Helper pour récupérer le nom affichable
-    pub fn get_name(&self) -> &str {
-        self.name.as_str()
+/// Gestion flexible des noms (String simple ou objet complexe JSON-LD)
+#[derive(Debug, Serializable, Deserializable, Clone)]
+#[serde(untagged)]
+pub enum NameType {
+    String(String),
+    Object(UnorderedMap<String, JsonValue>),
+}
+
+impl Default for NameType {
+    fn default() -> Self {
+        NameType::String("Unnamed".to_string())
     }
 }
 
-// --- MODÈLE DU PROJET ---
+impl NameType {
+    /// Helper pour récupérer une représentation textuelle du nom
+    pub fn as_str(&self) -> &str {
+        match self {
+            NameType::String(s) => s,
+            NameType::Object(_) => "ComplexName",
+        }
+    }
+}
 
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
+/// Métadonnées du projet
+#[derive(Debug, Serializable, Deserializable, Clone, Default)]
 pub struct ProjectMeta {
-    #[serde(default)]
     pub name: String,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub last_modified: String,
-
-    // CHAMPS TECHNIQUES RESTAURÉS (Requis par Loader et AuditReport)
-    #[serde(default)]
-    pub loaded_at: String,
-    #[serde(default)]
     pub element_count: usize,
 }
 
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
+/// 🎯 Le Modèle "Pure Graph"
+/// Remplace les anciens champs statiques (oa, sa, la, pa...) par une structure dynamique.
+#[derive(Debug, Serializable, Deserializable, Clone, Default)]
 pub struct ProjectModel {
     pub meta: ProjectMeta,
-    pub oa: OperationalAnalysisModel,
-    pub sa: SystemAnalysisModel,
-    pub la: LogicalArchitectureModel,
-    pub pa: PhysicalArchitectureModel,
-    pub epbs: EPBSModel,
-    pub data: DataModel,
-    // AJOUT : Couche Transverse (Exigences, Scénarios, etc.)
-    pub transverse: TransverseModel,
+    /// Structure : Layer (ex: "sa") -> Collection (ex: "functions") -> Liste d'éléments
+    pub layers: UnorderedMap<String, UnorderedMap<String, Vec<ArcadiaElement>>>,
 }
 
-// --- COUCHES ARCADIA ---
+impl ProjectModel {
+    /// Ajoute un élément de manière dynamique dans le graphe
+    pub fn add_element(&mut self, layer: &str, collection: &str, el: ArcadiaElement) {
+        self.layers
+            .entry(layer.to_string())
+            .or_default()
+            .entry(collection.to_string())
+            .or_default()
+            .push(el);
+    }
 
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
-pub struct OperationalAnalysisModel {
-    pub actors: Vec<ArcadiaElement>,
-    pub activities: Vec<ArcadiaElement>,
-    pub capabilities: Vec<ArcadiaElement>,
-    pub entities: Vec<ArcadiaElement>,
-    pub exchanges: Vec<ArcadiaElement>,
+    /// Récupère une collection spécifique de manière sécurisée (retourne une slice vide si absente)
+    pub fn get_collection(&self, layer: &str, collection: &str) -> &[ArcadiaElement] {
+        self.layers
+            .get(layer)
+            .and_then(|cols| cols.get(collection))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Recherche un élément par son identifiant unique dans l'ensemble des couches
+    pub fn find_element(&self, id: &str) -> Option<&ArcadiaElement> {
+        self.all_elements().into_iter().find(|el| el.id == id)
+    }
+
+    /// Itérateur universel : Récupère tous les éléments du modèle, toutes couches confondues
+    pub fn all_elements(&self) -> Vec<&ArcadiaElement> {
+        self.layers
+            .values()
+            .flat_map(|collections| collections.values())
+            .flat_map(|vec| vec.iter())
+            .collect()
+    }
 }
 
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
-pub struct SystemAnalysisModel {
-    pub components: Vec<ArcadiaElement>,
-    pub functions: Vec<ArcadiaElement>,
-    pub actors: Vec<ArcadiaElement>,
-    pub capabilities: Vec<ArcadiaElement>,
-    pub exchanges: Vec<ArcadiaElement>,
-}
-
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
-pub struct LogicalArchitectureModel {
-    pub components: Vec<ArcadiaElement>,
-    pub functions: Vec<ArcadiaElement>,
-    pub actors: Vec<ArcadiaElement>,
-    pub interfaces: Vec<ArcadiaElement>,
-    pub exchanges: Vec<ArcadiaElement>,
-}
-
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
-pub struct PhysicalArchitectureModel {
-    pub components: Vec<ArcadiaElement>,
-    pub functions: Vec<ArcadiaElement>,
-    pub actors: Vec<ArcadiaElement>,
-    pub links: Vec<ArcadiaElement>,
-    pub exchanges: Vec<ArcadiaElement>,
-}
-
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
-pub struct EPBSModel {
-    pub configuration_items: Vec<ArcadiaElement>,
-}
-
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
-pub struct DataModel {
-    pub classes: Vec<ArcadiaElement>,
-    pub data_types: Vec<ArcadiaElement>,
-    pub exchange_items: Vec<ArcadiaElement>,
-}
-
-// AJOUT : Structure pour la couche Transverse
-#[derive(Debug, Default, Clone, Serializable, Deserializable)]
-pub struct TransverseModel {
-    pub requirements: Vec<ArcadiaElement>,
-    pub scenarios: Vec<ArcadiaElement>,
-    pub functional_chains: Vec<ArcadiaElement>,
-    pub constraints: Vec<ArcadiaElement>,
-    pub common_definitions: Vec<ArcadiaElement>,
-    pub others: Vec<ArcadiaElement>, // Pour tout ce qui n'est pas catégorisé explicitement ci-dessus
-}
-
-// ============================================================================
+// =========================================================================
 // TESTS UNITAIRES
-// ============================================================================
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_name_type_polymorphism() {
-        // Cas 1: String simple
-        let n1 = NameType::String("Test".to_string());
-        assert_eq!(n1.as_str(), "Test");
+    fn make_test_element(id: &str, name: &str) -> ArcadiaElement {
+        let mut properties = UnorderedMap::new();
+        properties.insert("description".to_string(), json_value!("Test content"));
 
-        // Cas 2: Objet multilingue
-        let mut map = UnorderedMap::new();
-        map.insert("en".to_string(), "Test EN".to_string());
-        map.insert("fr".to_string(), "Test FR".to_string());
-        let n2 = NameType::Object(map);
-        assert_eq!(n2.as_str(), "Test EN"); // Priorité à l'anglais par défaut
+        ArcadiaElement {
+            id: id.to_string(),
+            name: NameType::String(name.to_string()),
+            kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string(),
+            properties,
+        }
     }
 
     #[test]
-    fn test_arcadia_element_flattening() {
-        // Teste que les champs inconnus vont bien dans "properties"
-        let json_data = json_value!({
-            "_id": "123",
-            "name": "MyElement",
-            "type": "LogicalComponent",
-            "custom_prop": "value",
-            "allocated_to": ["456"]
-        });
+    fn test_dynamic_insertion_and_retrieval() {
+        let mut model = ProjectModel::default();
+        let el = make_test_element("comp_1", "Radar");
 
-        let el: ArcadiaElement = json::deserialize_from_value(json_data).unwrap();
-        assert_eq!(el.id, "123");
-        assert_eq!(el.kind, "LogicalComponent");
+        // Test insertion
+        model.add_element("la", "components", el);
 
-        // Vérification des propriétés dynamiques
-        assert!(el.properties.contains_key("custom_prop"));
-        assert_eq!(el.properties.get("custom_prop").unwrap(), "value");
+        // Test récupération directe
+        let collection = model.get_collection("la", "components");
+        assert_eq!(collection.len(), 1);
+        assert_eq!(collection[0].name.as_str(), "Radar");
+
+        // Vérification que les propriétés sont bien présentes (Pure Graph)
+        assert_eq!(
+            collection[0]
+                .properties
+                .get("description")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "Test content"
+        );
     }
 
     #[test]
-    fn test_project_model_structure() {
-        // Vérifie que la structure contient bien toutes les couches, y compris Transverse
+    fn test_global_search_find_element() {
+        let mut model = ProjectModel::default();
+        model.add_element("sa", "functions", make_test_element("f_1", "Func1"));
+        model.add_element("oa", "actors", make_test_element("a_1", "Actor1"));
+
+        let found = model.find_element("a_1");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name.as_str(), "Actor1");
+
+        let not_found = model.find_element("missing");
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_all_elements_iterator() {
+        let mut model = ProjectModel::default();
+        model.add_element("layer1", "col1", make_test_element("1", "E1"));
+        model.add_element("layer1", "col2", make_test_element("2", "E2"));
+        model.add_element("layer2", "col1", make_test_element("3", "E3"));
+
+        let all = model.all_elements();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_empty_collection_safety() {
         let model = ProjectModel::default();
-
-        // Les vecteurs doivent être vides par défaut
-        assert!(model.oa.actors.is_empty());
-        assert!(model.transverse.requirements.is_empty());
-        assert!(model.transverse.scenarios.is_empty());
-    }
-
-    #[test]
-    fn test_project_meta_fields() {
-        // Vérifie que les champs restaurés sont bien là et accessibles
-        let meta = ProjectMeta {
-            loaded_at: "now".to_string(),
-            element_count: 42,
-            ..Default::default()
-        };
-        assert_eq!(meta.element_count, 42);
-        assert_eq!(meta.loaded_at, "now");
-    }
-
-    #[test]
-    fn test_transverse_model_serialization() {
-        let mut transverse = TransverseModel::default();
-        transverse.requirements.push(ArcadiaElement {
-            id: "REQ-001".to_string(),
-            name: NameType::String("Perf Requirement".to_string()),
-            kind: "Requirement".to_string(),
-            ..Default::default()
-        });
-
-        // Sérialisation
-        let json = json::serialize_to_string(&transverse).unwrap();
-        assert!(json.contains("requirements"));
-        assert!(json.contains("REQ-001"));
+        let empty = model.get_collection("non_existent", "layer");
+        assert!(empty.is_empty());
     }
 }

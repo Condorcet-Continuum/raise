@@ -1,4 +1,5 @@
 // FICHIER : src-tauri/src/workflow_engine/compiler.rs
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*;
 
 use super::mandate::Mandate;
@@ -7,294 +8,264 @@ use super::{NodeType, WorkflowDefinition, WorkflowEdge, WorkflowNode};
 pub struct WorkflowCompiler;
 
 impl WorkflowCompiler {
-    /// Dictionnaire interne pour résoudre les dépendances techniques d'une règle politique
-    /// Retourne : Option<(Nom_de_l_outil, Arguments_JSON, Clé_de_contexte_cible)>
-    fn resolve_tool_dependency(rule_name: &str) -> Option<(&'static str, JsonValue, &'static str)> {
-        match rule_name {
-            "VIBRATION_MAX" => Some((
-                "read_system_metrics",
-                json_value!({ "sensor_id": "vibration_z" }),
-                "sensor_vibration",
-            )),
-            "TEMP_MAX" => Some((
-                "read_system_metrics",
-                json_value!({ "sensor_id": "temp_core" }),
-                "sensor_temperature",
-            )),
-            // Facilement extensible sans modifier le cœur du moteur
-            _ => None,
+    /// 🎯 DATA-DRIVEN : Résout les dépendances techniques depuis la base de données.
+    async fn resolve_tool_dependency(
+        manager: &CollectionsManager<'_>,
+        rule_name: &str,
+    ) -> Option<(String, JsonValue, String)> {
+        if let Ok(Some(doc)) = manager
+            .get_document("configs", "ref:configs:tool_dependencies")
+            .await
+        {
+            if let Some(mapping) = doc.get("mappings").and_then(|m| m.as_object()) {
+                if let Some(rule_config) = mapping.get(rule_name).and_then(|r| r.as_object()) {
+                    let tool_name = rule_config
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let arguments = rule_config
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or(json_value!({}));
+                    let output_key = rule_config
+                        .get("output_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+
+                    if !tool_name.is_empty() {
+                        return Some((tool_name, arguments, output_key));
+                    }
+                }
+            }
         }
+        None
     }
 
-    /// Transforme un Mandat politique en Workflow technique exécutable
-    pub fn compile(mandate: &Mandate) -> WorkflowDefinition {
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
+    /// 🎯 NOUVEAU : Compile dynamiquement un workflow à partir d'une Mission
+    pub async fn compile(
+        manager: &CollectionsManager<'_>,
+        mission_handle: &str,
+    ) -> RaiseResult<WorkflowDefinition> {
+        // 1. Charger la Mission
+        let mission_doc = match manager.get_document("missions", mission_handle).await? {
+            Some(doc) => doc,
+            None => raise_error!(
+                "ERR_MISSION_NOT_FOUND",
+                context = json_value!({"mission_id": mission_handle})
+            ),
+        };
 
-        let wf_id = format!(
-            "wf_{}_{}",
-            mandate.meta.author.replace(" ", ""),
-            mandate.meta.version
-        );
+        let template_handle = mission_doc["workflow_template_id"]
+            .as_str()
+            .unwrap_or_default();
+        let mandate_handle = mission_doc["mandate_id"].as_str().unwrap_or_default();
 
-        let mut previous_node_id = "start".to_string();
+        // 2. Charger le WorkflowTemplate (Graphe métier de base)
+        let template_doc = match manager
+            .get_document("workflow_definitions", template_handle)
+            .await?
+        {
+            Some(doc) => doc,
+            None => raise_error!(
+                "ERR_TEMPLATE_NOT_FOUND",
+                context = json_value!({"template_id": template_handle})
+            ),
+        };
+        let mut workflow: WorkflowDefinition = json::deserialize_from_value(template_doc).unwrap();
 
-        // 1. Nœud de Départ
-        nodes.push(WorkflowNode {
-            id: "start".into(),
-            r#type: NodeType::Task,
-            name: "Initialisation Mandat".into(),
-            params: json_value!({
-                "strategy": mandate.governance.strategy,
-                "observability": mandate.observability
-            }),
-        });
+        // 3. Charger le Mandat (Règles de gouvernance)
+        let mandate = Mandate::fetch_from_store(manager, mandate_handle).await?;
 
-        // 2. Compilation des Lignes Rouges (VETOS -> GatePolicy)
+        // 4. "Weaving" (Tissage) : Injection des vetos du Mandat dans le Workflow
+        let original_entry = workflow.entry.clone();
+        let mut previous_node_id = original_entry.clone();
+
+        // On récupère les arêtes qui partaient de l'entrée pour les re-brancher à la fin de nos vetos
+        let entry_edges: Vec<WorkflowEdge> = workflow
+            .edges
+            .iter()
+            .filter(|e| e.from == original_entry)
+            .cloned()
+            .collect();
+        workflow.edges.retain(|e| e.from != original_entry); // On enlève les arêtes d'origine
+
         for (i, veto) in mandate.hard_logic.vetos.iter().enumerate() {
             if veto.active {
-                // Injection DYNAMIQUE de l'outil si la règle le nécessite
+                // Si la règle nécessite un capteur externe (CallMcp)
                 if let Some((tool_name, args, output_key)) =
-                    Self::resolve_tool_dependency(&veto.rule)
+                    Self::resolve_tool_dependency(manager, &veto.rule).await
                 {
                     let tool_node_id = format!("tool_read_{}_{}", veto.rule.to_lowercase(), i);
-
-                    nodes.push(WorkflowNode {
+                    workflow.nodes.push(WorkflowNode {
                         id: tool_node_id.clone(),
                         r#type: NodeType::CallMcp,
                         name: format!("Lecture pour {}", veto.rule),
                         params: json_value!({
                             "tool_name": tool_name,
                             "arguments": args,
-                            "output_key": output_key // Instruction pour l'executor de stocker le résultat ici
+                            "output_key": output_key
                         }),
                     });
-
-                    edges.push(WorkflowEdge {
+                    workflow.edges.push(WorkflowEdge {
                         from: previous_node_id.clone(),
                         to: tool_node_id.clone(),
                         condition: None,
                     });
-
                     previous_node_id = tool_node_id;
                 }
 
-                let node_id = format!("gate_veto_{}", i);
-
+                // Le Nœud QualityGate (Ex-GatePolicy)
+                let node_id = format!("quality_gate_{}_{}", veto.rule.to_lowercase(), i);
                 let mut params = json_value!({
                     "rule": veto.rule,
                     "action": veto.action
                 });
-
-                // Transmission de l'AST dynamique
                 if let Some(ast) = &veto.ast {
-                    if let Some(obj) = params.as_object_mut() {
-                        obj.insert("ast".to_string(), ast.clone());
-                    }
+                    params
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("ast".to_string(), ast.clone());
                 }
 
-                nodes.push(WorkflowNode {
+                workflow.nodes.push(WorkflowNode {
                     id: node_id.clone(),
-                    r#type: NodeType::GatePolicy,
-                    name: format!("VETO: {}", veto.rule),
+                    r#type: NodeType::QualityGate, // NOUVEAU NOM
+                    name: format!("Vérification: {}", veto.rule),
                     params,
                 });
 
-                edges.push(WorkflowEdge {
+                workflow.edges.push(WorkflowEdge {
                     from: previous_node_id.clone(),
                     to: node_id.clone(),
                     condition: None,
                 });
-
                 previous_node_id = node_id;
             }
         }
 
-        // 2.5 Injection de la Gouvernance Dynamique (WASM / Plugins)
-        let wasm_node_id = "policy_wasm_check".to_string();
-        nodes.push(WorkflowNode {
-            id: wasm_node_id.clone(),
-            r#type: NodeType::Wasm,
-            name: "🛡️ Politique WASM (Hot-Swap)".into(),
-            params: json_value!({}),
-        });
-
-        edges.push(WorkflowEdge {
-            from: previous_node_id.clone(),
-            to: wasm_node_id.clone(),
-            condition: None,
-        });
-        previous_node_id = wasm_node_id;
-
-        // 3. L'Agent d'Exécution
-        let task_id = "agent_execution".to_string();
-        nodes.push(WorkflowNode {
-            id: task_id.clone(),
-            r#type: NodeType::Task,
-            name: format!("Exécution Stratégie {:?}", mandate.governance.strategy),
-            params: json_value!({ "context_fetch": true }),
-        });
-        edges.push(WorkflowEdge {
-            from: previous_node_id.clone(),
-            to: task_id.clone(),
-            condition: None,
-        });
-        previous_node_id = task_id;
-
-        // 4. Le Consensus Algorithmique
-        let vote_id = "consensus_condorcet".to_string();
-        nodes.push(WorkflowNode {
-            id: vote_id.clone(),
-            r#type: NodeType::Decision,
-            name: "Vote Condorcet Pondéré".into(),
-            params: json_value!({
-                "weights": mandate.governance.condorcet_weights,
-                "threshold": 0.5
-            }),
-        });
-        edges.push(WorkflowEdge {
-            from: previous_node_id.clone(),
-            to: vote_id.clone(),
-            condition: None,
-        });
-
-        // 5. Fin
-        nodes.push(WorkflowNode {
-            id: "end".into(),
-            r#type: NodeType::End,
-            name: "Fin de Mission".into(),
-            params: json_value!({}),
-        });
-        edges.push(WorkflowEdge {
-            from: vote_id,
-            to: "end".into(),
-            condition: None,
-        });
-
-        WorkflowDefinition {
-            id: wf_id,
-            nodes,
-            edges,
-            entry: "start".into(),
+        // Re-brancher la fin des vetos injectés vers la suite du graphe original
+        for mut edge in entry_edges {
+            edge.from = previous_node_id.clone();
+            workflow.edges.push(edge);
         }
+
+        // L'ID final est unique à cette exécution
+        workflow._id = None;
+        workflow.handle = format!(
+            "wf_compiled_{}_{}",
+            mandate_handle,
+            UtcClock::now().timestamp_millis()
+        );
+        Ok(workflow)
     }
 }
 
-// =========================================================================
-// TESTS UNITAIRES
-// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow_engine::mandate::{
-        Governance, HardLogic, Mandate, MandateMeta, Observability, Strategy, VetoRule,
-    };
+    use crate::utils::testing::AgentDbSandbox;
 
-    fn build_test_mandate(rules: Vec<VetoRule>) -> Mandate {
-        Mandate {
-            id: "test_mandate_001".into(),
-            meta: MandateMeta {
-                author: "Admin".into(),
-                status: "ACTIVE".into(),
-                version: "v1".into(),
-            },
-            governance: Governance {
-                strategy: Strategy::SafetyFirst,
-                condorcet_weights: UnorderedMap::from([("sec".to_string(), 1.0)]),
-            },
-            hard_logic: HardLogic { vetos: rules },
-            observability: Observability { heartbeat_ms: 100 },
-            signature: None,
-        }
-    }
-
-    #[test]
-    fn test_compiler_dynamic_tool_injection() {
-        let mandate = build_test_mandate(vec![
-            VetoRule {
-                rule: "VIBRATION_MAX".into(), // Doit injecter un outil
-                active: true,
-                action: "STOP".into(),
-                ast: Some(json_value!({"Gt": [{"Var": "sensor_vibration"}, {"Val": 8.0}]})),
-            },
-            VetoRule {
-                rule: "UNKNOWN_RULE".into(), // NE DOIT PAS injecter d'outil
-                active: true,
-                action: "LOG".into(),
-                ast: Some(json_value!({"Eq": [{"Var": "x"}, {"Val": 1}]})),
-            },
-        ]);
-
-        let wf = WorkflowCompiler::compile(&mandate);
-
-        // Nœuds attendus :
-        // 1. Start
-        // 2. Tool (VIBRATION_MAX)
-        // 3. Gate (VIBRATION_MAX)
-        // 4. Gate (UNKNOWN_RULE) - Pas d'outil avant !
-        // 5. WASM
-        // 6. Agent Exec
-        // 7. Vote
-        // 8. End
-        assert_eq!(
-            wf.nodes.len(),
-            8,
-            "Le workflow doit avoir exactement 8 nœuds"
+    #[async_test]
+    async fn test_compiler_mission_weaving() {
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
         );
 
-        // Vérification de l'injection d'outil
-        let tools: Vec<_> = wf
-            .nodes
-            .iter()
-            .filter(|n| n.r#type == NodeType::CallMcp)
-            .collect();
-        assert_eq!(tools.len(), 1, "Un seul outil doit être injecté");
-        assert_eq!(
-            tools[0].params.get("output_key").unwrap().as_str().unwrap(),
-            "sensor_vibration"
-        );
+        // 1. Créer le template de Workflow (Un simple nœud start -> task -> end)
+        manager
+            .create_collection(
+                "workflow_definitions",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+        manager
+            .upsert_document(
+                "workflow_definitions",
+                json_value!({
+                    "handle": "tpl_mbse_v1",
+                    "entry": "start",
+                    "nodes": [
+                        { "id": "start", "type": "task", "name": "Start", "params": {} },
+                        { "id": "task_1", "type": "task", "name": "Phase LA", "params": {} }
+                    ],
+                    "edges": [{ "from": "start", "to": "task_1", "condition": null }]
+                }),
+            )
+            .await
+            .unwrap();
 
-        // Vérification des AST
+        // 2. Créer le Mandat avec un veto
+        manager
+            .create_collection(
+                "mandates",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+        manager.upsert_document("mandates", json_value!({
+            "handle": "man_123",
+            "handle": "mandate-123",
+            "name": "Mandat 123",
+            "meta": { "author": "Admin", "version": "1.0", "status": "ACTIVE" },
+            "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": {} },
+            "hardLogic": {
+                "vetos": [{ "rule": "ISO_26262_CHK", "active": true, "action": "STOP", "ast": {"Eq": [{"Var": "x"}, {"Val": 1}]} }]
+            },
+            "observability": { "heartbeatMs": 100 }
+        })).await.unwrap();
+
+        // 3. Créer la Mission qui lie les deux
+        manager
+            .create_collection(
+                "missions",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+        manager
+            .upsert_document(
+                "missions",
+                json_value!({
+                    "handle": "mission_alpha",
+                    "name": "Mission Alpha",
+                    "mandate_id": "mandate-123",
+                    "squad_id": "squad_arch",
+                    "workflow_template_id": "tpl_mbse_v1",
+                    "status": "draft"
+                }),
+            )
+            .await
+            .unwrap();
+
+        let wf = WorkflowCompiler::compile(&manager, "mission_alpha")
+            .await
+            .unwrap();
+
+        // Le graphe final doit avoir : start + quality_gate_iso_26262_chk_0 + task_1 (3 nœuds)
+        assert_eq!(wf.nodes.len(), 3);
+
         let gates: Vec<_> = wf
             .nodes
             .iter()
-            .filter(|n| n.r#type == NodeType::GatePolicy)
+            .filter(|n| n.r#type == NodeType::QualityGate)
             .collect();
-        assert_eq!(gates.len(), 2, "Deux vetos actifs doivent être présents");
-        assert!(gates[0].params.get("ast").is_some());
-        assert!(gates[1].params.get("ast").is_some());
-    }
+        assert_eq!(gates.len(), 1);
+        assert_eq!(gates[0].id, "quality_gate_iso_26262_chk_0");
 
-    #[test]
-    fn test_compiler_ignores_inactive_rules() {
-        let mandate = build_test_mandate(vec![VetoRule {
-            rule: "TEMP_MAX".into(),
-            active: false, // Règle désactivée !
-            action: "STOP".into(),
-            ast: None,
-        }]);
-
-        let wf = WorkflowCompiler::compile(&mandate);
-        let gates: Vec<_> = wf
-            .nodes
+        // Vérifier le chaînage (Start -> Gate -> Task)
+        assert!(wf
+            .edges
             .iter()
-            .filter(|n| n.r#type == NodeType::GatePolicy)
-            .collect();
-        let tools: Vec<_> = wf
-            .nodes
+            .any(|e| e.from == "start" && e.to == "quality_gate_iso_26262_chk_0"));
+        assert!(wf
+            .edges
             .iter()
-            .filter(|n| n.r#type == NodeType::CallMcp)
-            .collect();
-
-        assert_eq!(
-            gates.len(),
-            0,
-            "Aucun gate ne doit être généré pour un veto inactif"
-        );
-        assert_eq!(
-            tools.len(),
-            0,
-            "Aucun outil ne doit être injecté pour un veto inactif"
-        );
+            .any(|e| e.from == "quality_gate_iso_26262_chk_0" && e.to == "task_1"));
     }
 }

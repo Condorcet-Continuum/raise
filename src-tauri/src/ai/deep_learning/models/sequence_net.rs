@@ -1,12 +1,17 @@
+// FICHIER : src-tauri/src/ai/deep_learning/models/sequence_net.rs
 use crate::utils::prelude::*;
 
-use crate::ai::deep_learning::layers::{linear::Linear, rnn_cell::LSTMCell};
-use candle_core::{DType, Tensor};
-use candle_nn::{Init, VarBuilder};
+use candle_core::{Module, Tensor};
+// 🎯 On retire RNNConfig de l'import, on utilisera l'inférence de type !
+use candle_nn::{
+    linear,
+    rnn::{lstm, LSTM, RNN},
+    Linear, VarBuilder,
+};
 
-/// Modèle de séquence complet (RNN).
+/// Modèle de séquence complet (RNN natif).
 pub struct SequenceNet {
-    pub lstm: LSTMCell,
+    pub lstm: LSTM,
     pub head: Linear,
     pub hidden_size: usize,
 }
@@ -18,60 +23,73 @@ impl SequenceNet {
         output_size: usize,
         vb: VarBuilder,
     ) -> RaiseResult<Self> {
-        let lstm = LSTMCell::new(input_size, hidden_size, vb.pp("lstm"))?;
+        // 🎯 L'inférence Default::default() trouve la bonne configuration toute seule !
+        let lstm_layer = match lstm(input_size, hidden_size, Default::default(), vb.pp("lstm")) {
+            Ok(l) => l,
+            Err(e) => raise_error!("ERR_SEQNET_LSTM_INIT", error = e.to_string()), // Plus de return Err()
+        };
 
-        // CORRECTION : Initialisation aléatoire pour la tête de lecture aussi
-        let head = Linear::new(
-            vb.pp("head").get_with_hints(
-                (output_size, hidden_size),
-                "weight",
-                Init::Randn {
-                    mean: 0.,
-                    stdev: 0.1,
-                },
-            )?,
-            Some(
-                vb.pp("head")
-                    .get_with_hints((output_size,), "bias", Init::Const(0.))?,
-            ),
-        );
+        let head_layer = match linear(hidden_size, output_size, vb.pp("head")) {
+            Ok(l) => l,
+            Err(e) => raise_error!("ERR_SEQNET_HEAD_INIT", error = e.to_string()), // Plus de return Err()
+        };
 
         Ok(Self {
-            lstm,
-            head,
+            lstm: lstm_layer,
+            head: head_layer,
             hidden_size,
         })
     }
 
     pub fn forward(&self, input_seq: &Tensor) -> RaiseResult<Tensor> {
-        let (batch_size, seq_len, _) = input_seq.dims3()?;
-        let device = input_seq.device();
+        let (batch_size, seq_len, _) = match input_seq.dims3() {
+            Ok(d) => d,
+            Err(e) => raise_error!("ERR_SEQNET_DIMS", error = e.to_string()),
+        };
 
-        let mut h_state = Tensor::zeros((batch_size, self.hidden_size), DType::F32, device)?;
-        let mut c_state = Tensor::zeros((batch_size, self.hidden_size), DType::F32, device)?;
+        // 🎯 Initialisation de l'état caché (h, c) 100% géré par Candle sur le GPU
+        let mut state = match self.lstm.zero_state(batch_size) {
+            Ok(s) => s,
+            Err(e) => raise_error!("ERR_SEQNET_STATE", error = e.to_string()),
+        };
 
         let mut outputs = Vec::with_capacity(seq_len);
 
         for t in 0..seq_len {
-            let input_step = input_seq.narrow(1, t, 1)?.squeeze(1)?;
-            let (next_h, next_c) = self.lstm.forward(&input_step, &h_state, &c_state)?;
+            let step_input = match input_seq.narrow(1, t, 1) {
+                Ok(t) => match t.squeeze(1) {
+                    Ok(t) => t,
+                    Err(e) => raise_error!("ERR_SEQNET_SQUEEZE", error = e.to_string()),
+                },
+                Err(e) => raise_error!("ERR_SEQNET_NARROW", error = e.to_string()),
+            };
 
-            h_state = next_h;
-            c_state = next_c;
+            // 🎯 Exécution optimisée via la primitive .step() de Candle
+            state = match self.lstm.step(&step_input, &state) {
+                Ok(s) => s,
+                Err(e) => raise_error!("ERR_SEQNET_STEP", error = e.to_string()),
+            };
 
-            let projection = self.head.forward(&h_state)?;
+            // L'état LSTM de Candle expose .h() pour obtenir le tenseur de sortie !
+            let projection = match self.head.forward(state.h()) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_SEQNET_PROJECTION", error = e.to_string()),
+            };
+
             outputs.push(projection);
         }
 
-        let result = Tensor::stack(&outputs, 1)?;
-        Ok(result)
+        match Tensor::stack(&outputs, 1) {
+            Ok(t) => Ok(t),
+            Err(e) => raise_error!("ERR_SEQNET_STACK", error = e.to_string()),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::Device;
+    use candle_core::{DType, Device}; // DType est ramené ici pour les tests
     use candle_nn::VarMap;
 
     #[test]
@@ -88,16 +106,13 @@ mod tests {
 
         let model = SequenceNet::new(input_dim, hidden_dim, output_dim, vb)?;
 
-        // Entrée aléatoire non nulle
         let input = Tensor::randn(0f32, 1.0, (batch_size, seq_len, input_dim), &device)?;
-
         let output = model.forward(&input)?;
 
         assert_eq!(output.dims(), &[batch_size, seq_len, output_dim]);
 
-        // Cette assertion devrait maintenant passer car les poids ne sont plus à 0
         let sum_sq = output.sqr()?.sum_all()?.to_scalar::<f32>()?;
-        println!("Sum squares output: {}", sum_sq); // Debug
+        println!("Sum squares output: {}", sum_sq);
         assert!(sum_sq > 0.0, "Le modèle a produit une sortie nulle !");
 
         Ok(())

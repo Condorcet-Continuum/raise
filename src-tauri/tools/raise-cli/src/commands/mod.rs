@@ -4,6 +4,7 @@
 pub mod ai;
 pub mod blockchain;
 pub mod code_gen;
+pub mod dl;
 pub mod genetics;
 pub mod jsondb;
 pub mod model_engine;

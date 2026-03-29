@@ -5,23 +5,21 @@ use crate::json_db::jsonld::JsonLdProcessor;
 use crate::json_db::storage::StorageEngine;
 use crate::model_engine::types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
 use crate::rules_engine::evaluator::DataProvider;
-
+use crate::utils::data::config::AppConfig;
 use crate::utils::prelude::*;
-
 use tauri::State;
 
-/// Cache de localisation pour le Lazy Loading.
-type LocationIndex = UnorderedMap<String, String>;
+/// Index de localisation : Document_ID -> (Couche_DB, Nom_Collection)
+type LocationIndex = UnorderedMap<String, (String, String)>;
 
 pub struct ModelLoader<'a> {
     pub manager: CollectionsManager<'a>,
+    /// Index partagé protégé par un verrou asynchrone
     index: SharedRef<AsyncRwLock<LocationIndex>>,
     processor: JsonLdProcessor,
 }
 
 impl<'a> ModelLoader<'a> {
-    // --- CONSTRUCTEURS ---
-
     pub fn new(storage: &'a State<'_, StorageEngine>, space: &str, db: &str) -> Self {
         Self::from_engine(storage.inner(), space, db)
     }
@@ -42,143 +40,116 @@ impl<'a> ModelLoader<'a> {
         }
     }
 
-    // --- INDEXATION ---
-
+    /// Analyse la structure du projet sur disque via le mapping ontologique
     pub async fn index_project(&self) -> RaiseResult<usize> {
         let mut idx = self.index.write().await;
         idx.clear();
 
-        let collections = [
-            "oa",
-            "sa",
-            "la",
-            "pa",
-            "epbs",
-            "data",
-            "transverse",
-            "common",
-        ];
+        let config = AppConfig::get();
+        let sys_mgr = CollectionsManager::new(
+            self.manager.storage,
+            &config.system_domain,
+            &config.system_db,
+        );
+
+        // Lecture du mapping pour connaître les collections à scanner
+        let mapping_doc = match sys_mgr
+            .get_document("configs", "ref:configs:handle:ontological_mapping")
+            .await?
+        {
+            Some(doc) => doc,
+            None => return Ok(0), // Si pas de mapping, index vide
+        };
+
+        // 🎯 FIX : Utilisation d'un match explicite pour éviter l'erreur de conversion ?
+        let search_spaces = match mapping_doc["search_spaces"].as_array() {
+            Some(arr) => arr,
+            None => raise_error!(
+                "ERR_INVALID_ONTOLOGY_MAPPING",
+                error = "Le champ 'search_spaces' est manquant ou invalide."
+            ),
+        };
+
         let mut count = 0;
+        for space_def in search_spaces {
+            let layer_db = space_def["layer"].as_str().unwrap_or("raise");
+            let col = space_def["collection"].as_str().unwrap_or("");
 
-        for col in collections {
-            let col_path = self.manager.storage.config.db_collection_path(
-                &self.manager.space,
-                &self.manager.db,
-                col,
-            );
-
-            if fs::exists_async(&col_path).await {
-                let mut entries = fs::read_dir_async(&col_path).await?;
-                while let Some(entry) = match entries.next_entry().await {
-                    Ok(e) => e,
-                    Err(e) => raise_error!(
-                        "ERR_FS_INDEX_ENTRY_FAIL",
-                        error = e,
-                        context = json_value!({
-                            "collection_path": col_path,
-                            "action": "build_global_index"
-                        })
-                    ),
-                } {
-                    let path = entry.path();
-
-                    // Filtrage et extraction du nom sans panique
-                    if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                            if !stem.starts_with('_') {
-                                idx.insert(stem.to_string(), col.to_string());
-                                count += 1;
-                            }
-                        }
-                    }
-                }
+            // Scan du système de fichiers pour récupérer les IDs (fichiers .json)
+            let ids = self.fetch_document_ids(layer_db, col).await?;
+            for id in ids {
+                idx.insert(id.clone(), (layer_db.to_string(), col.to_string()));
+                count += 1;
             }
         }
         Ok(count)
     }
 
-    // --- ACCÈS UNITAIRE ---
+    /// Récupère la liste des IDs de documents présents dans une collection physique
+    async fn fetch_document_ids(&self, db: &str, col: &str) -> RaiseResult<Vec<String>> {
+        let col_path = self
+            .manager
+            .storage
+            .config
+            .db_collection_path(&self.manager.space, db, col);
+        let mut ids = Vec::new();
 
-    pub async fn get_element(&self, id: &str) -> RaiseResult<ArcadiaElement> {
-        let collection = {
-            let idx = self.index.read().await;
-            idx.get(id).cloned()
-        };
-
-        match collection {
-            Some(col) => {
-                let doc_opt = self.manager.get_document(&col, id).await?;
-
-                let Some(doc) = doc_opt else {
-                    raise_error!(
-                        "ERR_DB_INDEX_OUT_OF_SYNC",
-                        error = format!(
-                            "Document '{}' introuvable dans la collection '{}'.",
-                            id, col
-                        ),
-                        context = json_value!({
-                            "document_id": id,
-                            "collection": col,
-                            "action": "fetch_document_from_index",
-                            "hint": "L'index semble périmé. Une reconstruction de l'index (rebuild) pourrait être nécessaire."
-                        })
-                    );
-                };
-
-                self.json_to_element(doc, Some(&col))
-            }
-            None => {
-                raise_error!(
-                    "ERR_DB_UNKNOWN_IDENTITY",
-                    error = format!("Identifiant inconnu ou non indexé : {}", id),
-                    context = json_value!({
-                        "document_id": id,
-                        "action": "resolve_collection_from_id",
-                        "hint": "Vérifiez que le document a été correctement inséré ou que l'ID est valide."
-                    })
-                );
+        if fs::exists_async(&col_path).await {
+            let mut entries = fs::read_dir_async(&col_path).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if !stem.starts_with('_') {
+                            ids.push(stem.to_string());
+                        }
+                    }
+                }
             }
         }
+        Ok(ids)
     }
 
-    pub async fn get_json(&self, id: &str) -> RaiseResult<JsonValue> {
-        let collection = {
+    /// Charge un élément spécifique par son ID
+    pub async fn get_element(&self, id: &str) -> RaiseResult<ArcadiaElement> {
+        let location = {
             let idx = self.index.read().await;
             idx.get(id).cloned()
         };
 
-        match collection {
-            Some(col) => match self.manager.get_document(&col, id).await? {
-                Some(doc) => Ok(doc),
-                None => raise_error!(
-                    "ERR_DOC_NOT_FOUND",
-                    context = json_value!({
-                        "document_id": id,
-                        "collection": col,
-                        "action": "fetch_document",
-                        "hint": "Le document existe dans l'index mais est introuvable sur le disque. Vérifiez l'intégrité de la base de données."
-                    })
-                ),
-            },
+        match location {
+            Some((db, col)) => {
+                let target_mgr =
+                    CollectionsManager::new(self.manager.storage, &self.manager.space, &db);
+                let doc_opt = target_mgr.get_document(&col, id).await?;
+
+                // 🎯 FIX : Utilisation d'un match explicite au lieu de ok_or_else
+                let doc = match doc_opt {
+                    Some(d) => d,
+                    None => raise_error!(
+                        "ERR_DB_INDEX_OUT_OF_SYNC",
+                        error = format!("Document '{}' introuvable dans {}/{}", id, db, col)
+                    ),
+                };
+
+                self.json_to_element(doc, Some(&db))
+            }
             None => raise_error!(
-                "ERR_INDEX_MISSING_ID",
-                context = json_value!({
-                    "document_id": id,
-                    "action": "lookup_index",
-                    "hint": "Cet ID n'est rattaché à aucune collection connue dans l'index global."
-                })
+                "ERR_DB_UNKNOWN_IDENTITY",
+                error = format!("ID '{}' non répertorié dans l'index du projet", id)
             ),
         }
     }
 
+    /// Transforme un document JSON en ArcadiaElement Pure Graph
     fn json_to_element(
         &self,
         doc: JsonValue,
         layer_hint: Option<&str>,
     ) -> RaiseResult<ArcadiaElement> {
         let id = doc
-            .get("id")
-            .or_else(|| doc.get("_id"))
+            .get("_id")
+            .or(doc.get("id"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
@@ -187,406 +158,117 @@ impl<'a> ModelLoader<'a> {
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Sans nom");
-        let name = NameType::String(name_val.to_string());
 
-        let description = doc
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let short_type = doc
-            .get("@type")
-            .or_else(|| doc.get("type"))
+        let raw_type = doc
+            .get("type")
+            .or(doc.get("@type"))
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown");
 
+        // Résolution dynamique du type via le processeur JSON-LD
         let kind = if let Some(layer) = layer_hint {
             let mut local_proc = self.processor.clone();
             let _ = local_proc.load_layer_context(layer);
-            local_proc.context_manager().expand_term(short_type)
+            local_proc.context_manager().expand_term(raw_type)
         } else {
-            short_type.to_string()
+            raw_type.to_string()
         };
 
-        // On s'assure que le document est bien un objet JSON éditable
-        let obj = match doc.as_object() {
-            Some(o) => o,
-            None => raise_error!(
-                "ERR_DB_INVALID_JSON_TYPE",
-                context = json_value!({
-                    "expected": "Object",
-                    "received": format!("{:?}", doc),
-                    "action": "access_document_object",
-                    "hint": "Le document n'est pas un objet JSON valide (peut-être un tableau ou une valeur primitive). Vérifiez l'intégrité de la collection."
-                })
-            ),
-        };
+        // 🎯 PURE GRAPH : On aplatit toutes les propriétés dans la map dynamique
         let mut properties = UnorderedMap::new();
-        for (k, v) in obj {
-            if !matches!(
-                k.as_str(),
-                "id" | "name" | "description" | "@type" | "type" | "@context" | "$schema"
-            ) {
-                properties.insert(k.clone(), v.clone());
+        if let Some(obj) = doc.as_object() {
+            for (k, v) in obj {
+                if !matches!(
+                    k.as_str(),
+                    "id" | "_id" | "name" | "type" | "@type" | "@context"
+                ) {
+                    properties.insert(k.clone(), v.clone());
+                }
             }
         }
 
         Ok(ArcadiaElement {
             id,
-            name,
+            name: NameType::String(name_val.to_string()),
             kind,
-            description,
             properties,
         })
     }
 
-    // --- HYDRATATION ---
-
-    pub async fn fetch_hydrated_element(&self, element_id: &str) -> RaiseResult<JsonValue> {
-        let mut element = self.get_json(element_id).await?;
-
-        let relations = [
-            "ownedLogicalComponents",
-            "ownedSystemComponents",
-            "allocatedFunctions",
-            "incomingComponentExchanges",
-            "outgoingComponentExchanges",
-            "ownedFunctionalAllocation",
-            "base_class",
-            "deployedComponents",
-            "realizedEntities",
-            "realizedActivities",
-        ];
-
-        self.hydrate_element(&mut element, &relations).await?;
-        Ok(element)
-    }
-
-    pub async fn hydrate_element(
-        &self,
-        element: &mut JsonValue,
-        fields: &[&str],
-    ) -> RaiseResult<()> {
-        for field in fields {
-            if let Some(target_val) = element.get_mut(*field) {
-                if let Some(arr) = target_val.as_array_mut() {
-                    let mut hydrated_list = Vec::new();
-                    for item in arr.iter() {
-                        let target_id = item
-                            .as_str()
-                            .or_else(|| item.get("target").and_then(|t| t.as_str()));
-
-                        if let Some(tid) = target_id {
-                            if let Ok(doc) = self.get_json(tid).await {
-                                hydrated_list.push(doc);
-                            } else {
-                                hydrated_list.push(item.clone());
-                            }
-                        } else {
-                            hydrated_list.push(item.clone());
-                        }
-                    }
-                    *target_val = json_value!(hydrated_list);
-                } else if let Some(tid) = target_val.as_str() {
-                    if let Ok(doc) = self.get_json(tid).await {
-                        *target_val = doc;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    // --- CHARGEMENT COMPLET ---
-
+    /// Charge l'intégralité du modèle en mémoire
     pub async fn load_full_model(&self) -> RaiseResult<ProjectModel> {
         let count = self.index_project().await?;
-
-        let all_ids: Vec<String> = {
-            let index = self.index.read().await;
-            index.keys().cloned().collect()
-        };
+        let index_snapshot = { self.index.read().await.clone() };
 
         let mut model = ProjectModel {
             meta: ProjectMeta {
                 name: format!("{}/{}", self.manager.space, self.manager.db),
-                loaded_at: UtcClock::now().to_rfc3339(),
                 element_count: count,
-                ..Default::default()
             },
             ..Default::default()
         };
 
-        for id in all_ids {
+        for (id, (layer, col)) in index_snapshot {
             if let Ok(el) = self.get_element(&id).await {
-                self.dispatch_element(&mut model, el);
+                // 🎯 PURE GRAPH : Remplissage dynamique sans dispatch statique
+                model.add_element(&layer, &col, el);
             }
         }
 
         Ok(model)
     }
-
-    fn dispatch_element(&self, model: &mut ProjectModel, el: ArcadiaElement) {
-        let k = &el.kind;
-
-        // Dispatch robuste basé sur l'URI ou le nom
-
-        if k.contains("/oa#") || k.contains("Operational") {
-            if k.contains("Actor") {
-                model.oa.actors.push(el);
-            } else if k.contains("Activity") {
-                model.oa.activities.push(el);
-            } else if k.contains("Capability") {
-                model.oa.capabilities.push(el);
-            } else if k.contains("Exchange") {
-                model.oa.exchanges.push(el);
-            } else {
-                model.oa.entities.push(el);
-            }
-        } else if k.contains("/sa#") || k.contains("System") {
-            if k.contains("Actor") {
-                model.sa.actors.push(el);
-            } else if k.contains("Function") {
-                model.sa.functions.push(el);
-            } else if k.contains("Component") {
-                model.sa.components.push(el);
-            } else if k.contains("Exchange") {
-                model.sa.exchanges.push(el);
-            } else {
-                model.sa.capabilities.push(el);
-            }
-        } else if k.contains("/la#") || k.contains("Logical") {
-            if k.contains("Component") {
-                model.la.components.push(el);
-            } else if k.contains("Function") {
-                model.la.functions.push(el);
-            } else if k.contains("Actor") {
-                model.la.actors.push(el);
-            } else if k.contains("Interface") {
-                model.la.interfaces.push(el);
-            } else {
-                model.la.exchanges.push(el);
-            }
-        } else if k.contains("/pa#") || k.contains("Physical") {
-            if k.contains("Component") {
-                model.pa.components.push(el);
-            } else if k.contains("Function") {
-                model.pa.functions.push(el);
-            } else if k.contains("Link") {
-                model.pa.links.push(el);
-            } else {
-                model.pa.actors.push(el);
-            }
-        } else if k.contains("Class") {
-            model.data.classes.push(el);
-        } else if k.contains("DataType") {
-            model.data.data_types.push(el);
-        } else if k.contains("ExchangeItem") {
-            model.data.exchange_items.push(el);
-        }
-        // CORRECTION : Ajout de "CommonDefinition" dans la condition principale
-        else if k.contains("/transverse#")
-            || k.contains("Requirement")
-            || k.contains("Scenario")
-            || k.contains("FunctionalChain")
-            || k.contains("Constraint")
-            || k.contains("CommonDefinition")
-        {
-            if k.contains("Requirement") {
-                model.transverse.requirements.push(el);
-            } else if k.contains("Scenario") {
-                model.transverse.scenarios.push(el);
-            } else if k.contains("FunctionalChain") {
-                model.transverse.functional_chains.push(el);
-            } else if k.contains("Constraint") {
-                model.transverse.constraints.push(el);
-            } else if k.contains("CommonDefinition") {
-                model.transverse.common_definitions.push(el);
-            } else {
-                model.transverse.others.push(el);
-            }
-        } else {
-            model.epbs.configuration_items.push(el);
-        }
-    }
 }
 
-// --- DATA PROVIDER ---
-
+/// Implémentation du pont pour le moteur de règles (Data-Driven)
 #[async_interface]
 impl<'a> DataProvider for ModelLoader<'a> {
-    async fn get_value(&self, collection: &str, id: &str, field: &str) -> Option<JsonValue> {
-        let doc_opt = if !collection.is_empty() {
-            self.manager
-                .get_document(collection, id)
-                .await
-                .ok()
-                .flatten()
-        } else {
-            self.get_json(id).await.ok()
-        };
-
-        if let Some(doc) = doc_opt {
-            let ptr = if field.starts_with('/') {
-                field.to_string()
-            } else {
-                format!("/{}", field.replace('.', "/"))
-            };
-            doc.pointer(&ptr).cloned()
-        } else {
-            None
-        }
+    async fn get_value(&self, _collection: &str, id: &str, field: &str) -> Option<JsonValue> {
+        let el = self.get_element(id).await.ok()?;
+        // Recherche dans les propriétés dynamiques
+        el.properties.get(field).cloned()
     }
 }
+
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
-    async fn test_loader_index_and_semantic_resolution() {
+    async fn test_loader_json_to_element_pure_graph() {
         let sandbox = AgentDbSandbox::new().await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
+        let loader = ModelLoader::from_engine(&sandbox.db, "space", "db");
 
         let doc = json_value!({
-            "_id": "UUID-SEM-1", "name": "User", "@type": "OperationalActor"
+            "_id": "el_1",
+            "name": "Moteur",
+            "type": "Component",
+            "description": "Un moteur puissant",
+            "mass": 450
         });
-        manager
-            .create_collection(
-                "oa",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
-        manager.insert_raw("oa", &doc).await.unwrap();
 
-        let loader = ModelLoader::new_with_manager(manager);
-        loader.index_project().await.unwrap();
-        let el = loader.get_element("UUID-SEM-1").await.unwrap();
+        let element = loader.json_to_element(doc, None).unwrap();
 
-        assert!(el.kind.contains("OperationalActor"));
-        assert_eq!(el.name.as_str(), "User");
-    }
+        assert_eq!(element.id, "el_1");
+        assert_eq!(element.name.as_str(), "Moteur");
 
-    #[async_test]
-    async fn test_transverse_dispatch_comprehensive() {
-        let sandbox = AgentDbSandbox::new().await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
-        manager
-            .create_collection(
-                "transverse",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
-        manager
-            .insert_raw(
-                "transverse",
-                &json_value!({ "_id": "REQ-1", "name": "Req1", "type": "Requirement" }),
-            )
-            .await
-            .unwrap();
-        manager
-            .insert_raw(
-                "transverse",
-                &json_value!({ "_id": "SC-1", "name": "Scen1", "type": "Scenario" }),
-            )
-            .await
-            .unwrap();
-        manager
-            .insert_raw(
-                "transverse",
-                &json_value!({ "_id": "FC-1", "name": "Chain1", "type": "FunctionalChain" }),
-            )
-            .await
-            .unwrap();
-        manager
-            .insert_raw(
-                "transverse",
-                &json_value!({ "_id": "CST-1", "name": "Const1", "type": "Constraint" }),
-            )
-            .await
-            .unwrap();
-        manager
-            .insert_raw(
-                "transverse",
-                &json_value!({ "_id": "COM-1", "name": "Def1", "type": "CommonDefinition" }),
-            )
-            .await
-            .unwrap();
-        manager.insert_raw("transverse", &json_value!({ "_id": "OTH-1", "name": "Other1", "type": "https://raise.io/ontology/arcadia/transverse#CustomThing" })).await.unwrap();
-
-        let loader = ModelLoader::new_with_manager(manager);
-        let model = loader.load_full_model().await.unwrap();
-
+        // Vérification du stockage dynamique (Pure Graph)
         assert_eq!(
-            model.transverse.requirements.len(),
-            1,
-            "Requirement manquant"
-        );
-        assert_eq!(model.transverse.scenarios.len(), 1, "Scenario manquant");
-        assert_eq!(
-            model.transverse.functional_chains.len(),
-            1,
-            "FunctionalChain manquante"
+            element
+                .properties
+                .get("description")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "Un moteur puissant"
         );
         assert_eq!(
-            model.transverse.constraints.len(),
-            1,
-            "Constraint manquante"
+            element.properties.get("mass").unwrap().as_i64().unwrap(),
+            450
         );
-        assert_eq!(
-            model.transverse.common_definitions.len(),
-            1,
-            "CommonDefinition manquante"
-        );
-        assert_eq!(model.transverse.others.len(), 1, "Other manquant");
-    }
-
-    #[async_test]
-    async fn test_provider_access_on_transverse() {
-        let sandbox = AgentDbSandbox::new().await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
-        manager
-            .create_collection(
-                "transverse",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
-        manager
-            .insert_raw(
-                "transverse",
-                &json_value!({
-                    "_id": "REQ-TEST", "name": "Limit", "properties": { "max": 120 }
-                }),
-            )
-            .await
-            .unwrap();
-
-        let loader = ModelLoader::new_with_manager(manager);
-        loader.index_project().await.unwrap();
-
-        let name = loader.get_value("transverse", "REQ-TEST", "name").await;
-        assert_eq!(name, Some(JsonValue::String("Limit".to_string())));
-
-        let max = loader
-            .get_value("transverse", "REQ-TEST", "properties/max")
-            .await;
-        assert_eq!(max, Some(json_value!(120)));
     }
 }

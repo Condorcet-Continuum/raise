@@ -2,6 +2,7 @@ pub mod ai_commands;
 pub mod blockchain_commands;
 pub mod codegen_commands;
 pub mod cognitive_commands;
+pub mod dl_commands;
 pub mod genetics_commands;
 pub mod json_db_commands;
 pub mod model_commands;

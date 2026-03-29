@@ -3,6 +3,7 @@
 use candle_core::{DType, Device, Tensor, Var};
 use candle_nn::{VarBuilder, VarMap};
 
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*;
 
 use crate::ai::nlp::parser::CommandType;
@@ -57,11 +58,7 @@ impl NeuroSymbolicEngine {
     pub fn new(config: WorldModelConfig, varmap: VarMap) -> RaiseResult<Self> {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
 
-        // L'encodeur (ArcadiaEncoder) reste stateless pour le moment car ses dimensions
-        // sont intrinsèquement liées à l'ontologie MBSE (8+8=16).
         let quantizer = VectorQuantizer::new(&config, vb.pp("quantizer"))?;
-
-        // 🎯 Notre prédicteur prend enfin la config !
         let predictor = WorldModelPredictor::new(&config, vb.pp("dynamics"))?;
 
         Ok(Self {
@@ -96,19 +93,29 @@ impl NeuroSymbolicEngine {
         extracted
     }
 
-    pub async fn save_to_file<P: AsRef<Path>>(&self, path: P) -> RaiseResult<()> {
-        let path = path.as_ref().to_owned();
+    /// 🎯 ALIGNEMENT STRICT : Le Cerveau vit dans `domaine/db/tensors/world_model/`
+    fn get_model_dir(manager: &CollectionsManager<'_>) -> PathBuf {
+        manager
+            .storage
+            .config
+            .db_root(&manager.space, &manager.db)
+            .join("tensors")
+            .join("world_model")
+    }
+
+    pub async fn save(&self, manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let model_dir = Self::get_model_dir(manager);
+        fs::ensure_dir_async(&model_dir).await?;
+
+        let path = model_dir.join("world_model.safetensors");
         let tensors = self.extract_tensors_sync();
 
-        // 1. On extrait les infos pour les logs AVANT le move
         let path_display = path.to_string_lossy().to_string();
         let tensor_count = tensors.len();
 
-        // 2. On attend la fin de la tâche (les originaux sont déplacés ici)
         let spawn_result =
             spawn_cpu_task(move || candle_core::safetensors::save(&tensors, path)).await;
 
-        // 3. Gestion de l'erreur de Spawn
         let save_result = match spawn_result {
             Ok(res) => res,
             Err(e) => raise_error!(
@@ -116,13 +123,12 @@ impl NeuroSymbolicEngine {
                 error = e,
                 context = json_value!({
                     "action": "spawn_blocking_save",
-                    "path": path_display, // On utilise la copie légère
+                    "path": path_display,
                     "hint": "La tâche a paniqué ou a été annulée."
                 })
             ),
         };
 
-        // 4. Gestion de l'erreur de sauvegarde
         match save_result {
             Ok(_) => (),
             Err(e) => raise_error!(
@@ -130,7 +136,7 @@ impl NeuroSymbolicEngine {
                 error = e,
                 context = json_value!({
                     "action": "write_safetensors_to_disk",
-                    "path": path_display, // On utilise la copie légère
+                    "path": path_display,
                     "tensor_count": tensor_count
                 })
             ),
@@ -138,10 +144,21 @@ impl NeuroSymbolicEngine {
         Ok(())
     }
 
-    pub async fn load_from_file<P: AsRef<Path>>(
-        path: P,
+    pub async fn load(
+        manager: &CollectionsManager<'_>,
         config: WorldModelConfig,
     ) -> RaiseResult<Self> {
+        let model_dir = Self::get_model_dir(manager);
+        let path = model_dir.join("world_model.safetensors");
+
+        if !fs::exists_async(&path).await {
+            raise_error!(
+                "ERR_MODEL_NOT_FOUND",
+                error = "Le fichier du World Model n'existe pas.",
+                context = json_value!({ "path": path.to_string_lossy() })
+            );
+        }
+
         let buffer = fs::read_async(path).await?;
 
         let tensors = match candle_core::safetensors::load_buffer(&buffer, &Device::Cpu) {
@@ -181,16 +198,21 @@ impl NeuroSymbolicEngine {
 
         Self::new(config, varmap)
     }
+
+    pub async fn exists(manager: &CollectionsManager<'_>) -> bool {
+        let model_dir = Self::get_model_dir(manager);
+        let path = model_dir.join("world_model.safetensors");
+        fs::exists_async(&path).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
+    use crate::utils::testing::AgentDbSandbox;
     use candle_nn::VarMap;
-    use tempfile::NamedTempFile;
 
-    // Helper pour générer une config de test
     fn get_test_config() -> WorldModelConfig {
         WorldModelConfig {
             vocab_size: 10,
@@ -206,14 +228,12 @@ mod tests {
         let varmap = VarMap::new();
         let config = get_test_config();
 
-        // 🎯 On passe la config au lieu des 4 entiers
         let engine = NeuroSymbolicEngine::new(config, varmap).unwrap();
 
         let element = ArcadiaElement {
             id: "1".to_string(),
             name: NameType::default(),
             kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string(),
-            description: None,
             properties: UnorderedMap::new(),
         };
         let action = WorldAction {
@@ -224,16 +244,24 @@ mod tests {
 
     #[async_test]
     async fn test_persistence_async() {
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path();
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
         let varmap = VarMap::new();
         let config = get_test_config();
 
         let engine1 = NeuroSymbolicEngine::new(config.clone(), varmap).unwrap();
-        engine1.save_to_file(path).await.expect("Save failed");
+        // 🎯 Sauvegarde alignée sur la DB
+        engine1.save(&manager).await.expect("Save failed");
 
-        // 🎯 load_from_file prend maintenant la config
-        let engine2 = NeuroSymbolicEngine::load_from_file(path, config)
+        assert!(NeuroSymbolicEngine::exists(&manager).await);
+
+        // 🎯 Chargement aligné sur la DB
+        let engine2 = NeuroSymbolicEngine::load(&manager, config)
             .await
             .expect("Load failed");
 
@@ -241,7 +269,6 @@ mod tests {
             id: "t".to_string(),
             name: NameType::default(),
             kind: "test".to_string(),
-            description: None,
             properties: UnorderedMap::new(),
         };
         let action = WorldAction {

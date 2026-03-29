@@ -6,17 +6,14 @@ use crate::json_db::jsonld::{ContextManager, VocabularyRegistry};
 use crate::model_engine::types::ProjectModel;
 use crate::utils::prelude::*;
 
-/// Service principal de traçabilité basé sur un Graphe d'IDs.
-/// 🎯 OPTIMISATION : Plus de durée de vie 'a, le Traceur possède son propre graphe orienté.
+/// Service de traçabilité basé sur un Graphe d'identifiants.
 pub struct Tracer {
-    // Graphe orienté : Source ID -> List of Target IDs (Downstream)
     downstream_links: UnorderedMap<String, Vec<String>>,
-    // Index inversé : Target ID -> List of Source IDs (Upstream)
     upstream_links: UnorderedMap<String, Vec<String>>,
 }
 
 impl Tracer {
-    /// 1. Initialisation depuis le nouveau JsonDb (Architecture Cible SSOT)
+    /// Initialisation depuis le JsonDb (Architecture cible)
     pub async fn from_db(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         let mut docs = Vec::new();
         if let Ok(collections) = manager.list_collections().await {
@@ -29,55 +26,45 @@ impl Tracer {
         Ok(Self::build_graph(docs))
     }
 
-    /// 2. Rétro-compatibilité : Initialisation depuis l'ancien ProjectModel
+    /// 🎯 PURE GRAPH : Initialisation via l'itérateur universel
     pub fn from_legacy_model(model: &ProjectModel) -> Self {
         let mut docs = Vec::new();
 
-        let mut collect = |elements: &Vec<crate::model_engine::types::ArcadiaElement>| {
-            for e in elements {
-                if let Ok(val) = crate::utils::json::serialize_to_value(e) {
-                    docs.push(val);
-                }
+        // On itère sur absolument tout le modèle de manière dynamique
+        for e in model.all_elements() {
+            if let Ok(val) = crate::utils::json::serialize_to_value(e) {
+                docs.push(val);
             }
-        };
-
-        collect(&model.sa.functions);
-        collect(&model.sa.components);
-        collect(&model.la.functions);
-        collect(&model.la.components);
-        collect(&model.pa.functions);
-        collect(&model.pa.components);
+        }
 
         Self::build_graph(docs)
     }
+
     pub fn from_json_list(documents: Vec<JsonValue>) -> Self {
         Self::build_graph(documents)
     }
-    /// Construit le graphe d'adjacence à partir de n'importe quel document JSON
+
     fn build_graph(documents: Vec<JsonValue>) -> Self {
         let mut downstream: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
         let mut upstream: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
-
         let ctx = ContextManager::new();
         let registry = VocabularyRegistry::global();
 
         for doc in documents {
-            let id = match doc.get("_id").and_then(|v| v.as_str()) {
+            let id = match doc.get("_id").or(doc.get("id")).and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
                 None => continue,
             };
 
-            // On supporte le format Legacy (sous-objet "properties") et le format JsonDb pur (racine)
-            let properties_obj = doc
+            let properties = doc
                 .get("properties")
                 .and_then(|p| p.as_object())
-                .or_else(|| doc.as_object());
+                .or(doc.as_object());
 
-            if let Some(props) = properties_obj {
+            if let Some(props) = properties {
                 for (key, value) in props {
                     if is_link_property(key, &ctx, registry) {
                         let mut targets = Vec::new();
-
                         if let Some(target_id) = value.as_str() {
                             targets.push(target_id.to_string());
                         } else if let Some(arr) = value.as_array() {
@@ -88,14 +75,12 @@ impl Tracer {
                             }
                         }
 
-                        // Indexation croisée
                         for target_id in &targets {
                             upstream
                                 .entry(target_id.clone())
                                 .or_default()
                                 .push(id.clone());
                         }
-
                         downstream.entry(id.clone()).or_default().extend(targets);
                     }
                 }
@@ -123,22 +108,17 @@ impl Tracer {
     }
 }
 
-/// 🎯 L'INTELLIGENCE SÉMANTIQUE (JSON-LD)
 fn is_link_property(key: &str, ctx: &ContextManager, registry: &VocabularyRegistry) -> bool {
-    // 1. Compatibilité Legacy (Hardcoded Strings)
     if matches!(
         key,
         "allocatedTo" | "realizedBy" | "satisfiedBy" | "verifiedBy" | "model_id"
     ) {
         return true;
     }
-
-    // 2. Résolution Sémantique : Est-ce une ObjectProperty dans l'ontologie RAISE ?
     let expanded_uri = ctx.expand_term(key);
     if let Some(prop) = registry.get_property(&expanded_uri) {
         return prop.property_type == PropertyType::ObjectProperty;
     }
-
     false
 }
 
@@ -153,19 +133,26 @@ mod tests {
         let mut props = UnorderedMap::new();
         props.insert("model_id".to_string(), json_value!("ai_1"));
 
-        let report = ArcadiaElement {
-            id: "rep_1".into(),
-            name: NameType::String("Report".into()),
-            kind: "QualityReport".into(),
-            description: None,
-            properties: props,
-        };
-        model.pa.components.push(report);
+        // 🎯 FIX : Suppression du champ 'description' et usage de 'add_element'
+        model.add_element(
+            "pa",
+            "components",
+            ArcadiaElement {
+                id: "rep_1".into(),
+                name: NameType::String("Report".into()),
+                kind: "QualityReport".into(),
+                properties: props,
+            },
+        );
 
         let tracer = Tracer::from_legacy_model(&model);
-
         let upstream = tracer.get_upstream_ids("ai_1");
-        assert_eq!(upstream.len(), 1);
+
+        assert_eq!(
+            upstream.len(),
+            1,
+            "Le lien inverse (upstream) n'a pas été détecté."
+        );
         assert_eq!(upstream[0], "rep_1");
     }
 }

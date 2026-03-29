@@ -1,12 +1,16 @@
 // FICHIER : src-tauri/src/ai/tools/codegen_tool.rs
 
 use crate::ai::protocols::mcp::{McpTool, McpToolCall, McpToolResult, ToolDefinition};
-use crate::code_generator::{CodeGeneratorService, TargetLanguage};
+use crate::code_generator::analyzers::semantic_analyzer::SemanticAnalyzer;
+use crate::code_generator::analyzers::Analyzer;
+use crate::code_generator::models::{
+    CodeElement, CodeElementType, Module, TargetLanguage, Visibility,
+};
+use crate::code_generator::CodeGeneratorService;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
 use crate::utils::prelude::*;
 
-/// Outil MCP qui fait le pont entre l'IA, la Base de Données et le Générateur de Code.
 pub struct CodeGenTool {
     service: CodeGeneratorService,
     db: SharedRef<StorageEngine>,
@@ -15,10 +19,6 @@ pub struct CodeGenTool {
 }
 
 impl CodeGenTool {
-    /// Initialise l'outil avec tout le contexte nécessaire :
-    /// - domain_root : Où écrire les fichiers générés
-    /// - db : Le moteur de stockage pour lire le modèle
-    /// - space/db_name : Les coordonnées de la base (ex: "mbse2"/"drones")
     pub fn new(
         domain_root: PathBuf,
         db: SharedRef<StorageEngine>,
@@ -33,8 +33,6 @@ impl CodeGenTool {
         }
     }
 
-    /// Récupère le document complet depuis la base de données via son ID interne.
-    /// Parcourt les collections probables car l'ID est unique globalement.
     async fn fetch_component(&self, id: &str) -> RaiseResult<JsonValue> {
         let manager = CollectionsManager::new(&self.db, &self.space, &self.db_name);
         let collections = ["pa_components", "la_components", "sa_components"];
@@ -43,56 +41,36 @@ impl CodeGenTool {
             match manager.get_document(col, id).await {
                 Ok(Some(doc)) => return Ok(doc),
                 Ok(None) => continue,
-                Err(e) => eprintln!("⚠️ Erreur lecture collection {}: {}", col, e),
+                Err(e) => {
+                    user_error!(
+                        "ERR_DB_READ",
+                        json_value!({ "col": col, "error": e.to_string() })
+                    );
+                }
             }
         }
 
-        // ✅ PLUS de Err(), PLUS de point-virgule nécessaire après la macro
         raise_error!(
             "ERR_DB_COMPONENT_NOT_FOUND",
-            context = json_value!({
-                "component_id": id,
-                "searched_collections": collections,
-                "space": self.space,
-                "database": self.db_name,
-                "action": "resolve_component",
-                "hint": format!(
-                    "Le composant '{}' est absent des collections ciblées.",
-                    id
-                )
-            })
+            context = json_value!({ "id": id })
         )
     }
 
-    /// Détermine le langage cible depuis le JSON du composant
-    fn determine_language(&self, component: &JsonValue) -> RaiseResult<TargetLanguage> {
-        let tech = component
+    fn determine_language(&self, doc: &JsonValue) -> RaiseResult<TargetLanguage> {
+        let tech = doc
             .get("implementation")
             .and_then(|i| i.get("technology"))
             .and_then(|t| t.as_str())
             .unwrap_or("unknown");
 
         match tech {
-            "Rust_Crate" | "rust" => Ok(TargetLanguage::Rust),
-            "Cpp_Class" | "cpp" | "c++" => Ok(TargetLanguage::Cpp),
-            "TypeScript_Module" | "typescript" | "ts" => Ok(TargetLanguage::TypeScript),
-            "Python_Module" | "python" => Ok(TargetLanguage::Python),
-            "Verilog_Module" | "verilog" => Ok(TargetLanguage::Verilog),
-            "VHDL_Entity" | "vhdl" => Ok(TargetLanguage::Vhdl),
-            _ => {
-                // 🛠️ Alerte de support technologique
-                raise_error!(
-                    "ERR_CODEGEN_UNSUPPORTED_TECH",
-                    context = json_value!({
-                        "received_tech": tech,
-                        "action": "resolve_target_language",
-                        "supported_languages": [
-                            "rust", "cpp", "typescript", "python", "verilog", "vhdl"
-                        ],
-                        "hint": "La technologie spécifiée dans le mandat n'est pas reconnue par le générateur. Vérifiez la casse ou ajoutez le support dans le LanguageResolver."
-                    })
-                )
-            }
+            "rust" => Ok(TargetLanguage::Rust),
+            "cpp" => Ok(TargetLanguage::Cpp),
+            "ts" => Ok(TargetLanguage::TypeScript),
+            _ => raise_error!(
+                "ERR_CODEGEN_UNSUPPORTED_TECH",
+                context = json_value!({ "tech": tech })
+            ),
         }
     }
 }
@@ -102,13 +80,10 @@ impl McpTool for CodeGenTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "generate_component_code".into(),
-            description: "Génère le code source pour un composant stocké en base.".into(),
+            description: "Synchronise le composant Arcadia avec le code source physique.".into(),
             input_schema: json_value!({
                 "type": "object",
-                "properties": {
-                    "component_id": { "type": "string" },
-                    "dry_run": { "type": "boolean" }
-                },
+                "properties": { "component_id": { "type": "string" } },
                 "required": ["component_id"]
             }),
         }
@@ -117,91 +92,68 @@ impl McpTool for CodeGenTool {
     async fn execute(&self, call: McpToolCall) -> McpToolResult {
         let component_id = match call.arguments["component_id"].as_str() {
             Some(id) => id,
-            None => return McpToolResult::error(call.id, "component_id manquant"),
+            None => return McpToolResult::error(call.id, "ID manquant"),
         };
 
-        // 1. Récupération des données (DB)
-        let component_doc = match self.fetch_component(component_id).await {
-            Ok(doc) => doc,
-            Err(e) => return McpToolResult::error(call.id, &format!("Erreur DB: {}", e)),
+        // 1. Fetch & Lang
+        let doc = match self.fetch_component(component_id).await {
+            Ok(d) => d,
+            Err(e) => return McpToolResult::error(call.id, &e.to_string()),
         };
 
-        // 2. Détermination du langage
-        let lang = match self.determine_language(&component_doc) {
+        let lang = match self.determine_language(&doc) {
             Ok(l) => l,
-            Err(e) => return McpToolResult::error(call.id, &format!("Erreur Config: {}", e)),
+            Err(e) => return McpToolResult::error(call.id, &e.to_string()),
         };
 
-        // 3. Génération (Service)
-        // Note: Le service gère l'écriture disque si dry_run est faux (comportement par défaut du service)
-        match self
-            .service
-            .generate_for_element(&component_doc, lang)
-            .await
-        {
-            Ok(paths) => {
-                let file_list: Vec<String> = paths
-                    .iter()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .collect();
+        // 2. Construction du Module
+        let name = doc["name"].as_str().unwrap_or("component");
+        let mut module = match Module::new(name, PathBuf::from(format!("{}.rs", name))) {
+            Ok(m) => m,
+            Err(e) => return McpToolResult::error(call.id, &e.to_string()),
+        };
 
-                // 🎯 4. VÉRIFICATION DE LA COMPILATION (RUST UNIQUEMENT)
+        // 3. Analyse & Tissage
+        let analyzer = SemanticAnalyzer::new();
+        let analysis = match analyzer.analyze(&doc) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::error(call.id, &e.to_string()),
+        };
+
+        module.elements.push(CodeElement {
+            handle: format!("comp:{}", component_id),
+            element_type: CodeElementType::Function,
+            visibility: Visibility::Public,
+            signature: format!("fn {}_logic()", name),
+            body: Some(" { println!(\"RAISE Exec\"); } ".to_string()),
+            dependencies: analysis.dependencies,
+            metadata: analysis.metadata,
+        });
+
+        // 4. Sync disque
+        match self.service.sync_module(module).await {
+            Ok(path) => {
                 if lang == TargetLanguage::Rust {
-                    // On récupère le chemin racine du domaine pour lancer cargo
-                    if let Some(first_file) = paths.first() {
-                        // On remonte jusqu'au dossier contenant le Cargo.toml (généralement src-gen)
-                        let mut crate_root = first_file.parent().unwrap();
-                        while crate_root.file_name().unwrap_or_default() != "src-gen"
-                            && crate_root.parent().is_some()
-                        {
-                            crate_root = crate_root.parent().unwrap();
-                        }
-
-                        if crate_root.join("Cargo.toml").exists() {
-                            let args = ["check", "--message-format=short"];
-                            match os::exec_command_sync("cargo", &args, Some(crate_root)) {
-                                Ok(_) => {
-                                    // Succès : Le code compile !
-                                }
-                                Err(e) => {
-                                    // ❌ Échec : On intercepte ton AppError et on la renvoie via MCP
-                                    return McpToolResult::error(
-                                        call.id,
-                                        &format!("Erreur de compilation Rustc:\n{}\nFichiers impliqués: {:?}", e, file_list)
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    let _ = self.service.format_module(&path);
                 }
-
-                let message = format!(
-                    "Génération réussie pour '{}' ({}). {} fichiers écrits.",
-                    component_doc["name"].as_str().unwrap_or("?"),
-                    json_value!(lang).as_str().unwrap_or("Code"),
-                    file_list.len()
-                );
-
-                McpToolResult::success(
-                    call.id,
-                    json_value!({
-                        "message": message,
-                        "files": file_list
-                    }),
-                )
+                McpToolResult::success(call.id, json_value!({ "path": path.to_string_lossy() }))
             }
-            Err(e) => McpToolResult::error(call.id, &format!("Erreur Génération: {}", e)),
+            Err(e) => McpToolResult::error(call.id, &e.to_string()),
         }
     }
 }
 
+// =========================================================================
+// 🧪 TESTS UNITAIRES ET D'INTÉGRATION
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::mock::AgentDbSandbox;
 
     #[async_test]
-    async fn test_codegen_tool_full_integration() {
+    async fn test_codegen_tool_execution_flow() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -209,73 +161,91 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        let comp_id = "comp-rust-01";
+        let comp_id = "test-comp-01";
+
+        // 🎯 FIX : Utilisation de l'URI de schéma système injectée par le mock
+        let generic_schema_uri = "db://_system/_system/schemas/v1/db/generic.schema.json";
+
         manager
-            .create_collection(
-                "pa_components",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
+            .create_collection("pa_components", generic_schema_uri)
             .await
-            .unwrap();
+            .expect("Échec création collection de test"); //
+
         manager
             .upsert_document(
                 "pa_components",
                 json_value!({
                     "_id": comp_id,
-                    "name": "MyRustComponent",
+                    "name": "EngineController",
                     "implementation": { "technology": "rust" }
                 }),
             )
             .await
             .unwrap();
-        let gen_root = sandbox.domain_root.join("src-gen");
+
+        // 🎯 FIX : Garantir l'existence physique du dossier pour le service
+        let gen_path = sandbox.domain_root.join("src-gen");
+        fs::create_dir_all_sync(&gen_path).unwrap(); //
+
         let tool = CodeGenTool::new(
-            gen_root,
+            gen_path,
             sandbox.db.clone(),
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
+
         let call = McpToolCall::new(
             "generate_component_code",
             json_value!({ "component_id": comp_id }),
         );
-
         let result = tool.execute(call).await;
 
-        assert!(
-            !result.is_error,
-            "L'outil a retourné une erreur: {:?}",
-            result.content
-        );
-        assert!(result.content["files"]
-            .as_array()
-            .map_or(false, |a| !a.is_empty()));
+        // Si erreur, on l'affiche pour faciliter le debug
+        if result.is_error {
+            panic!("Tool execution failed: {}", result.content["error"]);
+        }
+
+        assert!(!result.is_error);
+        assert!(result.content["path"]
+            .as_str()
+            .unwrap()
+            .contains("EngineController.rs"));
     }
 
     #[async_test]
-    async fn test_codegen_tool_not_found() {
+    async fn test_determine_language_logic() {
+        let sandbox = AgentDbSandbox::new().await;
+        let tool = CodeGenTool::new(PathBuf::from("/tmp"), sandbox.db.clone(), "test", "test");
+
+        let doc_rust = json_value!({ "implementation": { "technology": "rust" } });
+        let doc_cpp = json_value!({ "implementation": { "technology": "cpp" } });
+
+        assert_eq!(
+            tool.determine_language(&doc_rust).unwrap(),
+            TargetLanguage::Rust
+        );
+        assert_eq!(
+            tool.determine_language(&doc_cpp).unwrap(),
+            TargetLanguage::Cpp
+        );
+    }
+
+    #[async_test]
+    async fn test_fetch_component_error_handling() {
         let sandbox = AgentDbSandbox::new().await;
         let tool = CodeGenTool::new(
             sandbox.domain_root.clone(),
             sandbox.db.clone(),
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
-        let call = McpToolCall::new(
-            "generate_component_code",
-            json_value!({ "component_id": "unknown_id" }),
+            "void",
+            "void",
         );
 
-        let result = tool.execute(call).await;
+        let result = tool.fetch_component("ghost_id").await;
 
-        assert!(result.is_error);
-
-        // ✅ On vérifie le CODE d'erreur structuré au lieu du message traduit
-        let error_msg = result.content["error"].as_str().unwrap();
-        assert!(
-            error_msg.contains("ERR_DB_COMPONENT_NOT_FOUND"),
-            "Le code d'erreur devrait être ERR_DB_COMPONENT_NOT_FOUND. Reçu : {}",
-            error_msg
-        );
+        assert!(result.is_err());
+        match result {
+            Err(AppError::Structured(data)) => assert_eq!(data.code, "ERR_DB_COMPONENT_NOT_FOUND"), //
+            _ => panic!("Type d'erreur incorrect"),
+        }
     }
 }

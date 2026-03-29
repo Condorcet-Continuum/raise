@@ -75,16 +75,12 @@ impl NodeHandler for DecisionHandler {
             max_wins
         );
 
-        // On injecte le vainqueur dans le contexte pour la suite du graphe
         context.insert("condorcet_winner".into(), candidates[winner_idx].clone());
 
         Ok(ExecutionStatus::Completed)
     }
 }
 
-// =========================================================================
-// TESTS UNITAIRES
-// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,19 +91,20 @@ mod tests {
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
 
-    // 🎯 FIX : On passe la config en plus pour utiliser le CollectionsManager
-    async fn setup_dummy_context(
+    // 🎯 FIX : Retourne le CollectionsManager pour satisfaire la nouvelle signature
+    async fn setup_dummy_context<'a>(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
-        config: &AppConfig,
+        config: &'a AppConfig,
+        sandbox_db: &'a crate::json_db::storage::StorageEngine,
     ) -> (
         SharedRef<AsyncMutex<AiOrchestrator>>,
         SharedRef<PluginManager>,
         WorkflowCritic,
         UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
+        CollectionsManager<'a>,
     ) {
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        let manager = CollectionsManager::new(sandbox_db, &config.system_domain, &config.system_db);
 
-        // 1. 🎯 INJECTION DES MOCKS : L'orchestrateur ne paniquera plus !
         inject_mock_component(
             &manager,
             "llm",
@@ -116,7 +113,6 @@ mod tests {
         .await;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
-        // 2. 🎯 ATTENTION : On passe Some(storage.clone()) au lieu de None
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .unwrap();
@@ -130,6 +126,7 @@ mod tests {
             plugin_manager,
             critic,
             tools,
+            manager,
         )
     }
 
@@ -137,18 +134,16 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_decision_handler_condorcet_evaluation() {
-        // 1. Initialisation de la sandbox
         let sandbox = AgentDbSandbox::new().await;
-
-        // 2. On passe la base et la config à notre setup
-        let (orch, pm, critic, tools) =
-            setup_dummy_context(sandbox.db.clone(), &sandbox.config).await;
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager, // 🎯 FIX : Injection du manager
         };
         let handler = DecisionHandler;
 
@@ -164,13 +159,9 @@ mod tests {
             json_value!(["Option A (Courte)", "Option B (Très très longue)"]),
         )]);
 
-        // 3. Exécution du Handler
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
         assert_eq!(result, ExecutionStatus::Completed);
-        assert!(
-            data_ctx.contains_key("condorcet_winner"),
-            "Le vainqueur doit être injecté au contexte"
-        );
+        assert!(data_ctx.contains_key("condorcet_winner"));
     }
 }

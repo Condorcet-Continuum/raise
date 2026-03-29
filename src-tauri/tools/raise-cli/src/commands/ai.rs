@@ -5,7 +5,6 @@ use clap::{Args, Subcommand};
 // --- IMPORTS MÉTIER RAISE ---
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::tools::query_knowledge_graph;
-// 🎯 FIX : Plus besoin d'importer SystemAgent, SoftwareAgent, etc. Uniquement DynamicAgent !
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 
 use raise::ai::context::rag::RagRetriever;
@@ -117,7 +116,6 @@ pub enum AiCommands {
     Health,
 }
 
-// --- AJOUT DE L'ENUM RAG ACTION ---
 #[derive(Subcommand, Debug, Clone)]
 pub enum RagAction {
     /// 📥 Ingeste un document (texte) dans la base vectorielle locale
@@ -176,16 +174,15 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
                 json_value!({ "domain": final_domain, "db": final_db, "lr": final_lr, "epochs": final_epochs })
             );
 
-            match ai_train_domain_native(
+            // 🎯 FIX : Initialisation du CollectionsManager pour l'entraînement natif
+            let manager = raise::json_db::collections::manager::CollectionsManager::new(
                 &storage,
                 &ctx.active_domain,
                 &final_db,
-                &final_domain,
-                final_epochs,
-                final_lr,
-            )
-            .await
-            {
+            );
+
+            // 🎯 FIX : Appel avec la signature mise à jour (manager)
+            match ai_train_domain_native(&manager, &final_domain, final_epochs, final_lr).await {
                 Ok(msg) => user_success!("AI_TRAIN_SUCCESS", json_value!({ "result": msg })),
                 Err(e) => user_error!(
                     "AI_TRAIN_FAIL",
@@ -332,7 +329,10 @@ async fn run_rag_action(
                 .to_string_lossy()
                 .to_string();
 
-            match rag_engine.index_document(&content, &source_name).await {
+            match rag_engine
+                .index_document(manager, &content, &source_name)
+                .await
+            {
                 Ok(chunks_count) => {
                     user_success!(
                         "RAG_INGESTION_SUCCESS",
@@ -354,7 +354,7 @@ async fn run_rag_action(
                 json_value!({"question": question, "limit": top_k})
             );
 
-            match rag_engine.retrieve(&question, top_k as u64).await {
+            match rag_engine.retrieve(manager, &question, top_k as u64).await {
                 Ok(context_str) => {
                     if context_str.is_empty() {
                         user_warn!(
@@ -539,8 +539,6 @@ async fn run_health_action() -> RaiseResult<()> {
     Ok(())
 }
 
-// 🎯 FIX MAJEUR : Le dispatcher ne contient plus de conditions "en dur".
-// Il récupère directement l'URN de l'agent et l'instancie dynamiquement !
 async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execute: bool) {
     let classifier = IntentClassifier::new(client);
     user_info!("AI_ANALYZING", json_value!({"input_length": input.len()}));
@@ -735,7 +733,6 @@ async fn run_train_world_action(
         id: "comp_logic_1".into(),
         name: NameType::default(),
         kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".into(),
-        description: None,
         properties: raise::utils::data::UnorderedMap::new(),
     };
 
@@ -743,7 +740,6 @@ async fn run_train_world_action(
         id: "comp_phys_1".into(),
         name: NameType::default(),
         kind: "https://raise.io/ontology/arcadia/pa#PhysicalComponent".into(),
-        description: None,
         properties: raise::utils::data::UnorderedMap::new(),
     };
 
@@ -815,7 +811,6 @@ mod tests {
         }
     }
 
-    // 🎯 FIX MAJEUR : Les tests reflètent dorénavant la résolution URN Data-Driven
     #[async_test]
     async fn test_intent_dispatch_layers() {
         mock::inject_mock_config().await;

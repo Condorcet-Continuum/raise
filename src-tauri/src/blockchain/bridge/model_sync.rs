@@ -17,13 +17,9 @@ impl<'a> ModelSync<'a> {
 
     /// Applique les mutations d'un commit au ProjectModel global.
     pub async fn sync_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
-        // 🎯 Ajout du mot-clé async
-
-        // 🎯 On attend l'acquisition du verrou asynchrone (infaillible et non-bloquant)
         let mut model_guard = self.app_state.model.lock().await;
 
         for mutation in &commit.mutations {
-            // Utilisation de l'auto-deref pour la garde du Mutex (Validation Clippy)
             self.apply_mutation(&mut model_guard, mutation)?;
         }
         Ok(())
@@ -32,20 +28,18 @@ impl<'a> ModelSync<'a> {
     fn apply_mutation(&self, model: &mut ProjectModel, mutation: &Mutation) -> RaiseResult<()> {
         match mutation.operation {
             MutationOp::Create | MutationOp::Update => {
-                let element: ArcadiaElement = match json::deserialize_from_value(
-                    mutation.payload.clone(),
-                ) {
-                    Ok(el) => el,
-                    Err(e) => raise_error!(
-                        "ERR_SYNC_PAYLOAD_INVALID",
-                        error = e,
-                        context = json_value!({
-                            "element_id": mutation.element_id,
-                            "action": "deserialize_mutation_payload",
-                            "hint": "Échec du mapping JSON vers ArcadiaElement. Vérifiez si des champs obligatoires sont manquants ou si les types (string/int) correspondent."
-                        })
-                    ),
-                };
+                let element: ArcadiaElement =
+                    match json::deserialize_from_value(mutation.payload.clone()) {
+                        Ok(el) => el,
+                        Err(e) => raise_error!(
+                            "ERR_SYNC_PAYLOAD_INVALID",
+                            error = e,
+                            context = json_value!({
+                                "element_id": mutation.element_id,
+                                "action": "deserialize_mutation_payload"
+                            })
+                        ),
+                    };
 
                 self.upsert_element(model, element)?;
             }
@@ -56,66 +50,69 @@ impl<'a> ModelSync<'a> {
         Ok(())
     }
 
+    /// 🎯 PURE GRAPH : Insertion ou mise à jour dynamique
     fn upsert_element(&self, model: &mut ProjectModel, element: ArcadiaElement) -> RaiseResult<()> {
-        let target_vec = self.resolve_model_vector(model, &element.kind)?;
+        // On détermine la destination à partir du type (kind) de l'élément
+        let (layer, col) = self.map_kind_to_location(&element.kind);
 
-        if let Some(pos) = target_vec.iter().position(|e| e.id == element.id) {
-            target_vec[pos] = element;
-        } else {
-            target_vec.push(element);
+        // Si l'élément existe déjà quelque part, on le met à jour
+        let mut found = false;
+        for collections in model.layers.values_mut() {
+            for vec in collections.values_mut() {
+                if let Some(pos) = vec.iter().position(|e| e.id == element.id) {
+                    vec[pos] = element.clone();
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
         }
+
+        // Sinon, on l'ajoute dans sa couche naturelle
+        if !found {
+            model.add_element(layer, col, element);
+        }
+
         Ok(())
     }
 
+    /// 🎯 PURE GRAPH : Recherche et suppression transversale dans toutes les couches
     fn delete_element(&self, model: &mut ProjectModel, id: &str) -> RaiseResult<()> {
-        let all_vectors = vec![
-            &mut model.oa.actors,
-            &mut model.oa.activities,
-            &mut model.sa.components,
-            &mut model.sa.functions,
-            &mut model.la.components,
-            &mut model.pa.components,
-        ];
-
-        for vec in all_vectors {
-            if let Some(pos) = vec.iter().position(|e| e.id == id) {
-                vec.remove(pos);
-                return Ok(());
+        for collections in model.layers.values_mut() {
+            for vec in collections.values_mut() {
+                if let Some(pos) = vec.iter().position(|e| e.id == id) {
+                    vec.remove(pos);
+                    return Ok(());
+                }
             }
         }
 
         crate::raise_error!(
             "ERR_SYNC_ELEMENT_NOT_FOUND",
-            error = format!("Élément '{}' introuvable pour suppression.", id),
-            context = json_value!({
-                "element_id": id,
-                "action": "delete_element_from_model",
-                "hint": "L'élément a peut-être déjà été supprimé ou n'a jamais été synchronisé en mémoire."
-            })
+            error = format!("Élément '{}' introuvable pour suppression.", id)
         );
     }
 
-    fn resolve_model_vector<'b>(
-        &self,
-        model: &'b mut ProjectModel,
-        kind: &str,
-    ) -> RaiseResult<&'b mut Vec<ArcadiaElement>> {
-        match kind {
-            "OperationalActor" => Ok(&mut model.oa.actors),
-            "OperationalActivity" => Ok(&mut model.oa.activities),
-            "SystemComponent" => Ok(&mut model.sa.components),
-            "SystemFunction" => Ok(&mut model.sa.functions),
-            "LogicalComponent" => Ok(&mut model.la.components),
-            "PhysicalComponent" => Ok(&mut model.pa.components),
-            _ => crate::raise_error!(
-                "ERR_SYNC_UNSUPPORTED_KIND",
-                error = format!("Type Arcadia '{}' non géré par le ModelSync.", kind),
-                context = json_value!({
-                    "kind": kind,
-                    "action": "resolve_model_vector",
-                    "hint": "Vérifiez que ce type est bien supporté par le synchroniseur. Une mise à jour du Bridge peut être nécessaire."
-                })
-            ),
+    /// Helper pour router les nouveaux éléments vers les couches par défaut
+    fn map_kind_to_location(&self, kind: &str) -> (&'static str, &'static str) {
+        if kind.contains("OperationalActor") {
+            ("oa", "actors")
+        } else if kind.contains("OperationalActivity") {
+            ("oa", "activities")
+        } else if kind.contains("SystemComponent") {
+            ("sa", "components")
+        } else if kind.contains("SystemFunction") {
+            ("sa", "functions")
+        } else if kind.contains("LogicalComponent") {
+            ("la", "components")
+        } else if kind.contains("PhysicalComponent") {
+            ("pa", "components")
+        } else if kind.contains("Requirement") {
+            ("transverse", "requirements")
+        } else {
+            ("others", "elements")
         }
     }
 
@@ -137,7 +134,7 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_upsert_new_element() {
+    async fn test_upsert_new_element_pure_graph() {
         let state = create_test_state();
         let sync = ModelSync::new(&state);
 
@@ -153,22 +150,28 @@ mod tests {
 
         sync.apply_mutation(&mut *state.model.lock().await, &mutation)
             .unwrap();
+
         let model = state.model.lock().await;
-        assert_eq!(model.sa.components.len(), 1);
-        assert_eq!(model.sa.components[0].name.as_str(), "Radar Unit");
+        let components = model.get_collection("sa", "components");
+        assert_eq!(components.len(), 1);
+        assert_eq!(components[0].name.as_str(), "Radar Unit");
     }
 
     #[async_test]
-    async fn test_delete_element_success() {
+    async fn test_delete_element_pure_graph() {
         let state = create_test_state();
         let sync = ModelSync::new(&state);
 
         let mut model = state.model.lock().await;
-        model.la.components.push(ArcadiaElement {
-            id: "urn:la:ecu".into(),
-            kind: "LogicalComponent".into(),
-            ..Default::default()
-        });
+        model.add_element(
+            "la",
+            "components",
+            ArcadiaElement {
+                id: "urn:la:ecu".into(),
+                kind: "LogicalComponent".into(),
+                ..Default::default()
+            },
+        );
         drop(model);
 
         let mutation = Mutation {
@@ -179,7 +182,8 @@ mod tests {
 
         sync.apply_mutation(&mut *state.model.lock().await, &mutation)
             .unwrap();
+
         let model = state.model.lock().await;
-        assert!(model.la.components.is_empty());
+        assert!(model.get_collection("la", "components").is_empty());
     }
 }

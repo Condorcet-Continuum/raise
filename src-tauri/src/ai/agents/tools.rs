@@ -44,7 +44,6 @@ pub async fn save_artifact(ctx: &AgentContext, doc: &JsonValue) -> RaiseResult<C
         .unwrap_or("UnknownElement")
         .to_string();
 
-    // 🎯 1. RÉSOLUTION ONTOLOGIQUE (Data-Driven)
     let mapping_doc =
         match query_knowledge_graph(ctx, "ref:configs:handle:ontological_mapping", false).await {
             Ok(d) => d,
@@ -61,34 +60,36 @@ pub async fn save_artifact(ctx: &AgentContext, doc: &JsonValue) -> RaiseResult<C
         .unwrap_or_else(|| doc["layer"].as_str().unwrap_or("unknown"));
     let collection = route["collection"].as_str().unwrap_or("elements");
 
-    // 🎯 2. RÉCUPÉRATION DU DOMAINE CIBLE
     let config = AppConfig::get();
     let sys_mgr = CollectionsManager::new(&ctx.db, &config.system_domain, &config.system_db);
     let settings = AppConfig::get_component_settings(&sys_mgr, "ai_agents")
         .await
         .unwrap_or(json_value!({}));
+
     let active_domain = settings["target_domain"].as_str().unwrap_or("un2");
+    let active_db = layer.to_lowercase();
 
-    let relative_path = format!(
-        "{}/{}/collections/{}/{}.json",
-        active_domain,
-        layer.to_lowercase(),
-        collection,
-        doc_id
-    );
-    let full_path = ctx.paths.domain_root.join(&relative_path);
+    let target_manager = CollectionsManager::new(&ctx.db, active_domain, &active_db);
 
-    if let Some(parent) = full_path.parent() {
-        fs::create_dir_all_async(parent).await?;
+    let mut final_doc = doc.clone();
+    if let Some(obj) = final_doc.as_object_mut() {
+        if !obj.contains_key("_id") {
+            obj.insert("_id".to_string(), json_value!(doc_id.clone()));
+        }
     }
-    fs::write_async(&full_path, json::serialize_to_string_pretty(doc)?).await?;
+
+    target_manager
+        .upsert_document(collection, final_doc)
+        .await?;
+
+    let virtual_path = format!("ref:{}:id:{}", collection, doc_id);
 
     Ok(CreatedArtifact {
         id: doc_id,
         name,
         layer: layer.to_uppercase(),
         element_type,
-        path: relative_path,
+        path: virtual_path,
     })
 }
 
@@ -129,7 +130,6 @@ pub async fn query_knowledge_graph(
     Ok(result.content["data"].clone())
 }
 
-/// Recherche un élément par son nom via les Search Spaces Ontologiques
 pub async fn find_element_by_name(ctx: &AgentContext, name: &str) -> Option<JsonValue> {
     let config = AppConfig::get();
     let sys_mgr = CollectionsManager::new(&ctx.db, &config.system_domain, &config.system_db);
@@ -141,17 +141,20 @@ pub async fn find_element_by_name(ctx: &AgentContext, name: &str) -> Option<Json
         .unwrap_or("un2")
         .to_string();
 
-    // 🎯 RÉCUPÉRATION DES ESPACES DE RECHERCHE DYNAMIQUES
     let mapping_doc = query_knowledge_graph(ctx, "ref:configs:handle:ontological_mapping", false)
         .await
         .ok()?;
     let search_spaces = mapping_doc["search_spaces"].as_array()?;
 
     for space in search_spaces {
-        let layer_db = space["layer"].as_str().unwrap_or("");
+        let layer_db = space["layer"].as_str().unwrap_or("raise");
         let col = space["collection"].as_str().unwrap_or("");
 
-        let tool = QueryDbTool::new(ctx.db.clone(), active_domain.clone(), layer_db.to_string());
+        let tool = QueryDbTool::new(
+            ctx.db.clone(),
+            active_domain.clone(),
+            layer_db.to_lowercase(),
+        );
         let reference = format!("ref:{}:name:{}", col, name);
 
         let call = McpToolCall::new(
@@ -176,22 +179,15 @@ pub async fn load_session(ctx: &AgentContext) -> RaiseResult<AgentSession> {
         .as_str()
         .unwrap_or(&config.system_domain);
     let target_db = settings["system_db"].as_str().unwrap_or(&config.system_db);
-    let manager = CollectionsManager::new(&ctx.db, target_domain, target_db);
 
-    let is_test = ctx.paths.domain_root.join(".is_test_env").exists();
-    let schema_uri = if is_test {
-        "db://_system/_system/schemas/v1/db/generic.schema.json"
-    } else {
-        "db://_system/_system/schemas/v1/configs/session-agent.schema.json"
-    };
-    let _ = manager
-        .create_collection("session_agents", schema_uri)
-        .await;
+    // 🎯 PRODUCTION STRICTE : On fait confiance à l'infrastructure.
+    // Plus de `create_collection` sauvage au runtime ! L'upsert / query_db s'occupera du reste.
 
     let handle_slug = format!("{}-{}", ctx.session_id, ctx.agent_id)
         .replace(":", "-")
         .replace("_", "-")
         .to_lowercase();
+
     let tool = QueryDbTool::new(
         ctx.db.clone(),
         target_domain.to_string(),
@@ -203,35 +199,24 @@ pub async fn load_session(ctx: &AgentContext) -> RaiseResult<AgentSession> {
     );
     let result = tool.execute(call).await;
 
+    let mut session = AgentSession::new(&ctx.session_id, &ctx.agent_id);
+
     if !result.is_error {
         let doc_value = &result.content["data"];
-        let thread_id = doc_value["memory_state"]["thread_id"]
-            .as_str()
-            .unwrap_or(&handle_slug);
-        let thread_file = ctx
-            .paths
-            .domain_root
-            .join("chats")
-            .join("agents")
-            .join(format!("{}.json", thread_id));
-        let mut messages = vec![];
-        if thread_file.exists() {
-            if let Ok(msgs) = json::deserialize_from_str(
-                &fs::read_to_string_async(&thread_file)
-                    .await
-                    .unwrap_or_default(),
-            ) {
-                messages = msgs;
+
+        if let Some(msgs_array) = doc_value["messages"].as_array() {
+            if let Ok(msgs) = json::deserialize_from_value(json_value!(msgs_array)) {
+                session.messages = msgs;
             }
         }
-        let mut session = AgentSession::new(&ctx.session_id, &ctx.agent_id);
-        session.messages = messages;
-        Ok(session)
+        if let Some(summary) = doc_value["summary"].as_str() {
+            session.summary = Some(summary.to_string());
+        }
     } else {
-        let session = AgentSession::new(&ctx.session_id, &ctx.agent_id);
-        Box::pin(save_session(ctx, &session)).await?;
-        Ok(session)
+        let _ = Box::pin(save_session(ctx, &session)).await;
     }
+
+    Ok(session)
 }
 
 pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> RaiseResult<()> {
@@ -250,13 +235,6 @@ pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> RaiseRe
         .replace(":", "-")
         .replace("_", "-")
         .to_lowercase();
-    let chats_dir = ctx.paths.domain_root.join("chats").join("agents");
-    fs::create_dir_all_async(&chats_dir).await?;
-    fs::write_async(
-        &chats_dir.join(format!("{}.json", handle_slug)),
-        json::serialize_to_string_pretty(&session.messages)?,
-    )
-    .await?;
 
     let tool = QueryDbTool::new(
         ctx.db.clone(),
@@ -270,19 +248,28 @@ pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> RaiseRe
     let result = tool.execute(call).await;
 
     let mut session_doc = json_value!({
-        "handle": handle_slug, "session_id": ctx.session_id, "agent_id": ctx.agent_id, "status": "idle",
+        "handle": handle_slug,
+        "session_id": ctx.session_id,
+        "agent_id": ctx.agent_id,
+        "status": "idle",
+        "messages": session.messages,
+        "summary": session.summary,
         "memory_state": { "thread_id": handle_slug, "turns_count": session.messages.len() },
         "metrics": { "tokens_prompt": 0, "tokens_completion": 0, "total_compute_time_ms": 0 }
     });
 
     if !result.is_error {
         if let Some(id) = result.content["data"].get("_id") {
-            session_doc["_id"] = id.clone();
+            if let Some(obj) = session_doc.as_object_mut() {
+                obj.insert("_id".to_string(), id.clone());
+            }
         }
     }
+
     manager
         .upsert_document("session_agents", session_doc)
         .await?;
+
     Ok(())
 }
 

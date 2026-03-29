@@ -1,6 +1,8 @@
 // FICHIER : src-tauri/src/ai/voice/stt.rs
 
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*;
+
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::whisper::{self as whisper_model, audio, Config};
@@ -15,9 +17,7 @@ pub struct WhisperEngine {
 }
 
 impl WhisperEngine {
-    pub async fn new(
-        manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
-    ) -> RaiseResult<Self> {
+    pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         // 1. Récupération de la configuration globale dynamique
         let settings = AppConfig::get_component_settings(manager, "ai_voice").await?;
 
@@ -281,7 +281,7 @@ impl WhisperEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::collections::manager::CollectionsManager;
+
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     #[async_test]

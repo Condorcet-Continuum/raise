@@ -17,29 +17,18 @@ impl NodeHandler for McpHandler {
         context: &mut UnorderedMap<String, JsonValue>,
         shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
-        // Extraction sécurisée du nom de l'outil MCP
         let tool_name = match node.params.get("tool_name") {
             Some(val) => match val.as_str() {
                 Some(s) => s,
                 None => raise_error!(
                     "ERR_MCP_INVALID_PARAM",
-                    context = json_value!({
-                        "node_id": node.id,
-                        "param": "tool_name",
-                        "expected": "string",
-                        "received": val,
-                        "hint": "Le nom de l'outil MCP doit être une chaîne de caractères (ex: 'fetch_url')."
-                    })
+                    context = json_value!({ "node_id": node.id, "param": "tool_name", "expected": "string" })
                 ),
             },
             None => raise_error!(
                 "ERR_MCP_MISSING_PARAM",
-                context = json_value!({
-                    "node_id": node.id,
-                    "param": "tool_name",
-                    "action": "CallMcp",
-                    "hint": "Le paramètre 'tool_name' est obligatoire pour les nœuds de type CallMcp."
-                })
+                context =
+                    json_value!({ "node_id": node.id, "param": "tool_name", "action": "CallMcp" })
             ),
         };
 
@@ -54,16 +43,15 @@ impl NodeHandler for McpHandler {
         tracing::info!("🛠️ Appel Outil MCP : {} avec {:?}", tool_name, args);
 
         if let Some(tool) = shared_ctx.tools.get(tool_name) {
-            match tool.execute(args).await {
+            // 🎯 NOUVEAU : On passe le shared_ctx à l'outil
+            match tool.execute(args, shared_ctx).await {
                 Ok(output) => {
                     tracing::info!("✅ Résultat Outil injecté dans '{}'", output_key);
-
                     let cleaned_output = if let Some(obj) = output.as_object() {
                         obj.get("value").cloned().unwrap_or(output)
                     } else {
                         output
                     };
-
                     context.insert(output_key.to_string(), cleaned_output);
                     Ok(ExecutionStatus::Completed)
                 }
@@ -86,27 +74,27 @@ impl NodeHandler for McpHandler {
 mod tests {
     use super::*;
     use crate::ai::orchestrator::AiOrchestrator;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
     use crate::workflow_engine::tools::{AgentTool, SystemMonitorTool};
 
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
-
-    // 🎯 FIX : La fonction prend la DB et la config en paramètres
-    async fn setup_dummy_context_with_tool(
+    // 🎯 FIX : On retourne aussi le manager pour qu'il survive à la portée
+    async fn setup_dummy_context_with_tool<'a>(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
-        config: &AppConfig,
+        config: &'a AppConfig,
+        sandbox_db: &'a crate::json_db::storage::StorageEngine,
     ) -> (
         SharedRef<AsyncMutex<AiOrchestrator>>,
         SharedRef<PluginManager>,
         WorkflowCritic,
         UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
+        CollectionsManager<'a>,
     ) {
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        let manager = CollectionsManager::new(sandbox_db, &config.system_domain, &config.system_db);
 
-        // 1. 🎯 INJECTION DES MOCKS : L'orchestrateur IA trouve ses petits
         inject_mock_component(
             &manager,
             "llm",
@@ -115,11 +103,9 @@ mod tests {
         .await;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
-        // 2. 🎯 INITIALISATION : On utilise le StorageEngine de la Sandbox
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .unwrap();
-
         let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
         let critic = WorkflowCritic::default();
 
@@ -133,6 +119,7 @@ mod tests {
             plugin_manager,
             critic,
             tools,
+            manager,
         )
     }
 
@@ -140,18 +127,18 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mcp_handler_success_and_injection() {
-        // 1. 🎯 MAGIE : La Sandbox initialise le dossier isolé et le schéma
         let sandbox = AgentDbSandbox::new().await;
 
-        // 2. Injection dans le faux contexte
-        let (orch, pm, critic, tools) =
-            setup_dummy_context_with_tool(sandbox.db.clone(), &sandbox.config).await;
+        // Extraction des éléments
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context_with_tool(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager, // 🎯 Ajout
         };
         let handler = McpHandler;
 
@@ -170,10 +157,7 @@ mod tests {
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
         assert_eq!(result, ExecutionStatus::Completed);
-        assert!(
-            data_ctx.contains_key("my_cpu_result"),
-            "Le résultat de l'outil doit être injecté sous la clé demandée"
-        );
+        assert!(data_ctx.contains_key("my_cpu_result"));
     }
 
     #[async_test]
@@ -181,14 +165,15 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mcp_handler_missing_tool_fails_safely() {
         let sandbox = AgentDbSandbox::new().await;
-        let (orch, pm, critic, tools) =
-            setup_dummy_context_with_tool(sandbox.db.clone(), &sandbox.config).await;
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context_with_tool(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager, // 🎯 Ajout
         };
         let handler = McpHandler;
 
@@ -202,7 +187,6 @@ mod tests {
         let mut data_ctx = UnorderedMap::new();
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
-        // L'outil n'existe pas, l'exécution doit échouer proprement
         assert_eq!(result, ExecutionStatus::Failed);
     }
 }

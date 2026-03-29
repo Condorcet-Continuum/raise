@@ -56,34 +56,29 @@ impl NodeHandler for WasmHandler {
     }
 }
 
-// =========================================================================
-// TESTS UNITAIRES
-// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::orchestrator::AiOrchestrator;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
 
-    // 🎯 IMPORTS AJOUTÉS : On récupère notre Sandbox et les injecteurs
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
-
-    // 🎯 FIX : La fonction prend la DB et la config de la Sandbox en paramètres
-    async fn setup_dummy_context(
+    async fn setup_dummy_context<'a>(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
-        config: &AppConfig,
+        config: &'a AppConfig,
+        sandbox_db: &'a crate::json_db::storage::StorageEngine,
     ) -> (
         SharedRef<AsyncMutex<AiOrchestrator>>,
         SharedRef<PluginManager>,
         WorkflowCritic,
         UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
+        CollectionsManager<'a>,
     ) {
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        let manager = CollectionsManager::new(sandbox_db, &config.system_domain, &config.system_db);
 
-        // 1. 🎯 INJECTION DES MOCKS : Configuration de l'orchestrateur IA
         inject_mock_component(
             &manager,
             "llm",
@@ -92,7 +87,6 @@ mod tests {
         .await;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
-        // 2. 🎯 INITIALISATION : On utilise le StorageEngine de la Sandbox
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .unwrap();
@@ -104,6 +98,7 @@ mod tests {
             plugin_manager,
             WorkflowCritic::default(),
             UnorderedMap::new(),
+            manager,
         )
     }
 
@@ -111,18 +106,17 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_wasm_handler_missing_plugin_fails_safely() {
-        // 1. 🎯 MAGIE : La Sandbox initialise le dossier isolé et le schéma
         let sandbox = AgentDbSandbox::new().await;
 
-        // 2. Injection dans le faux contexte
-        let (orch, pm, critic, tools) =
-            setup_dummy_context(sandbox.db.clone(), &sandbox.config).await;
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager,
         };
         let handler = WasmHandler;
 
@@ -136,7 +130,6 @@ mod tests {
         let mut data_ctx = UnorderedMap::new();
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
-        // Un plugin manquant doit retourner Failed
         assert_eq!(result, ExecutionStatus::Failed);
     }
 }

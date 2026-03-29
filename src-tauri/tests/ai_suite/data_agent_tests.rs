@@ -33,7 +33,12 @@ async fn test_data_agent_creates_class_and_enum() {
             "db://_system/_system/schemas/v1/db/generic.schema.json",
         )
         .await;
-
+    let _ = sys_mgr
+        .create_collection(
+            "session_agents",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
     sys_mgr
         .upsert_document(
             "prompts",

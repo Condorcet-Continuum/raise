@@ -28,7 +28,7 @@ impl LlmClient {
 
     pub async fn ask(
         &self,
-        _backend: LlmBackend, // 🎯 Ignoré : Tout passe désormais en mode 100% hors-ligne !
+        _backend: LlmBackend,
         system_prompt: &str,
         user_prompt: &str,
     ) -> RaiseResult<String> {

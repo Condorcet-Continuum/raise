@@ -38,8 +38,8 @@ pub struct ModelExchange {
 
 impl SystemModelProvider for ProjectModel {
     fn get_functions(&self) -> Vec<ModelFunction> {
-        self.la
-            .functions
+        // 🎯 PURE GRAPH : Utilisation de get_collection
+        self.get_collection("la", "functions")
             .iter()
             .map(|f| {
                 let complexity = f
@@ -58,8 +58,8 @@ impl SystemModelProvider for ProjectModel {
     }
 
     fn get_components(&self) -> Vec<ModelComponent> {
-        self.pa
-            .components
+        // 🎯 PURE GRAPH : Utilisation de get_collection
+        self.get_collection("pa", "components")
             .iter()
             .map(|c| {
                 let capacity = c
@@ -78,8 +78,8 @@ impl SystemModelProvider for ProjectModel {
     }
 
     fn get_exchanges(&self) -> Vec<ModelExchange> {
-        self.la
-            .exchanges
+        // 🎯 PURE GRAPH : Utilisation de get_collection
+        self.get_collection("la", "exchanges")
             .iter()
             .map(|e| {
                 let source_id = e
@@ -213,13 +213,12 @@ mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
 
-    // Helper pour remplacer l'ancienne méthode ArcadiaElement::new()
     fn make_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
         ArcadiaElement {
             id: id.to_string(),
             name: NameType::String(name.to_string()),
             kind: kind.to_string(),
-            description: None,
+            // 🎯 FIX : Suppression du champ description
             properties: UnorderedMap::new(),
         }
     }
@@ -229,21 +228,22 @@ mod tests {
 
         let mut f1 = make_element("F1", "Navigation", "LogicalFunction");
         f1.properties.insert("complexity".into(), json_value!(20.0));
-        model.la.functions.push(f1);
+        // 🎯 FIX : Utilisation de add_element
+        model.add_element("la", "functions", f1);
 
         let mut f2 = make_element("F2", "Radio", "LogicalFunction");
         f2.properties.insert("complexity".into(), json_value!(10.0));
-        model.la.functions.push(f2);
+        model.add_element("la", "functions", f2);
 
         let mut c1 = make_element("C1", "MainCPU", "PhysicalComponent");
         c1.properties.insert("capacity".into(), json_value!(100.0));
-        model.pa.components.push(c1);
+        model.add_element("pa", "components", c1);
 
         let mut ex = make_element("E1", "DataLink", "FunctionalExchange");
         ex.properties.insert("source".into(), json_value!("F1"));
         ex.properties.insert("target".into(), json_value!("F2"));
         ex.properties.insert("volume".into(), json_value!(50.0));
-        model.la.exchanges.push(ex);
+        model.add_element("la", "exchanges", ex);
 
         model
     }
@@ -254,7 +254,6 @@ mod tests {
         let adapter = GeneticsAdapter::new(&model);
         let cost_model = adapter.build_cost_model(&model);
 
-        // Correction des assertions pour utiliser les champs réels
         assert_eq!(cost_model.function_loads.len(), 2);
         assert_eq!(cost_model.component_capacities.len(), 1);
         assert_eq!(cost_model.data_flow_matrix[0][1], 50.0);

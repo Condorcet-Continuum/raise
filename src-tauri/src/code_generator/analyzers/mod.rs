@@ -1,29 +1,17 @@
-pub mod dependency_analyzer;
-pub mod injection_analyzer;
-
 use crate::utils::prelude::*;
+
+pub mod semantic_analyzer;
+
+/// 📊 Résultat d'analyse simplifié pour alimenter le Weaver
 #[derive(Debug, Default, Clone)]
 pub struct AnalysisResult {
-    /// Liste des modules/fichiers que cet élément doit importer (ex: "crate::models::Engine")
-    pub imports: UniqueSet<String>,
-
-    /// Liste des dépendances fortes qui nécessitent une définition préalable
-    pub hard_dependencies: Vec<String>,
+    /// Les handles sémantiques requis (ex: "fn:init")
+    pub dependencies: Vec<String>,
+    /// Métadonnées extraites du modèle
+    pub metadata: UnorderedMap<String, String>,
 }
 
-/// Trait que tout analyseur de modèle doit respecter
+/// 📝 Contrat mathématique pour les analyseurs de code.
 pub trait Analyzer {
-    fn analyze(&self, model: &JsonValue) -> RaiseResult<AnalysisResult>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_analysis_result_defaults() {
-        let res = AnalysisResult::default();
-        assert!(res.imports.is_empty());
-        assert!(res.hard_dependencies.is_empty());
-    }
+    fn analyze(&self, element: &JsonValue) -> RaiseResult<AnalysisResult>;
 }

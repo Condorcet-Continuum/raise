@@ -18,27 +18,133 @@ impl NodeHandler for TaskHandler {
         context: &mut UnorderedMap<String, JsonValue>,
         shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
-        let mut orch = shared_ctx.orchestrator.lock().await;
+        // ====================================================================
+        // 1. IDENTIFICATION DE LA MISSION ET DE LA SQUAD
+        // ====================================================================
+        let mission_handle = match context.get("mission_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => raise_error!("ERR_MISSION_ID_MISSING_IN_CONTEXT"),
+        };
 
-        let mission = format!(
-            "OBJECTIF: {}\nPARAMÈTRES: {:?}\nCONTEXTE: {:?}",
-            node.name, node.params, context
+        let mission_doc = match shared_ctx
+            .manager
+            .get_document("missions", mission_handle)
+            .await?
+        {
+            Some(doc) => doc,
+            None => raise_error!("ERR_MISSION_NOT_FOUND"),
+        };
+        let squad_handle = mission_doc["squad_id"].as_str().unwrap_or_default();
+
+        tracing::info!("🕵️‍♂️ Assignation de la tâche à la Squad : {}", squad_handle);
+
+        let squad_doc = match shared_ctx
+            .manager
+            .get_document("squads", squad_handle)
+            .await?
+        {
+            Some(doc) => doc,
+            None => raise_error!(
+                "ERR_SQUAD_NOT_FOUND",
+                context = json_value!({"squad_id": squad_handle})
+            ),
+        };
+
+        let lead_agent_id = squad_doc["lead_agent_id"].as_str().unwrap_or_default();
+
+        // ====================================================================
+        // 2. FORGEAGE DE L'INTENTION MACRO POUR L'ORCHESTRATEUR
+        // ====================================================================
+        // Au lieu d'un simple prompt, on envoie une macro-intention qui sera
+        // classifiée (ex: "ManagePhase") par le IntentClassifier.
+        let rich_mission = format!(
+            "OBJECTIF DE PHASE : {}\n\nINSTRUCTIONS SPÉCIFIQUES : {:?}\n\nCONTEXTE JUMEAU NUMÉRIQUE : {:?}\n\nSQUAD LEAD : {}",
+            node.name, node.params, context, lead_agent_id
         );
 
-        let ai_response = orch.ask(&mission).await?;
+        // ====================================================================
+        // 3. EXÉCUTION DE LA SQUAD (BOUCLE ACL)
+        // ====================================================================
+        let mut orch = shared_ctx.orchestrator.lock().await;
+        // 🎯 NOUVEAU : On utilise le système multi-agents complet
+        let agent_result = orch.execute_workflow(&rich_mission).await?;
 
-        // Traçabilité et Explicabilité (XAI)
-        let mut xai = XaiFrame::new(&node.id, XaiMethod::ChainOfThought, ExplanationScope::Local);
-        xai.predicted_output = ai_response.clone();
-        xai.input_snapshot = mission;
+        // Mettre à jour le contexte (Jumeau Numérique) avec les artefacts générés (ex: Noeuds SysML, Code)
+        let mut new_artifacts = context
+            .get("generated_artifacts")
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
+        for artifact in &agent_result.artifacts {
+            new_artifacts.push(json::serialize_to_value(artifact).unwrap_or_default());
+        }
+        context.insert(
+            "generated_artifacts".to_string(),
+            json_value!(new_artifacts),
+        );
 
-        // Le Critique (Reward Model)
+        // ====================================================================
+        // 4. TRAÇABILITÉ (XAI) & AUDITABILITÉ (Reward Model)
+        // ====================================================================
+        let mut xai = XaiFrame::new(
+            &node.id,
+            XaiMethod::ChainOfThought,
+            ExplanationScope::Global,
+        );
+        xai.predicted_output = agent_result.message.clone();
+        xai.input_snapshot = rich_mission;
+
         let critique = shared_ctx.critic.evaluate(&xai).await;
         if !critique.is_acceptable {
             tracing::warn!("⚠️ Qualité insuffisante détectée par le critique !");
+            // Optionnel: On pourrait retourner ExecutionStatus::Failed ici selon la stratégie
         }
 
-        tracing::info!("✅ Tâche '{}' validée par l'agent.", node.name);
+        // ====================================================================
+        // 5. PERSISTANCE DE LA PREUVE D'EXPLICABILITÉ
+        // ====================================================================
+        let xai_id = format!(
+            "ref:xai_frames:handle:xai_{}_{}",
+            node.id,
+            UtcClock::now().timestamp_millis()
+        );
+        let mut xai_json = json::serialize_to_value(&xai).unwrap_or(json_value!({}));
+
+        if let Some(obj) = xai_json.as_object_mut() {
+            obj.insert("_id".to_string(), json_value!(xai_id.clone()));
+            obj.insert("fidelity_score".to_string(), json_value!(critique.score));
+        }
+
+        let _ = shared_ctx
+            .manager
+            .create_collection(
+                "xai_frames",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await;
+        let _ = shared_ctx
+            .manager
+            .upsert_document("xai_frames", xai_json)
+            .await;
+
+        let mut traces = context
+            .get("xai_traces")
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
+        traces.push(json_value!(xai_id));
+        context.insert("xai_traces".to_string(), json_value!(traces));
+
+        // Résultat textuel
+        let output_key = node
+            .params
+            .get("output_key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("task_output");
+        context.insert(output_key.to_string(), json_value!(agent_result.message));
+
+        tracing::info!(
+            "✅ Tâche '{}' exécutée par la Squad avec succès.",
+            node.name
+        );
         Ok(ExecutionStatus::Completed)
     }
 }
@@ -56,19 +162,19 @@ mod tests {
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
 
-    // 🎯 FIX : La fonction prend la DB et la config de la Sandbox en paramètres
-    async fn setup_dummy_context(
+    async fn setup_dummy_context<'a>(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
-        config: &AppConfig,
+        config: &'a AppConfig,
+        sandbox_db: &'a crate::json_db::storage::StorageEngine,
     ) -> (
         SharedRef<AsyncMutex<AiOrchestrator>>,
         SharedRef<PluginManager>,
         WorkflowCritic,
         UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
+        CollectionsManager<'a>,
     ) {
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        let manager = CollectionsManager::new(sandbox_db, &config.system_domain, &config.system_db);
 
-        // 1. 🎯 INJECTION DES MOCKS : L'orchestrateur IA est configuré de façon transparente
         inject_mock_component(
             &manager,
             "llm",
@@ -77,54 +183,167 @@ mod tests {
         .await;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
-        // 2. 🎯 INITIALISATION : On utilise le StorageEngine de la Sandbox (important : Some(storage.clone()))
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .unwrap();
-
-        let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
-        let critic = WorkflowCritic::default();
-        let tools = UnorderedMap::new();
-
         (
             SharedRef::new(AsyncMutex::new(orch)),
-            plugin_manager,
-            critic,
-            tools,
+            SharedRef::new(PluginManager::new(&storage, None)),
+            WorkflowCritic::default(),
+            UnorderedMap::new(),
+            manager,
         )
     }
 
     #[async_test]
     #[serial_test::serial]
-    #[cfg_attr(not(feature = "cuda"), ignore)] // Indispensable car on instancie l'Orchestrateur
-    async fn test_task_handler_execution() {
-        // 1. 🎯 MAGIE : La Sandbox initialise le dossier isolé et le schéma
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_task_handler_squad_delegation() {
         let sandbox = AgentDbSandbox::new().await;
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
-        // 2. Injection dans le faux contexte
-        let (orch, pm, critic, tools) =
-            setup_dummy_context(sandbox.db.clone(), &sandbox.config).await;
+        let generic_schema = "db://_system/_system/schemas/v1/db/generic.schema.json";
+
+        let mock_agent = |id: &str| {
+            let handle = id.replace("ref:agents:handle:", "");
+            json_value!({
+                "_id": id,
+                "handle": handle.clone(),
+                "name": handle,
+                "status": "active",
+                "description": "Mock Agent",
+                "neuroProfile": { "promptId": "ref:prompts:handle:dummy" },
+                "base": { "neuro_profile": { "prompt_id": "ref:prompts:handle:dummy" } }
+            })
+        };
+
+        let mock_prompt = json_value!({
+            "_id": "ref:prompts:handle:dummy",
+            "handle": "dummy",
+            "name": "Dummy Prompt",
+            "template": "Tu es un assistant de test.",
+            "content": "Tu es un assistant de test."
+        });
+
+        // Injection dans la DB Projet (Lue par l'Orchestrateur) et DB Système (Lue par le Handler)
+        let o = orch.lock().await;
+        let project_manager = CollectionsManager::new(&sandbox.db, &o.space, &o.db_name);
+
+        let collections = vec![
+            "agents",
+            "agent_configs",
+            "configs",
+            "prompts",
+            "session_agents",
+        ];
+        for coll in collections {
+            // DB Système (Utilisation du schéma générique)
+            let _ = manager.create_collection(coll, generic_schema).await;
+            if coll == "prompts" {
+                let _ = manager.upsert_document(coll, mock_prompt.clone()).await;
+            } else if coll == "agents" {
+                let _ = manager
+                    .upsert_document(coll, mock_agent("ref:agents:handle:agent_lead_architect"))
+                    .await;
+                let _ = manager
+                    .upsert_document(coll, mock_agent("ref:agents:handle:agent_software"))
+                    .await;
+                let _ = manager
+                    .upsert_document(coll, mock_agent("ref:agents:handle:agent_quality"))
+                    .await;
+            }
+
+            // DB Projet (Utilisation du schéma générique)
+            let _ = project_manager
+                .create_collection(coll, generic_schema)
+                .await;
+            if coll == "prompts" {
+                let _ = project_manager
+                    .upsert_document(coll, mock_prompt.clone())
+                    .await;
+            } else if coll == "agents" {
+                let _ = project_manager
+                    .upsert_document(coll, mock_agent("ref:agents:handle:agent_lead_architect"))
+                    .await;
+                let _ = project_manager
+                    .upsert_document(coll, mock_agent("ref:agents:handle:agent_software"))
+                    .await;
+                let _ = project_manager
+                    .upsert_document(coll, mock_agent("ref:agents:handle:agent_quality"))
+                    .await;
+            }
+        }
+        drop(o);
+
+        // 1. Mocker la Squad
+        let _ = manager.create_collection("squads", generic_schema).await;
+        manager
+            .upsert_document(
+                "squads",
+                json_value!({
+                    "_id": "squad_01",
+                    "handle": "squad-01",
+                    "name": "Squad Architecture",
+                    "lead_agent_id": "ref:agents:handle:agent_lead_architect",
+                    "status": "active"
+                }),
+            )
+            .await
+            .unwrap();
+
+        // 2. Mocker la Mission
+        let _ = manager.create_collection("missions", generic_schema).await;
+        manager
+            .upsert_document(
+                "missions",
+                json_value!({
+                    "_id": "mission_123",
+                    "handle": "mission-123",
+                    "name": "Conception Freinage",
+                    "squad_id": "squad_01",
+                    "mandate_id": "man_1",
+                    "status": "running"
+                }),
+            )
+            .await
+            .unwrap();
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager,
         };
-        let handler = TaskHandler;
 
         let node = WorkflowNode {
-            id: "task_1".into(),
+            id: "task_phase_la".into(),
             r#type: NodeType::Task,
-            name: "Agent de Test".into(),
-            params: json_value!({ "directive": "Analyse de sécurité" }),
+            name: "Phase d'Architecture Logique".into(),
+            params: json_value!({ "output_key": "la_report" }),
         };
 
         let mut data_ctx = UnorderedMap::new();
+        data_ctx.insert("mission_id".to_string(), json_value!("mission_123"));
 
-        // 3. Exécution de la tâche
-        let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
+        let result = TaskHandler
+            .execute(&node, &mut data_ctx, &ctx)
+            .await
+            .unwrap();
 
         assert_eq!(result, ExecutionStatus::Completed);
+        assert!(
+            data_ctx.contains_key("xai_traces"),
+            "Doit contenir les traces XAI"
+        );
+        assert!(
+            data_ctx.contains_key("la_report"),
+            "Doit contenir la sortie de l'Orchestrateur"
+        );
+        assert!(
+            data_ctx.contains_key("generated_artifacts"),
+            "Doit initialiser le tableau d'artefacts"
+        );
     }
 }

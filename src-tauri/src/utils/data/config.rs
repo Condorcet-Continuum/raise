@@ -74,6 +74,9 @@ pub struct AppConfig {
     #[serde(default = "fallback_integrations")]
     pub integrations: IntegrationsConfig,
 
+    #[serde(default = "fallback_simulation_context")]
+    pub simulation_context: SimulationContextConfig,
+
     // --- NIVEAU 2 & 3 : SURCHARGES ---
     pub workstation: Option<ScopeConfig>,
     pub user: Option<ScopeConfig>,
@@ -124,6 +127,10 @@ fn fallback_empty_services() -> Vec<String> {
 /// Fallback si la liste des composants est absente du JSON
 fn fallback_empty_components() -> Vec<String> {
     Vec::new()
+}
+
+fn fallback_simulation_context() -> SimulationContextConfig {
+    SimulationContextConfig::default()
 }
 
 // =========================================================================
@@ -205,6 +212,14 @@ impl std::fmt::Debug for IntegrationsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IntegrationsConfig").finish()
     }
+}
+
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
+pub struct SimulationContextConfig {
+    pub source_domain: String,
+    pub source_db: String,
+    pub target_domain: String,
+    pub target_db: String,
 }
 
 // =========================================================================
@@ -475,6 +490,17 @@ impl DeepLearningConfig {
         match self.device.as_str() {
             "cuda" => candle_core::Device::new_cuda(0).unwrap_or(candle_core::Device::Cpu),
             _ => candle_core::Device::Cpu,
+        }
+    }
+}
+
+impl Default for SimulationContextConfig {
+    fn default() -> Self {
+        Self {
+            source_domain: "mbse2".to_string(),
+            source_db: "raise".to_string(),
+            target_domain: "sim_mbse2".to_string(),
+            target_db: "sim_raise".to_string(),
         }
     }
 }

@@ -12,39 +12,10 @@ impl SimpleRetriever {
         Self { model }
     }
 
-    /// Récupère un élément "racine" ou par défaut pour servir de contexte initial à la simulation.
-    /// Parcourt les couches dans l'ordre pour trouver le premier élément tangible.
+    /// Récupère un élément "racine" pour servir de contexte initial.
+    /// 🎯 PURE GRAPH : On utilise l'itérateur universel pour trouver le premier élément disponible.
     pub fn get_root_element(&self) -> Option<ArcadiaElement> {
-        // 1. Operational Analysis (OA)
-        if let Some(el) = self.model.oa.actors.first() {
-            return Some(el.clone());
-        }
-        if let Some(el) = self.model.oa.activities.first() {
-            return Some(el.clone());
-        }
-
-        // 2. System Analysis (SA)
-        if let Some(el) = self.model.sa.components.first() {
-            return Some(el.clone());
-        }
-        if let Some(el) = self.model.sa.functions.first() {
-            return Some(el.clone());
-        }
-
-        // 3. Data
-        if let Some(el) = self.model.data.classes.first() {
-            return Some(el.clone());
-        }
-
-        // 4. AJOUT : Transverse (Si on n'a que des exigences au début du projet)
-        if let Some(el) = self.model.transverse.requirements.first() {
-            return Some(el.clone());
-        }
-        if let Some(el) = self.model.transverse.scenarios.first() {
-            return Some(el.clone());
-        }
-
-        None
+        self.model.all_elements().first().cloned().cloned()
     }
 
     /// Cherche les éléments pertinents avec tolérance aux accents/casse
@@ -55,89 +26,34 @@ impl SimpleRetriever {
 
         let mut found_elements = Vec::new();
 
-        // --- SCAN ARCHITECTURE ---
-        self.scan_layer(
-            "OA:Acteur",
-            &self.model.oa.actors,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "OA:Activité",
-            &self.model.oa.activities,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "SA:Fonction",
-            &self.model.sa.functions,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "SA:Composant",
-            &self.model.sa.components,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "LA:Composant",
-            &self.model.la.components,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "PA:Composant",
-            &self.model.pa.components,
-            &keywords,
-            &mut found_elements,
-        );
+        // 🎯 PURE GRAPH : Un seul scan universel au lieu de multiples appels à scan_layer
+        for el in self.model.all_elements() {
+            let raw_name = el.name.as_str();
+            let name_norm = preprocessing::normalize(raw_name);
 
-        // --- SCAN DATA ---
-        self.scan_layer(
-            "DATA:Class",
-            &self.model.data.classes,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "DATA:Item",
-            &self.model.data.exchange_items,
-            &keywords,
-            &mut found_elements,
-        );
+            // Récupération de la description dans les propriétés dynamiques
+            let raw_desc = el
+                .properties
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let desc_norm = preprocessing::normalize(raw_desc);
 
-        // --- AJOUT : SCAN TRANSVERSE ---
-        self.scan_layer(
-            "TRANS:Exigence",
-            &self.model.transverse.requirements,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "TRANS:Scénario",
-            &self.model.transverse.scenarios,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "TRANS:Chaîne",
-            &self.model.transverse.functional_chains,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "TRANS:Contrainte",
-            &self.model.transverse.constraints,
-            &keywords,
-            &mut found_elements,
-        );
-        self.scan_layer(
-            "TRANS:Définition",
-            &self.model.transverse.common_definitions,
-            &keywords,
-            &mut found_elements,
-        );
+            // MATCHING ROBUSTE
+            let matches = keywords
+                .iter()
+                .any(|k| k.len() > 3 && (name_norm.contains(k) || desc_norm.contains(k)));
+
+            let ask_all = keywords.iter().any(|k| k == "liste" || k == "tous");
+
+            if matches || ask_all {
+                found_elements.push((
+                    el.kind.clone(), // On utilise le type réel (URI)
+                    raw_name.to_string(),
+                    raw_desc.to_string(),
+                ));
+            }
+        }
 
         if found_elements.is_empty() {
             return "Aucun élément spécifique du modèle n'a été trouvé.".to_string();
@@ -150,38 +66,6 @@ impl SimpleRetriever {
 
         tokenizers::truncate_tokens(&context_str, 2000)
     }
-
-    fn scan_layer(
-        &self,
-        kind_label: &str,
-        elements: &[ArcadiaElement],
-        keywords: &[String],
-        results: &mut Vec<(String, String, String)>,
-    ) {
-        for el in elements {
-            let raw_name = el.name.as_str();
-
-            // 2. NORMALISATION DES DONNÉES DU MODÈLE
-            let name_norm = preprocessing::normalize(raw_name);
-            let raw_desc = el.description.as_deref().unwrap_or("");
-            let desc_norm = preprocessing::normalize(raw_desc);
-
-            // 3. MATCHING ROBUSTE
-            let matches = keywords
-                .iter()
-                .any(|k| k.len() > 3 && (name_norm.contains(k) || desc_norm.contains(k)));
-
-            let ask_all = keywords.iter().any(|k| k == "liste" || k == "tous");
-
-            if matches || ask_all {
-                results.push((
-                    kind_label.to_string(),
-                    raw_name.to_string(),
-                    raw_desc.to_string(),
-                ));
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -189,21 +73,24 @@ mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
     use crate::utils::prelude::*;
-    // Helper pour créer un élément factice
+
+    // Helper pour créer un élément factice compatible Pure Graph
     fn mock_el(name: &str) -> ArcadiaElement {
+        let mut properties = UnorderedMap::new();
+        properties.insert("description".to_string(), json_value!("desc"));
+
         ArcadiaElement {
             id: "uuid".to_string(),
             name: NameType::String(name.to_string()),
-            kind: "test".to_string(),
-            description: Some("desc".to_string()),
-            properties: UnorderedMap::new(),
+            kind: "test_type".to_string(),
+            properties,
         }
     }
 
     #[test]
     fn test_retrieval_normalization() {
         let mut model = ProjectModel::default();
-        model.sa.components.push(mock_el("Système Électrique"));
+        model.add_element("sa", "components", mock_el("Système Électrique"));
 
         let retriever = SimpleRetriever::new(model);
         let result = retriever.retrieve_context("Je cherche le systeme electrique");
@@ -225,7 +112,7 @@ mod tests {
         let retriever_empty = SimpleRetriever::new(model.clone());
         assert!(retriever_empty.get_root_element().is_none());
 
-        model.sa.components.push(mock_el("Composant Racine"));
+        model.add_element("sa", "components", mock_el("Composant Racine"));
         let retriever_full = SimpleRetriever::new(model);
 
         let root = retriever_full.get_root_element();
@@ -234,32 +121,24 @@ mod tests {
     }
 
     #[test]
-    fn test_retrieval_transverse_elements() {
+    fn test_retrieval_dynamic_elements() {
         let mut model = ProjectModel::default();
-        // Ajout d'une exigence
-        let mut req = mock_el("Perf Constraint 10ms");
-        req.description = Some("Le système doit répondre en moins de 10ms".to_string());
-        model.transverse.requirements.push(req);
 
-        // Ajout d'un scénario
-        model.transverse.scenarios.push(mock_el("Scénario Nominal"));
+        // Ajout d'une exigence via l'API dynamique
+        let mut req = mock_el("Perf Constraint 10ms");
+        req.properties.insert(
+            "description".to_string(),
+            json_value!("Le système doit répondre en moins de 10ms"),
+        );
+        model.add_element("transverse", "requirements", req);
 
         let retriever = SimpleRetriever::new(model);
 
-        // 1. Recherche sur Exigence (mot clé "10ms")
+        // Recherche sur mot clé "10ms"
         let res_req = retriever.retrieve_context("exigence 10ms");
-        assert!(res_req.contains("TRANS:Exigence"), "Label manquant");
-        assert!(res_req.contains("Perf Constraint"), "Nom manquant");
-
-        // 2. Recherche sur Scénario
-        let res_scen = retriever.retrieve_context("scénario nominal");
         assert!(
-            res_scen.contains("TRANS:Scénario"),
-            "Label Scénario manquant"
-        );
-        assert!(
-            res_scen.contains("Scénario Nominal"),
-            "Nom Scénario manquant"
+            res_req.contains("Perf Constraint"),
+            "Nom d'exigence manquant"
         );
     }
 }

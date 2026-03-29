@@ -25,8 +25,6 @@ pub struct UnifiedTestEnv {
     pub db: String,
 }
 
-// FICHIER : src-tauri/tests/common/mod.rs
-
 pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
@@ -53,6 +51,117 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
         .await
         .expect("❌ Échec de l'initialisation de l'index système");
 
+    // =========================================================================
+    // 🎯 AJOUT MAJEUR : PRÉ-CRÉATION DES COLLECTIONS POUR LE SANDBOX DE TESTS
+    // =========================================================================
+
+    // A. Collections Système (_system)
+    let _ = mgr
+        .create_collection(
+            "session_agents",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = mgr
+        .create_collection(
+            "prompts",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = mgr
+        .create_collection(
+            "agents",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = mgr
+        .create_collection(
+            "configs",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+
+    // B. Collections Métier cibles pour les artefacts (Domaine "un2")
+    let oa_mgr = CollectionsManager::new(&sandbox.storage, "un2", "oa");
+    let _ = oa_mgr
+        .create_collection(
+            "capabilities",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = oa_mgr
+        .create_collection(
+            "actors",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+
+    let data_mgr = CollectionsManager::new(&sandbox.storage, "un2", "data");
+    let _ = data_mgr
+        .create_collection(
+            "classes",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = data_mgr
+        .create_collection(
+            "types",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+
+    let sa_mgr = CollectionsManager::new(&sandbox.storage, "un2", "sa");
+    let _ = sa_mgr
+        .create_collection(
+            "functions",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+
+    let la_mgr = CollectionsManager::new(&sandbox.storage, "un2", "la");
+    let _ = la_mgr
+        .create_collection(
+            "components",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+
+    let pa_mgr = CollectionsManager::new(&sandbox.storage, "un2", "pa");
+    let _ = pa_mgr
+        .create_collection(
+            "physical_nodes",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+
+    let trans_mgr = CollectionsManager::new(&sandbox.storage, "un2", "transverse");
+    let _ = trans_mgr
+        .create_collection(
+            "requirements",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = trans_mgr
+        .create_collection(
+            "test_procedures",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+    let _ = trans_mgr
+        .create_collection(
+            "test_campaigns",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+
+    let epbs_mgr = CollectionsManager::new(&sandbox.storage, "un2", "epbs");
+    let _ = epbs_mgr
+        .create_collection(
+            "configuration_items",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await;
+
     // 5. INJECTION DES DOCUMENTS DE CONFIGURATION (Data-Driven)
 
     // A. Config ai_agents
@@ -68,12 +177,6 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     .await;
 
     // B. Mapping Ontologique
-    let _ = mgr
-        .create_collection(
-            "configs",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await;
     mgr.upsert_document(
         "configs",
         json_value!({

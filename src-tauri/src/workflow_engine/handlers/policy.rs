@@ -1,3 +1,4 @@
+// FICHIER : src-tauri/src/workflow_engine/handlers/policy.rs
 use crate::utils::prelude::*;
 
 use super::{HandlerContext, NodeHandler};
@@ -10,14 +11,14 @@ pub struct GatePolicyHandler;
 #[async_interface]
 impl NodeHandler for GatePolicyHandler {
     fn node_type(&self) -> NodeType {
-        NodeType::GatePolicy
+        NodeType::QualityGate // 🎯 FIX : Renommé de GatePolicy à QualityGate
     }
 
     async fn execute(
         &self,
         node: &WorkflowNode,
         context: &mut UnorderedMap<String, JsonValue>,
-        _shared_ctx: &HandlerContext<'_>, // Pas besoin d'outils externes pour évaluer l'AST
+        _shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
         let rule_name = node
             .params
@@ -71,35 +72,30 @@ impl NodeHandler for GatePolicyHandler {
         }
     }
 }
-// =========================================================================
-// TESTS UNITAIRES
-// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::orchestrator::AiOrchestrator;
+    use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
 
-    // 🎯 IMPORTS AJOUTÉS : On récupère notre Sandbox et les injecteurs
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
-
-    /// Helper pour générer rapidement un HandlerContext factice sans surcharger les tests
-    // 🎯 FIX : La fonction prend la DB et la config en paramètres
-    async fn setup_dummy_context(
+    async fn setup_dummy_context<'a>(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
-        config: &AppConfig,
+        config: &'a AppConfig,
+        sandbox_db: &'a crate::json_db::storage::StorageEngine,
     ) -> (
         SharedRef<AsyncMutex<AiOrchestrator>>,
         SharedRef<PluginManager>,
         WorkflowCritic,
         UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
+        CollectionsManager<'a>,
     ) {
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        let manager = CollectionsManager::new(sandbox_db, &config.system_domain, &config.system_db);
 
-        // 1. 🎯 INJECTION DES MOCKS : L'orchestrateur IA trouve sa configuration
         inject_mock_component(
             &manager,
             "llm",
@@ -108,7 +104,6 @@ mod tests {
         .await;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
-        // 2. 🎯 INITIALISATION : On utilise le StorageEngine de la Sandbox
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .unwrap();
@@ -122,6 +117,7 @@ mod tests {
             plugin_manager,
             critic,
             tools,
+            manager,
         )
     }
 
@@ -129,31 +125,27 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_policy_handler_valid_ast_pass() {
-        // 1. 🎯 MAGIE : La Sandbox initialise le dossier isolé
         let sandbox = AgentDbSandbox::new().await;
-
-        // 2. Injection dans le faux contexte
-        let (orch, pm, critic, tools) =
-            setup_dummy_context(sandbox.db.clone(), &sandbox.config).await;
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager,
         };
         let handler = GatePolicyHandler;
 
-        // Règle : Bloquer SI sensor_vibration > 8.0
         let ast = json_value!({ "gt": [{"var": "sensor_vibration"}, {"val": 8.0}] });
         let node = WorkflowNode {
             id: "v1".into(),
-            r#type: NodeType::GatePolicy,
+            r#type: NodeType::QualityGate, // 🎯 FIX
             name: "VETO: VIBRATION".into(),
             params: json_value!({ "rule": "VIBRATION_MAX", "ast": ast }),
         };
 
-        // Cas A : La valeur est sûre (2.5 n'est pas > 8.0) -> Veto NON déclenché (Completed)
         let mut data_ctx = UnorderedMap::from([("sensor_vibration".into(), json_value!(2.5))]);
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
@@ -165,27 +157,26 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_policy_handler_valid_ast_trigger() {
         let sandbox = AgentDbSandbox::new().await;
-        let (orch, pm, critic, tools) =
-            setup_dummy_context(sandbox.db.clone(), &sandbox.config).await;
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager,
         };
         let handler = GatePolicyHandler;
 
-        // Règle : Bloquer SI sensor_vibration > 8.0
         let ast = json_value!({ "gt": [{"var": "sensor_vibration"}, {"val": 8.0}] });
         let node = WorkflowNode {
             id: "v2".into(),
-            r#type: NodeType::GatePolicy,
+            r#type: NodeType::QualityGate, // 🎯 FIX
             name: "VETO: VIBRATION".into(),
             params: json_value!({ "rule": "VIBRATION_MAX", "ast": ast }),
         };
 
-        // Cas B : La valeur est dangereuse (12.0 > 8.0) -> Veto DÉCLENCHÉ (Failed)
         let mut data_ctx = UnorderedMap::from([("sensor_vibration".into(), json_value!(12.0))]);
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
@@ -197,21 +188,21 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_policy_handler_fails_safe_without_ast() {
         let sandbox = AgentDbSandbox::new().await;
-        let (orch, pm, critic, tools) =
-            setup_dummy_context(sandbox.db.clone(), &sandbox.config).await;
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager,
         };
         let handler = GatePolicyHandler;
 
-        // On omet le champ "ast" intentionnellement
         let node = WorkflowNode {
             id: "v3".into(),
-            r#type: NodeType::GatePolicy,
+            r#type: NodeType::QualityGate, // 🎯 FIX
             name: "VETO: NO_AST".into(),
             params: json_value!({ "rule": "MISSING_RULES" }),
         };
@@ -219,7 +210,6 @@ mod tests {
         let mut data_ctx = UnorderedMap::new();
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
-        // Sécurité maximale : Pas de règle = on bloque le flux
         assert_eq!(result, ExecutionStatus::Failed);
     }
 
@@ -228,21 +218,21 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_policy_handler_fails_safe_with_malformed_ast() {
         let sandbox = AgentDbSandbox::new().await;
-        let (orch, pm, critic, tools) =
-            setup_dummy_context(sandbox.db.clone(), &sandbox.config).await;
+        let (orch, pm, critic, tools, manager) =
+            setup_dummy_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
+            manager: &manager,
         };
         let handler = GatePolicyHandler;
 
-        // On met un AST qui n'est pas compréhensible par le rules_engine
         let node = WorkflowNode {
             id: "v4".into(),
-            r#type: NodeType::GatePolicy,
+            r#type: NodeType::QualityGate, // 🎯 FIX
             name: "VETO: BROKEN_AST".into(),
             params: json_value!({ "rule": "BROKEN", "ast": "Ceci n'est pas un JSON valide" }),
         };
@@ -250,7 +240,6 @@ mod tests {
         let mut data_ctx = UnorderedMap::new();
         let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
 
-        // L'erreur de parsing ne doit pas faire crasher l'application, mais bloquer l'exécution
         assert_eq!(result, ExecutionStatus::Failed);
     }
 }

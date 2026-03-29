@@ -15,7 +15,6 @@ pub struct ImpactedItem {
     pub distance: usize,
 }
 
-/// 🎯 OPTIMISATION : L'analyseur possède son Traceur, plus aucun problème de lifetime !
 pub struct ImpactAnalyzer {
     tracer: Tracer,
 }
@@ -45,17 +44,14 @@ impl ImpactAnalyzer {
         results: &mut Vec<ImpactedItem>,
     ) {
         if depth > max || !visited.insert(id.to_string()) {
-            return; // Prévention des boucles infinies (Cycles)
+            return;
         }
-
         if depth > 0 {
             results.push(ImpactedItem {
                 element_id: id.to_string(),
                 distance: depth,
             });
         }
-
-        // 🎯 L'algorithme se déplace de pure ID en ID
         for next_id in self.tracer.get_downstream_ids(id) {
             self.traverse(&next_id, depth + 1, max, visited, results);
         }
@@ -71,31 +67,41 @@ mod tests {
     use crate::model_engine::types::{ArcadiaElement, NameType, ProjectModel};
 
     #[test]
-    fn test_impact_propagation() {
+    fn test_impact_propagation_pure_graph() {
         let mut model = ProjectModel::default();
         let mut p1 = UnorderedMap::new();
         p1.insert("allocatedTo".into(), json_value!("B"));
 
-        model.sa.functions.push(ArcadiaElement {
-            id: "A".into(),
-            name: NameType::String("A".into()),
-            kind: "F".into(),
-            description: None,
-            properties: p1,
-        });
-        model.sa.functions.push(ArcadiaElement {
-            id: "B".into(),
-            name: NameType::String("B".into()),
-            kind: "F".into(),
-            description: None,
-            properties: Default::default(),
-        });
+        // 🎯 FIX : Utilisation de 'add_element' au lieu de model.sa.functions.push
+        model.add_element(
+            "sa",
+            "functions",
+            ArcadiaElement {
+                id: "A".into(),
+                name: NameType::String("A".into()),
+                kind: "SystemFunction".into(),
+                properties: p1,
+            },
+        );
 
-        // Test avec l'adaptateur de rétro-compatibilité
+        model.add_element(
+            "sa",
+            "functions",
+            ArcadiaElement {
+                id: "B".into(),
+                name: NameType::String("B".into()),
+                kind: "SystemFunction".into(),
+                properties: Default::default(),
+            },
+        );
+
         let tracer = Tracer::from_legacy_model(&model);
         let analyzer = ImpactAnalyzer::new(tracer);
         let report = analyzer.analyze("B", 1);
 
-        assert!(report.impacted_elements.iter().any(|e| e.element_id == "A"));
+        assert!(
+            report.impacted_elements.iter().any(|e| e.element_id == "A"),
+            "L'impact n'a pas été propagé de B vers A."
+        );
     }
 }

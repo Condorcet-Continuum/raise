@@ -1,13 +1,13 @@
 // FICHIER : src-tauri/src/model_engine/validators/dynamic_validator.rs
 
-use crate::utils::prelude::*;
-
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
 use crate::model_engine::validators::{ModelValidator, Severity, ValidationIssue};
 use crate::rules_engine::ast::Rule;
 use crate::rules_engine::evaluator::Evaluator;
+use crate::utils::prelude::*;
 
+/// Validateur piloté par les données (Data-Driven Rules)
 pub struct DynamicValidator {
     rules: Vec<Rule>,
 }
@@ -17,71 +17,28 @@ impl DynamicValidator {
         Self { rules }
     }
 
-    /// Vérifie si une règle s'applique à un élément donné via son type (Kind).
-    fn rule_applies_to(&self, rule_target: &str, element_kind: &str) -> bool {
-        match rule_target {
-            // OA
-            "oa.actors" => element_kind.contains("OperationalActor"),
-            "oa.activities" => element_kind.contains("OperationalActivity"),
-            "oa.capabilities" => element_kind.contains("OperationalCapability"),
-            "oa.entities" => element_kind.contains("OperationalEntity"),
-            // SA
-            "sa.components" => element_kind.contains("SystemComponent"),
-            "sa.functions" => element_kind.contains("SystemFunction"),
-            "sa.actors" => element_kind.contains("SystemActor"),
-            // LA
-            "la.components" => element_kind.contains("LogicalComponent"),
-            "la.functions" => element_kind.contains("LogicalFunction"),
-            // PA
-            "pa.components" => element_kind.contains("PhysicalComponent"),
-            // Transverse
-            "transverse.requirements" => element_kind.contains("Requirement"),
-            "transverse.scenarios" => element_kind.contains("Scenario"),
-            "transverse.functional_chains" => element_kind.contains("FunctionalChain"),
-            "transverse.constraints" => element_kind.contains("Constraint"),
-            // Generic
-            "all" => true,
-            _ => false,
-        }
-    }
-
-    /// Construit le contexte JSON pour l'évaluation de la règle
+    /// Prépare le contexte JSON pour l'évaluation de la règle
+    /// 🎯 PURE GRAPH : On aplatit l'élément et ses propriétés dynamiques
     fn build_context(element: &ArcadiaElement) -> JsonValue {
         let mut context = json_value!({
             "_id": element.id,
             "name": element.name.as_str(),
-            "kind": element.kind,
-            "description": element.description
+            "kind": element.kind
         });
 
-        // Fusion des propriétés dynamiques (flatten)
+        // Injection de toutes les propriétés dynamiques à la racine du contexte
         if let Some(obj) = context.as_object_mut() {
-            for (k, v) in &element.properties {
-                if !obj.contains_key(k) {
-                    obj.insert(k.clone(), v.clone());
-                }
+            for (key, value) in &element.properties {
+                obj.insert(key.clone(), value.clone());
             }
         }
         context
-    }
-
-    /// Helper pour valider une liste d'éléments (remplace la closure async problématique)
-    async fn validate_list(
-        &self,
-        elements: &[ArcadiaElement],
-        loader: &ModelLoader<'_>,
-        issues: &mut Vec<ValidationIssue>,
-    ) {
-        for el in elements {
-            // On réutilise validate_element pour garantir la cohérence
-            let el_issues = self.validate_element(el, loader).await;
-            issues.extend(el_issues);
-        }
     }
 }
 
 #[async_interface]
 impl ModelValidator for DynamicValidator {
+    /// Valide un élément spécifique contre toutes les règles applicables
     async fn validate_element(
         &self,
         element: &ArcadiaElement,
@@ -90,212 +47,138 @@ impl ModelValidator for DynamicValidator {
         let mut issues = Vec::new();
         let context = Self::build_context(element);
 
-        // Filtrage des règles applicables
-        let applicable_rules: Vec<&Rule> = self
-            .rules
-            .iter()
-            .filter(|r| self.rule_applies_to(&r.target, &element.kind))
-            .collect();
-
-        for rule in applicable_rules {
-            // Appel direct à la méthode statique evaluate
-            match Evaluator::evaluate(&rule.expr, &context, loader).await {
-                Ok(result) => {
-                    // Conversion du résultat (Cow<JsonValue>) en booléen
-                    let is_valid = match result.as_ref() {
-                        JsonValue::Bool(b) => *b,
-                        JsonValue::Null => false,
-                        JsonValue::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
-                        JsonValue::String(s) => !s.is_empty(),
-                        _ => true,
-                    };
-
-                    if !is_valid {
+        for rule in &self.rules {
+            // Une règle s'applique si la cible est "all" ou si le type (URI) contient la cible
+            if rule.target == "all" || element.kind.contains(&rule.target) {
+                // Évaluation de l'expression de la règle via le Rules Engine
+                if let Ok(result) = Evaluator::evaluate(&rule.expr, &context, loader).await {
+                    // Si l'expression retourne 'false', une issue est créée
+                    if result.as_bool() == Some(false) {
                         issues.push(ValidationIssue {
-                            severity: match rule.severity.as_deref() {
-                                Some("Error") => Severity::Error,
-                                Some("Info") => Severity::Info,
-                                _ => Severity::Warning,
-                            },
+                            severity: Severity::Warning,
                             rule_id: rule.id.clone(),
                             element_id: element.id.clone(),
-                            message: rule
-                                .description
-                                .clone()
-                                .unwrap_or_else(|| format!("Règle {} non respectée", rule.id)),
+                            message: rule.description.clone().unwrap_or_else(|| {
+                                format!("Violation de la règle dynamique : {}", rule.id)
+                            }),
                         });
                     }
-                }
-                Err(e) => {
-                    issues.push(ValidationIssue {
-                        severity: Severity::Info,
-                        rule_id: "EVAL_ERROR".to_string(),
-                        element_id: element.id.clone(),
-                        message: format!("Erreur d'évaluation règle {}: {}", rule.id, e),
-                    });
                 }
             }
         }
         issues
     }
 
+    /// Scan universel de toutes les règles sur tout le modèle
     async fn validate_full(&self, loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
         let mut all_issues = Vec::new();
 
         if let Ok(model) = loader.load_full_model().await {
-            // OA
-            self.validate_list(&model.oa.actors, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.oa.activities, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.oa.capabilities, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.oa.entities, loader, &mut all_issues)
-                .await;
-
-            // SA
-            self.validate_list(&model.sa.components, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.sa.functions, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.sa.actors, loader, &mut all_issues)
-                .await;
-
-            // LA
-            self.validate_list(&model.la.components, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.la.functions, loader, &mut all_issues)
-                .await;
-
-            // PA
-            self.validate_list(&model.pa.components, loader, &mut all_issues)
-                .await;
-
-            // AJOUT : TRANSVERSE
-            self.validate_list(&model.transverse.requirements, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.transverse.scenarios, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.transverse.functional_chains, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.transverse.constraints, loader, &mut all_issues)
-                .await;
+            // 🎯 PURE GRAPH : Itération universelle sans distinction de couches
+            for element in model.all_elements() {
+                let element_issues = self.validate_element(element, loader).await;
+                all_issues.extend(element_issues);
+            }
         }
 
         all_issues
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::model_engine::types::NameType;
+    // 🎯 FIX : Suppression des imports inutilisés (CollectionsManager, NameType)
     use crate::rules_engine::ast::Expr;
     use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
-    async fn test_dynamic_rule_application() {
+    async fn test_dynamic_rule_on_properties() {
         let sandbox = AgentDbSandbox::new().await;
-        let loader = ModelLoader::new_with_manager(CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        ));
+        let loader = ModelLoader::from_engine(&sandbox.db, "test", "db");
 
-        // Règle : name == "ValidElement"
-        let rule_expr = Expr::Eq(vec![
-            Expr::Var("name".to_string()),
-            Expr::Val(json_value!("ValidElement")),
-        ]);
-
+        // Règle : La masse doit être inférieure à 500 (mass < 500)
+        // 🎯 FIX : Utilisation de Box::new() pour les 2 arguments requis par Lt
         let rule = Rule {
-            id: "TEST_RULE".to_string(),
-            target: "oa.actors".to_string(),
-            expr: rule_expr,
-            description: Some("Nom invalide".to_string()),
-            severity: Some("Warning".to_string()),
+            id: "CHECK_MASS".into(),
+            target: "all".into(),
+            expr: Expr::Lt(
+                Box::new(Expr::Var("mass".to_string())),
+                Box::new(Expr::Val(json_value!(500))),
+            ),
+            description: Some("L'élément est trop lourd".into()),
+            severity: None,
         };
 
         let validator = DynamicValidator::new(vec![rule]);
 
-        // Élément valide
-        let valid_el = ArcadiaElement {
+        // 1. Cas Valide (masse = 100)
+        let mut props_ok = UnorderedMap::new();
+        props_ok.insert("mass".into(), json_value!(100));
+        let el_ok = ArcadiaElement {
             id: "1".into(),
-            name: NameType::String("ValidElement".into()),
-            kind: "OperationalActor".into(),
-            description: None,
-            properties: UnorderedMap::new(),
+            properties: props_ok,
+            ..Default::default()
         };
 
-        // Élément invalide
-        let invalid_el = ArcadiaElement {
+        let issues_ok = validator.validate_element(&el_ok, &loader).await;
+        assert!(issues_ok.is_empty());
+
+        // 2. Cas Invalide (masse = 1000)
+        let mut props_ko = UnorderedMap::new();
+        props_ko.insert("mass".into(), json_value!(1000));
+        let el_ko = ArcadiaElement {
             id: "2".into(),
-            name: NameType::String("BadName".into()),
-            kind: "OperationalActor".into(),
-            description: None,
-            properties: UnorderedMap::new(),
+            properties: props_ko,
+            ..Default::default()
         };
 
-        let issues_1 = validator.validate_element(&valid_el, &loader).await;
-        assert!(issues_1.is_empty());
-
-        let issues_2 = validator.validate_element(&invalid_el, &loader).await;
-        assert_eq!(issues_2.len(), 1);
-        assert_eq!(issues_2[0].rule_id, "TEST_RULE");
+        let issues_ko = validator.validate_element(&el_ko, &loader).await;
+        assert_eq!(issues_ko.len(), 1);
+        assert_eq!(issues_ko[0].rule_id, "CHECK_MASS");
     }
 
     #[async_test]
-    async fn test_dynamic_rule_on_transverse_requirement() {
+    async fn test_rule_target_filtering() {
         let sandbox = AgentDbSandbox::new().await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
+        let loader = ModelLoader::from_engine(&sandbox.db, "test", "db");
 
-        // Règle dynamique : properties/priority == "High"
-        let rule_expr = Expr::Eq(vec![
-            Expr::Var("priority".to_string()),
-            Expr::Val(json_value!("High")),
-        ]);
-
+        // Règle ciblant uniquement les "LogicalFunction"
         let rule = Rule {
-            id: "REQ_PRIORITY".to_string(),
-            target: "transverse.requirements".to_string(),
-            expr: rule_expr,
-            description: Some("Must be High priority".to_string()),
-            severity: Some("Error".to_string()),
+            id: "FUNC_ONLY".into(),
+            target: "LogicalFunction".into(),
+            expr: Expr::Val(json_value!(false)), // Échoue toujours
+            description: Some("Erreur fonction".into()),
+            severity: None,
         };
 
-        // Création d'une exigence invalide (Low priority)
-        let req = json_value!({
-            "_id": "REQ-LOW",
-            "id": "REQ-LOW",
-            "name": "Slow Request",
-            "type": "Requirement",
-            "priority": "Low"
-        });
-        manager
-            .create_collection(
-                "transverse",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
-        manager.insert_raw("transverse", &req).await.unwrap();
-
-        let loader = ModelLoader::new_with_manager(manager);
         let validator = DynamicValidator::new(vec![rule]);
 
-        let issues = validator.validate_full(&loader).await;
-
+        // Element qui matche le type
+        let el_match = ArcadiaElement {
+            kind: "https://raise.io/la#LogicalFunction".into(),
+            ..Default::default()
+        };
         assert_eq!(
-            issues.len(),
-            1,
-            "La règle dynamique sur l'exigence aurait dû échouer"
+            validator.validate_element(&el_match, &loader).await.len(),
+            1
         );
-        assert_eq!(issues[0].element_id, "REQ-LOW");
-        assert_eq!(issues[0].rule_id, "REQ_PRIORITY");
+
+        // Element qui ne matche pas
+        let el_no_match = ArcadiaElement {
+            kind: "https://raise.io/sa#SystemComponent".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            validator
+                .validate_element(&el_no_match, &loader)
+                .await
+                .len(),
+            0
+        );
     }
 }

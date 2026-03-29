@@ -32,23 +32,16 @@ pub enum TraceabilityCommands {
 }
 
 /// Helper pour extraire les documents (indispensable pour les nouveaux générateurs)
+/// 🎯 PURE GRAPH : Utilisation de all_elements() pour remplacer l'énumération manuelle des couches.
 fn get_docs(model: &ProjectModel) -> UnorderedMap<String, JsonValue> {
     let mut docs = UnorderedMap::new();
-    let mut collect = |elements: &Vec<raise::model_engine::types::ArcadiaElement>| {
-        for e in elements {
-            if let Ok(val) = json::serialize_to_value(e) {
-                docs.insert(e.id.clone(), val);
-            }
-        }
-    };
 
-    collect(&model.sa.functions);
-    collect(&model.sa.components);
-    collect(&model.la.functions);
-    collect(&model.la.components);
-    collect(&model.pa.functions);
-    collect(&model.pa.components);
-    collect(&model.transverse.requirements);
+    // On itère dynamiquement sur l'ensemble du graphe
+    for e in model.all_elements() {
+        if let Ok(val) = json::serialize_to_value(e) {
+            docs.insert(e.id.clone(), val);
+        }
+    }
 
     docs
 }
@@ -60,7 +53,6 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
 
     match args.command {
         TraceabilityCommands::Audit => {
-            // 🎯 Utilisation stricte du contexte JSON pour les macros
             user_info!(
                 "TRACE_START",
                 json_value!({
@@ -71,9 +63,11 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
                 })
             );
 
+            // Note: En production, le modèle serait chargé via le session_mgr
             let model = ProjectModel::default();
             let docs = get_docs(&model);
 
+            // Tracer::from_legacy_model utilise désormais en interne all_elements()
             let tracer = Tracer::from_legacy_model(&model);
             let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name);
 
@@ -105,7 +99,6 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
             let tracer = Tracer::from_legacy_model(&model);
             let analyzer = ImpactAnalyzer::new(tracer);
 
-            // 🎯 Remplacement de la simple string par un JSON structuré
             user_info!(
                 "IMPACT_CALCULATING",
                 json_value!({"step": "graph_traversal", "message": "Calcul des propagations de changement..."})
@@ -153,13 +146,10 @@ mod tests {
     use super::*;
     use crate::CliContext;
     use raise::utils::context::SessionManager;
-
-    #[cfg(test)]
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
     async fn test_traceability_cli_flow() {
-        // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
@@ -170,7 +160,6 @@ mod tests {
             command: TraceabilityCommands::Audit,
         };
 
-        // On passe le contexte à handle()
         assert!(handle(args, ctx).await.is_ok());
     }
 }

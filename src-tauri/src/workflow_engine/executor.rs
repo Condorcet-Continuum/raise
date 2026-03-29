@@ -7,7 +7,6 @@ use super::handlers::{
     decision::DecisionHandler, end::EndHandler, hitl::GateHitlHandler, mcp::McpHandler,
     policy::GatePolicyHandler, task::TaskHandler, wasm::WasmHandler, HandlerContext, NodeHandler,
 };
-use super::mandate::Mandate;
 use super::tools::AgentTool;
 use super::{critic::WorkflowCritic, ExecutionStatus, NodeType, WorkflowDefinition, WorkflowNode};
 use crate::plugins::manager::PluginManager;
@@ -25,15 +24,14 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
-    /// Crée un nouvel exécuteur lié à l'intelligence centrale et au Hub de Plugins
     pub fn new(
         orchestrator: SharedRef<AsyncMutex<AiOrchestrator>>,
         plugin_manager: SharedRef<PluginManager>,
     ) -> Self {
         let mut handlers: UnorderedMap<NodeType, Box<dyn NodeHandler>> = UnorderedMap::new();
 
-        // RECUTEMENT DE TOUS LES OUVRIERS SPÉCIALISÉS !
-        handlers.insert(NodeType::GatePolicy, Box::new(GatePolicyHandler));
+        // 🎯 FIX : Utilisation du nom QualityGate (aligné sur MBSE)
+        handlers.insert(NodeType::QualityGate, Box::new(GatePolicyHandler));
         handlers.insert(NodeType::Task, Box::new(TaskHandler));
         handlers.insert(NodeType::Decision, Box::new(DecisionHandler));
         handlers.insert(NodeType::CallMcp, Box::new(McpHandler));
@@ -50,7 +48,6 @@ impl WorkflowExecutor {
         }
     }
 
-    /// Permet au Scheduler d'injecter des outils dynamiquement
     pub fn register_tool(&mut self, tool: Box<dyn AgentTool>) {
         self.tools.insert(tool.name().to_string(), tool);
     }
@@ -61,23 +58,19 @@ impl WorkflowExecutor {
 
     pub async fn load_and_prepare_workflow(
         manager: &CollectionsManager<'_>,
-        mandate_id: &str,
+        mission_handle: &str,
     ) -> RaiseResult<WorkflowDefinition> {
-        let mandate = Mandate::fetch_from_store(manager, mandate_id).await?;
-
         tracing::info!(
-            "📜 Mandat chargé et validé : {} v{} (Stratégie: {:?})",
-            mandate.meta.author,
-            mandate.meta.version,
-            mandate.governance.strategy
+            "📥 Début de compilation pour la mission : {}",
+            mission_handle
         );
 
-        let workflow = WorkflowCompiler::compile(&mandate);
+        // Compilation asynchrone (tissage Mission/Mandat/Template)
+        let workflow = WorkflowCompiler::compile(manager, mission_handle).await?;
 
         tracing::info!(
-            "🏗️ Workflow compilé avec succès : {} ({}) - {} noeuds",
-            workflow.id,
-            mandate.id,
+            "🏗️ Workflow compilé : {} ({} noeuds)",
+            workflow.handle, // 🎯 FIX : Utilisation du handle métier sémantique
             workflow.nodes.len()
         );
 
@@ -88,10 +81,11 @@ impl WorkflowExecutor {
     // EXECUTION DES NOEUDS (ROUTAGE)
     // ========================================================================
 
-    pub async fn execute_node(
-        &self,
+    pub async fn execute_node<'a>(
+        &'a self,
         node: &WorkflowNode,
         context: &mut UnorderedMap<String, JsonValue>,
+        manager: &'a CollectionsManager<'a>,
     ) -> RaiseResult<ExecutionStatus> {
         tracing::info!("⚙️ Exécution : {} ({:?})", node.name, node.r#type);
 
@@ -100,17 +94,21 @@ impl WorkflowExecutor {
             plugin_manager: &self.plugin_manager,
             critic: &self.critic,
             tools: &self.tools,
+            manager,
         };
 
-        // Routage dynamique unique. Plus de match !
         if let Some(handler) = self.handlers.get(&node.r#type) {
             handler.execute(node, context, &shared_ctx).await
         } else {
-            tracing::error!(
-                "❌ Erreur Critique : Aucun Handler défini pour le type de nœud {:?}",
-                node.r#type
-            );
-            Ok(ExecutionStatus::Failed)
+            // 🎯 FIX : Utilisation de raise_error! pour l'observabilité standard RAISE
+            raise_error!(
+                "ERR_WF_HANDLER_NOT_FOUND",
+                context = json_value!({
+                    "node_id": node.id,
+                    "node_type": format!("{:?}", node.r#type),
+                    "hint": "Aucun exécuteur (Handler) associé à ce type de nœud. Vérifiez l'initialisation du WorkflowExecutor."
+                })
+            )
         }
     }
 }
@@ -118,23 +116,20 @@ impl WorkflowExecutor {
 // =========================================================================
 // TESTS UNITAIRES
 // =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model_engine::types::ProjectModel;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::tools::SystemMonitorTool;
-    // N'oubliez pas d'importer le CollectionsManager si ce n'est pas déjà fait
-    use crate::json_db::collections::manager::CollectionsManager;
 
-    // 🎯 FIX : On passe la Config en plus pour pouvoir initialiser le Manager
+    /// 🎯 Helper utilisé par test_gate_pause (Supprime le warning dead_code)
     async fn create_test_executor_with_tools(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &AppConfig,
     ) -> WorkflowExecutor {
         let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
-
-        // 1. 🎯 INJECTION DES MOCKS : On nourrit l'orchestrateur avec des composants factices
         inject_mock_component(
             &manager,
             "llm",
@@ -143,9 +138,7 @@ mod tests {
         .await;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
-        let model = ProjectModel::default();
-
-        let orch = AiOrchestrator::new(model, &manager, storage.clone())
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .unwrap();
         let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
@@ -159,10 +152,14 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gate_pause() {
+        // 🎯 FIX : Restauration du test qui appelle create_test_executor_with_tools
         let sandbox = AgentDbSandbox::new().await;
-
-        // 🎯 FIX : On passe db et config
         let executor = create_test_executor_with_tools(sandbox.db.clone(), &sandbox.config).await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
         let node = WorkflowNode {
             id: "node_pause".into(),
@@ -172,7 +169,7 @@ mod tests {
         };
 
         let mut ctx = UnorderedMap::new();
-        let result = executor.execute_node(&node, &mut ctx).await;
+        let result = executor.execute_node(&node, &mut ctx, &manager).await;
         assert_eq!(result.unwrap(), ExecutionStatus::Paused);
     }
 
@@ -181,20 +178,33 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_bridge_loading_and_compilation() {
         let sandbox = AgentDbSandbox::new().await;
-
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
 
-        let valid_mandate = json_value!({
-            "_id": "mandate_prod",
-            "meta": { "author": "BridgeTest", "version": "1.0", "status": "ACTIVE" },
-            "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": { "agent_security": 1.0 } },
-            "hardLogic": { "vetos": [{ "rule": "VIBRATION_MAX", "active": true, "action": "STOP" }] },
-            "observability": { "heartbeatMs": 100 }
-        });
+        // Mocks JSON alignés sur les schémas stricts (Handle et Name obligatoires)
+        manager
+            .create_collection(
+                "workflow_definitions",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+        manager
+            .upsert_document(
+                "workflow_definitions",
+                json_value!({
+                    "handle": "tpl_1",
+                    "name": "Template Test",
+                    "entry": "start",
+                    "nodes": [{"id": "start", "type": "task", "name": "Start", "params": {}}],
+                    "edges": []
+                }),
+            )
+            .await
+            .unwrap();
 
         manager
             .create_collection(
@@ -203,17 +213,48 @@ mod tests {
             )
             .await
             .unwrap();
+        manager
+            .upsert_document(
+                "mandates",
+                json_value!({
+                    "handle": "mandate-1",
+                    "name": "Mandat de Test",
+                    "meta": { "author": "Test", "version": "1.0", "status": "ACTIVE" },
+                    "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": {} },
+                    "hardLogic": { "vetos": [] },
+                    "observability": { "heartbeatMs": 100 }
+                }),
+            )
+            .await
+            .unwrap();
 
         manager
-            .insert_raw("mandates", &valid_mandate)
+            .create_collection(
+                "missions",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
             .await
-            .expect("L'insertion du mandat a échoué");
+            .unwrap();
 
-        let result = WorkflowExecutor::load_and_prepare_workflow(&manager, "mandate_prod").await;
+        // Note: L'insertion utilise des handles sémantiques. Le moteur json_db générera l'_id.
+        manager
+            .upsert_document(
+                "missions",
+                json_value!({
+                    "handle": "mission-prod",
+                    "name": "Mission de Production",
+                    "mandate_id": "mandate-1",
+                    "squad_id": "squad_1",
+                    "workflow_template_id": "tpl_1",
+                    "status": "draft"
+                }),
+            )
+            .await
+            .unwrap();
 
-        assert!(result.is_ok(), "Le chargement du workflow a échoué");
+        let result = WorkflowExecutor::load_and_prepare_workflow(&manager, "mission-prod").await;
+        assert!(result.is_ok());
         let workflow = result.unwrap();
-
-        assert!(workflow.nodes.len() >= 4);
+        assert!(workflow.handle.starts_with("wf_compiled_mandate-1"));
     }
 }

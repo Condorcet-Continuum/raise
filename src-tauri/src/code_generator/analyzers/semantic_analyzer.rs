@@ -2,16 +2,15 @@ use super::{AnalysisResult, Analyzer};
 use crate::utils::prelude::*;
 
 #[derive(Default)]
-pub struct DependencyAnalyzer;
+pub struct SemanticAnalyzer; // Renommé pour cohérence avec le fichier
 
-impl DependencyAnalyzer {
+impl SemanticAnalyzer {
     pub fn new() -> Self {
         Self
     }
 
     /// Détecte le type d'élément Arcadia et applique les règles de dépendance
     fn extract_dependencies(&self, element: &JsonValue, result: &mut AnalysisResult) {
-        // Tentative de détection du type via JSON-LD (@type) ou structure simple (type)
         let element_type = element
             .get("@type")
             .or_else(|| element.get("type"))
@@ -26,7 +25,6 @@ impl DependencyAnalyzer {
                 self.analyze_function(element, result);
             }
             _ => {
-                // Fallback : recherche générique de références
                 self.analyze_generic_refs(element, result);
             }
         }
@@ -34,33 +32,27 @@ impl DependencyAnalyzer {
 
     fn analyze_component(&self, component: &JsonValue, result: &mut AnalysisResult) {
         // 1. Dépendances fonctionnelles (Allocation)
-        // Un composant doit importer les fonctions qu'il héberge/exécute
         if let Some(allocations) = component
             .get("ownedFunctionalAllocation")
             .and_then(|v| v.as_array())
         {
             for alloc in allocations {
                 if let Some(target_id) = alloc.get("target").and_then(|v| v.as_str()) {
-                    // Simulation d'un namespace basé sur l'ID (à adapter selon votre structure réelle)
-                    result
-                        .imports
-                        .insert(format!("crate::functions::Function_{}", target_id));
+                    // On utilise le handle sémantique strict "fn:ID"
+                    result.dependencies.push(format!("fn:{}", target_id));
                 }
             }
         }
 
-        // 2. Dépendances structurelles (Enfants)
+        // 2. Dépendances structurelles (Sous-composants)
         if let Some(children) = component
             .get("ownedLogicalComponents")
             .and_then(|v| v.as_array())
         {
             for child in children {
                 if let Some(child_name) = child.get("name").and_then(|v| v.as_str()) {
-                    result.hard_dependencies.push(child_name.to_string());
-                    // On importe aussi le type de l'enfant
-                    result
-                        .imports
-                        .insert(format!("crate::components::{}", child_name));
+                    // Les sous-composants sont des dépendances directes
+                    result.dependencies.push(format!("comp:{}", child_name));
                 }
             }
         }
@@ -73,20 +65,18 @@ impl DependencyAnalyzer {
             .and_then(|v| v.as_array())
         {
             if !inputs.is_empty() {
-                result
-                    .imports
-                    .insert("crate::common::ExchangeHandler".to_string());
+                // Dépendance vers le handler sémantique système
+                result.dependencies.push("sys:exchange_handler".to_string());
             }
         }
     }
 
     fn analyze_generic_refs(&self, element: &JsonValue, result: &mut AnalysisResult) {
-        // Scan récursif simple pour trouver des champs "type_ref" ou "base_class"
         if let Some(obj) = element.as_object() {
             for (key, val) in obj {
                 if key == "base_class" || key == "implements" {
                     if let Some(ref_name) = val.as_str() {
-                        result.imports.insert(format!("crate::base::{}", ref_name));
+                        result.dependencies.push(format!("base:{}", ref_name));
                     }
                 }
             }
@@ -94,7 +84,7 @@ impl DependencyAnalyzer {
     }
 }
 
-impl Analyzer for DependencyAnalyzer {
+impl Analyzer for SemanticAnalyzer {
     fn analyze(&self, model: &JsonValue) -> RaiseResult<AnalysisResult> {
         let mut result = AnalysisResult::default();
         self.extract_dependencies(model, &mut result);
@@ -102,44 +92,41 @@ impl Analyzer for DependencyAnalyzer {
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES (Corrigés pour la V2)
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_component_dependencies_extraction() {
-        let analyzer = DependencyAnalyzer::new();
+        let analyzer = SemanticAnalyzer::new();
 
         let component = json_value!({
             "@type": "LogicalComponent",
             "name": "FlightManager",
-            // Allocation de fonction
             "ownedFunctionalAllocation": [
                 { "target": "ComputeRouteID" }
             ],
-            // Sous-composants
             "ownedLogicalComponents": [
-                { "name": "Autopilot" },
-                { "name": "GPS" }
+                { "name": "Autopilot" }
             ]
         });
 
         let result = analyzer.analyze(&component).expect("Analyse échouée");
 
-        // Vérification des imports
+        // On vérifie que les handles sont corrects dans 'dependencies'
         assert!(result
-            .imports
-            .contains("crate::functions::Function_ComputeRouteID"));
-        assert!(result.imports.contains("crate::components::Autopilot"));
-
-        // Vérification des dépendances fortes
-        assert_eq!(result.hard_dependencies.len(), 2);
-        assert!(result.hard_dependencies.contains(&"Autopilot".to_string()));
+            .dependencies
+            .contains(&"fn:ComputeRouteID".to_string()));
+        assert!(result.dependencies.contains(&"comp:Autopilot".to_string()));
     }
 
     #[test]
     fn test_function_dependencies() {
-        let analyzer = DependencyAnalyzer::new();
+        let analyzer = SemanticAnalyzer::new();
         let function = json_value!({
             "@type": "LogicalFunction",
             "name": "Calculate",
@@ -147,6 +134,8 @@ mod tests {
         });
 
         let result = analyzer.analyze(&function).expect("Analyse échouée");
-        assert!(result.imports.contains("crate::common::ExchangeHandler"));
+        assert!(result
+            .dependencies
+            .contains(&"sys:exchange_handler".to_string()));
     }
 }

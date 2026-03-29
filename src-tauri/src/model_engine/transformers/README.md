@@ -1,18 +1,18 @@
 # Model Transformers (`src/model_engine/transformers`)
 
-Ce module gère la **génération d'artefacts** à partir du modèle système (`ProjectModel`) ou la transformation de données externes (ex: Dialogue IA) vers le modèle.
+Ce module gère la **transformation d'artefacts** à partir du modèle système global (`ProjectModel`) ou la conversion de données externes (ex: IA/LLM) vers le modèle.
 
-C'est le moteur de "production" de l'application RAISE : il permet de passer de l'architecture abstraite (Arcadia) à du code concret (Rust, VHDL) ou des rapports.
+Suite à la migration vers l'architecture **"Pure Graph"**, ce module a été entièrement repensé pour devenir **Data-Driven**. Il ne repose plus sur du code Rust statique pour chaque domaine, mais utilise un moteur sémantique générique capable de naviguer intelligemment dans le graphe des données.
 
 ## 🎯 Objectifs
 
-1.  **Code Generation (Model-to-Text)** : Générer des squelettes de code (Structs, Classes, Entity VHDL) basés sur les Composants et Interfaces définis dans le modèle.
-2.  **Model Transformation (Text-to-Model)** : Convertir des sorties textuelles d'IA (LLM) en objets JSON valides pour insertion dans la base de données (via `DialogueToModel`).
-3.  **Abstraction Factory** : Fournir une interface unique pour invoquer différents types de générateurs sans coupler le code métier aux implémentations spécifiques.
+1.  **Génération Contextuelle (Graph-to-Text)** : Extraire des vues spécifiques (Logiciel, Matériel, Système) en naviguant dans les relations sémantiques du `ProjectModel` (ex: allocations fonctionnelles, liens physiques).
+2.  **Transformation Pilotée par les Données** : Utiliser un `UniversalTransformer` unique configuré par des règles de mapping, évitant la duplication de code pour chaque nouveau domaine d'ingénierie.
+3.  **Text-to-Model (IA)** : Convertir des intentions textuelles (LLM) en objets JSON (`ArcadiaElement`) valides pour insertion dans le graphe (via `DialogueToModel`).
 
-## 📊 Architecture
+## 📊 Architecture (Universal Pattern)
 
-Le système utilise un **Pattern Factory**. Le client demande un transformateur pour un domaine spécifique (`TransformationDomain`), et le moteur retourne l'implémentation correspondante traitant le `ProjectModel`.
+Le système utilise toujours une Factory, mais au lieu de retourner des classes différentes, elle configure une instance générique avec un `TransformerConfig` qui dicte quelles couches et quelles relations suivre dans le graphe.
 
 ```mermaid
 classDiagram
@@ -21,116 +21,107 @@ classDiagram
         Software
         Hardware
         System
-        Dialogue
+    }
+
+    class TransformerConfig {
+        <<Struct>>
+        +domain: String
+        +relation_key: String
+        +target_layer: String
+        +target_col: String
     }
 
     class ModelTransformer {
         <<Trait>>
-        +transform(input: Value) -> Result~Value~
+        +transform(input: Value) Result
+        +transform_with_context(element: ArcadiaElement, model: ProjectModel) Result
     }
 
-    class SoftwareTransformer {
-        +transform()
-        -generate_rust_structs()
-    }
-
-    class HardwareTransformer {
-        +transform()
-        -generate_vhdl_entity()
+    class UniversalTransformer {
+        -config: TransformerConfig
+        +transform_with_context()
     }
 
     class DialogueToModelTransformer {
         +transform()
-        -parse_llm_json()
     }
 
-    ModelTransformer <|-- SoftwareTransformer
-    ModelTransformer <|-- HardwareTransformer
-    ModelTransformer <|-- DialogueToModelTransformer
-
+    ModelTransformer <|.. UniversalTransformer
+    ModelTransformer <|.. DialogueToModelTransformer
+    UniversalTransformer --> TransformerConfig : Utilise
 ```
 
 ## 📂 Structure du Module
 
+Le code a été drastiquement factorisé pour une maintenance minimale et une évolutivité maximale :
+
 ```text
 src/model_engine/transformers/
-├── mod.rs                  # Factory (get_transformer) et définitions des Traits
-├── software.rs             # Génération de code logiciel (Rust/C++)
-├── hardware.rs             # Génération de code matériel (VHDL/Verilog)
-├── system.rs               # Transformation vers des rapports système
-└── dialogue_to_model.rs    # Parsing et validation des réponses JSON de l'IA
-
+├── mod.rs                  # Cœur du moteur : Trait, UniversalTransformer et Factory
+└── dialogue_to_model.rs    # Plugin spécifique : NLP/LLM vers graphe Arcadia
 ```
+*(Note : Les anciens fichiers `software.rs`, `hardware.rs` et `system.rs` ont été fusionnés dans le moteur universel).*
 
 ## 🛠️ Le Trait `ModelTransformer`
 
-Tous les transformateurs implémentent ce trait générique :
+Le trait expose désormais deux méthodes. La méthode phare est `transform_with_context`, qui donne au transformateur une vision complète du graphe en mémoire.
 
 ```rust
-pub trait ModelTransformer {
-    /// Transforme une entrée (souvent le ProjectModel ou une String)
-    /// en une sortie (Code, JSON, Rapport).
-    fn transform(&self, input: &serde_json::Value) -> anyhow::RaiseResult<serde_json::Value>;
-}
+pub trait ModelTransformer: Send + Sync {
+    /// Transformation simple (Legacy ou NLP)
+    fn transform(&self, element: &JsonValue) -> RaiseResult<JsonValue>;
 
+    /// 🎯 Transformation Sémantique (Pure Graph)
+    /// Permet de générer du code en analysant les relations de l'élément avec le reste du modèle.
+    fn transform_with_context(
+        &self,
+        element: &ArcadiaElement,
+        model: &ProjectModel,
+    ) -> RaiseResult<JsonValue>;
+}
 ```
 
 ## 🚀 Utilisation
 
-### 1. Génération de Code (Software)
+### 1. Génération de Code (Avec Contexte du Graphe)
 
-Transforme les composants de l'architecture logique (LA) ou physique (PA) en structures de code.
+Exemple d'extraction d'une vue logicielle pour un composant, en laissant le moteur chercher automatiquement ses fonctions allouées.
 
 ```rust
 use crate::model_engine::transformers::{get_transformer, TransformationDomain};
-use serde_json::json;
 
-fn generate_code(model: &ProjectModel) {
-    // 1. Récupérer le transformateur Logiciel
+async fn generate_software_view(model: &ProjectModel, element_id: &str) {
+    // 1. Localiser l'élément source dans le graphe dynamique
+    let element = model.find_element(element_id).expect("Élément introuvable");
+
+    // 2. Instancier le transformateur configuré pour le domaine Logiciel
     let transformer = get_transformer(TransformationDomain::Software);
 
-    // 2. Préparer l'input (le modèle complet serialisé)
-    let input = serde_json::to_value(model).unwrap();
+    // 3. Exécuter la transformation en fournissant le graphe complet (modèle)
+    let result = transformer.transform_with_context(element, model).unwrap();
 
-    // 3. Exécuter la transformation
-    let result = transformer.transform(&input).expect("Erreur de génération");
-
-    println!("Code généré : {}", result["code"]);
+    println!("Domaine : {}", result["domain"]);
+    println!("Entité et relations extraites : {}", result["entity"]);
 }
-
 ```
 
-### 2. Dialogue vers Modèle (AI Feature)
+### 2. Ajout d'un Nouveau Domaine d'Ingénierie
 
-Utilisé par l'assistant pour convertir une suggestion textuelle en un élément insérable en base.
+Pour ajouter un nouveau domaine (ex: `Network`), **il n'est plus nécessaire de créer un nouveau fichier Rust**. 
+Il suffit d'ajouter sa configuration dans la Factory (ou directement en base de données) :
 
 ```rust
-use crate::model_engine::transformers::TransformationDomain;
-
-fn ai_response_to_model(llm_response: &str) {
-    let transformer = get_transformer(TransformationDomain::Dialogue);
-
-    // L'input est la réponse brute de l'IA
-    let input = json!({ "raw_text": llm_response });
-
-    // L'output est un ArcadiaElement valide (nettoyé et typé)
-    let element = transformer.transform(&input).unwrap();
-
-    // On peut maintenant l'insérer via le ModelLoader
+TransformerConfig {
+    domain: "network".into(),
+    relation_key: "ownedCommunicationLinks".into(),
+    target_layer: "pa".into(),
+    target_col: "networks".into(),
 }
-
 ```
 
 ## ⚠️ Règles d'Implémentation
 
-1. **Idempotence** : Les transformateurs doivent (autant que possible) produire le même résultat pour le même modèle d'entrée.
-2. **Séparation Logiciel/Matériel** :
-
-- Les composants tagués `Software` ou `Node` génèrent du code impératif/OO.
-- Les composants tagués `Hardware` ou `FPGA` génèrent du code de description matérielle (HDL).
-
-3. **Traçabilité** : Le code généré doit idéalement inclure en commentaire l'ID de l'élément modèle source pour permettre le "Round-Trip Engineering".
-
+1. **Aucun typage dur** : Ne référencez jamais des structures statiques (`SoftwareComponent`, etc.). Naviguez toujours via les propriétés JSON dynamiques (`element.properties.get(...)`) et les helpers du modèle (`model.get_collection(...)`).
+2. **Extensions** : Si une transformation nécessite un algorithme lourd et non générique (ex: génération d'images, parsing LLM), créez un nouveau fichier dédié dans ce dossier (comme `dialogue_to_model.rs`) et implémentez le trait `ModelTransformer`.
 ```
 
-```

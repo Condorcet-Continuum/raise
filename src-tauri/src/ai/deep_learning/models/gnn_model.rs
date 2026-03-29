@@ -50,6 +50,7 @@ impl ArcadiaGnnModel {
     }
 
     /// Calcule la similarité cosinus entre deux composants Arcadia après transformation GNN.
+    /// Calcule la similarité cosinus entre deux composants Arcadia après transformation GNN.
     pub async fn compute_similarity(
         &self,
         embeddings: &Tensor,
@@ -58,41 +59,89 @@ impl ArcadiaGnnModel {
         uri_b: &str,
     ) -> RaiseResult<f32> {
         // 1. Récupération stricte des index
-        let idx_a = adj_data.uri_to_index.get(uri_a).cloned().ok_or_else(|| {
-            build_error!(
-                "ERR_GNN_URI_NOT_FOUND",
-                error = format!("URI {} introuvable", uri_a)
-            )
-        })?;
+        let idx_a = match adj_data.uri_to_index.get(uri_a) {
+            Some(&idx) => idx,
+            None => {
+                raise_error!(
+                    "ERR_GNN_URI_NOT_FOUND",
+                    error = format!("URI {} introuvable", uri_a)
+                )
+            }
+        };
 
-        let idx_b = adj_data.uri_to_index.get(uri_b).cloned().ok_or_else(|| {
-            build_error!(
-                "ERR_GNN_URI_NOT_FOUND",
-                error = format!("URI {} introuvable", uri_b)
-            )
-        })?;
+        let idx_b = match adj_data.uri_to_index.get(uri_b) {
+            Some(&idx) => idx,
+            None => {
+                raise_error!(
+                    "ERR_GNN_URI_NOT_FOUND",
+                    error = format!("URI {} introuvable", uri_b)
+                )
+            }
+        };
 
-        let data = embeddings
-            .to_vec2::<f32>()
-            .map_err(|e| build_error!("ERR_GNN_TENSOR_EXPORT", error = e.to_string()))?;
+        // 2. EXTRACTION OPTIMISÉE (GPU) : On isole uniquement les deux vecteurs [1, D]
+        let vec_a = match embeddings.narrow(0, idx_a, 1) {
+            Ok(t) => match t.squeeze(0) {
+                Ok(t) => t,
+                Err(e) => {
+                    raise_error!("ERR_GNN_TENSOR_SQUEEZE", error = e.to_string())
+                }
+            },
+            Err(e) => raise_error!("ERR_GNN_TENSOR_NARROW", error = e.to_string()),
+        };
 
-        let vec_a = &data[idx_a];
-        let vec_b = &data[idx_b];
+        let vec_b = match embeddings.narrow(0, idx_b, 1) {
+            Ok(t) => match t.squeeze(0) {
+                Ok(t) => t,
+                Err(e) => {
+                    raise_error!("ERR_GNN_TENSOR_SQUEEZE", error = e.to_string())
+                }
+            },
+            Err(e) => raise_error!("ERR_GNN_TENSOR_NARROW", error = e.to_string()),
+        };
 
-        // 2. Calcul de la similarité cosinus (A·B) / (||A||*||B||)
-        let mut dot = 0.0;
-        let mut norm_a = 0.0;
-        let mut norm_b = 0.0;
+        // 3. MATHÉMATIQUES GPU : Produit scalaire et normes
+        let dot_tensor = match vec_a.mul(&vec_b) {
+            Ok(t) => match t.sum_all() {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_GNN_MATH_SUM", error = e.to_string()),
+            },
+            Err(e) => raise_error!("ERR_GNN_MATH_MUL", error = e.to_string()),
+        };
 
-        for (a, b) in vec_a.iter().zip(vec_b.iter()) {
-            dot += a * b;
-            norm_a += a * a;
-            norm_b += b * b;
-        }
+        let norm_a_tensor = match vec_a.sqr() {
+            Ok(t) => match t.sum_all() {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_GNN_MATH_SUM", error = e.to_string()),
+            },
+            Err(e) => raise_error!("ERR_GNN_MATH_SQR", error = e.to_string()),
+        };
 
-        // 🎯 OPTIMISATION PROD : Epsilon de sécurité pour éviter les divisions par zéro (NaN)
+        let norm_b_tensor = match vec_b.sqr() {
+            Ok(t) => match t.sum_all() {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_GNN_MATH_SUM", error = e.to_string()),
+            },
+            Err(e) => raise_error!("ERR_GNN_MATH_SQR", error = e.to_string()),
+        };
+
+        // 4. RAPATRIEMENT CPU (Seulement 3 petits floats !)
+        let dot = match dot_tensor.to_scalar::<f32>() {
+            Ok(val) => val,
+            Err(e) => raise_error!("ERR_GNN_SCALAR", error = e.to_string()),
+        };
+
+        let norm_a = match norm_a_tensor.to_scalar::<f32>() {
+            Ok(val) => val,
+            Err(e) => raise_error!("ERR_GNN_SCALAR", error = e.to_string()),
+        };
+
+        let norm_b = match norm_b_tensor.to_scalar::<f32>() {
+            Ok(val) => val,
+            Err(e) => raise_error!("ERR_GNN_SCALAR", error = e.to_string()),
+        };
+        // 5. Calcul final de la similarité cosinus
         let epsilon = 1e-8_f32;
-
         Ok(dot / ((norm_a + epsilon).sqrt() * (norm_b + epsilon).sqrt()))
     }
 }

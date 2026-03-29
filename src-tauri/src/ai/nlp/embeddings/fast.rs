@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/ai/nlp/embeddings/fast.rs
 
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
@@ -8,9 +9,24 @@ pub struct FastEmbedEngine {
 }
 
 impl FastEmbedEngine {
-    pub fn new() -> RaiseResult<Self> {
-        let options =
-            InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true);
+    // 🎯 FIX : On prend le manager et on devient async pour lire la base de données
+    pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
+        let settings = AppConfig::get_component_settings(manager, "ai_nlp")
+            .await
+            .unwrap_or(json_value!({}));
+
+        let model_name_str = settings
+            .get("fastembed_model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("BGESmallENV15");
+
+        // Déduction dynamique du modèle (on pourrait ajouter d'autres variantes de FastEmbed)
+        let embed_model = match model_name_str {
+            "AllMiniLML6V2" => EmbeddingModel::AllMiniLML6V2,
+            _ => EmbeddingModel::BGESmallENV15,
+        };
+
+        let options = InitOptions::new(embed_model).with_show_download_progress(true);
 
         let model = match TextEmbedding::try_new(options) {
             Ok(m) => m,
@@ -20,7 +36,7 @@ impl FastEmbedEngine {
                 context = json_value!({
                     "provider": "FastEmbed",
                     "action": "initialize_text_embedding",
-                    "model": "BGESmallENV15"
+                    "model": model_name_str
                 })
             ),
         };
@@ -73,10 +89,18 @@ impl FastEmbedEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::testing::AgentDbSandbox;
 
-    #[test]
-    fn test_fast_embed_single() {
-        let mut engine = FastEmbedEngine::new().expect("Init failed");
+    #[async_test]
+    async fn test_fast_embed_single() {
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
+        let mut engine = FastEmbedEngine::new(&manager).await.expect("Init failed");
         let vec = engine
             .embed_query("Ceci est un test")
             .expect("Embedding failed");
@@ -86,9 +110,16 @@ mod tests {
         assert!(vec.iter().any(|&x| x != 0.0));
     }
 
-    #[test]
-    fn test_fast_embed_batch() {
-        let mut engine = FastEmbedEngine::new().expect("Init failed");
+    #[async_test]
+    async fn test_fast_embed_batch() {
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
+
+        let mut engine = FastEmbedEngine::new(&manager).await.expect("Init failed");
         let inputs = vec![
             "Phrase 1".to_string(),
             "Phrase 2".to_string(),

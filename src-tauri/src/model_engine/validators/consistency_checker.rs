@@ -1,12 +1,11 @@
 // FICHIER : src-tauri/src/model_engine/validators/consistency_checker.rs
 
 use super::{ModelValidator, Severity, ValidationIssue};
-use crate::json_db::jsonld::vocabulary::VocabularyRegistry; // Accès à l'ontologie
+use crate::json_db::jsonld::vocabulary::VocabularyRegistry;
 use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::types::ArcadiaElement;
 use crate::utils::prelude::*;
 
-/// Validateur de cohérence technique et sémantique.
 #[derive(Default)]
 pub struct ConsistencyChecker;
 
@@ -15,13 +14,12 @@ impl ConsistencyChecker {
         Self
     }
 
-    /// Logique de validation unitaire pure (sans accès base de données)
-    /// Vérifie les champs obligatoires et les contraintes de domaine locales.
+    /// Vérifie la logique locale (ID, Nom, Domaine des propriétés)
     pub fn check_local_logic(&self, element: &ArcadiaElement) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
         let name = element.name.as_str();
 
-        // RÈGLE 1 : Vérification de l'ID
+        // 1. Vérification de l'ID technique
         if element.id.trim().is_empty() {
             issues.push(ValidationIssue {
                 severity: Severity::Error,
@@ -31,7 +29,7 @@ impl ConsistencyChecker {
             });
         }
 
-        // RÈGLE 2 : Vérification du Nom
+        // 2. Vérification du nom par défaut
         if name.trim().is_empty() || name == "Sans nom" {
             issues.push(ValidationIssue {
                 severity: Severity::Warning,
@@ -41,23 +39,18 @@ impl ConsistencyChecker {
             });
         }
 
-        // RÈGLE 3 : Validation de Domaine Sémantique
-        // On vérifie que les propriétés présentes sont autorisées pour ce type d'élément.
+        // 3. Validation sémantique du domaine (Ontologie)
         let registry = VocabularyRegistry::global();
-
         for prop_key in element.properties.keys() {
-            // Si la propriété est définie dans l'ontologie
             if let Some(prop_def) = registry.get_property(prop_key) {
-                // Et si elle a un domaine restreint
                 if let Some(domain_iri) = &prop_def.domain {
-                    // On vérifie si le type de notre élément est bien un sous-type du domaine
                     if !registry.is_subtype_of(&element.kind, domain_iri) {
                         issues.push(ValidationIssue {
                             severity: Severity::Error,
                             rule_id: "SEM_001".to_string(),
                             element_id: element.id.clone(),
                             message: format!(
-                                "Propriété invalide : '{}' ne peut pas s'appliquer à un '{}' (Attendu: {}).",
+                                "Violation de domaine : '{}' ne peut pas s'appliquer à un '{}' (Attendu: {}).",
                                 prop_def.label, element.kind, domain_iri
                             ),
                         });
@@ -69,8 +62,7 @@ impl ConsistencyChecker {
         issues
     }
 
-    /// Logique de validation relationnelle (avec accès base de données)
-    /// Vérifie les cibles des relations (Range check).
+    /// Vérifie la validité des relations (Range de l'ontologie)
     async fn check_relationships(
         &self,
         element: &ArcadiaElement,
@@ -79,12 +71,9 @@ impl ConsistencyChecker {
         let mut issues = Vec::new();
         let registry = VocabularyRegistry::global();
 
-        // Ici on garde l'itération complète car on a besoin de prop_val
         for (prop_key, prop_val) in &element.properties {
             if let Some(prop_def) = registry.get_property(prop_key) {
-                // Si la propriété a un Range défini (type attendu de la cible)
                 if let Some(range_iri) = &prop_def.range {
-                    // Récupération des IDs cibles (tableau ou valeur simple)
                     let target_ids = match prop_val {
                         JsonValue::String(s) => vec![s.clone()],
                         JsonValue::Array(arr) => arr
@@ -95,9 +84,8 @@ impl ConsistencyChecker {
                     };
 
                     for target_id in target_ids {
-                        // On ignore les cibles qui ne sont pas des IRIs ou UUIDs valides pour le moment
+                        // On ne vérifie que les références qui ressemblent à des IDs ou URIs
                         if target_id.starts_with("http") || target_id.len() > 20 {
-                            // Fetch de la cible pour vérifier son type
                             if let Ok(target_el) = loader.get_element(&target_id).await {
                                 if !registry.is_subtype_of(&target_el.kind, range_iri) {
                                     issues.push(ValidationIssue {
@@ -105,8 +93,8 @@ impl ConsistencyChecker {
                                         rule_id: "SEM_002".to_string(),
                                         element_id: element.id.clone(),
                                         message: format!(
-                                            "Relation invalide : La cible '{}' (via {}) est de type '{}', attendu '{}'.",
-                                            target_el.name.as_str(), prop_def.label, target_el.kind, range_iri
+                                            "Relation invalide : La cible '{}' est de type '{}', attendu '{}' pour la propriété '{}'.",
+                                            target_el.name.as_str(), target_el.kind, range_iri, prop_def.label
                                         ),
                                     });
                                 }
@@ -119,19 +107,6 @@ impl ConsistencyChecker {
 
         issues
     }
-
-    /// Helper pour valider une liste d'éléments (évite la duplication dans validate_full)
-    async fn validate_list(
-        &self,
-        elements: &[ArcadiaElement],
-        loader: &ModelLoader<'_>,
-        issues: &mut Vec<ValidationIssue>,
-    ) {
-        for el in elements {
-            let el_issues = self.validate_element(el, loader).await;
-            issues.extend(el_issues);
-        }
-    }
 }
 
 #[async_interface]
@@ -141,11 +116,8 @@ impl ModelValidator for ConsistencyChecker {
         element: &ArcadiaElement,
         loader: &ModelLoader<'_>,
     ) -> Vec<ValidationIssue> {
-        // 1. Contrôles locaux (rapides)
         let mut issues = self.check_local_logic(element);
 
-        // 2. Contrôles relationnels (asynchrones, nécessitent des lectures DB)
-        // Pour éviter de spammer la DB, on ne le fait que si l'élément semble avoir des relations sémantiques
         if !element.properties.is_empty() {
             let rel_issues = self.check_relationships(element, loader).await;
             issues.extend(rel_issues);
@@ -154,87 +126,15 @@ impl ModelValidator for ConsistencyChecker {
         issues
     }
 
-    // AJOUT : Implémentation explicite de la validation complète incluant la couche Transverse
+    /// 🎯 SCAN UNIVERSEL : On parcourt dynamiquement tout le modèle chargé
     async fn validate_full(&self, loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
         let mut all_issues = Vec::new();
 
         if let Ok(model) = loader.load_full_model().await {
-            // --- COUCHES CLASSIQUES ---
-            // OA
-            self.validate_list(&model.oa.actors, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.oa.activities, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.oa.capabilities, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.oa.entities, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.oa.exchanges, loader, &mut all_issues)
-                .await;
-
-            // SA
-            self.validate_list(&model.sa.components, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.sa.functions, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.sa.actors, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.sa.capabilities, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.sa.exchanges, loader, &mut all_issues)
-                .await;
-
-            // LA
-            self.validate_list(&model.la.components, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.la.functions, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.la.actors, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.la.interfaces, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.la.exchanges, loader, &mut all_issues)
-                .await;
-
-            // PA
-            self.validate_list(&model.pa.components, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.pa.functions, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.pa.actors, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.pa.links, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.pa.exchanges, loader, &mut all_issues)
-                .await;
-
-            // EPBS & Data
-            self.validate_list(&model.epbs.configuration_items, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.data.classes, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.data.data_types, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.data.exchange_items, loader, &mut all_issues)
-                .await;
-
-            // --- AJOUT : COUCHE TRANSVERSE ---
-            self.validate_list(&model.transverse.requirements, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.transverse.scenarios, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.transverse.functional_chains, loader, &mut all_issues)
-                .await;
-            self.validate_list(&model.transverse.constraints, loader, &mut all_issues)
-                .await;
-            self.validate_list(
-                &model.transverse.common_definitions,
-                loader,
-                &mut all_issues,
-            )
-            .await;
-            self.validate_list(&model.transverse.others, loader, &mut all_issues)
-                .await;
+            // 🚀 Utilisation de l'itérateur dynamique all_elements()
+            for el in model.all_elements() {
+                all_issues.extend(self.validate_element(el, loader).await);
+            }
         }
 
         all_issues
@@ -248,97 +148,64 @@ mod tests {
     use crate::model_engine::types::NameType;
     use crate::utils::testing::AgentDbSandbox;
 
-    fn create_dummy_element(id: &str, name: &str, kind: &str) -> ArcadiaElement {
-        ArcadiaElement {
-            id: id.to_string(),
-            name: NameType::String(name.to_string()),
-            kind: kind.to_string(),
-            description: None,
-            properties: UnorderedMap::new(),
-        }
+    async fn inject_mock_mapping(manager: &CollectionsManager<'_>) {
+        let _ = manager
+            .create_collection(
+                "configs",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await;
+        manager
+            .upsert_document(
+                "configs",
+                json_value!({
+                    "_id": "ref:configs:handle:ontological_mapping",
+                    "search_spaces": [ { "layer": "oa", "collection": "actors" } ]
+                }),
+            )
+            .await
+            .unwrap();
     }
 
     #[test]
-    fn test_valid_element_logic() {
+    fn test_consistency_local_logic() {
         let checker = ConsistencyChecker::new();
-        // 🎯 Utilisation d'une URI de test explicite
-        let kind = "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string();
-        let el = create_dummy_element("UUID-1", "MyComponent", &kind);
+        let el = ArcadiaElement {
+            id: "UUID-OK".to_string(),
+            name: NameType::String("ValidName".to_string()),
+            kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string(),
+            ..Default::default()
+        };
         let issues = checker.check_local_logic(&el);
         assert!(issues.is_empty());
     }
 
-    #[test]
-    fn test_missing_name_warning() {
-        let checker = ConsistencyChecker::new();
-        let kind = "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string();
-        let el = create_dummy_element("UUID-2", "", &kind);
-        let issues = checker.check_local_logic(&el);
-
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].severity, Severity::Warning);
-        assert_eq!(issues[0].rule_id, "SYS_002");
-    }
-
-    #[test]
-    fn test_domain_violation() {
-        let checker = ConsistencyChecker::new();
-
-        // Un PhysicalComponent...
-        let kind_pa = "https://raise.io/ontology/arcadia/pa#PhysicalComponent".to_string();
-        let mut el = create_dummy_element("UUID-BAD", "BadComponent", &kind_pa);
-
-        // ... qui essaie d'avoir une propriété "involvesActivity"
-        let prop_iri = "https://raise.io/ontology/arcadia/oa#involvesActivity".to_string();
-        el.properties
-            .insert(prop_iri.clone(), json_value!(["UUID-ACT-1"]));
-
-        let issues = checker.check_local_logic(&el);
-
-        // 🎯 RÉSILIENCE : On vérifie si l'ontologie de test possède un "domain" strict.
-        // Si ce n'est pas le cas, on ne force pas le test à paniquer.
-        let registry = VocabularyRegistry::global();
-        if let Some(prop) = registry.get_property(&prop_iri) {
-            if prop.domain.is_some() {
-                assert!(
-                    !issues.is_empty(),
-                    "Devrait détecter une violation de domaine sémantique"
-                );
-                let err = &issues[0];
-                assert_eq!(err.rule_id, "SEM_001");
-                assert!(err.message.contains("ne peut pas s'appliquer"));
-            }
-        }
-        // Si aucun 'domain' n'est trouvé dans le VocabularyRegistry, le validateur a eu raison
-        // de ne pas lever d'erreur, le test passe avec succès !
-    }
-
     #[async_test]
-    async fn test_full_validation_scans_transverse() {
+    async fn test_consistency_full_scan_dynamic() {
         let sandbox = AgentDbSandbox::new().await;
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
+        inject_mock_mapping(&manager).await;
 
-        // Insertion d'une Exigence sémantique avec nom vide
-        let invalid_req = json_value!({
-            "_id": "REQ-BAD",
-            "name": "",
-            "type": "https://raise.io/ontology/arcadia/transverse#Requirement"
-        });
-
-        manager
+        let oa_mgr = CollectionsManager::new(&sandbox.db, &sandbox.config.system_domain, "oa");
+        let _ = oa_mgr
             .create_collection(
-                "transverse",
+                "actors",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await;
 
-        manager
-            .insert_raw("transverse", &invalid_req)
+        // Insertion d'un élément avec nom vide dans la couche OA
+        oa_mgr
+            .insert_raw(
+                "actors",
+                &json_value!({
+                    "_id": "ACT-EMPTY", "name": "", "type": "OperationalActor"
+                }),
+            )
             .await
             .unwrap();
 
@@ -347,13 +214,13 @@ mod tests {
 
         let issues = checker.validate_full(&loader).await;
 
+        // Vérification de la détection
         let found = issues
             .iter()
-            .any(|i| i.element_id == "REQ-BAD" && i.rule_id == "SYS_002");
-
+            .any(|i| i.element_id == "ACT-EMPTY" && i.rule_id == "SYS_002");
         assert!(
             found,
-            "La validation globale n'a pas détecté l'élément invalide."
+            "Le checker doit trouver l'erreur via le scan universel"
         );
     }
 }

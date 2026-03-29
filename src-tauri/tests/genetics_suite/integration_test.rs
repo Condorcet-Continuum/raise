@@ -10,69 +10,63 @@ use raise::genetics::types::{Individual, Population};
 use raise::genetics::GeneticEngine;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::model_engine::loader::ModelLoader;
-use raise::utils::prelude::*; // ✅ Correction : retrait de 'io' inutilisé
+use raise::utils::prelude::*;
 
 #[async_test]
-#[serial_test::serial] // Protection RTX 5060 en local
+#[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_genetics_integration_with_json_db() {
-    // 1. Initialisation robuste
     let env = setup_test_env(LlmMode::Disabled).await;
-
-    // 2. Manager sur un espace de test dédié
     let manager = CollectionsManager::new(&env.sandbox.storage, "testing", "arcadia");
 
-    let lf_schema = "https://raise.local/schemas/v1/arcadia/la/logical-function.schema.json";
-    let lc_schema = "https://raise.local/schemas/v1/arcadia/la/logical-component.schema.json";
+    let _ = manager
+        .create_collection("la", "db://_system/schemas/v1/db/generic.schema.json")
+        .await;
 
-    manager
-        .create_collection(
-            "la",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await
-        .unwrap();
-
+    // Insertion de données avec les bonnes propriétés pour le bridge
     manager.insert_raw("la", &json_value!({
-        "_id": "f_ctrl", "name": "Control", "type": lf_schema, "properties": { "complexity": 50.0 }
+        "_id": "f1", "name": "Control", "type": "LogicalFunction", "properties": { "complexity": 50.0 }
     })).await.unwrap();
 
-    manager
-        .insert_raw(
-            "la",
-            &json_value!({
-                "_id": "c_cpu", "name": "CPU", "type": lc_schema, "properties": { "capacity": 100.0 }
-            }),
-        )
-        .await
-        .unwrap();
+    manager.insert_raw("la", &json_value!({
+        "_id": "c1", "name": "CPU", "type": "LogicalComponent", "properties": { "capacity": 100.0 }
+    })).await.unwrap();
 
     let loader = ModelLoader::new_with_manager(manager);
     let model = loader.load_full_model().await.expect("Erreur chargement");
 
-    let function_ids: Vec<String> = model.la.functions.iter().map(|f| f.id.clone()).collect();
-    let component_ids: Vec<String> = model.pa.components.iter().map(|c| c.id.clone()).collect();
+    // 🎯 FIX : On utilise get_collection pour extraire les IDs
+    let function_ids: Vec<String> = model
+        .get_collection("la", "functions")
+        .iter()
+        .map(|f| f.id.clone())
+        .collect();
+    let component_ids: Vec<String> = model
+        .get_collection("la", "components")
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
 
     let adapter = GeneticsAdapter::new(&model);
     let cost_model = adapter.build_cost_model(&model);
-    let evaluator = ArchitectureEvaluator::new(cost_model);
 
     let config = GeneticConfig {
         population_size: 10,
         max_generations: 2,
         ..Default::default()
     };
+    let engine = GeneticEngine::new(
+        ArchitectureEvaluator::new(cost_model),
+        TournamentSelection::new(2),
+        config,
+    );
 
-    let selection = TournamentSelection::new(2);
-    let engine = GeneticEngine::new(evaluator, selection, config.clone());
+    let mut pop = Population::new();
+    pop.add(Individual::new(SystemAllocationGenome::new_random(
+        function_ids,
+        component_ids,
+    )));
 
-    let mut initial_population = Population::new();
-    for _ in 0..config.population_size {
-        let genome =
-            SystemAllocationGenome::new_random(function_ids.clone(), component_ids.clone());
-        initial_population.add(Individual::new(genome));
-    }
-
-    let final_population = engine.run(initial_population, |_| {});
-    assert!(!final_population.individuals.is_empty());
+    let final_pop = engine.run(pop, |_| {});
+    assert!(!final_pop.individuals.is_empty());
 }

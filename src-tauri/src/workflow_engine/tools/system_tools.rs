@@ -2,18 +2,14 @@
 
 use super::AgentTool;
 use crate::utils::prelude::*;
-
-// Imports pour le Jumeau Numérique via JSON-DB
-use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+use crate::workflow_engine::handlers::HandlerContext;
 
 /// Outil permettant à l'IA et au Workflow de lire l'état du Jumeau Numérique.
-/// Cet outil est désormais "Stateless" et lit la source de vérité en base de données.
+/// Cet outil est désormais 100% "Stateless" et ultra-rapide grâce au contexte partagé.
 #[derive(Debug, Default)]
 pub struct SystemMonitorTool;
 
 impl SystemMonitorTool {
-    /// Initialise une nouvelle instance de l'outil.
     pub fn new() -> Self {
         Self
     }
@@ -37,21 +33,22 @@ impl AgentTool for SystemMonitorTool {
         })
     }
 
-    /// Exécute la lecture des métriques en interrogeant la persistance du Jumeau Numérique.
-    async fn execute(&self, _params: &JsonValue) -> RaiseResult<JsonValue> {
-        tracing::info!("🔍 [SystemMonitorTool] Lecture du Jumeau Numérique via JSON-DB...");
+    /// Exécute la lecture des métriques en utilisant la connexion DB mutualisée.
+    async fn execute(
+        &self,
+        _params: &JsonValue,
+        context: &HandlerContext<'_>,
+    ) -> RaiseResult<JsonValue> {
+        tracing::info!(
+            "🔍 [SystemMonitorTool] Lecture du Jumeau Numérique via le Contexte Partagé..."
+        );
 
-        // 1. Accès à la configuration et initialisation du moteur de stockage
-        let config = AppConfig::get();
-        let db_root = config
-            .get_path("PATH_RAISE_DOMAIN")
-            .unwrap_or_else(|| PathBuf::from("./_system"));
-
-        let storage = StorageEngine::new(JsonDbConfig::new(db_root));
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
-
-        // 2. Récupération décentralisée de la donnée (vibration_z) mise à jour par le CLI ou l'UI
-        let vibration_z = match manager.get_document("digital_twin", "vibration_z").await {
+        // 🎯 On utilise directement le manager du contexte, plus besoin de StorageEngine::new !
+        let vibration_z = match context
+            .manager
+            .get_document("digital_twin", "vibration_z")
+            .await
+        {
             Ok(Some(doc)) => doc["value"].as_f64().unwrap_or(2.0),
             _ => {
                 tracing::warn!(
@@ -61,7 +58,6 @@ impl AgentTool for SystemMonitorTool {
             }
         };
 
-        // 3. Agrégation des métriques pour le contexte de l'Agent
         let metrics = json_value!({
             "vibration_z": vibration_z,
             "temp_core": 45.0,
@@ -71,40 +67,50 @@ impl AgentTool for SystemMonitorTool {
         });
 
         tracing::info!("📊 [SystemMonitorTool] Métriques extraites avec succès.");
-
         Ok(metrics)
     }
 }
+
 // =========================================================================
 // TESTS UNITAIRES
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    // 🎯 IMPORT UNIQUE : On utilise la GlobalDbSandbox car l'outil s'appuie
-    // sur le Singleton global AppConfig, et le test est séquentiel (#[serial]).
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::GlobalDbSandbox;
+    // 🎯 FIX : On importe inject_mock_component pour l'Orchestrateur
+    use crate::utils::testing::{inject_mock_component, GlobalDbSandbox};
+
+    use crate::ai::orchestrator::AiOrchestrator;
+    use crate::model_engine::types::ProjectModel;
+    use crate::plugins::manager::PluginManager;
+    use crate::workflow_engine::critic::WorkflowCritic;
 
     #[async_test]
     #[serial_test::serial]
     async fn test_system_tool_persistence_integration() {
-        // 1. 🎯 MAGIE : La GlobalDbSandbox configure le mock, purge l'ancienne base,
-        // recrée le schéma et initialise le tout en UNE ligne !
         let sandbox = GlobalDbSandbox::new().await;
-
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
 
-        // 2. Injection manuelle d'une valeur critique pour tester le grounding de l'IA
+        // 🎯 FIX CRITIQUE : Injection des composants IA factices pour que l'orchestrateur démarre
+        inject_mock_component(
+            &manager,
+            "llm",
+            json_value!({ "provider": "mock", "model": "test" }),
+        )
+        .await;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
+
         let sensor_doc = json_value!({
             "_id": "vibration_z",
             "value": 15.5,
             "updatedAt": UtcClock::now().to_rfc3339()
         });
+
         manager
             .create_collection(
                 "digital_twin",
@@ -112,17 +118,31 @@ mod tests {
             )
             .await
             .unwrap();
-        // On s'assure que l'insertion fonctionne (unwrap est utile dans les tests pour repérer les erreurs vite)
         manager
-            .insert_raw("digital_twin", &sensor_doc)
+            .upsert_document("digital_twin", sensor_doc)
             .await
             .unwrap();
 
-        // 3. Exécution de l'outil
-        let tool = SystemMonitorTool::new();
-        let result = tool.execute(&json_value!({})).await.unwrap();
+        // Création du faux contexte requis par la nouvelle signature
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
+            .await
+            .unwrap();
+        let pm = SharedRef::new(PluginManager::new(&sandbox.db, None));
+        let critic = WorkflowCritic::default();
+        let tools = UnorderedMap::new();
 
-        // 4. Vérifications
+        let ctx = HandlerContext {
+            orchestrator: &SharedRef::new(AsyncMutex::new(orch)),
+            plugin_manager: &pm,
+            critic: &critic,
+            tools: &tools,
+            manager: &manager,
+        };
+
+        let tool = SystemMonitorTool::new();
+        // L'exécution utilise désormais le contexte complet !
+        let result = tool.execute(&json_value!({}), &ctx).await.unwrap();
+
         assert_eq!(result["vibration_z"], 15.5);
         assert_eq!(result["status"], "ONLINE");
     }

@@ -115,7 +115,6 @@ mod tests {
             id: id.to_string(),
             name: NameType::default(),
             kind: kind.to_string(),
-            description: None,
             properties: UnorderedMap::new(),
         }
     }

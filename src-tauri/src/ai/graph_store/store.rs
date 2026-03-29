@@ -62,15 +62,20 @@ impl GraphStore {
     }
 
     /// Indexe une entité Arcadia avec normalisation JSON-LD et vectorisation sémantique profonde.
+    /// 🎯 OPTIMISATION : Utilisation exclusive du CollectionsManager pour l'écriture.
     pub async fn index_entity(
         &self,
+        manager: &CollectionsManager<'_>,
         collection: &str,
         id: &str,
         mut data: JsonValue,
     ) -> RaiseResult<()> {
-        // 1. Normalisation JSON-LD de l'ID
+        // 1. Normalisation JSON-LD et DB
         if self.processor.get_id(&data).is_none() {
             data["@id"] = json_value!(format!("{}:{}", collection, id));
+        }
+        if data.get("_id").is_none() {
+            data["_id"] = json_value!(id.to_string());
         }
 
         // 🎯 OPTIMISATION PROD : Extraction Sémantique Complète
@@ -90,39 +95,42 @@ impl GraphStore {
                         vectors: Some(vector),
                     };
 
-                    let _ = v_store.add_documents(collection, vec![record]).await;
+                    // 🎯 FIX ICI : On passe le paramètre `manager` !
+                    let _ = v_store
+                        .add_documents(manager, collection, vec![record])
+                        .await;
                     let _ = v_store.save().await;
                 }
             }
         }
 
-        // 3. Branche Documentaire (Persistence Physique sur Disque)
-        let col_dir = self.storage_path.join("collections").join(collection);
-        fs::ensure_dir_async(&col_dir).await?;
-
-        let file_path = col_dir.join(format!("{}.json", id));
-        let json_str = json::serialize_to_string_pretty(&data)?;
-        fs::write_async(&file_path, json_str).await?;
+        // 3. Branche Documentaire (Persistence via JSON-DB pour bénéficier de la validation et des index)
+        manager.upsert_document(collection, data).await?;
 
         Ok(())
     }
 
     /// Établit un lien sémantique typé entre deux composants Arcadia.
+    /// 🎯 OPTIMISATION : Utilisation exclusive du CollectionsManager.
     pub async fn link_entities(
         &self,
+        manager: &CollectionsManager<'_>,
         from: (&str, &str),
         relation: &str,
         to: (&str, &str),
     ) -> RaiseResult<()> {
         let (from_col, from_id) = from;
-        let file_path = self
-            .storage_path
-            .join("collections")
-            .join(from_col)
-            .join(format!("{}.json", from_id));
-        let content = fs::read_to_string_async(&file_path).await?;
-        let mut doc: JsonValue = json::deserialize_from_str(&content)?;
 
+        // 1. Lecture propre via la BDD
+        let mut doc = match manager.get_document(from_col, from_id).await? {
+            Some(d) => d,
+            None => raise_error!(
+                "ERR_GNN_LINK_FROM_NOT_FOUND",
+                error = format!("Entité {}:{} introuvable", from_col, from_id)
+            ),
+        };
+
+        // 2. Modification du JSON en mémoire
         let target_uri = format!("{}:{}", to.0, to.1);
         if let Some(obj) = doc.as_object_mut() {
             let rel_array = obj.entry(relation.to_string()).or_insert(json_value!([]));
@@ -134,14 +142,16 @@ impl GraphStore {
             }
         }
 
-        fs::write_async(&file_path, json::serialize_to_string_pretty(&doc)?).await?;
+        // 3. Écriture propre via la BDD (Patch sémantique)
+        manager.update_document(from_col, from_id, doc).await?;
+
         Ok(())
     }
 }
 
 /// 🎯 OPTIMISATION PROD : Construit une représentation textuelle riche du composant
 /// pour maximiser la pertinence des embeddings vectoriels.
-fn extract_rich_semantic_content(data: &JsonValue) -> String {
+pub fn extract_rich_semantic_content(data: &JsonValue) -> String {
     let mut parts = Vec::new();
 
     if let Some(obj) = data.as_object() {
@@ -235,25 +245,53 @@ mod tests {
             &sandbox.config.system_db,
         );
 
+        // 🎯 FIX : Initialisation des collections de test pour éviter l'erreur "ERR_DB_STRICT_SCHEMA_REQUIRED"
+        manager.init_db().await.unwrap();
+        manager
+            .create_collection(
+                "la",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+        manager
+            .create_collection(
+                "sa",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .unwrap();
+
         let store = GraphStore::new(sandbox.domain_root.clone(), &manager)
             .await
             .unwrap();
 
         let doc =
             json_value!({ "name": "TelemetryModule", "description": "Gère les flux de données" });
+
+        // 🎯 On passe le manager
         store
-            .index_entity("la", "TM01", doc)
+            .index_entity(&manager, "la", "TM01", doc)
             .await
             .expect("L'indexation doit réussir.");
 
+        // 🎯 On passe le manager pour lier
         store
-            .link_entities(("la", "TM01"), "realizes", ("sa", "DataMonitoring"))
+            .link_entities(
+                &manager,
+                ("la", "TM01"),
+                "realizes",
+                ("sa", "DataMonitoring"),
+            )
             .await
             .unwrap();
 
-        let file_path = sandbox.domain_root.join("collections/la/TM01.json");
-        let raw = fs::read_to_string_async(&file_path).await.unwrap();
-        let final_doc: JsonValue = json::deserialize_from_str(&raw).unwrap();
+        // On lit de manière sémantique au lieu du FS brut !
+        let final_doc = manager
+            .get_document("la", "TM01")
+            .await
+            .unwrap()
+            .expect("Le document devrait exister");
 
         assert_eq!(final_doc["@id"], "la:TM01");
         assert_eq!(final_doc["realizes"][0]["@id"], "sa:DataMonitoring");

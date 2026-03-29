@@ -85,16 +85,6 @@ impl From<candle_core::Error> for AppError {
     }
 }
 
-impl From<tera::Error> for AppError {
-    fn from(e: tera::Error) -> Self {
-        crate::build_error!(
-            "ERR_TEMPLATE_PARSE_FAIL",
-            error = format!("Erreur de Templating Tera : {}", e),
-            context = json_value!({"engine": "tera"}) // 🎯 Utilisation de la nouvelle macro
-        )
-    }
-}
-
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
         crate::build_error!(

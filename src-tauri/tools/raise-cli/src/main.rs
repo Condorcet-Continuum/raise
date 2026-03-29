@@ -25,6 +25,10 @@ pub struct CliContext {
     pub active_user: String,
     pub active_domain: String,
     pub active_db: String,
+    pub is_test_mode: bool,
+    pub is_simulation: bool,
+    pub sim_domain: String,
+    pub sim_db: String,
 }
 
 // ============================================================================
@@ -59,6 +63,28 @@ struct Cli {
     )]
     db: Option<String>,
 
+    #[arg(
+        long,
+        global = true,
+        env = "RAISE_SIMULATE",
+        help = "Active le mode Bac à Sable (Simulation IA)"
+    )]
+    simulate: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Surcharge le domaine cible pour la simulation"
+    )]
+    sim_domain: Option<String>,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Surcharge la base de données cible pour la simulation"
+    )]
+    sim_db: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -69,6 +95,7 @@ enum Commands {
     ModelEngine(commands::model_engine::ModelArgs),
     Jsondb(commands::jsondb::JsondbArgs),
     Ai(commands::ai::AiArgs),
+    Dl(commands::dl::DlArgs),
     Genetics(commands::genetics::GeneticsArgs),
     Blockchain(commands::blockchain::BlockchainArgs),
     Plugins(commands::plugins::PluginsArgs),
@@ -137,6 +164,15 @@ async fn main() -> RaiseResult<()> {
     bootstrap_semantic_engine(&ontology_path).await?;
     let session_mgr = context::SessionManager::new(storage.clone());
 
+    // --- RÉSOLUTION DU CONTEXTE DE SIMULATION ---
+    let is_simulation = cli.simulate;
+
+    // Idéalement, config.simulation_context devrait exister dans ta structure AppConfig Rust.
+    // Pour l'instant, utilisons des valeurs par défaut robustes si tu n'as pas encore mis à jour
+    // le parseur serde_json de AppConfig.
+    let sim_domain = cli.sim_domain.unwrap_or_else(|| "sim_mbse2".to_string());
+    let sim_db = cli.sim_db.unwrap_or_else(|| "sim_raise".to_string());
+
     // 6. CRÉATION DU CONTEXTE UNIFIÉ
     let ctx = CliContext {
         config,
@@ -145,6 +181,10 @@ async fn main() -> RaiseResult<()> {
         active_user: active_user.clone(),
         active_domain,
         active_db,
+        is_test_mode: false,
+        is_simulation,
+        sim_domain,
+        sim_db,
     };
 
     // 7. AUTO-LOGIN AVEC L'UTILISATEUR RÉSOLU
@@ -337,6 +377,7 @@ async fn execute_command(cmd: Commands, ctx: CliContext) -> RaiseResult<()> {
         Commands::ModelEngine(args) => commands::model_engine::handle(args, ctx).await,
         Commands::Jsondb(args) => commands::jsondb::handle(args, ctx).await,
         Commands::Ai(args) => commands::ai::handle(args, ctx).await,
+        Commands::Dl(args) => commands::dl::handle(args, ctx).await,
         Commands::Genetics(args) => commands::genetics::handle(args, ctx).await,
         Commands::Blockchain(args) => commands::blockchain::handle(args, ctx).await,
         Commands::Plugins(args) => commands::plugins::handle(args, ctx).await,
@@ -393,6 +434,10 @@ impl CliContext {
             active_user: "mock_user".to_string(),
             active_domain: "mock_domain".to_string(),
             active_db: "mock_db".to_string(),
+            is_test_mode: true,
+            is_simulation: false, // Faux par défaut dans les tests
+            sim_domain: "mock_sim_domain".to_string(),
+            sim_db: "mock_sim_db".to_string(),
         }
     }
 }

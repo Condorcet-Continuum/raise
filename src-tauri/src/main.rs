@@ -10,12 +10,12 @@ use raise::utils::{context, prelude::*};
 use tauri::Manager;
 
 // --- IMPORTS RAISE ---
-use raise::ai::training::dataset;
+
 use raise::blockchain::{ConnectionProfile, FabricClient};
 use raise::commands::{
-    ai_commands, blockchain_commands, codegen_commands, cognitive_commands, genetics_commands,
-    json_db_commands, model_commands, rules_commands, traceability_commands, training_commands,
-    utils_commands, workflow_commands,
+    ai_commands, blockchain_commands, codegen_commands, cognitive_commands, dl_commands,
+    genetics_commands, json_db_commands, model_commands, rules_commands, traceability_commands,
+    training_commands, utils_commands, workflow_commands,
 };
 
 // --- IMPORT IA NATIF ---
@@ -43,7 +43,7 @@ use raise::ai::graph_store::GraphStore;
 use raise::ai::orchestrator::AiOrchestrator;
 use raise::model_engine::loader::ModelLoader;
 
-use raise::commands::ai_commands::DlState;
+use raise::commands::dl_commands::DlState;
 
 use raise::spatial_engine;
 
@@ -269,14 +269,14 @@ fn main() {
             ai_commands::ai_reset,
             ai_commands::ask_native_llm,
             ai_commands::ai_learn_text,
-            //ai_commands::validate_arcadia_gnn,
-            ai_commands::init_dl_model,
-            ai_commands::run_dl_prediction,
-            ai_commands::train_dl_step,
-            ai_commands::save_dl_model,
-            ai_commands::load_dl_model,
+            ai_commands::ai_export_dataset,
+            ai_commands::validate_arcadia_gnn,
+            dl_commands::init_dl_model,
+            dl_commands::run_dl_prediction,
+            dl_commands::train_dl_step,
+            dl_commands::save_dl_model,
+            dl_commands::load_dl_model,
             training_commands::tauri_train_domain,
-            dataset::ai_export_dataset,
             cognitive_commands::cognitive_load_plugin,
             cognitive_commands::cognitive_run_plugin,
             cognitive_commands::cognitive_list_plugins,
@@ -305,7 +305,7 @@ fn main() {
             utils_commands::session_login,
             utils_commands::session_logout,
             utils_commands::session_get,
-            workflow_commands::submit_mandate,
+            workflow_commands::compile_mission,
             workflow_commands::register_workflow,
             workflow_commands::start_workflow,
             workflow_commands::resume_workflow,

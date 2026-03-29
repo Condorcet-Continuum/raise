@@ -9,8 +9,8 @@ use crate::utils::io::fs::{self, tempdir, Path, PathBuf, TempDir};
 
 // 2. Data : Configuration, JSON et Traits
 use crate::utils::data::config::{
-    AppConfig, CoreConfig, DeepLearningConfig, IntegrationsConfig, WorldModelConfig, CONFIG,
-    SYSTEM_DB, SYSTEM_DOMAIN,
+    AppConfig, CoreConfig, DeepLearningConfig, IntegrationsConfig, SimulationContextConfig,
+    WorldModelConfig, CONFIG, SYSTEM_DB, SYSTEM_DOMAIN,
 };
 use crate::utils::data::json::{self, json_value, JsonValue};
 use crate::utils::data::UnorderedMap;
@@ -147,6 +147,7 @@ pub fn create_default_test_config() -> AppConfig {
         active_services: vec!["ref:services:handle:mock-service".to_string()],
         active_components: vec!["ref:components:handle:mock-comp-1".to_string()],
         integrations: IntegrationsConfig::default(),
+        simulation_context: SimulationContextConfig::default(),
     }
 }
 

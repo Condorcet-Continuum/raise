@@ -1,8 +1,7 @@
 // FICHIER : src-tauri/src/ai/graph_store/adjacency.rs
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*;
 use candle_core::{Device, Tensor};
-// 🎯 IMPORT DU MANAGER
-use crate::json_db::collections::manager::CollectionsManager;
 
 /// Traduit l'ontologie Arcadia en structure mathématique (Matrice A) pour le GNN.
 pub struct GraphAdjacency {
@@ -21,28 +20,20 @@ impl GraphAdjacency {
         let mut uri_vec = Vec::new();
         let mut documents = Vec::new();
 
-        // 1. PHASE DE DÉCOUVERTE : On liste les collections via le Manager
-        let collections = match manager.list_collections().await {
-            Ok(cols) => cols,
-            Err(e) => raise_error!("ERR_GNN_LIST_COLLECTIONS", error = e),
-        };
+        // 🎯 OPTIMISATION 1 : Filtrage Ontologique (O(1) sur les collections)
+        // On ignore les configs, les agents, et les logs. On ne garde que l'ingénierie.
+        let mbse_collections = vec!["oa", "sa", "la", "pa", "epbs", "data", "transverse"];
 
-        // 2. RÉCUPÉRATION DES DOCUMENTS : On demande tous les documents au Manager
-        for col_name in collections {
-            let docs = match manager.list_all(&col_name).await {
-                Ok(d) => d,
-                Err(e) => raise_error!(
-                    "ERR_GNN_READ_COLLECTION",
-                    error = e,
-                    context = json_value!({ "collection": col_name })
-                ),
-            };
-
-            for doc in docs {
-                if let Some(id) = doc.get("@id").and_then(|v| v.as_str()) {
-                    uri_map.insert(id.to_string(), uri_vec.len());
-                    uri_vec.push(id.to_string());
-                    documents.push(doc);
+        // 1. PHASE DE DÉCOUVERTE : Récupération ciblée
+        for col_name in mbse_collections {
+            // Si la collection n'existe pas encore, list_all échoue silencieusement, ce qui est voulu.
+            if let Ok(docs) = manager.list_all(col_name).await {
+                for doc in docs {
+                    if let Some(id) = doc.get("@id").and_then(|v| v.as_str()) {
+                        uri_map.insert(id.to_string(), uri_vec.len());
+                        uri_vec.push(id.to_string());
+                        documents.push(doc);
+                    }
                 }
             }
         }
@@ -51,37 +42,49 @@ impl GraphAdjacency {
         if n == 0 {
             raise_error!(
                 "ERR_GNN_EMPTY_GRAPH",
-                error = "Aucune entité Arcadia trouvée via le CollectionsManager."
+                error = "Aucune entité Arcadia trouvée dans les collections MBSE via le CollectionsManager."
             );
         }
 
-        // 3. PHASE DE CONSTRUCTION : Matrice A + I
+        user_info!(
+            "🕸️ [GNN] Matrice d'adjacence en construction pour {} nœuds MBSE...",
+            json_value!(n)
+        );
+
+        // 2. PHASE DE CONSTRUCTION : Matrice A + I
         let mut data = vec![0.0f32; n * n];
+
+        // Self-loops (Diagonale à 1) pour que le GNN n'oublie pas les caractéristiques du nœud lui-même
         for i in 0..n {
             data[i * n + i] = 1.0;
         }
 
+        // 🎯 OPTIMISATION 2 : Ciblage strict des relations Arcadia (O(1) sur les propriétés)
+        let arcadia_relations = ["realizes", "allocatedTo", "subComponents", "involvedActors"];
+
         for (i, doc) in documents.iter().enumerate() {
             if let Some(obj) = doc.as_object() {
-                for value in obj.values() {
-                    if let Some(arr) = value.as_array() {
-                        for item in arr {
-                            if let Some(tid) = item.get("@id").and_then(|v| v.as_str()) {
-                                if let Some(&j) = uri_map.get(tid) {
-                                    data[i * n + j] = 1.0;
+                for rel_key in arcadia_relations {
+                    if let Some(value) = obj.get(rel_key) {
+                        if let Some(arr) = value.as_array() {
+                            for item in arr {
+                                if let Some(tid) = item.get("@id").and_then(|v| v.as_str()) {
+                                    if let Some(&j) = uri_map.get(tid) {
+                                        data[i * n + j] = 1.0;
+                                    }
                                 }
                             }
-                        }
-                    } else if let Some(tid) = value.get("@id").and_then(|v| v.as_str()) {
-                        if let Some(&j) = uri_map.get(tid) {
-                            data[i * n + j] = 1.0;
+                        } else if let Some(tid) = value.get("@id").and_then(|v| v.as_str()) {
+                            if let Some(&j) = uri_map.get(tid) {
+                                data[i * n + j] = 1.0;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // 4. TRANSFERT HARDWARE : Conversion vers Tenseur Candle
+        // 3. TRANSFERT HARDWARE : Conversion vers Tenseur Candle
         let matrix = match Tensor::from_vec(data, (n, n), device) {
             Ok(m) => m,
             Err(e) => raise_error!(
@@ -105,15 +108,19 @@ impl GraphAdjacency {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::DbSandbox;
+    use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
     async fn test_adjacency_build_with_arcadia_links() {
-        let sandbox = DbSandbox::new().await;
-        let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
         manager.init_db().await.unwrap();
 
-        // Création des collections virtuelles
+        // Création des collections MBSE virtuelles
         manager
             .create_collection(
                 "la",
@@ -129,16 +136,14 @@ mod tests {
             .await
             .unwrap();
 
-        // 🎯 On utilise l'API de base de données (Manager) et on inclut `_id` requis par insert_raw
-        let f1_doc =
-            json_value!({ "_id": "la_F1", "@id": "la:F1", "realizes": [{ "@id": "sa:S1" }] });
-        let s1_doc = json_value!({ "_id": "sa_S1", "@id": "sa:S1" });
+        // 🎯 On utilise l'API de base de données (Manager)
+        let f1_doc = json_value!({ "_id": "F1", "@id": "la:F1", "realizes": [{ "@id": "sa:S1" }] });
+        let s1_doc = json_value!({ "_id": "S1", "@id": "sa:S1" });
 
         manager.insert_raw("la", &f1_doc).await.unwrap();
         manager.insert_raw("sa", &s1_doc).await.unwrap();
 
         let device = Device::Cpu;
-        // Le GNN interroge désormais proprement la Base de données
         let adj_res = GraphAdjacency::build_from_store(&manager, &device).await;
 
         assert!(
@@ -150,7 +155,7 @@ mod tests {
         assert_eq!(
             adj.index_to_uri.len(),
             2,
-            "Le graphe devrait contenir exactement 2 nœuds."
+            "Le graphe devrait contenir exactement 2 nœuds MBSE."
         );
 
         let data = adj.matrix.flatten_all().unwrap().to_vec1::<f32>().unwrap();
@@ -160,7 +165,7 @@ mod tests {
         assert_eq!(
             data[i * 2 + j],
             1.0,
-            "Le lien sémantique la:F1 -> sa:S1 est manquant."
+            "Le lien sémantique la:F1 -> sa:S1 ('realizes') est manquant."
         );
         assert_eq!(
             data[i * 2 + i],

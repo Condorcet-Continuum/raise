@@ -15,7 +15,6 @@ use candle_nn::VarMap;
 
 // --- IMPORTS AGENTS ---
 use crate::ai::agents::intent_classifier::IntentClassifier;
-// 🎯 NOUVEAU : On importe uniquement le DynamicAgent et les traits de base !
 use crate::ai::agents::{
     dynamic_agent::DynamicAgent, Agent, AgentContext, AgentResult, CreatedArtifact,
 };
@@ -27,10 +26,10 @@ pub struct AiOrchestrator {
     pub session: ConversationSession,
     pub memory_store: MemoryStore,
     pub world_engine: SharedRef<NeuroSymbolicEngine>,
-    #[allow(dead_code)]
-    world_engine_path: PathBuf,
 
-    // Référence au StorageEngine pour les Agents
+    // 🎯 Nouveau : On garde l'espace et la db pour recréer un Manager à la volée (ex: Reinforce Learning)
+    pub space: String,
+    pub db_name: String,
     storage: Option<SharedRef<StorageEngine>>,
 }
 
@@ -43,28 +42,16 @@ impl AiOrchestrator {
     ) -> RaiseResult<Self> {
         let app_config = AppConfig::get();
 
-        let Some(domain_path) = app_config.get_path("PATH_RAISE_DOMAIN") else {
-            raise_error!(
-                "ERR_CONFIG_DOMAIN_PATH_MISSING",
-                error = "PATH_RAISE_DOMAIN est manquant dans la configuration AppConfig",
-                context = json_value!({
-                    "required_key": "PATH_RAISE_DOMAIN",
-                    "action": "initialize_domain_context"
-                })
-            );
-        };
-        let chats_path = domain_path.join("chats");
-        let brain_path = domain_path.join("world_model.safetensors");
-
         let rag = RagRetriever::new(manager).await?;
         let symbolic = SimpleRetriever::new(model);
         let llm = LlmClient::new(manager).await?;
 
         let wm_config = app_config.world_model.clone();
 
-        let world_engine = if brain_path.exists() {
-            tracing::info!("🧠 [Orchestrator] Chargement du World Model existant...");
-            NeuroSymbolicEngine::load_from_file(&brain_path, wm_config.clone())
+        // 🎯 L'Orchestrateur délègue entièrement la gestion physique au World Model via le Manager !
+        let world_engine = if NeuroSymbolicEngine::exists(manager).await {
+            tracing::info!("🧠 [Orchestrator] Chargement du World Model depuis JSON-DB...");
+            NeuroSymbolicEngine::load(manager, wm_config.clone())
                 .await
                 .unwrap_or_else(|e| {
                     tracing::error!("⚠️ Erreur chargement cerveau, réinitialisation: {}", e);
@@ -78,20 +65,19 @@ impl AiOrchestrator {
             NeuroSymbolicEngine::new(wm_config, vm)?
         };
 
-        let memory_store = match MemoryStore::new(&chats_path).await {
+        let memory_store = match MemoryStore::new(manager).await {
             Ok(ms) => ms,
             Err(e) => raise_error!(
                 "ERR_CHAT_MEMORY_STORE_INIT",
                 error = e,
                 context = json_value!({
-                    "chats_path": chats_path.to_string_lossy(),
                     "component": "CHAT_SYSTEM"
                 })
             ),
         };
 
         let session_id = "main_session";
-        let session = memory_store.load_or_create(session_id).await?;
+        let session = memory_store.load_or_create(manager, session_id).await?;
 
         Ok(Self {
             rag,
@@ -100,50 +86,51 @@ impl AiOrchestrator {
             session,
             memory_store,
             world_engine: SharedRef::new(world_engine),
-            world_engine_path: brain_path,
+            space: manager.space.to_string(),
+            db_name: manager.db.to_string(),
             storage: Some(storage),
         })
     }
 
     /// Point d'entrée principal : Exécute une requête utilisateur via le système multi-agents
     pub async fn execute_workflow(&mut self, user_query: &str) -> RaiseResult<AgentResult> {
-        let _rag_context = self.rag.retrieve(user_query, 3).await.unwrap_or_default();
+        let app_config = AppConfig::get();
+        let Some(storage_arc) = self.storage.clone() else {
+            raise_error!(
+                "ERR_AGENT_STORAGE_MISSING",
+                error = "StorageEngine requis pour l'exécution des agents",
+                context = json_value!({
+                    "component": "ORCHESTRATOR",
+                    "action": "execute_workflow"
+                })
+            );
+        };
+
+        let manager = CollectionsManager::new(
+            storage_arc.as_ref(),
+            &app_config.system_domain,
+            &app_config.system_db,
+        );
+
+        let _rag_context = self
+            .rag
+            .retrieve(&manager, user_query, 3)
+            .await
+            .unwrap_or_default();
         let _arcadia_context = self.symbolic.retrieve_context(user_query);
 
         let classifier = IntentClassifier::new(self.llm.clone());
         let mut current_intent = classifier.classify(user_query).await;
-        // 🎯 L'intent renvoie maintenant une URN (ex: "ref:agents:handle:agent_software")
         let mut current_agent_urn = current_intent.recommended_agent_id().to_string();
 
         let session_scope = current_intent.default_session_scope();
         let global_session_id =
             AgentContext::generate_default_session_id("orchestrator", session_scope);
 
-        let app_config = AppConfig::get();
-        let Some(domain_path) = app_config.get_path("PATH_RAISE_DOMAIN") else {
-            raise_error!(
-                "ERR_CONFIG_DOMAIN_PATH_MISSING",
-                error = "PATH_RAISE_DOMAIN est manquant dans la configuration AppConfig",
-                context = json_value!({
-                    "required_key": "PATH_RAISE_DOMAIN",
-                    "action": "initialize_app_domain"
-                })
-            );
-        };
+        let domain_path = app_config.get_path("PATH_RAISE_DOMAIN").unwrap();
         let dataset_path = app_config
             .get_path("PATH_RAISE_DATASET")
             .unwrap_or_else(|| domain_path.join("dataset"));
-
-        let Some(storage_arc) = self.storage.clone() else {
-            raise_error!(
-                "ERR_AGENT_STORAGE_MISSING",
-                error = "StorageEngine requis pour l'exécution des agents",
-                context = json_value!({
-                    "component": "AGENT_RUNNER",
-                    "action": "execute_agent"
-                })
-            );
-        };
 
         let mut hop_count = 0;
         const MAX_HOPS: i32 = 5;
@@ -168,7 +155,6 @@ impl AiOrchestrator {
             )
             .await;
 
-            // 🎯 L'INSTANCIATION MAGIQUE DATA-DRIVEN EST ICI !
             tracing::info!(
                 "🤖 Instanciation et Activation de l'Agent Dynamique: {}",
                 current_agent_urn
@@ -205,7 +191,22 @@ impl AiOrchestrator {
     pub async fn ask(&mut self, query: &str) -> RaiseResult<String> {
         self.session.add_user_message(query);
 
-        let rag_ctx = self.rag.retrieve(query, 3).await.unwrap_or_default();
+        let app_config = AppConfig::get();
+        let Some(storage_arc) = &self.storage else {
+            raise_error!("ERR_STORAGE_MISSING", error = "StorageEngine manquant");
+        };
+
+        let manager = CollectionsManager::new(
+            storage_arc.as_ref(),
+            &app_config.system_domain,
+            &app_config.system_db,
+        );
+
+        let rag_ctx = self
+            .rag
+            .retrieve(&manager, query, 3)
+            .await
+            .unwrap_or_default();
         let arcadia_ctx = self.symbolic.retrieve_context(query);
 
         let mut prompt = format!("Demande Utilisateur : {}\n\n", query);
@@ -229,7 +230,10 @@ impl AiOrchestrator {
             .await?;
 
         self.session.add_ai_message(&response);
-        let _ = self.memory_store.save_session(&self.session).await;
+        let _ = self
+            .memory_store
+            .save_session(&manager, &self.session)
+            .await;
 
         Ok(response)
     }
@@ -242,20 +246,51 @@ impl AiOrchestrator {
     ) -> RaiseResult<f64> {
         let mut trainer = WorldTrainer::new(&self.world_engine, 0.01)?;
         let loss = trainer.train_step(state_before, WorldAction { intent }, state_after)?;
-        let _ = self
-            .world_engine
-            .save_to_file(&self.world_engine_path)
-            .await;
+
+        // 🎯 L'Orchestrateur recrée un manager localement pour sauvegarder dans la bonne DB !
+        if let Some(storage_arc) = &self.storage {
+            let manager = CollectionsManager::new(storage_arc.as_ref(), &self.space, &self.db_name);
+            let _ = self.world_engine.save(&manager).await;
+        }
+
         Ok(loss)
     }
 
     pub async fn learn_document(&mut self, content: &str, source: &str) -> RaiseResult<usize> {
-        self.rag.index_document(content, source).await
+        let app_config = AppConfig::get();
+        let Some(storage_arc) = &self.storage else {
+            raise_error!(
+                "ERR_STORAGE_MISSING",
+                error = "StorageEngine manquant pour l'indexation RAG"
+            );
+        };
+        let manager = CollectionsManager::new(
+            storage_arc.as_ref(),
+            &app_config.system_domain,
+            &app_config.system_db,
+        );
+
+        self.rag.index_document(&manager, content, source).await
     }
 
     pub async fn clear_history(&mut self) -> RaiseResult<()> {
         self.session = ConversationSession::new(self.session.id.clone());
-        let _ = self.memory_store.save_session(&self.session).await;
+
+        let app_config = AppConfig::get();
+        let Some(storage_arc) = &self.storage else {
+            raise_error!("ERR_STORAGE_MISSING", error = "StorageEngine manquant");
+        };
+        let manager = CollectionsManager::new(
+            storage_arc.as_ref(),
+            &app_config.system_domain,
+            &app_config.system_db,
+        );
+
+        let _ = self
+            .memory_store
+            .save_session(&manager, &self.session)
+            .await;
+
         Ok(())
     }
 }
@@ -282,7 +317,6 @@ mod tests {
             id: id.to_string(),
             name: NameType::default(),
             kind: "https://raise.io/ontology/arcadia/la#LogicalFunction".to_string(),
-            description: None,
             properties: UnorderedMap::new(),
         }
     }

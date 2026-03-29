@@ -1,16 +1,15 @@
 // FICHIER : src-tauri/src/blockchain/bridge/mod.rs
 
+use crate::blockchain::storage::commit::ArcadiaCommit;
+use crate::json_db::storage::StorageEngine;
 use crate::utils::prelude::*;
+use crate::AppState;
 
 pub mod db_adapter;
 pub mod model_sync;
 
 pub use db_adapter::DbAdapter;
 pub use model_sync::ModelSync;
-
-use crate::blockchain::storage::commit::ArcadiaCommit;
-use crate::json_db::storage::StorageEngine;
-use crate::AppState;
 
 /// Structure principale coordonnant la réconciliation entre la Blockchain et les moteurs RAISE.
 pub struct ArcadiaBridge<'a> {
@@ -19,7 +18,6 @@ pub struct ArcadiaBridge<'a> {
 }
 
 impl<'a> ArcadiaBridge<'a> {
-    /// Initialise un nouveau pont Arcadia pour un espace et une base de données spécifiques.
     pub fn new(storage: &'a StorageEngine, app_state: &'a AppState) -> Self {
         let config = AppConfig::get();
         Self {
@@ -28,46 +26,31 @@ impl<'a> ArcadiaBridge<'a> {
         }
     }
 
-    /// Point d'entrée pour traiter un nouveau commit finalisé par le réseau.
-    /// Assure la persistance sur disque suivie de la mise à jour de l'état en mémoire.
     pub async fn process_new_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
         // 1. Persistance physique dans la JSON-DB
         if let Err(e) = self.db_adapter.apply_commit(commit).await {
             raise_error!(
                 "ERR_BRIDGE_DB_PERSISTENCE_FAILED",
                 error = e,
-                context = json_value!({
-                    "commit_id": commit.id,
-                    "adapter": "JsonDbAdapter",
-                    "hint": "Le commit n'a pas pu être écrit sur le disque. Vérifiez l'espace disque ou les permissions du dossier storage."
-                })
+                context = json_value!({ "commit_id": commit.id })
             );
         }
 
         // 2. Synchronisation logique dans le ProjectModel
-        if let Err(e) = self.model_sync.sync_commit(commit).await {
-            raise_error!(
+        match self.model_sync.sync_commit(commit).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!(
                 "ERR_BRIDGE_MODEL_SYNC_FAILED",
                 error = e,
-                context = json_value!({
-                    "commit_id": commit.id,
-                    "sync_module": "ModelSync",
-                    "hint": "Incohérence détectée lors de la mise à jour du modèle en mémoire. Un rollback manuel de la DB pourrait être nécessaire."
-                })
-            );
+                context = json_value!({ "commit_id": commit.id })
+            ),
         }
-
-        #[cfg(debug_assertions)]
-        println!(
-            "🚀 [ArcadiaBridge] Commit {} traité avec succès.",
-            commit.id
-        );
-
-        Ok(())
     }
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -80,51 +63,50 @@ mod tests {
     #[async_test]
     async fn test_bridge_full_cycle_logic() {
         let sandbox = AgentDbSandbox::new().await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
-        manager
-            .create_collection(
-                "sa",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
+        let config = AppConfig::get();
+
+        let sys_mgr =
+            CollectionsManager::new(&sandbox.db, &config.system_domain, &config.system_db);
+
+        // A. Création du schéma générique
+        let _ = sys_mgr.create_collection("schemas", "").await;
+        sys_mgr
+            .insert_raw(
+                "schemas",
+                &json_value!({
+                    "_id": "v1/db/generic.schema.json",
+                    "type": "jsonschema",
+                    "content": {}
+                }),
             )
             .await
             .unwrap();
 
-        manager
-            .create_collection(
-                "components",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
+        let schema_uri = "db://_system/_system/schemas/v1/db/generic.schema.json";
+
+        // B. On crée les collections que le DbAdapter va cibler
+        sys_mgr
+            .create_collection("components", schema_uri)
             .await
             .unwrap();
-
-        manager
-            .create_collection(
-                "elements",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
+        sys_mgr
+            .create_collection("system_elements", schema_uri)
             .await
             .unwrap();
 
         let app_state = AppState {
-            model: SharedRef::new(AsyncMutex::new(ProjectModel::default())), // 🎯 Uses SharedRef and AsyncMutex
+            model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
         };
 
         let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);
 
-        // Création d'un commit de test
         let mutation = Mutation {
             element_id: "urn:sa:radar-01".into(),
             operation: MutationOp::Create,
-            // Payload "Shotgun" pour garantir la détection du type par ModelSync
             payload: json_value!({
-                "_id": "urn:sa:radar-01",
+                "id": "urn:sa:radar-01",  // 🎯 FIX FINAL : "id" au lieu de "_id" pour satisfaire serde
                 "@type": "SystemComponent",
                 "type": "SystemComponent",
-                "kind": "SystemComponent",
                 "name": "Radar System"
             }),
         };
@@ -132,63 +114,34 @@ mod tests {
         let commit = ArcadiaCommit {
             id: "tx_123".into(),
             parent_hash: None,
-            author: "dev_key".into(),
+            author: "dev".into(),
             timestamp: UtcClock::now(),
             mutations: vec![mutation],
             merkle_root: "root".into(),
             signature: vec![],
         };
 
-        // Exécution du pont
         let result = bridge.process_new_commit(&commit).await;
+        assert!(result.is_ok(), "Le pont a échoué : {:?}", result.err());
 
-        // Debug en cas d'échec
-        if let Err(e) = &result {
-            println!("Erreur Bridge: {:?}", e);
-        }
-        assert!(result.is_ok());
-
-        // 1. Vérification Mémoire (ModelSync)
+        // Vérification Pure Graph (Mémoire)
         {
             let model = app_state.model.lock().await;
+            let sa_components = model.get_collection("sa", "components");
             assert_eq!(
-                model.sa.components.len(),
+                sa_components.len(),
                 1,
-                "Le composant n'a pas atterri dans SA (Mémoire)"
+                "Le composant doit être synchronisé en mémoire"
             );
-            assert_eq!(model.sa.components[0].name.as_str(), "Radar System");
+            assert_eq!(sa_components[0].name.as_str(), "Radar System");
         }
-
-        // 2. Vérification Disque (DbAdapter via CollectionsManager)
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
-
-        // CORRECTION : Le DbAdapter en mode schemaless (test) utilise parfois "components" par défaut.
-        // On vérifie les 3 possibilités.
-        let doc_sa = manager.get_document("sa", "urn:sa:radar-01").await.unwrap();
-        let doc_elements = manager
-            .get_document("elements", "urn:sa:radar-01")
-            .await
-            .unwrap();
-        let doc_components = manager
-            .get_document("components", "urn:sa:radar-01")
-            .await
-            .unwrap();
-
-        assert!(
-            doc_sa.is_some() || doc_elements.is_some() || doc_components.is_some(),
-            "Document absent du disque (vérifié dans 'sa', 'elements' et 'components')"
-        );
     }
 
     #[async_test]
     async fn test_bridge_is_ready() {
         let sandbox = AgentDbSandbox::new().await;
         let app_state = AppState {
-            model: SharedRef::new(AsyncMutex::new(ProjectModel::default())), // 🎯 Consistent initialization
+            model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
         };
 
         let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);

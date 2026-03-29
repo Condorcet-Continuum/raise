@@ -52,6 +52,7 @@ pub trait ArcadiaSemantics {
 }
 
 impl ArcadiaSemantics for ArcadiaElement {
+    /// Déduit la couche d'appartenance à partir de l'URI du type
     fn get_layer(&self) -> Layer {
         let k = &self.kind;
 
@@ -75,6 +76,7 @@ impl ArcadiaSemantics for ArcadiaElement {
         }
     }
 
+    /// Déduit la catégorie fonctionnelle à partir du suffixe de l'URI
     fn get_category(&self) -> ElementCategory {
         let k = &self.kind;
 
@@ -113,18 +115,22 @@ impl ArcadiaSemantics for ArcadiaElement {
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model_engine::types::{ArcadiaElement, NameType};
-    use crate::utils::data::UnorderedMap;
 
+    /// Helper pour créer un élément de test compatible Pure Graph
     fn make_el(kind: &str) -> ArcadiaElement {
         ArcadiaElement {
-            id: "test".to_string(),
+            id: "test_id".to_string(),
             name: NameType::default(),
             kind: kind.to_string(),
-            description: None,
+            // 🎯 PURE GRAPH : Plus de champ description ici, on utilise la map properties vide
             properties: UnorderedMap::new(),
         }
     }
@@ -140,11 +146,8 @@ mod tests {
         let el_data = make_el("https://raise.io/ontology/arcadia/data#Class");
         assert_eq!(el_data.get_layer(), Layer::Data);
 
-        let el_trans = make_el("https://raise.io/ontology/arcadia/transverse#CommonLib");
+        let el_trans = make_el("https://raise.io/ontology/arcadia/transverse#Requirement");
         assert_eq!(el_trans.get_layer(), Layer::Transverse);
-
-        let el_unknown = make_el("http://unknown.org/thing");
-        assert_eq!(el_unknown.get_layer(), Layer::Unknown);
     }
 
     #[test]
@@ -159,5 +162,12 @@ mod tests {
 
         let data = make_el("https://raise.io/ontology/arcadia/data#DataType");
         assert_eq!(data.get_category(), ElementCategory::Data);
+    }
+
+    #[test]
+    fn test_unknown_type_handling() {
+        let unknown = make_el("http://external.org/UnknownThing");
+        assert_eq!(unknown.get_layer(), Layer::Unknown);
+        assert_eq!(unknown.get_category(), ElementCategory::Other);
     }
 }

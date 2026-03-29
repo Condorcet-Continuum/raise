@@ -1,6 +1,7 @@
 // FICHIER : src-tauri/src/commands/training_commands.rs
 
 use crate::ai::training::ai_train_domain_native;
+use crate::json_db::collections::manager::CollectionsManager; // 🎯 Import du manager
 use crate::json_db::storage::StorageEngine;
 use crate::utils::prelude::*;
 
@@ -13,6 +14,9 @@ pub async fn tauri_train_domain(
     epochs: usize,
     lr: f64,
 ) -> RaiseResult<String> {
-    // On appelle simplement la fonction pure du noyau !
-    ai_train_domain_native(storage.inner(), &space, &db_name, &domain, epochs, lr).await
+    // 🎯 FIX : On instancie le manager pour la base demandée
+    let manager = CollectionsManager::new(storage.inner(), &space, &db_name);
+
+    // Et on le passe au moteur d'entraînement
+    ai_train_domain_native(&manager, &domain, epochs, lr).await
 }

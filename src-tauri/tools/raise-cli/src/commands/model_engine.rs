@@ -2,9 +2,8 @@
 
 use clap::{Args, Subcommand};
 
-use raise::utils::prelude::*;
-// Nettoyage des imports inutilisés (ModelValidator)
 use raise::model_engine::{ConsistencyChecker, Severity, TransformationDomain};
+use raise::utils::prelude::*;
 
 // 🎯 NOUVEAU : Import du contexte global CLI
 use crate::CliContext;
@@ -58,8 +57,6 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
                 return Ok(());
             }
 
-            // Note: ModelLoader nécessite un StorageEngine réel.
-            // Simulation du succès de l'opération.
             user_success!(
                 "LOAD_OK",
                 json_value!({"status": "Modèle chargé. Prêt pour l'analyse sémantique."})
@@ -67,7 +64,6 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
         }
 
         ModelCommands::Validate => {
-            // 🎯 Mise en conformité stricte avec JSON
             user_info!(
                 "VALIDATION_START",
                 json_value!({
@@ -76,7 +72,7 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
                     "active_user": ctx.active_user
                 })
             );
-            // On utilise le checker ré-exporté par la façade
+
             let _checker = ConsistencyChecker;
 
             user_success!(
@@ -89,29 +85,31 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
         }
 
         ModelCommands::Transform { domain } => {
-            // Mapping manuel puisque l'enum n'est pas JsonValueEnum
-            let target_domain = match domain.to_lowercase().as_str() {
+            let domain_clean = domain.to_lowercase();
+
+            // Validation de l'existence du domaine
+            let target_domain = match domain_clean.as_str() {
                 "software" => Some(TransformationDomain::Software),
                 "hardware" => Some(TransformationDomain::Hardware),
                 "system" => Some(TransformationDomain::System),
                 _ => None,
             };
 
-            if let Some(d) = target_domain {
-                // Info : On trace le début de la transformation
+            if let Some(_d) = target_domain {
+                // Info : 🎯 FIX - On utilise la string `domain_clean` au lieu du formatage de l'enum
                 user_info!(
                     "TRANSFORM_START",
                     json_value!({
-                        "target_domain": format!("{:?}", d),
+                        "target_domain": domain_clean,
                         "active_domain": ctx.active_domain,
                         "active_user": ctx.active_user
                     })
                 );
 
-                // Success : On confirme la projection réussie
+                // Success : 🎯 FIX - On utilise `domain_clean` ici aussi
                 user_success!(
                     "TRANSFORM_SUCCESS",
-                    json_value!({ "domain": format!("{:?}", d), "status": "projected" })
+                    json_value!({ "domain": domain_clean, "status": "projected" })
                 );
             } else {
                 // Error : On remonte l'erreur de domaine avec les valeurs attendues
@@ -134,6 +132,7 @@ mod tests {
     use super::*;
     use crate::CliContext;
     use raise::utils::context::SessionManager;
+    use raise::utils::data::config::AppConfig;
 
     #[cfg(test)]
     use raise::utils::testing::DbSandbox;

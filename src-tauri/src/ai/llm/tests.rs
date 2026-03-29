@@ -1,26 +1,8 @@
-use super::prompts;
 use super::response_parser;
 
 // ==========================================
 // 1. TESTS UNITAIRES (LOGIQUE INTERNE)
 // ==========================================
-
-/// Vérifie que les "Personas" (Prompts Système) sont bien définis et non vides.
-#[test]
-fn test_prompts_integrity() {
-    assert!(
-        !prompts::INTENT_CLASSIFIER_PROMPT.trim().is_empty(),
-        "Le prompt Intent Classifier est vide !"
-    );
-    assert!(
-        !prompts::SYSTEM_AGENT_PROMPT.trim().is_empty(),
-        "Le prompt System Agent est vide !"
-    );
-    assert!(
-        !prompts::SOFTWARE_AGENT_PROMPT.trim().is_empty(),
-        "Le prompt Software Agent est vide !"
-    );
-}
 
 /// Vérifie que le parser nettoie correctement les balises Markdown des LLM.
 #[test]

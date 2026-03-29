@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/workflow_engine/handlers/mod.rs
+
 pub mod decision;
 pub mod end;
 pub mod hitl;
@@ -9,6 +11,8 @@ pub mod wasm;
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::plugins::manager::PluginManager;
 use crate::utils::prelude::*;
+// 🎯 NOUVEAU : Import du gestionnaire de collections
+use crate::json_db::collections::manager::CollectionsManager;
 
 use super::critic::WorkflowCritic;
 use super::tools::AgentTool;
@@ -20,6 +24,8 @@ pub struct HandlerContext<'a> {
     pub plugin_manager: &'a SharedRef<PluginManager>,
     pub critic: &'a WorkflowCritic,
     pub tools: &'a UnorderedMap<String, Box<dyn AgentTool>>,
+    // 🎯 NOUVEAU : Accès direct, asynchrone et mutualisé à la donnée (Data-Driven)
+    pub manager: &'a CollectionsManager<'a>,
 }
 
 /// Le Contrat : Chaque stratégie d'exécution doit implémenter ceci

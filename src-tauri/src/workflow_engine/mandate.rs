@@ -1,21 +1,22 @@
 // FICHIER : src-tauri/src/workflow_engine/mandate.rs
-use crate::utils::prelude::*;
-
 use crate::json_db::collections::manager::CollectionsManager;
-
+use crate::utils::prelude::*;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
-// --- STRUCTURES DU MANDAT ---
+// --- STRUCTURES DU MANDAT (Alignées sur mandate.schema.json) ---
 
 #[derive(Debug, Clone, Serializable, Deserializable)]
 #[serde(rename_all = "camelCase")]
 pub struct Mandate {
-    #[serde(default, rename = "_id")]
-    pub id: String,
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub _id: Option<String>,
+    pub handle: String,
+    pub name: JsonValue, // Supporte string ou i18n object
     pub meta: MandateMeta,
     pub governance: Governance,
     pub hard_logic: HardLogic,
     pub observability: Observability,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
 }
 
@@ -55,10 +56,8 @@ pub struct VetoRule {
     pub rule: String,
     pub active: bool,
     pub action: String,
-    // AJOUT : Stockage optionnel de la règle dynamique (AST JSON)
-    // Le "Option" garantit la rétrocompatibilité (pas obligatoire dans le JSON)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ast: Option<JsonValue>,
+    pub ast: Option<JsonValue>, // L'arbre syntaxique pour le Rules Engine
 }
 
 #[derive(Debug, Clone, Serializable, Deserializable)]
@@ -70,49 +69,42 @@ pub struct Observability {
 // --- LOGIQUE MÉTIER ---
 
 impl Mandate {
-    /// Charge un mandat depuis la base de données (Collection "mandates") - ASYNC
-    pub async fn fetch_from_store(manager: &CollectionsManager<'_>, id: &str) -> RaiseResult<Self> {
-        // 1. Récupération avec diagnostic d'infrastructure
-        // 1. Exécution de la requête
-        let mandate_result = manager.get_document("mandates", id).await;
-
-        // 2. Résolution impérative
+    pub async fn fetch_from_store(
+        manager: &CollectionsManager<'_>,
+        handle: &str,
+    ) -> RaiseResult<Self> {
+        let mandate_result = manager.get_document("mandates", handle).await;
         let doc = match mandate_result {
             Ok(Some(document)) => document,
             Ok(None) => raise_error!(
                 "ERR_WF_MANDATE_NOT_FOUND",
                 context = json_value!({
-                    "mandate_id": id,
+                    "handle": handle,
                     "action": "resolve_mandate",
-                    "hint": "L'identifiant est inconnu ou le mandat a été révoqué/supprimé."
+                    "hint": "L'identifiant est inconnu ou le mandat a été révoqué."
                 })
             ),
             Err(e) => raise_error!(
                 "ERR_WF_MANDATE_DB_ACCESS",
                 context = json_value!({
-                    "mandate_id": id,
-                    "action": "fetch_mandate_document",
+                    "handle": handle,
                     "db_error": e.to_string(),
-                    "hint": "Problème de connexion ou de permissions lors de l'accès à la collection 'mandates'."
                 })
             ),
         };
 
-        // 2. Désérialisation avec diagnostic d'intégrité
         let mut mandate: Mandate = match json::deserialize_from_value(doc) {
             Ok(m) => m,
             Err(e) => raise_error!(
                 "ERR_WF_MANDATE_CORRUPT",
                 context = json_value!({
-                    "mandate_id": id,
+                    "handle": handle,
                     "serialization_error": e.to_string(),
-                    "action": "parse_mandate_payload",
-                    "hint": "La structure du mandat en base ne correspond plus au modèle Rust. Une migration de schéma est peut-être nécessaire."
                 })
             ),
         };
 
-        mandate.id = id.to_string();
+        mandate._id = Some(handle.to_string());
         Ok(mandate)
     }
 
@@ -169,18 +161,21 @@ mod tests {
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
+        // JSON strict correspondant à mandate.schema.json
         let full_json = json_value!({
-            "_id": "man_01",
-            "meta": { "author": "System", "version": "1.0", "status": "ACTIVE" },
+            "handle": "mandate-core-v1",
+            "name": "Mandat Central",
+            "meta": { "author": "System Admin", "version": "1.0", "status": "ACTIVE" },
             "governance": {
                 "strategy": "SAFETY_FIRST",
-                "condorcetWeights": { "security": 10.0 }
+                "condorcetWeights": { "agent_security": 10.0 }
             },
             "hardLogic": {
                 "vetos": [{ "rule": "MAX_TEMP", "active": true, "action": "STOP" }]
             },
             "observability": { "heartbeatMs": 100 }
         });
+
         manager
             .create_collection(
                 "mandates",
@@ -188,14 +183,18 @@ mod tests {
             )
             .await
             .unwrap();
-        manager.insert_raw("mandates", &full_json).await.unwrap();
+        manager
+            .upsert_document("mandates", full_json)
+            .await
+            .unwrap();
 
-        let result = Mandate::fetch_from_store(&manager, "man_01").await;
+        let result = Mandate::fetch_from_store(&manager, "mandate-core-v1").await;
         assert!(result.is_ok());
 
         let mandate = result.unwrap();
+        assert_eq!(mandate.handle, "mandate-core-v1");
         assert_eq!(mandate.governance.strategy, Strategy::SafetyFirst);
-        // Vérification rétrocompatibilité : ast doit être None
+        // Vérification rétrocompatibilité : ast doit être None si non fourni
         assert!(mandate.hard_logic.vetos[0].ast.is_none());
     }
 
@@ -205,13 +204,14 @@ mod tests {
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
-        // Une règle dynamique injectée
+        // Une règle dynamique (AST) injectée pour le Rules Engine
         let ast_json = json_value!({
-            "Gt": [{"Var": "temp"}, {"Val": 100.0}]
+            "gt": [{"var": "temp"}, {"val": 100.0}]
         });
 
         let full_json = json_value!({
-            "_id": "man_ast",
+            "handle": "mandate-perf-v2",
+            "name": "Mandat Performance",
             "meta": { "author": "System", "version": "2.0", "status": "ACTIVE" },
             "governance": {
                 "strategy": "PERFORMANCE",
@@ -222,11 +222,12 @@ mod tests {
                     "rule": "DYNAMIC_TEMP",
                     "active": true,
                     "action": "STOP",
-                    "ast": ast_json // Nouveau champ
+                    "ast": ast_json // L'AST est bien injecté
                 }]
             },
             "observability": { "heartbeatMs": 100 }
         });
+
         manager
             .create_collection(
                 "mandates",
@@ -234,13 +235,19 @@ mod tests {
             )
             .await
             .unwrap();
-        manager.insert_raw("mandates", &full_json).await.unwrap();
+        manager
+            .upsert_document("mandates", full_json)
+            .await
+            .unwrap();
 
-        let result = Mandate::fetch_from_store(&manager, "man_ast").await;
+        let result = Mandate::fetch_from_store(&manager, "mandate-perf-v2").await;
         assert!(result.is_ok());
         let mandate = result.unwrap();
-        // Vérification que l'AST est bien présent
+
+        // L'AST doit être correctement désérialisé
         assert!(mandate.hard_logic.vetos[0].ast.is_some());
+        let parsed_ast = mandate.hard_logic.vetos[0].ast.as_ref().unwrap();
+        assert!(parsed_ast.get("gt").is_some());
     }
 
     #[async_test]
@@ -249,11 +256,13 @@ mod tests {
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         manager.init_db().await.unwrap();
 
+        // Un JSON corrompu ou incomplet par rapport au schéma
         let bad_json = json_value!({
-            "_id": "man_broken",
+            "handle": "broken",
             "meta": { "author": "Hacker", "version": "0.0", "status": "DRAFT" },
-            "governance": { "strategy": "PERFORMANCE" }
+            "governance": { "strategy": "PERFORMANCE" } // Il manque hardLogic, observability, etc.
         });
+
         manager
             .create_collection(
                 "mandates",
@@ -261,9 +270,16 @@ mod tests {
             )
             .await
             .unwrap();
-        manager.insert_raw("mandates", &bad_json).await.unwrap();
+        manager.upsert_document("mandates", bad_json).await.unwrap();
 
-        let result = Mandate::fetch_from_store(&manager, "man_broken").await;
+        let result = Mandate::fetch_from_store(&manager, "broken").await;
         assert!(result.is_err());
+
+        if let Err(e) = result {
+            assert!(
+                e.to_string().contains("ERR_WF_MANDATE_CORRUPT"),
+                "Doit renvoyer une erreur de corruption de payload"
+            );
+        }
     }
 }
