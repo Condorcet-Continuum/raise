@@ -88,6 +88,7 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_system_tool_persistence_integration() {
         let sandbox = GlobalDbSandbox::new().await;
         let manager = CollectionsManager::new(
