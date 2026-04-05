@@ -1,177 +1,70 @@
-# RAISE · Usine de Cas d'Usage IA Orientée Poste de Travail
+# 🦀 RAISE Core Backend
 
-<p align="center">
-<img src="src/assets/images/logo-white.svg" alt="RAISE Logo" width="200">
-</p>
+Ce répertoire contient le cœur logique de **RAISE**, implémenté en **Rust**. Il s'agit du moteur souverain chargé de l'orchestration neuro-symbolique, du calcul haute performance et de la gestion de la connaissance MBSE.
 
-**RAISE** est une **Use-Case Factory** (Usine à Cas d'Usage) souveraine pour l'ingénierie complexe.
+## 🏗️ Architecture du Cœur
 
-Plus qu'un simple outil, c'est une plateforme unifiée qui permet de concevoir, déployer et exécuter des assistants IA spécialisés pour l'**Ingénierie Système, Logicielle, Matérielle et IA**. Elle a pour vocation d'être une **infrastructure de Bien Commun Numérique**, redonnant aux ingénieurs la maîtrise de leurs outils et de leur savoir-faire.
+Le backend est structuré pour garantir une isolation stricte entre les entrées/sorties asynchrones et les calculs lourds (CPU-bound) afin de maintenir une réactivité maximale de l'interface utilisateur.
 
-Contrairement aux silos propriétaires, RAISE décloisonne les disciplines en combinant la créativité de l'IA Générative avec la rigueur des méthodes formelles, le tout dans un environnement **Local-First, Transparent et Sécurisé**.
+### 1. Moteur de Workflow & Handlers
+Le `workflow_engine` pilote l'exécution séquentielle ou parallèle des tâches d'ingénierie.
+* **GeneticsHandler** : Gère l'optimisation d'architecture via des algorithmes génétiques (NSGA-II).
+* **WorldModelHandler** : (Nouveau) Utilise le GNN pour prédire l'impact topologique d'une modification sur le graphe système.
+* **TaskHandler** : Délègue des actions spécifiques aux agents spécialisés.
 
----
+### 2. Intelligence Neuro-Symbolique (`ai/`)
+RAISE combine la flexibilité des LLM avec la rigueur des modèles formels.
+* **Orchestrateur** : Planifie les missions et coordonne les agents.
+* **World Model (GNN)** : Implémentation native via **Candle** pour une intuition topologique du graphe Arcadia.
+* **RAG (Retrieval-Augmented Generation)** : Système de mémoire vectorielle locale pour l'accès documentaire.
 
-## 🌐 Spectre d'Ingénierie (Multidisciplinaire)
+### 3. Moteur Génétique (`genetics/`)
+Module dédié à l'exploration massive de l'espace des solutions.
+* **Isolation Parallèle** : Les calculs sont isolés dans un pool de threads **Rayon** via la façade `spawn_cpu_task`, évitant ainsi de saturer la boucle d'événements asynchrone **Tokio**.
+* **Multi-Objectif** : Optimisation Pareto (Poids, Coût, Performance) basée sur l'ontologie Arcadia.
 
-RAISE orchestre la collaboration entre quatre domaines critiques grâce à son architecture modulaire :
-
-### 1. Ingénierie Système (MBSE)
-
-_Le cœur méthodologique._
-
-- Pilotage par la méthode **Arcadia** (OA, SA, LA, PA) via le moteur `model_engine`.
-- Garantie de cohérence architecturale via sémantique **JSON-LD**.
-
-### 2. Ingénierie Logicielle
-
-_De la conception au code._
-
-- Génération de code polyglotte (Rust, C++, Python) via le module `code_generator`.
-- Validation de la qualité et conformité aux patterns de conception.
-
-### 3. Ingénierie Matérielle
-
-_Contraintes physiques et intégration._
-
-- Prise en compte des contraintes Hardware (Ressources, I/O) via des agents dédiés.
-- Modélisation des interfaces physiques définie dans les `domain-models`.
-
-### 4. Ingénierie IA (Neuro-Symbolique)
-
-_L'intelligence du système._
-
-- Optimisation des architectures via le moteur génétique `genetics`.
-- Orchestration d'agents autonomes et gestion des `plugins` cognitifs.
+### 4. Persistance & Graphe (`json_db/`)
+Moteur NoSQL souverain conçu pour l'intégrité MBSE.
+* **JSON-LD Native** : Support natif de la sémantique de graphe pour une interopérabilité totale.
+* **Transactionnel** : Support WAL (Write-Ahead Log) pour garantir la résilience des données locales.
 
 ---
 
-## 🏛️ Philosophie & Piliers Techniques
+## 🚦 Modèle de Concurrence : Async vs Sync
 
-RAISE repose sur quatre piliers qui garantissent l'indépendance technologique et la rigueur industrielle :
+Pour garantir une performance "Zéro Dette", le Core respecte cette règle d'or :
+1. **Async (Tokio)** : Utilisé pour tout ce qui est I/O (Réseau, Lecture DB, Appels LLM).
+2. **Sync (Rayon)** : Utilisé pour les calculs bruts (Évaluation génétique, Algèbre tensorielle, Inférence locale).
 
-### 1. Souveraineté (Local-First & JSON-DB)
-
-_Vos données vous appartiennent physiquement._
-L'architecture refuse le verrouillage technologique. Toutes les données sont gérées par un moteur NoSQL sur-mesure développé en Rust (`src-tauri/src/json_db`) :
-
-- **Stockage Local Standard** : Les données résident dans des fichiers JSON lisibles sur votre disque, validés par **JSON Schema**.
-- **Intégrité** : Support des transactions ACID via un **Write-Ahead Log (WAL)** (`_wal.jsonl`) qui garantit qu'aucune donnée n'est corrompue.
-- **Moteur `x_compute**` : Calcul automatique des métadonnées (UUID, timestamps) sans dépendance externe.
-
-### 2. Transparence & Rigueur (MBAIE Neuro-Symbolique)
-
-_Une IA ingénieur, pas une boîte noire._
-L'approche **MBAIE** (Model-Based AI Engineering) force l'IA à respecter des règles explicites :
-
-- **Validation Logique** : Un **Moteur de Règles** (`rules_engine`) vérifie la cohérence de chaque proposition de l'IA avant validation.
-- **Optimisation Hybride** : Le **Moteur Génétique** (`genetics`) combine l'IA générative (créativité) et l'IA symbolique (contraintes) pour explorer les solutions.
-
-### 3. Confiance (Preuve & Audit)
-
-_L'ingénierie critique exige des preuves irréfutables._
-
-- **Compliance & Reporting** : Un module dédié de **Traçabilité** (`traceability`) génère les preuves de conformité pour les standards critiques (DO-178C, ISO-26262).
-- **Blockchain Fabric** : Client gRPC intégré (`blockchain/fabric`) pour ancrer les décisions d'architecture sur Hyperledger Fabric, créant un registre immuable.
-
-### 4. Pérennité & Extensibilité
-
-_Une technologie durable et modulaire._
-
-- **Blocs Cognitifs** : Une architecture de **Plugins** (`plugins`) permet d'étendre les capacités de l'IA sans toucher au cœur du système.
-- **Performance Durable** : Noyau de calcul compilé en **WebAssembly** (`src-wasm`) pour une exécution haute performance sur poste standard.
+> **Note technique** : Le `GeneticsHandler` délègue explicitement l'évolution de la population à Rayon pour saturer le CPU sans geler l'application.
 
 ---
 
-## 🗣️ Stratégie Linguistique : Le Pari de la Précision
+## 🛠️ Développement & Tests
 
-RAISE adopte une position forte sur la **Souveraineté Cognitive** :
-
-- **Code & Infrastructure (Anglais)** : Pour garantir l'universalité technique et la contribution Open Source, le code source, les APIs et les commentaires bas-niveau respectent le standard international (Anglais).
-- **Sémantique & Règles Métier (Français)** : Nous privilégions le **Français** pour la définition des modèles formels, des exigences et des ontologies.
-- _Pourquoi ?_ Le français offre une **rigueur grammaticale et une précision sémantique** supérieures à l'anglais contextuel. Dans l'IA Neuro-Symbolique, cette précision réduit drastiquement les ambiguïtés et les risques d'hallucinations lors de la spécification de systèmes critiques. C'est le choix de la **haute définition conceptuelle**.
-
----
-
-## 🛠️ Installation et Démarrage
-
-### Prérequis
-
-- **Node.js 20+** (Frontend)
-- **Rust 1.88+** (Backend et WASM)
-- **Cibles WASM** : `rustup target add wasm32-unknown-unknown wasm32-wasip1`
-
-### Commandes Rapides
-
-1. **Compiler le module WASM** (Requis pour l'UI) :
-
+### Compilation
+Le backend peut être compilé avec des accélérations matérielles spécifiques pour l'IA :
 ```bash
-cd src-wasm && ./build.sh && cd ..
+# Avec support CUDA (NVIDIA)
+cargo build --features cuda
 
+# Avec support Metal (Apple Silicon)
+cargo build --features metal
 ```
 
-2. **Lancer l'environnement de développement** :
-
+### Tests Unitaires & Intégration
+Le système dispose d'une suite de tests robustes utilisant `AgentDbSandbox` pour garantir l'isolation totale des données de test.
 ```bash
-npm install
-cargo tauri dev
-
+# Tester spécifiquement le module génétique
+cargo test genetics::handler::tests
 ```
+
+## 📜 Traçabilité & Assurance (XAI)
+Chaque décision prise par le cœur génère une **XaiFrame**. Ces trames documentent la méthode utilisée (ex: NSGA-II), les entrées (snapshot du graphe) et les métadonnées de performance (nombre de générations, convergence) pour assurer une auditabilité complète.
 
 ---
+*RAISE Core — Engineering Intelligence for the Sovereignty Era.*
 
-## 🔧 Outils en Ligne de Commande (CLI)
+ 
 
-RAISE fournit une suite d'outils pour administrer le système et valider les modèles sans interface graphique :
-
-### 1. Administration BDD (`jsondb_cli`)
-
-```bash
-# Lister les collections
-cargo run -p jsondb_cli -- list-collections --space un2 --db _system
-
-```
-
-### 2. Débogage IA (`ai_cli`)
-
-```bash
-# Tester la classification d'intention
-cargo run -p ai_cli -- classify "Crée une fonction de régulation thermique"
-
-```
-
-### 3. Validateur de Schéma (`validator_cli`)
-
-```bash
-# Valider un fichier de données contre son schéma
-cargo run -p validator_cli -- --data ./data/comp.json --schema arcadia/pa/phys-comp.json
-
-```
-
----
-
-## 🏗️ Structure du Projet
-
-- **`src-tauri/`** : Backend Rust. Cœur de l'application.
-- `ai/` : Orchestrateur Neuro-Symbolique.
-- `blockchain/` : Clients de preuve et sécurité (Fabric, Innernet).
-- `code_generator/` : Moteurs de génération de code (Rust, C++, Python).
-- `genetics/` : Moteur d'optimisation hybride (Symbolique/Générative).
-- `json_db/` : Moteur de base de données souverain.
-- `model_engine/` : Logique métier formelle Arcadia/Capella.
-- `plugins/` : Blocs cognitifs et extensions modulaires.
-- `rules_engine/` : Moteur de validation des règles métier.
-- `tools/` : Outils CLI (`ai_cli`, `jsondb_cli`, `validator_cli`).
-- `traceability/` : Moteur de conformité et reporting.
-
-- **`src-wasm/`** : Modules de calcul haute performance compilés en WASM.
-- **`src/`** : Frontend React/TypeScript.
-- **`schemas/`** : Ontologies et définitions JSON-LD.
-- **`domain-models/`** : Référentiels de connaissances métier.
-
----
-
-## Contact
-
-**RAISE — Usine de Cas d'Usage IA Orientée Poste de Travail**
-Contact : **zair@bezghiche.com**
+ 

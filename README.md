@@ -1,147 +1,91 @@
-<p align="center">
-  <img src="docs/assets/logo-raise-emblem.svg" alt="R.A.I.S.E. Logo" width="200" height="200">
-</p>
-<h1 align="center">R.A.I.S.E. Engine</h1>
+# 🚀 R.A.I.S.E. Engine
 
-<p align="center">
-  <strong>Rationalized Advanced Intelligence System Engine.</strong><br>
-  <em>Moteur de Système d'Intelligence Avancée Rationalisé.</em>
-</p>
+**Rationalized Advanced Intelligence System Engine.** *Sovereign Neuro-Symbolic Intelligence for Critical Engineering.*
 
-<p align="center">
-  <a href="https://github.com/Condorcet-Continuum/raise/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/Condorcet-Continuum/raise/ci.yml?branch=main&style=flat-square&label=Build&logo=github" alt="CI Status">
-  </a>
-  <a href="LICENSE">
-    <img src="https://img.shields.io/github/license/Condorcet-Continuum/raise?style=flat-square&color=blue" alt="License">
-  </a>
-  <a href="https://www.rust-lang.org/">
-    <img src="https://img.shields.io/badge/Built_with-Rust-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust">
-  </a>
-  <a href="https://tauri.app/">
-    <img src="https://img.shields.io/badge/Framework-Tauri-24C8DB?style=flat-square&logo=tauri&logoColor=black" alt="Tauri">
-  </a>
-  <a href="https://www.typescriptlang.org/">
-    <img src="https://img.shields.io/badge/Language-TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
-  </a>
-  <a href="https://webassembly.org/">
-    <img src="https://img.shields.io/badge/Powered_by-WebAssembly-654FF0?style=flat-square&logo=webassembly&logoColor=white" alt="WebAssembly">
-  </a>
-</p>
+[](https://www.google.com/search?q=https://github.com/Condorcet-Continuum/raise/actions)
+[](https://www.rust-lang.org/)
+[](https://www.google.com/search?q=https://github.com/Condorcet-Continuum/raise)
 
----
+-----
 
-> [!WARNING] > **🚧 PROTOTYPE STATUS: v0.1.0-alpha**
-> This repository is a **Functional Prototype** intended for the validation of the Neuro-Symbolic architecture and industrial sovereignty concepts.
+> [\!IMPORTANT]
+> **🌟 UPDATE v0.2.0:** RAISE has successfully transitioned from a conceptual architecture to a fully integrated **Neuro-Symbolic Pipeline**. The engine now features real-time topological simulation, evolutionary optimization, and verified code generation.
 
----
+## 💡 Vision: The Neuro-Symbolic Duality
 
-## 💡 Vision & Concept
+In critical engineering (Aerospace, Defense, Energy), "guessing" is not an option. RAISE orchestrates a perfect marriage between two cognitive worlds:
 
-**R.A.I.S.E.** is a sovereign AI platform specifically designed for **Critical Engineering**. Unlike classic AI assistants, RAISE orchestrates intelligent agents within a strict and deterministic governance framework.
+  * **The Neural Brain (LLM/GNN):** Handles complex reasoning, multi-agent planning, and **Topological Intuition** via Graph Neural Networks.
+  * **The Symbolic Safeguard (Rust Engine):** Enforces industrial standards, logical constraints, and **Deterministic Validation** through a high-performance Rules Engine.
 
-### The Neuro-Symbolic Duality
+-----
 
-In high-end engineering, error is unacceptable. RAISE addresses this challenge through a hybrid architecture:
+## 🏗️ Architectural Pillars (Zero-Debt Implementation)
 
-- **Neuro (The Brain):** LLMs (local/remote) handle reasoning, planning, and multi-agent collaboration.
-- **Symbolic (The Safeguard):** A Rust engine enforces **Mandates** through hard-coded Vetos and inviolable logical rules.
+### 1\. Topological Intuition (World Model)
 
----
+RAISE doesn't just read documentation; it "feels" the system architecture.
 
-## 🏗️ Architectural Pillars
+  - **Graph Neural Network (GNN):** Uses Candle-based embeddings to predict the impact of architectural changes.
+  - **Sparse Message Passing:** High-efficiency topological simulation for large-scale system graphs.
 
-### 1. Digital Twin & Grounding
+### 2\. Evolutionary Exploration (Genetic Engine)
 
-The Digital Twin acts as the semantic bridge between the AI and physical reality. It ensures permanent **grounding** by confronting AI plans with real-time sensor data.
+The engine explores thousands of potential design solutions in parallel.
 
-### 2. Total Sovereignty (Offline-First)
+  - **NSGA-II Algorithm:** Solves multi-objective optimization (e.g., Weight vs. Cost vs. Performance).
+  - **Async/Sync Isolation:** Leverages a custom bridge between **Tokio** (Async I/O) and **Rayon** (Parallel CPU) to maintain 100% UI responsiveness.
 
-RAISE is designed to operate in complete isolation (**Air-Gapped**): local storage via `JSON-DB`, local embeddings (`Candle`), and private networking via `Innernet`.
+### 3\. Automated Ingestion & Digital Twin
 
-### 3. Cryptographic Trust (Mandates)
+Bridge the gap between legacy engineering and AI.
 
-Every security policy (Veto) is defined in a **Mandate** numerically signed (**Ed25519**). The system rejects any unsigned modification.
+  - **Capella & SysML v2 Support:** Native ingestion of industrial modeling formats into a sovereign JSON-LD Knowledge Graph.
+  - **Semantic Grounding:** Continuous alignment between AI intent and physical/logical constraints.
 
----
+### 4\. Autonomous Code Factory (Module Weaver)
 
-## 🛡️ Traceability & XAI (Explainable AI)
+RAISE doesn't just write scripts; it manufactures verified systems.
 
-RAISE transforms AI into an auditable "white box":
+  - **Ontology Weaver:** Transforms validated Graph nodes into formal Rust AST.
+  - **Self-Correcting Toolchain:** Integrated feedback loop with the Rust compiler for zero-error delivery.
 
-- **Traceability Matrix:** Records the prompt, the reasoning (Thinking trace), and the state of the Digital Twin.
-- **Blockchain Anchoring:** Critical decisions are anchored on an immutable ledger (**Hyperledger Fabric**).
+-----
 
----
+## 🛡️ Sovereignty & Trust
 
-## 🇪🇺 European Union Sovereignty / Souveraineté Européenne
+  - **Offline-First:** Local LLM execution (Llama 3/Qwen), local embeddings (Candle), and local vector store.
+  - **Traceability (XAI):** Every decision is anchored in a **XaiFrame**, providing a complete audit trail of the AI's "Thinking Trace".
+  - **Cryptographic Governance:** Policies are enforced via signed **Mandates**.
 
-RAISE is built to serve the critical industrial needs of the European Union, guaranteeing **Data Sovereignty**, **Offline Capability**, and **Engineering Precision**.
+-----
 
----
-
-## 🚀 Quick Start
+## 🚀 Getting Started
 
 ```bash
-# 1. Clone the project
-git clone [https://github.com/Condorcet-Continuum/raise.git](https://github.com/Condorcet-Continuum/raise.git)
+# 1. Clone the sovereign core
+git clone https://github.com/Condorcet-Continuum/raise.git
 cd raise
 
 # 2. Install UI dependencies
 npm install
 
-# 3. Launch in development mode
+# 3. Launch the Neuro-Symbolic Engine
 cargo tauri dev
-
 ```
 
----
+### 🧪 Verifying the Engine
 
-## 🇪🇺 European Union Sovereignty / Souveraineté Européenne
+To run the full suite of 29+ validated engineering tests:
 
-RAISE is built to serve the critical industrial needs of the European Union, guaranteeing **Data Sovereignty**, **Offline Capability**, and **Engineering Precision**.
-
-### 📚 Documentation Disponible / Available Documentation
-
-| Language                                          | Description                                  | Status         |
-| ------------------------------------------------- | -------------------------------------------- | -------------- |
-| [🇺🇸 **English**](docs/en/ARCHITECTURE.md)         | **Global Reference.** (Code & Architecture). | ✅ Active      |
-| [🇫🇷 **Français**](docs/fr/ARCHITECTURE.md)        | **Architecture et Concepts Métier.**         | ✅ Active      |
-| [🇩🇪 **Deutsch**](docs/de/ARCHITECTURE.md)         | **Systemarchitektur und Sicherheit.**        | ✅ Active      |
-| [🇪🇸 **Español**](docs/es/ARCHITECTURE.md)         | **Arquitectura y Gobernanza.**               | ✅ Active      |
-| [🇮🇹 **Italiano**](docs/it/ARCHITECTURE.md)        | Architettura del sistema e sicurezza.        | 🚧 In progress |
-| [🇵🇱 **Polski**](docs/pl/ARCHITECTURE.md)          | Architektura systemu i bezpieczeństwo.       | 🚧 In progress |
-| [🇳🇱 **Nederlands**](docs/nl/ARCHITECTURE.md)      | Systeemarchitectuur en beveiliging.          | 🚧 In progress |
-| [🇵🇹 **Português**](docs/pt/ARCHITECTURE.md)       | Arquitetura de sistema e segurança.          | 🚧 In progress |
-| [🇬🇷 **Ελληνικά**](docs/el/ARCHITECTURE.md)        | Αρχιτεκτονική συστήματος και ασφάλεια.       | 🚧 In progress |
-| [🇸🇪 **Svenska**](docs/sv/ARCHITECTURE.md)         | Systemarkitektur och säkerhet.               | 🚧 In progress |
-| [🇨🇿 **Čeština**](docs/cs/ARCHITECTURE.md)         | Architektura systému a bezpečnost.           | 🚧 In progress |
-| [🇷🇴 **Română**](docs/ro/ARCHITECTURE.md)          | Arhitectura sistemului și securitatea.       | 🚧 In progress |
-| [🇭🇺 **Magyar**](docs/hu/ARCHITECTURE.md)          | Rendszerarchitektúra és biztonság.           | 🚧 In progress |
-| [🇦🇹 **Deutsch (AT)**](docs/at/ARCHITECTURE.md)    | Systemarchitektur und Sicherheit.            | 🚧 In progress |
-| [🇧🇬 **Български**](docs/bg/ARCHITECTURE.md)       | Системна архитектура и сигурност.            | 🚧 In progress |
-| [🇩🇰 **Dansk**](docs/da/ARCHITECTURE.md)           | Systemarkitektur og sikkerhed.               | 🚧 In progress |
-| [🇫🇮 **Suomi**](docs/fi/ARCHITECTURE.md)           | Järjestelmäarkkitehtuuri ja turvallisuus.    | 🚧 In progress |
-| [🇸🇰 **Slovenčina**](docs/sk/ARCHITECTURE.md)      | Architektúra systému a bezpečnosť.           | 🚧 In progress |
-| [🇮🇪 **Gaeilge**](docs/ga/ARCHITECTURE.md)         | Ailtireacht an chórais agus slándáil.        | 🚧 In progress |
-| [🇭🇷 **Hrvatski**](docs/hr/ARCHITECTURE.md)        | Arhitektura sustava i sigurnost.             | 🚧 In progress |
-| [🇱🇹 **Lietuvių**](docs/lt/ARCHITECTURE.md)        | Sistemos architektūra ir saugumas.           | 🚧 In progress |
-| [🇸🇮 **Slovenščina**](docs/sl/ARCHITECTURE.md)     | Arhitektura sistema in varnost.              | 🚧 In progress |
-| [🇱🇻 **Latviešu**](docs/lv/ARCHITECTURE.md)        | Sistēmas arhitektūra un drošība.             | 🚧 In progress |
-| [🇪🇪 **Eesti**](docs/et/ARCHITECTURE.md)           | Süsteemi arhitektuur ja turvalisus.          | 🚧 In progress |
-| [🇨🇾 **Türkçe/Ελληνικά**](docs/cy/ARCHITECTURE.md) | Sistem Mimarisi ve Güvenlik.                 | 🚧 In progress |
-| [🇱🇺 **Lëtzebuergesch**](docs/lu/ARCHITECTURE.md)  | Systemarchitektur a Sécherheet.              | 🚧 In progress |
-| [🇲🇹 **Malti**](docs/mt/ARCHITECTURE.md)           | Arkitettura tas-sistema u sigurtà.           | 🚧 In progress |
-
----
-
-<p align="center">
-<img src="src/assets/images/logo-white.svg" alt="RAISE Logo" width="150">
-
-<em>Sovereign Intelligence for Critical Engineering.</em>
-
-</p>
-
+```bash
+cargo test -p raise --lib --features cuda genetics::
 ```
 
-```
+-----
+
+<p align="center"\>
+<em\>Sovereign Intelligence for Critical Engineering.</em\>
+</p\>
+ 
+ 

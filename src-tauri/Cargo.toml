@@ -1,10 +1,10 @@
 [package]
 name = "raise"
-version = "0.2.1"
+version.workspace = true
 description = "Plateforme d'Ingénierie Multi-Domaines à Interface IA Native"
-authors = ["raise Team"]
-license = "MIT"
-edition = "2021"
+authors.workspace = true
+license = "Apache 2.0"
+edition.workspace = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -15,9 +15,9 @@ tauri = { version = "2", features = [] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 
-# --- Sérialisation & Données ---
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# --- Sérialisation & Données (Workspace) ---
+serde = { workspace = true }
+serde_json = { workspace = true }
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 quick-xml = { version = "0.39.0", features = ["serialize"] }
 
@@ -26,25 +26,25 @@ regex = "1.10"
 pest = "2.7"
 pest_derive = "2.7"
 
-# --- Asynchrone & Runtime ---
+# --- Asynchrone & Runtime (Workspace) ---
 tokio = { version = "1.36", features = ["full"] }
 tokio-stream = "0.1"
 async-trait = "0.1"
 lru = "0.16.3"
 
-# --- Utilitaires Système & Fichiers ---
-anyhow = "1.0"
-thiserror = "2.0"
+# --- Utilitaires Système & Fichiers (Workspace) ---
+anyhow = { workspace = true }
+thiserror = { workspace = true }
 walkdir = "2"
 pathdiff = "0.2"
 url = "2.5"
 tempfile = "3.10"
 zstd = "0.13"
 
+# --- Plugins & Runtime WASM (Workspace) ---
+wasmtime = { workspace = true }
 
-wasmtime = "43.0.0" # --- Plugins & Runtime WASM  ---
-
-# Requis pour l'embarquement des schémas (file_storage.rs)
+# Requis pour l'embarquement des schémas
 include_dir = "0.7"
 dirs = "6.0.0"
 
@@ -59,7 +59,6 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 rand = "0.10.0"
 
-
 # --- Algorithme Génétique ---
 rayon = "1.10"       # Pour le parallélisme (par_iter)
 rand_distr = "0.6.0" # Pour la distribution Gaussienne (Mutation)
@@ -73,13 +72,11 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "blocking",
     "multipart",
 ] }
-# Le serveur HTTP local
 axum = { version = "0.8.8", features = ["json", "tokio"] }
-# L'écosystème de middlewares (Standard de l'industrie)
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
-# --- MOTEUR IA & NLP  ---
+# --- MOTEUR IA & NLP ---
 text-splitter = "0.29.0"
 tiktoken-rs = "0.9.1"
 
@@ -89,32 +86,27 @@ candle-nn = "0.10.2"
 candle-transformers = "0.10.2"
 safetensors = "0.7.0"
 
-
 tokenizers = { version = "0.22.2", features = ["http"] }
 fastembed = "5.5.0"
 
-
 # --- LA CAPTATION AUDIO ---
-cpal = "0.17.2"       # Accès au microphone (Windows/Mac/Linux)
-rubato = "2.0.0"     # Pour convertir le son en 16kHz proprement
-audioadapter = "3.0.0"  # Requis par la nouvelle API de rubato
-ringbuf = "0.4.7"     # Buffer Lock-free pour le flux audio temps réel
-
+cpal = "0.17.2"
+rubato = "2.0.0"
+audioadapter = "3.0.0"
+ringbuf = "0.4.7"
 
 # --- BASE DE DONNÉES & QUERY ---
 sqlparser = { version = "0.61.0", features = ["serde"] }
-
 
 # --- CRYPTO ---
 ed25519-dalek = { version = "2.1", features = [
     "rand_core",
     "serde",
-] } # Pour la signature
-sha2 = "0.11.0" # Pour le hash du mandat
-hex = "0.4" # Pour manipuler les signatures en string
+] }
+sha2 = "0.11.0"
+hex = "0.4"
 futures = "0.3.31"
 async-recursion = "1.1.1"
-
 
 # --- BLOCKCHAIN (Fabric & VPN) ---
 libp2p = { version = "0.56", features = [
@@ -131,29 +123,23 @@ libp2p = { version = "0.56", features = [
 ] }
 getrandom = { version = "0.4.1", features = ["wasm_js"] }
 
-serde_yaml = "0.9" # Pour lire connection-profile.yaml
+serde_yaml = "0.9"
 tonic = { version = "0.14.3", features = [
     "tls-ring",
     "tls-webpki-roots",
     "transport",
     "codegen",
-] } # Client gRPC asynchrone
-prost = "0.13" # Protocol Buffers (pour Tonic)
+] }
+prost = "0.13"
 
-
-# --- Dépendances de développement (Pour les tests) ---
+# --- Dépendances de développement ---
 [dev-dependencies]
 serial_test = "3.3.1"
-tempfile = "3.10"     # Manquant pour transactions/tests.rs
-
+tempfile = "3.10"
 
 [features]
 default = []
-# Pour l'utilisateur sur PC (NVIDIA)
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
-# Pour l'utilisateur sur PC (Intel/AMD - Accélération CPU)
 mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
-# Pour l'utilisateur sur Mac (Accélération GPU Apple)
 metal = ["candle-core/metal", "candle-nn/metal"]
-# Pour l'utilisateur sur Mac (Accélération CPU Apple)
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]

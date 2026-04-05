@@ -3,13 +3,20 @@ members = ["src-tauri", "src-tauri/tools/raise-cli"]
 exclude = ["src-wasm", "wasm-modules"]
 resolver = "2"
 
+
+[workspace.package]
+version = "0.2.0-alpha"
+authors = ["Condorcet-Continuum"]
+edition = "2021"
+
+
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 wasm-bindgen = "0.2"
 thiserror = "2.0.17"
 anyhow = "1.0"
-wasmtime = "42.0.0"
+wasmtime = "43.0.0"
 
 # Profils valables pour tout le workspace (évitent les warnings)
 [profile.dev]
