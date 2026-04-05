@@ -47,7 +47,7 @@ impl NodeHandler for GatePolicyHandler {
             }
         };
 
-        let context_value = serde_json::to_value(&*context).unwrap_or(json_value!({}));
+        let context_value = json::serialize_to_value(&*context).unwrap_or(json_value!({}));
         let provider = NoOpDataProvider;
 
         match Evaluator::evaluate(&expr, &context_value, &provider).await {

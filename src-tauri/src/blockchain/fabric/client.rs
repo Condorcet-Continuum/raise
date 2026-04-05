@@ -41,7 +41,7 @@ impl FabricClient {
             }
         };
 
-        let config: ConnectionProfile = match serde_yaml::from_str(&content) {
+        let config: ConnectionProfile = match json::deserialize_from_yaml(&content) {
             Ok(profile) => profile,
             Err(e) => {
                 raise_error!(

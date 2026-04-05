@@ -1,5 +1,4 @@
 use crate::utils::prelude::*;
-use std::f32::consts::PI;
 
 // --- DÉFINITION DES TYPES ---
 
@@ -71,7 +70,7 @@ pub fn get_spatial_topology() -> SpatialGraph {
         // Composants Satellites
         let satellite_count = 6 + i * 2;
         for j in 0..satellite_count {
-            let angle = (j as f32 / satellite_count as f32) * 2.0 * PI;
+            let angle = (j as f32 / satellite_count as f32) * 2.0 * MATH_PI;
             let radius = 6.0 + (i as f32 * 2.0);
             let sub_id = format!("node_{}_{}", i, j);
 

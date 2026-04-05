@@ -11,10 +11,12 @@ pub use crate::utils::core::{
     async_recursive,
     async_test,
     is_same_reference,
+    memory_copy_fast,
     sleep_async,
     // Runtime & Tasks
     spawn_async_task,
     spawn_cpu_task,
+    terminate_process,
     AgentAttention,
     AsyncChannel,
     AsyncCommand,
@@ -25,6 +27,7 @@ pub use crate::utils::core::{
     CalendarDate,
     CalendarDuration,
     CowData,
+    DataStreamPeekable, // 🎯 Pour l'anticipation (lookahead)
     Eq,
     // Formatage Sémantique
     FmtCursor, // 🎯 Remplace Formatter (plus visuel: on écrit là où est le curseur)
@@ -50,6 +53,8 @@ pub use crate::utils::core::{
     StaticCell, // 🎯 Alias de OnceLock
     SyncMutex,
     SyncRwLock,
+    SystemStr, // 🎯 Pour la compatibilité OS native
+    TextChars, // 🎯 Pour le découpage atomique du texte
     TextRegex,
     TextRegexError,
     TimeDuration, // 🎯 Alias de std::time::Duration
@@ -59,6 +64,7 @@ pub use crate::utils::core::{
     UniqueId,     // 🎯 Alias de uuid::Uuid
     UtcClock,     // 🎯 Alias de chrono::Utc
     UtcTimestamp, // 🎯 Alias de chrono::DateTime<Utc>
+    MATH_PI,      // 🎯 La constante fondamentale
 };
 
 // --- 2. I/O, FS & SYSTÈME ---
@@ -103,7 +109,7 @@ pub use crate::utils::network::{
 // --- 5. MACROS & OBSERVABILITÉ (Exports Racine) ---
 pub use crate::{
     build_error, raise_error, require_session, user_debug, user_error, user_info, user_success,
-    user_warn,
+    user_trace, user_warn,
 };
 
 // On expose les logs de core pour le paramétrage du moteur

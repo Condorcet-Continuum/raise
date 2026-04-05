@@ -99,7 +99,10 @@ pub async fn ingest_code_file(
     let manager = CollectionsManager::new(&storage, &space, &db);
 
     let service = CodeGeneratorService::new(PathBuf::from(""));
-    let count = service.ingest_file(&PathBuf::from(path), &manager).await?;
+    let prod_schema_uri = "db://_system/_system/schemas/v1/dapps/services/code_element.schema.json";
+    let count = service
+        .ingest_file(&PathBuf::from(path), &manager, prod_schema_uri)
+        .await?;
 
     Ok(count)
 }
@@ -164,16 +167,21 @@ mod tests {
 
         // On injecte un composant dans la collection physique 'la/components'
         let la_mgr = CollectionsManager::new(&sandbox.db, &sandbox.config.system_domain, "la");
-        let _ = la_mgr
+        AgentDbSandbox::mock_db(&la_mgr)
+            .await
+            .expect("Le setup de la DB 'la' a échoué");
+        la_mgr
             .create_collection(
                 "components",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await;
+            .await
+            .unwrap();
 
         let component_id = "UUID-COMP-TEST";
         let component = json_value!({
             "_id": component_id,
+            "handle": component_id,
             "name": "RadarSystem",
             "type": "LogicalComponent",
             "properties": {

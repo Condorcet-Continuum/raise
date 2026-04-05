@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/workflow_engine/mandate.rs
 use crate::json_db::collections::manager::CollectionsManager;
+use crate::rules_engine::analyzer::Analyzer;
+use crate::rules_engine::ast::Expr;
 use crate::utils::prelude::*;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
@@ -64,6 +66,12 @@ pub struct VetoRule {
 #[serde(rename_all = "camelCase")]
 pub struct Observability {
     pub heartbeat_ms: u64,
+}
+
+#[derive(Debug)]
+pub struct VetoAnalysis {
+    pub rule_name: String,
+    pub status: RaiseResult<Vec<String>>,
 }
 
 // --- LOGIQUE MÉTIER ---
@@ -144,6 +152,45 @@ impl Mandate {
         clone.signature = None;
         json::serialize_to_string(&clone).unwrap_or_default()
     }
+
+    pub fn analyze_vetos(&self) -> Vec<VetoAnalysis> {
+        let mut results = Vec::new();
+
+        for veto in &self.hard_logic.vetos {
+            let rule_name = veto.rule.clone();
+
+            let status = (|| -> RaiseResult<Vec<String>> {
+                let ast_val = veto.ast.as_ref().ok_or_else(|| {
+                    // 🎯 FIX 2 : Utilisation stricte de la macro build_error! du socle Raise
+                    build_error!(
+                        "ERR_AST_MISSING",
+                        error = "Aucun AST défini pour cette règle",
+                        context = json_value!({ "rule": rule_name })
+                    )
+                })?;
+
+                let expr: Expr = json::deserialize_from_value(ast_val.clone()).map_err(|e| {
+                    // 🎯 FIX 2 : Utilisation de build_error! pour mapper l'erreur JSON
+                    build_error!(
+                        "ERR_JSON_DESERIALIZE",
+                        error = format!("Échec du parsing AST : {}", e),
+                        context = json_value!({ "rule": rule_name })
+                    )
+                })?;
+
+                // Validation de la profondeur (Sécurité Fail-Safe)
+                Analyzer::validate_depth(&expr, 50)?;
+
+                // Extraction des dépendances
+                let deps = Analyzer::get_dependencies(&expr).into_iter().collect();
+                Ok(deps)
+            })();
+
+            results.push(VetoAnalysis { rule_name, status });
+        }
+
+        results
+    }
 }
 
 // ============================================================================
@@ -154,12 +201,13 @@ impl Mandate {
 mod tests {
     use super::*;
     use crate::json_db::test_utils::init_test_env;
+    use crate::utils::testing::DbSandbox;
 
     #[async_test]
     async fn test_fetch_mandate_success() {
         let env = init_test_env().await;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
 
         // JSON strict correspondant à mandate.schema.json
         let full_json = json_value!({
@@ -202,7 +250,7 @@ mod tests {
     async fn test_fetch_mandate_with_ast() {
         let env = init_test_env().await;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
 
         // Une règle dynamique (AST) injectée pour le Rules Engine
         let ast_json = json_value!({
@@ -254,7 +302,7 @@ mod tests {
     async fn test_fetch_mandate_schema_mismatch() {
         let env = init_test_env().await;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
 
         // Un JSON corrompu ou incomplet par rapport au schéma
         let bad_json = json_value!({
@@ -281,5 +329,66 @@ mod tests {
                 "Doit renvoyer une erreur de corruption de payload"
             );
         }
+    }
+
+    #[test]
+    fn test_analyze_vetos_full_success() {
+        let ast = json_value!({ "gt": [{"var": "pa.brakes.temp"}, {"val": 120.0}] });
+
+        let mandate = Mandate {
+            _id: None,
+            handle: "test-mandate".into(),
+            name: json_value!("Test"),
+            meta: MandateMeta {
+                author: "sys".into(),
+                status: "ACTIVE".into(),
+                version: "1.0".into(),
+            },
+            governance: Governance {
+                strategy: Strategy::SafetyFirst,
+                condorcet_weights: UnorderedMap::new(),
+            },
+            hard_logic: HardLogic {
+                vetos: vec![VetoRule {
+                    rule: "TEMP_MAX".into(),
+                    active: true,
+                    action: "STOP".into(),
+                    ast: Some(ast),
+                }],
+            },
+            observability: Observability { heartbeat_ms: 1000 },
+            signature: None,
+        };
+
+        let results = mandate.analyze_vetos();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].rule_name, "TEMP_MAX");
+
+        let deps = results[0].status.as_ref().unwrap();
+        assert!(deps.contains(&"pa.brakes.temp".to_string()));
+    }
+
+    #[test]
+    fn test_analyze_vetos_invalid_ast_structure() {
+        let mandate = Mandate {
+            hard_logic: HardLogic {
+                vetos: vec![VetoRule {
+                    rule: "BROKEN_RULE".into(),
+                    active: true,
+                    action: "STOP".into(),
+                    ast: Some(json_value!({ "not_an_operator": 123 })), // AST Invalide
+                }]
+            },
+            // Hack pour instancier rapidement le reste (en test)
+            ..serde_json::from_str("{\"handle\":\"test\",\"name\":\"\",\"meta\":{\"author\":\"\",\"status\":\"\",\"version\":\"\"},\"governance\":{\"strategy\":\"SAFETY_FIRST\",\"condorcetWeights\":{}},\"hardLogic\":{\"vetos\":[]},\"observability\":{\"heartbeatMs\":100}}").unwrap()
+        };
+
+        let results = mandate.analyze_vetos();
+        assert!(results[0].status.is_err());
+
+        // 🎯 FIX 3 : On vérifie l'erreur via l'affichage (Display de AppError)
+        // ce qui évite de devoir importer la structure interne des erreurs
+        let err_msg = results[0].status.as_ref().unwrap_err().to_string();
+        assert!(err_msg.contains("ERR_JSON_DESERIALIZE"));
     }
 }

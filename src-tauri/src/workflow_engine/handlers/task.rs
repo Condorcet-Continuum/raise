@@ -1,6 +1,8 @@
 // FICHIER : src-tauri/src/workflow_engine/handlers/task.rs
 use super::{HandlerContext, NodeHandler};
 use crate::ai::assurance::xai::{ExplanationScope, XaiFrame, XaiMethod};
+use crate::code_generator::graph_weaver::OntologyWeaver;
+use crate::code_generator::toolchains::rust::RustToolchain;
 use crate::utils::prelude::*;
 use crate::workflow_engine::{ExecutionStatus, NodeType, WorkflowNode};
 
@@ -36,7 +38,10 @@ impl NodeHandler for TaskHandler {
         };
         let squad_handle = mission_doc["squad_id"].as_str().unwrap_or_default();
 
-        tracing::info!("🕵️‍♂️ Assignation de la tâche à la Squad : {}", squad_handle);
+        user_info!(
+            "INF_SQUAD_ASSIGNED",
+            json_value!({"squad_id": squad_handle, "task_id": node.id})
+        );
 
         let squad_doc = match shared_ctx
             .manager
@@ -66,16 +71,79 @@ impl NodeHandler for TaskHandler {
         // 3. EXÉCUTION DE LA SQUAD (BOUCLE ACL)
         // ====================================================================
         let mut orch = shared_ctx.orchestrator.lock().await;
-        // 🎯 NOUVEAU : On utilise le système multi-agents complet
+        // L'Orchestrateur génère les nœuds JSON-LD (Les intentions de code)
         let agent_result = orch.execute_workflow(&rich_mission).await?;
 
-        // Mettre à jour le contexte (Jumeau Numérique) avec les artefacts générés (ex: Noeuds SysML, Code)
+        // Récupération de l'état actuel du Jumeau Numérique
         let mut new_artifacts = context
             .get("generated_artifacts")
             .and_then(|v| v.as_array().cloned())
             .unwrap_or_default();
+
+        // 🎯 L'USINE LOGICIELLE INTERVIENT ICI !
         for artifact in &agent_result.artifacts {
-            new_artifacts.push(json::serialize_to_value(artifact).unwrap_or_default());
+            // 1. On sauvegarde l'artefact dans le Jumeau Numérique
+            new_artifacts
+                .push(crate::utils::data::json::serialize_to_value(artifact).unwrap_or_default());
+
+            // ====================================================================
+            // 3b. PONT NEURO-SYMBOLIQUE (GÉNÉRATION FISCALISÉE & COMPILATION)
+            // ====================================================================
+            // Si l'artefact généré par l'IA est identifié comme un composant de code
+            if artifact.id.starts_with("code_") || artifact.id.starts_with("module_") {
+                // On détermine où le code physique doit être écrit
+                let target_path =
+                    PathBuf::from("src/generated").join(format!("{}.rs", artifact.id));
+
+                user_info!(
+                    "INF_CODEGEN_START",
+                    json_value!({"element_id": artifact.id})
+                );
+
+                // 🏗️ Appel de l'Usine Logicielle
+                match OntologyWeaver::generate_and_validate(
+                    shared_ctx.manager,
+                    &artifact.id,
+                    target_path,
+                    &RustToolchain,
+                )
+                .await
+                {
+                    Ok(path) => {
+                        // Le code est généré, tissé et a passé cargo check !
+                        user_success!(
+                            "SUC_CODEGEN_READY",
+                            json_value!({"path": path.to_string_lossy()})
+                        );
+                    }
+                    Err(AppError::Structured(err_box)) => {
+                        if err_box.code == "ERR_CODEGEN_TOOLCHAIN_REJECTED" {
+                            // ❌ LE COMPILATEUR RUST A HURLÉ (Syntaxe invalide générée par l'IA)
+                            let feedback = err_box
+                                .context
+                                .get("xai_feedback")
+                                .cloned()
+                                .unwrap_or(json_value!("Erreur de compilation inconnue"));
+
+                            user_warn!(
+                                "WRN_CODEGEN_REJECTED",
+                                json_value!({
+                                    "element_id": artifact.id,
+                                    "feedback": feedback
+                                })
+                            );
+
+                            // 🛑 ZÉRO DETTE : On retourne Failed pour que le Workflow Engine puisse
+                            // potentiellement relancer l'agent IA avec le feedback du compilateur.
+                            return Ok(ExecutionStatus::Failed);
+                        }
+
+                        // Pour toutes les autres erreurs critiques (Disque, Base de données, etc.),
+                        // On propage l'erreur formellement vers le haut.
+                        return Err(AppError::Structured(err_box));
+                    }
+                }
+            }
         }
         context.insert(
             "generated_artifacts".to_string(),
@@ -93,10 +161,36 @@ impl NodeHandler for TaskHandler {
         xai.predicted_output = agent_result.message.clone();
         xai.input_snapshot = rich_mission;
 
-        let critique = shared_ctx.critic.evaluate(&xai).await;
+        //  On définit une règle métier à la volée (Normalement tirée de DB)
+        use crate::rules_engine::ast::Expr;
+        let default_rules = vec![Expr::Contains {
+            list: Box::new(Expr::Var("predicted_output".to_string())),
+            value: Box::new(Expr::Val(json_value!("JSON"))),
+        }];
+
+        //   Le workflow_engine appelle désormais formellement le rules_engine
+        let critique = match shared_ctx
+            .critic
+            .evaluate(&xai, shared_ctx.manager, &default_rules)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => raise_error!(
+                "ERR_CRITIC_EXECUTION_FAILED",
+                error = e,
+                context = json_value!({"node_id": node.id})
+            ),
+        };
         if !critique.is_acceptable {
-            tracing::warn!("⚠️ Qualité insuffisante détectée par le critique !");
-            // Optionnel: On pourrait retourner ExecutionStatus::Failed ici selon la stratégie
+            user_warn!(
+                "WRN_CRITIC_REJECTION",
+                json_value!({
+                    "reasoning": critique.reasoning,
+                    "score": critique.score,
+                    "node_id": node.id
+                })
+            );
+            // Optionnel : En cas de rejet, on déclenche une contre-mesure ou on relance l'agent !
         }
 
         // ====================================================================
@@ -141,9 +235,9 @@ impl NodeHandler for TaskHandler {
             .unwrap_or("task_output");
         context.insert(output_key.to_string(), json_value!(agent_result.message));
 
-        tracing::info!(
-            "✅ Tâche '{}' exécutée par la Squad avec succès.",
-            node.name
+        user_success!(
+            "SUC_TASK_COMPLETED",
+            json_value!({"task_name": node.name, "node_id": node.id})
         );
         Ok(ExecutionStatus::Completed)
     }
@@ -222,21 +316,20 @@ mod tests {
             "_id": "ref:prompts:handle:dummy",
             "handle": "dummy",
             "name": "Dummy Prompt",
-            "template": "Tu es un assistant de test.",
-            "content": "Tu es un assistant de test."
+            "role": "Assistant de Test",
+            "identity": {
+                "persona": "Tu es un assistant de test.",
+                "tone": "professionnel"
+            },
+            "environment": "Environnement de test simulé pour la Squad.",
+            "directives": ["Exécute la tâche de test", "Génère un JSON valide"]
         });
 
         // Injection dans la DB Projet (Lue par l'Orchestrateur) et DB Système (Lue par le Handler)
         let o = orch.lock().await;
         let project_manager = CollectionsManager::new(&sandbox.db, &o.space, &o.db_name);
 
-        let collections = vec![
-            "agents",
-            "agent_configs",
-            "configs",
-            "prompts",
-            "session_agents",
-        ];
+        let collections = vec!["prompts", "agents", "configs", "session_agents"];
         for coll in collections {
             // DB Système (Utilisation du schéma générique)
             let _ = manager.create_collection(coll, generic_schema).await;
@@ -251,6 +344,12 @@ mod tests {
                     .await;
                 let _ = manager
                     .upsert_document(coll, mock_agent("ref:agents:handle:agent_quality"))
+                    .await;
+                let _ = manager
+                    .upsert_document(coll, mock_agent("ref:agents:handle:agent_dispatcher"))
+                    .await;
+                let _ = project_manager
+                    .upsert_document(coll, mock_agent("ref:agents:handle:agent_dispatcher"))
                     .await;
             }
 

@@ -329,31 +329,49 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        inject_mock_component(&manager, "llm",  json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })).await;
-        inject_mock_component(&manager, "nlp",  json_value!({ "model_name": "minilm", "rust_config_file": "config.json", "rust_tokenizer_file": "tokenizer.json", "rust_safetensors_file": "model.safetensors" })).await;
+        // 🎯 L'ASTUCE : On construit le chemin ABSOLU vers ton vrai dossier utilisateur
+        let models_dir = dirs::home_dir()
+            .unwrap_or_default()
+            .join("raise_domain/_system/ai-assets/models");
+
+        let light_model_path = models_dir
+            .join("quew2-5-5b/qwen2.5-1.5b-instruct-q4_k_m.gguf")
+            .to_string_lossy()
+            .to_string();
+        let light_tokenizer_path = models_dir
+            .join("quew2-5-5b/tokenizer.json")
+            .to_string_lossy()
+            .to_string();
+
+        // On injecte les chemins absolus pour contourner le /tmp de la Sandbox
+        inject_mock_component(
+            &manager,
+            "llm",
+            json_value!({
+                "rust_model_file": light_model_path,
+                "rust_tokenizer_file": light_tokenizer_path
+            }),
+        )
+        .await;
+
+        inject_mock_component(
+            &manager,
+            "nlp",
+            json_value!({
+                "model_name": "minilm",
+                "rust_config_file": "config.json",
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_safetensors_file": "model.safetensors"
+            }),
+        )
+        .await;
 
         sandbox
     }
 
     #[async_test]
-    #[serial_test::serial]
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_orchestrator_init() {
-        let _guard = get_hf_lock().lock().await;
-        let sandbox = setup_mock_orchestrator_env().await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone()).await;
-
-        assert!(orch.is_ok(), "L'initialisation a échoué : {:?}", orch.err());
-        assert_eq!(orch.unwrap().session.id, "main_session");
-    }
-
-    #[async_test]
     async fn test_full_acl_path() {
+        // Ce test ne charge pas d'IA, on peut le laisser à part
         let msg = AclMessage::new(
             Performative::Request,
             "hardware",
@@ -363,10 +381,11 @@ mod tests {
         assert_eq!(msg.receiver, "quality_manager");
     }
 
+    // 🎯 FIX : On regroupe tous les tests de l'Orchestrateur en UN SEUL CYCLE
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_learning_cycle() {
+    async fn test_orchestrator_lifecycle() {
         let _guard = get_hf_lock().lock().await;
         let sandbox = setup_mock_orchestrator_env().await;
         let manager = CollectionsManager::new(
@@ -374,32 +393,26 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
-            .await
-            .unwrap();
 
+        // 1. TEST D'INITIALISATION
+        let mut orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
+            .await
+            .expect("L'initialisation a échoué");
+        assert_eq!(orch.session.id, "main_session");
+
+        // 2. TEST DE L'APPRENTISSAGE RAG
+        let content = "Raise est une plateforme incroyable combinant RAG et modèles formels.";
+        let res = orch.learn_document(content, "documentation.txt").await;
+        assert!(res.is_ok());
+        assert!(res.unwrap() > 0);
+
+        // 3. TEST DU CYCLE D'APPRENTISSAGE NEURO-SYMBOLIQUE (WORLD MODEL)
         let loss = orch
             .reinforce_learning(&make_element("1"), CommandType::Create, &make_element("2"))
             .await;
         assert!(loss.is_ok(), "L'apprentissage a échoué : {:?}", loss.err());
-    }
 
-    #[async_test]
-    #[serial_test::serial]
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_orchestrator_clear_history() {
-        let _guard = get_hf_lock().lock().await;
-        let sandbox = setup_mock_orchestrator_env().await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
-        let mut orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
-            .await
-            .unwrap();
-
-        orch.clear_history().await.unwrap();
+        // 4. TEST DE NETTOYAGE D'HISTORIQUE
         orch.session.add_user_message("Bonjour");
         orch.session.add_ai_message("Bonjour Humain");
         assert_eq!(orch.session.history.len(), 2);
@@ -407,26 +420,5 @@ mod tests {
         let clear_res = orch.clear_history().await;
         assert!(clear_res.is_ok());
         assert_eq!(orch.session.history.len(), 0);
-    }
-
-    #[async_test]
-    #[serial_test::serial]
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_orchestrator_learn_document() {
-        let _guard = get_hf_lock().lock().await;
-        let sandbox = setup_mock_orchestrator_env().await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
-        let mut orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
-            .await
-            .unwrap();
-
-        let content = "Raise est une plateforme incroyable combinant RAG et modèles formels.";
-        let res = orch.learn_document(content, "documentation.txt").await;
-        assert!(res.is_ok());
-        assert!(res.unwrap() > 0);
     }
 }

@@ -903,7 +903,7 @@ mod tests {
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        col_mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await.unwrap();
         col_mgr
             .create_collection(
                 "users",
@@ -937,7 +937,7 @@ mod tests {
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        col_mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await.unwrap();
         col_mgr
             .create_collection(
                 "users",
@@ -980,7 +980,7 @@ mod tests {
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        col_mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await.unwrap();
         col_mgr
             .create_collection(
                 "users",
@@ -1013,7 +1013,7 @@ mod tests {
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        col_mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await.unwrap();
         col_mgr
             .create_collection(
                 "items",
@@ -1071,7 +1071,7 @@ mod tests {
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        col_mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await.unwrap();
         col_mgr
             .create_collection(
                 "actors",
@@ -1132,7 +1132,7 @@ mod tests {
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        col_mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await.unwrap();
         col_mgr
             .create_collection(
                 "users",

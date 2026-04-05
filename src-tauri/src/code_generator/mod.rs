@@ -5,16 +5,18 @@
 pub mod analyzers; // Analyse sémantique Arcadia
 pub mod diff; // Moteur de comparaison (Jumeau vs Physique)
 pub mod graph; // Tri topologique des dépendances
+pub mod graph_weaver; // Pont "Graphe ➡️ AST ➡️ Code"
 pub mod models; // Modèles de données (CodeElement, Module)
 pub mod module_weaver; // Orchestration du tissage fichier
-pub mod reconciler; // Extraction Bottom-Up via @raise-handle
+pub mod reconcilers; // Extraction Bottom-Up via @raise-handle
+pub mod toolchains;
 pub mod utils; // Utilitaires mathématiques (String transformation)
 pub mod weaver; // Tissage unitaire des blocs de code
 
 use self::diff::{DiffAction, DiffEngine};
 use self::models::Module;
 use self::module_weaver::ModuleWeaver;
-use self::reconciler::Reconciler;
+use self::reconcilers::rust::Reconciler as RustReconciler;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Query, QueryEngine};
 use crate::utils::prelude::*;
@@ -39,6 +41,7 @@ impl CodeGeneratorService {
         &self,
         path: &Path,
         manager: &CollectionsManager<'_>,
+        schema_uri: &str,
     ) -> RaiseResult<usize> {
         if !path.exists() {
             raise_error!(
@@ -49,15 +52,10 @@ impl CodeGeneratorService {
         }
 
         // 1. Extraction Lexicale
-        let elements = Reconciler::parse_from_file(path)?;
+        let elements = RustReconciler::parse_from_file(path).await?;
 
         // 2. Préparation de la collection
-        let _ = manager
-            .create_collection(
-                "code_elements",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await;
+        let _ = manager.create_collection("code_elements", schema_uri).await;
 
         // 3. Enrichissement et Sauvegarde
         let mut ingested_count = 0;
@@ -121,7 +119,7 @@ impl CodeGeneratorService {
         if full_path.exists() {
             // 🆕 PHASE 0 : Normalisation du code existant via rustfmt
             // Cela garantit que le code lu par le Reconciler a une structure standardisée.
-            if let Err(e) = self.format_module(&full_path) {
+            if let Err(e) = self.format_module(&full_path).await {
                 user_info!(
                     "MSG_CODEGEN_PRE_SYNC_FMT_FAILED",
                     json_value!({ "path": full_path.to_string_lossy(), "error": e.to_string() })
@@ -131,7 +129,7 @@ impl CodeGeneratorService {
                 return Err(e);
             }
 
-            let physical_elements = match Reconciler::parse_from_file(&full_path) {
+            let physical_elements = match RustReconciler::parse_from_file(&full_path).await {
                 Ok(elems) => elems,
                 Err(e) => return Err(e),
             };
@@ -170,7 +168,7 @@ impl CodeGeneratorService {
         let backup_path = full_path.with_extension("rs.bak");
         let file_exists = full_path.exists();
         if file_exists {
-            if let Err(e) = fs::copy_sync(&full_path, &backup_path) {
+            if let Err(e) = fs::copy_async(&full_path, &backup_path).await {
                 raise_error!(
                     "ERR_CODEGEN_BACKUP_FAILED",
                     error = e.to_string(),
@@ -180,70 +178,53 @@ impl CodeGeneratorService {
         }
 
         // 4.2 Tissage Top-Down
-        if let Err(e) = ModuleWeaver::sync_to_disk(&module) {
-            Self::rollback(&full_path, &backup_path, file_exists);
+        if let Err(e) = ModuleWeaver::sync_to_disk(&module, &self.root_path).await {
+            Self::rollback(&full_path, &backup_path, file_exists).await;
             return Err(e); // L'erreur de tissage remonte
         }
 
         // 4.3 Formatage de propreté
-        let _ = self.format_module(&full_path);
+        let _ = self.format_module(&full_path).await;
 
         // 4.4 Compilation stricte (cargo check)
-        if let Err(e) = self.check_workspace(&module.name) {
-            Self::rollback(&full_path, &backup_path, file_exists);
+        if let Err(e) = self.check_workspace(&module.name).await {
+            Self::rollback(&full_path, &backup_path, file_exists).await;
             return Err(e); // Propage l'erreur structurée (avec logs cargo) à l'IA
         }
 
         // 4.5 Exécution des tests (cargo test)
-        if let Err(e) = self.test_workspace(&module.name) {
-            Self::rollback(&full_path, &backup_path, file_exists);
+        if let Err(e) = self.test_workspace(&module.name).await {
+            Self::rollback(&full_path, &backup_path, file_exists).await;
             return Err(e); // Propage l'erreur structurée (avec logs de test) à l'IA
         }
 
         // 4.6 Validation de la transaction (Commit)
         if file_exists {
-            let _ = fs::remove_file_sync(&backup_path);
+            let _ = fs::remove_file_async(&backup_path).await;
         }
 
         Ok(full_path)
     }
 
-    /// Met à jour ou insère un élément dans la liste du module.
-    /// non utilisé pour l'instant
-    /*
-    fn update_element_in_module(&self, module: &mut Module, new_element: models::CodeElement) {
-        let mut found = false;
-        for el in &mut module.elements {
-            if el.handle == new_element.handle {
-                *el = new_element.clone();
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            module.elements.push(new_element);
-        }
-    }
-    */
     /// 🧹 Post-process : Formatage du code (Anciennement lié à Clippy).
-    pub fn format_module(&self, path: &Path) -> RaiseResult<()> {
-        match os::exec_command_sync("rustfmt", &[path.to_string_lossy().as_ref()], None) {
+    pub async fn format_module(&self, path: &Path) -> RaiseResult<()> {
+        match os::exec_command_async("rustfmt", &[path.to_string_lossy().as_ref()], None).await {
             Ok(_) => Ok(()),
             Err(e) => raise_error!(
                 "ERR_CODEGEN_FMT_FAILED",
-                error = e.to_string(),
+                error = e,
                 context = json_value!({ "path": path.to_string_lossy() })
             ),
         }
     }
     /// ⏪ Restaure le fichier dans son état précédent en cas d'échec de l'IA
-    fn rollback(target: &Path, backup: &Path, existed_before: bool) {
+    async fn rollback(target: &Path, backup: &Path, existed_before: bool) {
         if existed_before {
-            let _ = fs::copy_sync(backup, target);
-            let _ = fs::remove_file_sync(backup);
+            let _ = fs::copy_async(backup, target).await;
+            let _ = fs::remove_file_async(backup).await;
         } else {
             // Si le fichier n'existait pas du tout avant, on le supprime simplement
-            let _ = fs::remove_file_sync(target);
+            let _ = fs::remove_file_async(target).await;
         }
         user_info!(
             "MSG_CODEGEN_ROLLBACK_EXECUTED",
@@ -257,43 +238,137 @@ impl CodeGeneratorService {
         self
     }
 
-    /// ⚖️ Le Juge de Paix : Vérifie que le projet compile
-    fn check_workspace(&self, module_name: &str) -> RaiseResult<()> {
-        // 🛑 COURT-CIRCUIT : On ne lance pas de sous-compilation pendant les tests unitaires
+    /// ⚖️ Le Juge de Paix : Vérifie que le projet compile et structure le feedback pour l'IA
+    async fn check_workspace(&self, module_name: &str) -> RaiseResult<()> {
         if cfg!(test) || self.skip_compilation {
             return Ok(());
         }
-        // On peut ajouter --message-format=json pour que l'Agent IA parse facilement l'erreur
-        match os::exec_command_sync("cargo", &["check", "--lib", "--message-format=json"], None) {
-            Ok(_) => Ok(()),
-            Err(e) => raise_error!(
+
+        // 1. Exécution via la façade OS stricte
+        let output = match os::exec_command_async(
+            "cargo",
+            &["check", "--lib", "--message-format=json"],
+            None,
+        )
+        .await
+        {
+            Ok(out) => out,
+            Err(e) => {
+                // 🛑 STRICT : Utilisation de raise_error! pour capturer l'erreur OS dans le "Trou noir" technique
+                raise_error!(
+                    "ERR_SYSTEM_IO",
+                    error = e,
+                    context = json_value!({
+                        "action": "cargo_check",
+                        "module": module_name
+                    })
+                );
+            }
+        };
+
+        let mut error_messages = Vec::new();
+
+        // 2. Parsing du retour de Cargo via la façade JSON
+        for line in output.lines() {
+            if line.starts_with('{') {
+                // STRICT : Utilisation de json::deserialize_from_string et JsonValue
+                if let Ok(json_line) = json::deserialize_from_str::<JsonValue>(line) {
+                    if json_line.get("reason").and_then(|v| v.as_str()) == Some("compiler-message")
+                    {
+                        if let Some(message_obj) = json_line.get("message") {
+                            if message_obj.get("level").and_then(|v| v.as_str()) == Some("error") {
+                                if let Some(rendered) =
+                                    message_obj.get("rendered").and_then(|v| v.as_str())
+                                {
+                                    error_messages.push(rendered.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Gestion de l'échec (World Model Feedback)
+        if !error_messages.is_empty() {
+            let feedback_payload = error_messages.join("\n---\n");
+
+            // STRICT : Notification IHM via la macro
+            user_warn!(
+                "MSG_CODEGEN_COMPILATION_FAILED",
+                json_value!({ "module": module_name, "errors_count": error_messages.len() })
+            );
+
+            // STRICT : Levée de l'erreur AI-Ready
+            raise_error!(
                 "ERR_CODEGEN_COMPILATION_FAILED",
-                error = "L'Agent IA a généré du code qui ne compile pas.",
+                error = "La compilation Cargo a échoué. Le modèle IA doit corriger le code.",
                 context = json_value!({
                     "module": module_name,
-                    "compiler_output": e.to_string()
+                    "xai_feedback": feedback_payload,
+                    "status": "requires_ai_correction"
                 })
-            ),
+            );
         }
+
+        // 4. Succès
+        user_success!(
+            "MSG_CODEGEN_COMPILATION_SUCCESS",
+            json_value!({ "module": module_name })
+        );
+
+        Ok(())
     }
 
-    /// 🔥 L'Épreuve du Feu : Exécute les tests unitaires
-    fn test_workspace(&self, module_name: &str) -> RaiseResult<()> {
-        // 🛑 COURT-CIRCUIT : Évite une boucle infinie (test qui lance des tests)
+    /// 🧪 L'Épreuve du Feu : Exécute les tests unitaires et structure les échecs pour l'IA
+    async fn test_workspace(&self, module_name: &str) -> RaiseResult<()> {
+        // On évite les boucles infinies si on est déjà en train de tester le moteur lui-même
         if cfg!(test) || self.skip_compilation {
             return Ok(());
         }
 
-        match os::exec_command_sync("cargo", &["test", "--lib"], None) {
-            Ok(_) => Ok(()),
-            Err(e) => raise_error!(
+        // 1. Exécution des tests via la façade OS stricte
+        let output_result = os::exec_command_async("cargo", &["test", "--lib"], None).await;
+
+        match output_result {
+            Ok(_) => {
+                // 2. Succès : Le code IA passe ses propres tests
+                user_success!(
+                    "MSG_CODEGEN_TESTS_SUCCESS",
+                    json_value!({ "module": module_name })
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // 3. Échec : On extrait la sortie d'erreur (stdout/stderr capturé par l'OS)
+                let raw_error = e.to_string();
+
+                // L'astuce ici est de ne garder que le bloc pertinent pour l'IA (les paniques et assertions)
+                // Cargo regroupe les erreurs à la fin sous la section "failures:"
+                let feedback_payload = if let Some(idx) = raw_error.find("failures:") {
+                    raw_error[idx..].trim().to_string()
+                } else {
+                    // Fallback si la structure est différente
+                    raw_error.clone()
+                };
+
+                // STRICT : Notification IHM
+                user_warn!(
+                    "MSG_CODEGEN_TESTS_FAILED",
+                    json_value!({ "module": module_name })
+                );
+
+                // STRICT : Levée de l'erreur AI-Ready pour déclencher le World Model
+                raise_error!(
                 "ERR_CODEGEN_TESTS_FAILED",
-                error = "Les tests unitaires générés par l'Agent ont échoué.",
+                error = "La Squad IA a généré un code qui ne passe pas les tests unitaires. Une correction logique est requise.",
                 context = json_value!({
                     "module": module_name,
-                    "test_output": e.to_string()
+                    "xai_feedback": feedback_payload,
+                    "status": "requires_ai_correction"
                 })
-            ),
+            );
+            }
         }
     }
 
@@ -384,8 +459,8 @@ impl CodeGeneratorService {
         count += 1;
 
         // Fichiers à la racine (Cargo.toml, README.md, etc.)
-        if let Ok(entries) = fs::read_dir_sync(&root_dir) {
-            for entry in entries.flatten() {
+        if let Ok(mut entries) = fs::read_dir_async(&root_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.is_file() {
                     count += self
@@ -403,8 +478,8 @@ impl CodeGeneratorService {
         }
 
         // Fichiers orphelins dans src/ (main.rs, lib.rs) appartiennent au macro-système
-        if let Ok(entries) = fs::read_dir_sync(&src_dir) {
-            for entry in entries.flatten() {
+        if let Ok(mut entries) = fs::read_dir_async(&src_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.is_file() {
                     count += self
@@ -424,9 +499,9 @@ impl CodeGeneratorService {
         // =====================================================================
         // ÉTAPE 2 : LES SERVICES MÉTIER (ex: code_generator, ai, blockchain)
         // =====================================================================
-        if fs::exists_sync(&src_dir) {
-            let entries = fs::read_dir_sync(&src_dir)?;
-            for entry in entries.flatten() {
+        if fs::exists_async(&src_dir).await {
+            let mut entries = fs::read_dir_async(&src_dir).await?;
+            while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.is_dir() {
                     let service_handle = path
@@ -478,12 +553,12 @@ impl CodeGeneratorService {
         service_id: &'a str,
         parent_comp_id: Option<String>,
         manager: &'a CollectionsManager<'_>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = RaiseResult<usize>> + Send + 'a>> {
+    ) -> Pinned<Box<dyn AsyncFuture<Output = RaiseResult<usize>> + Send + 'a>> {
         Box::pin(async move {
             let mut count = 0;
-            let entries = fs::read_dir_sync(current_dir)?;
+            let mut entries = fs::read_dir_async(current_dir).await?;
 
-            for entry in entries.flatten() {
+            while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.is_dir() {
                     // C'EST UN COMPOSANT (ex: "analyzers")
@@ -580,56 +655,84 @@ impl CodeGeneratorService {
 mod tests {
     use super::*;
     use crate::code_generator::models::{CodeElement, CodeElementType, Visibility};
-
     use crate::json_db::jsonld::VocabularyRegistry;
     use crate::utils::testing::DbSandbox;
 
+    const TEST_SCHEMA: &str = "db://_system/_system/schemas/v1/db/generic.schema.json";
+
     #[async_test]
     async fn test_service_sync_flow_strict_ai_master() {
-        let dir = tempdir().unwrap();
-        // 🎯 FIX : On n'oublie pas d'activer le mode test pour court-circuiter cargo !
-        let service = CodeGeneratorService::new(dir.path().to_path_buf()).with_test_mode();
+        // 1. Initialisation de l'environnement de test (Sandbox + Manager)
+        let sandbox = DbSandbox::new().await;
+        VocabularyRegistry::init_mock_for_tests();
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        let mut module = Module::new("test_mod", PathBuf::from("test_mod.rs")).unwrap();
+        manager
+            .create_collection(
+                "code_elements",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .expect("Échec de la création de la collection de test");
+
+        let root = sandbox.storage.config.data_root.clone();
+        let service = CodeGeneratorService::new(root.clone()).with_test_mode();
+        let mut module = Module::new("ai_module", root.join("ai.rs")).unwrap();
+
+        // 2. Construction de l'élément avec métadonnées IA et ACCOLADES
         module.elements.push(CodeElement {
+            module_id: None,
+            parent_id: None,
+            attributes: vec!["#[ai_master]".to_string()],
+            docs: Some("IA Documentation".to_string()),
+            elements: vec![],
             handle: "fn:main".to_string(),
             element_type: CodeElementType::Function,
             visibility: Visibility::Public,
-            signature: "fn main()".to_string(),
-            body: Some("{ println!(\"AI Power\"); }".to_string()),
+            signature: "pub fn main()".to_string(),
+            body: Some("{ println!(\"Hello\"); }".to_string()),
             dependencies: vec![],
             metadata: UnorderedMap::new(),
         });
 
-        // Premier passage : Création du fichier par l'IA
-        let path = service
-            .sync_module(module.clone())
+        // 3. Phase Top-Down : Synchronisation physique (Weave -> Disk)
+        service.sync_module(module.clone()).await.unwrap();
+
+        // 4. Phase Bottom-Up : Ingestion (Disk -> Reconcile -> DB)
+        // 🎯 FIX : Passage du manager requis par la signature
+        service
+            .ingest_file(&module.path, &manager, TEST_SCHEMA)
             .await
-            .expect("Sync initial échoué");
-        assert!(path.exists());
+            .unwrap();
 
-        // Simulation d'une tentative de modification par un humain (ou un processus externe)
-        let modified_content = "
-// @raise-handle: fn:main
-pub fn main() {
-    println!(\"Human interference\");
-}
-";
-        fs::write_sync(&path, modified_content).unwrap();
+        // 5. Vérification de la restauration via une requête en base
+        let query = Query::new("code_elements");
+        let result = QueryEngine::new(&manager)
+            .execute_query(query)
+            .await
+            .unwrap();
 
-        // Second passage : Le Jumeau Numérique doit écraser l'interférence
-        let _ = service.sync_module(module).await.expect("Re-sync échoué");
+        assert_eq!(result.total_count, 1);
+        let reconciled_doc = &result.documents[0];
 
-        let final_content = fs::read_to_string_sync(&path).unwrap();
+        // 🕵️ Assertions sémantiques
+        assert_eq!(reconciled_doc["handle"], "fn:main");
 
-        // 🎯 NOUVELLES ASSERTIONS : L'IA a repris le contrôle
+        let attrs = reconciled_doc["attributes"]
+            .as_array()
+            .expect("Attributs manquants");
         assert!(
-            !final_content.contains("Human interference"),
-            "Le système aurait dû écraser l'interférence humaine !"
+            attrs.iter().any(|v| v == "#[ai_master]"),
+            "Attribut #[ai_master] non restauré"
         );
-        assert!(
-            final_content.contains("AI Power"),
-            "Le système n'a pas restauré l'état de l'IA."
+
+        assert_eq!(
+            reconciled_doc["docs"], "IA Documentation",
+            "Documentation non restaurée"
         );
     }
 
@@ -647,6 +750,13 @@ pub fn main() {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
+        manager
+            .create_collection(
+                "code_elements",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .expect("Échec de la création de la collection de test");
 
         // 2. Création d'un faux fichier physique
         let file_path = sandbox.storage.config.data_root.join("test_ingest.rs");
@@ -656,11 +766,11 @@ pub fn test_ingest() {
     let a = 1;
 }
 ";
-        fs::write_sync(&file_path, rust_code).unwrap();
+        fs::write_async(&file_path, rust_code).await.unwrap();
 
         // 3. Exécution de l'Agent d'Ingestion
         let count = service
-            .ingest_file(&file_path, &manager)
+            .ingest_file(&file_path, &manager, TEST_SCHEMA)
             .await
             .expect("L'ingestion a échoué");
         assert_eq!(count, 1, "Un élément aurait dû être ingéré");
@@ -694,14 +804,25 @@ pub fn test_ingest() {
             &sandbox.config.system_db,
         );
 
+        manager
+            .create_collection(
+                "code_elements",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .expect("Échec de la création de la collection de test");
+
         // 2. Création du fichier et ingestion initiale
         let file_path = sandbox.storage.config.data_root.join("test_weave.rs");
         let rust_code = "
 // @raise-handle: fn:test_weave
 pub fn test_weave() {}
 ";
-        fs::write_sync(&file_path, rust_code).unwrap();
-        service.ingest_file(&file_path, &manager).await.unwrap();
+        fs::write_async(&file_path, rust_code).await.unwrap();
+        service
+            .ingest_file(&file_path, &manager, TEST_SCHEMA)
+            .await
+            .unwrap();
 
         // 3. Mutation par l'IA (Modification directe en base)
         let query = Query::new("code_elements");
@@ -721,7 +842,7 @@ pub fn test_weave() {}
             .expect("Le tissage a échoué");
 
         // 5. Vérification Physique
-        let final_code = fs::read_to_string_sync(&final_path).unwrap();
+        let final_code = fs::read_to_string_async(&final_path).await.unwrap();
         assert!(
             final_code.contains("AI was here"),
             "Le fichier n'a pas été mis à jour par la base de données !"

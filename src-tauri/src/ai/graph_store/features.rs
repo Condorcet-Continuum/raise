@@ -132,8 +132,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        // 🎯 FIX : Initialisation DB et insertion de données fictives pour tester l'extraction
-        manager.init_db().await.unwrap();
+        AgentDbSandbox::mock_db(&manager).await.unwrap();
         manager
             .create_collection(
                 "la",

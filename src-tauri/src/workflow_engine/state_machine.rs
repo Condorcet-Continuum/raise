@@ -175,7 +175,7 @@ impl<'a> WorkflowStateMachine<'a> {
         script: &str,
         context: &UnorderedMap<String, JsonValue>,
     ) -> bool {
-        let context_value = serde_json::to_value(context).unwrap_or(json_value!({}));
+        let context_value = json::serialize_to_value(context).unwrap_or(json_value!({}));
         let provider = NoOpDataProvider;
 
         // 1. Tente de lire le script comme un AST JSON pour le rules_engine

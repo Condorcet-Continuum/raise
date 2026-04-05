@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use crate::utils::prelude::*;
 /// Calcule le hash SHA-256 d'une valeur JSON de manière strictement déterministe.
 /// Utilise un OrderedMap pour forcer le tri des clés, neutralisant ainsi
-/// les réglages globaux de 'preserve_order' de serde_json.
+/// les réglages globaux de 'preserve_order' de json.
 pub fn calculate_hash(data: &JsonValue) -> String {
     // On convertit la JsonValue en une structure récursive où chaque Map est un OrderedMap (trié)
     let canonical_data = to_canonical_string(data);
@@ -12,7 +12,10 @@ pub fn calculate_hash(data: &JsonValue) -> String {
     hasher.update(canonical_data.as_bytes());
     let result = hasher.finalize();
 
-    format!("{:x}", result)
+    result
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
 /// Fonction récursive qui transforme une JsonValue en String avec clés triées

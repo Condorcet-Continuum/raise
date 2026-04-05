@@ -40,7 +40,7 @@ fn build_register_request(
         "hash": "hash_simulé_tauri"
     });
 
-    let payload = match serde_json::to_vec(&json_value!({
+    let payload = match json::serialize_to_bytes(&json_value!({
         "function": "register_schema",
         "args": args
     })) {

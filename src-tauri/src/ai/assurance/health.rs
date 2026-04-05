@@ -1,4 +1,7 @@
-use crate::utils::prelude::*;
+// FICHIER : src-tauri/src/ai/health.rs
+
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::utils::prelude::*; // 🎯 Import ajouté
 
 #[derive(Serializable, FmtDebug, PartialEq)]
 pub struct HealthReport {
@@ -12,11 +15,12 @@ pub struct HealthReport {
 pub struct RaiseHealthEngine;
 
 impl RaiseHealthEngine {
-    /// Exécute un diagnostic complet du moteur IA (Hardware + Assets)
-    pub async fn check_engine_health() -> RaiseResult<HealthReport> {
+    /// Exécute un diagnostic complet (nécessite l'accès à la configuration dynamique)
+    pub async fn check_engine_health(
+        manager: &CollectionsManager<'_>,
+    ) -> RaiseResult<HealthReport> {
         let mut details = UnorderedMap::new();
 
-        // 1. Diagnostic Matériel (via le Singleton AppConfig)
         let device = AppConfig::device();
         let (dev_type, accelerated) = match device {
             candle_core::Device::Cuda(_) => ("NVIDIA_GPU_CUDA", true),
@@ -24,7 +28,6 @@ impl RaiseHealthEngine {
             candle_core::Device::Cpu => ("SYSTEM_CPU", false),
         };
 
-        // 2. Détection des features de compilation (MKL/CUDA/METAL)
         let mkl_feat = cfg!(feature = "mkl");
         details.insert("hardware_label".to_string(), json_value!(dev_type));
         details.insert(
@@ -32,8 +35,15 @@ impl RaiseHealthEngine {
             json_value!(cfg!(feature = "cuda")),
         );
 
-        // 3. Vérification de l'intégrité des fichiers (Assets)
-        let assets_ok = Self::verify_critical_assets(&mut details).await?;
+        // 🎯 Remplacement par notre pattern match strict
+        let assets_ok = match Self::verify_critical_assets(manager, &mut details).await {
+            Ok(status) => status,
+            Err(e) => raise_error!(
+                "ERR_HEALTH_ASSETS_DIAGNOSTIC_FAILED",
+                error = "Impossible d'effectuer la vérification d'intégrité",
+                context = json_value!({"technical_error": e.to_string()})
+            ),
+        };
 
         user_info!(
             "MSG_HEALTH_DIAGNOSTIC_COMPLETE",
@@ -53,8 +63,8 @@ impl RaiseHealthEngine {
         })
     }
 
-    /// Vérifie la présence physique des poids du modèle Qwen et BERT
     async fn verify_critical_assets(
+        manager: &CollectionsManager<'_>,
         logs: &mut UnorderedMap<String, JsonValue>,
     ) -> RaiseResult<bool> {
         let mut all_present = true;
@@ -64,21 +74,32 @@ impl RaiseHealthEngine {
             Some(path) => path.join("_system/ai-assets"),
             None => raise_error!(
                 "ERR_CONFIG_PATH_MISSING",
-                error = "PATH_RAISE_DOMAIN non trouvé",
-                context = json_value!({
-                    "action": "resolve_critical_assets_path",
-                    "hint": "Vérifiez que la configuration active contient bien le chemin racine du domaine."
-                })
+                error = "PATH_RAISE_DOMAIN non trouvé dans la configuration",
+                context = json_value!({})
             ),
         };
 
+        // 🎯 LECTURE DYNAMIQUE DU NOM DU MODÈLE VIA LA BASE JSON
+        let (model_filename, _) = match AppConfig::get_llm_settings(manager).await {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_HEALTH_LLM_CONFIG",
+                error = "Impossible de récupérer le nom du modèle pour le diagnostic",
+                context = json_value!({"technical_error": e.to_string()})
+            ),
+        };
+
+        // On construit la liste des fichiers en injectant notre modèle dynamique
         let critical_files = vec![
-            ("LLM_MODEL", "models/qwen2.5-1.5b-instruct-q4_k_m.gguf"),
-            ("EMB_WEIGHTS", "embeddings/minilm/model.safetensors"),
+            ("LLM_MODEL", format!("models/{}", model_filename)),
+            (
+                "EMB_WEIGHTS",
+                "embeddings/minilm/model.safetensors".to_string(),
+            ),
         ];
 
         for (label, rel_path) in critical_files {
-            let full_path = base_path.join(rel_path);
+            let full_path = base_path.join(&rel_path);
             let exists = fs::exists_async(&full_path).await;
 
             if !exists {
@@ -94,36 +115,65 @@ impl RaiseHealthEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::testing::mock::{inject_mock_component, AgentDbSandbox};
 
     #[async_test]
     async fn test_health_diagnostic_hardware_consistency() {
-        // Initialisation de la sandbox (Mocks config + device)
-        let _sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        let report = RaiseHealthEngine::check_engine_health()
-            .await
-            .expect("Le diagnostic ne devrait pas crasher");
+        // 🎯 Injection requise pour que le diagnostic puisse lire la config !
+        inject_mock_component(&manager, "llm", json_value!({})).await;
 
-        // Sur ton PC AMD, on s'attend à du CPU (ou CUDA si compilé)
-        if cfg!(feature = "cuda") && report.device_type.contains("CUDA") {
-            assert!(report.acceleration_active);
-        } else {
-            // Si CPU, on vérifie si MKL est bien là pour la performance
-            assert_eq!(report.mkl_enabled, cfg!(feature = "mkl"));
+        let report_result = RaiseHealthEngine::check_engine_health(&manager).await;
+
+        match report_result {
+            Ok(report) => {
+                if cfg!(feature = "cuda") && report.device_type.contains("CUDA") {
+                    assert!(report.acceleration_active);
+                } else {
+                    assert_eq!(report.mkl_enabled, cfg!(feature = "mkl"));
+                }
+            }
+            Err(e) => panic!("Le diagnostic matériel ne devrait pas crasher : {:?}", e),
         }
     }
 
     #[async_test]
     async fn test_health_assets_failure_detection() {
-        let _sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &sandbox.config.system_domain,
+            &sandbox.config.system_db,
+        );
 
-        // Ce test va probablement échouer car les fichiers ne sont pas
-        // dans le dossier temporaire de la sandbox.
-        let report = RaiseHealthEngine::check_engine_health().await.unwrap();
+        // 🎯 Injection requise
+        inject_mock_component(&manager, "llm", json_value!({})).await;
 
-        // On vérifie que le moteur détecte bien l'absence d'assets dans un env vide
-        assert!(!report.assets_integrity);
-        assert!(report.diagnostic_details.contains_key("LLM_MODEL"));
+        let report_result = RaiseHealthEngine::check_engine_health(&manager).await;
+
+        match report_result {
+            Ok(report) => {
+                // Les fichiers n'étant pas dans la sandbox, le diagnostic
+                // doit s'exécuter jusqu'au bout mais marquer l'intégrité à "false".
+                assert!(
+                    !report.assets_integrity,
+                    "L'intégrité devrait être fausse en sandbox vide."
+                );
+
+                // On vérifie que la clé dynamique "LLM_MODEL" est bien présente dans les logs de diag
+                assert!(report.diagnostic_details.contains_key("LLM_MODEL"));
+            }
+            Err(e) => panic!(
+                "Le diagnostic global a crasher au lieu de remonter un statut false : {:?}",
+                e
+            ),
+        }
     }
 }

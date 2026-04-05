@@ -101,7 +101,6 @@ impl SessionManager {
 
     pub async fn start_session(&self, target_user: &str) -> RaiseResult<Session> {
         let mgr = self.get_db_manager();
-        let _ = mgr.init_db().await;
         let config = AppConfig::get();
 
         // 1. VÉRIFICATION DU USER DANS JSON_DB

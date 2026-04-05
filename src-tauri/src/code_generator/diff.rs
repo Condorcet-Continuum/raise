@@ -21,7 +21,25 @@ impl DiffEngine {
     /// 🧹 Normalise une chaîne en supprimant tous les espaces blancs pour une comparaison stricte.
     fn normalize_code(code: Option<&String>) -> String {
         match code {
-            Some(c) => c.chars().filter(|ch| !ch.is_whitespace()).collect(),
+            Some(c) => {
+                let mut result = String::with_capacity(c.len());
+                let mut in_string = false;
+                let mut prev_char = '\0';
+
+                for ch in c.chars() {
+                    // On détecte l'entrée/sortie d'une chaîne de caractères
+                    if ch == '"' && prev_char != '\\' {
+                        in_string = !in_string;
+                    }
+
+                    // On conserve le caractère si on est dans une chaîne, ou si ce n'est pas un espace
+                    if in_string || !ch.is_whitespace() {
+                        result.push(ch);
+                    }
+                    prev_char = ch;
+                }
+                result
+            }
             None => String::new(),
         }
     }
@@ -91,6 +109,14 @@ mod tests {
 
     fn mock_el(handle: &str, body: &str) -> CodeElement {
         CodeElement {
+            // 🎯 NOUVEAUX CHAMPS (Initialisation par défaut pour le mock)
+            module_id: None,
+            parent_id: None,
+            attributes: vec![],
+            docs: None,
+            elements: vec![],
+
+            // Champs existants
             handle: handle.to_string(),
             element_type: CodeElementType::Function,
             visibility: Visibility::Public,

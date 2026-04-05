@@ -19,8 +19,11 @@ use raise::utils::io::audio::AudioListener;
 
 use raise::{user_error, user_info, user_success, utils::prelude::*};
 
+use raise::ai::agents::prompt_engine::PromptEngine;
+use raise::ai::agents::tools::extract_json_from_llm;
 use raise::ai::assurance::health::RaiseHealthEngine;
 use raise::commands::ai_commands::validate_arcadia_gnn;
+use raise::commands::model_commands::ingest_arcadia_elements;
 
 use crate::CliContext;
 
@@ -102,6 +105,25 @@ pub enum AiCommands {
         /// Nombre d'itérations d'entraînement
         #[arg(short, long, default_value = "50")]
         iterations: usize,
+    },
+
+    /// 🚀 Exécuter un prompt stocké dans la base (Data-Driven)
+    #[command(visible_alias = "e")]
+    Execute {
+        /// Le Handle du prompt à exécuter (ex: prompt_mandate2oa_v1)
+        prompt_handle: String,
+
+        /// Variables d'injection (format JSON, ex: '{"user_intent": "..."}')
+        #[arg(long)]
+        vars: Option<String>,
+
+        /// Fichier de sortie optionnel pour sauvegarder la réponse
+        #[arg(long)]
+        out: Option<String>,
+
+        /// 🎯 NOUVEAU : Ingestion automatique dans la base de données cible
+        #[arg(short, long)]
+        ingest: bool,
     },
 
     /// 🔎 Expliquer une décision de l'IA (XAI)
@@ -216,7 +238,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
     }
 
     if let AiCommands::Health = &command {
-        run_health_action().await?;
+        run_health_action(&manager).await?;
         return Ok(());
     }
 
@@ -261,6 +283,16 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         AiCommands::TrainWorld { iterations } => {
             run_train_world_action(ctx.storage.clone(), &manager, iterations).await?;
         }
+
+        AiCommands::Execute {
+            prompt_handle,
+            vars,
+            out,
+            ingest,
+        } => {
+            run_execute_action(&ctx, client, &prompt_handle, vars, out, ingest).await?;
+        }
+
         _ => unreachable!(),
     }
 
@@ -483,10 +515,12 @@ async fn run_voice_mode(
     Ok(())
 }
 
-async fn run_health_action() -> RaiseResult<()> {
+async fn run_health_action(
+    manager: &raise::json_db::collections::manager::CollectionsManager<'_>,
+) -> RaiseResult<()> {
     user_info!("AI_HEALTH_CHECK_START", json_value!({}));
 
-    let report = RaiseHealthEngine::check_engine_health().await?;
+    let report = RaiseHealthEngine::check_engine_health(manager).await?;
 
     println!("\n🩺 --- RAPPORT DE SANTÉ DU MOTEUR IA ---");
     println!("Processeur / GPU Actif : {}", report.device_type);
@@ -773,6 +807,84 @@ async fn run_train_world_action(
         "AI_WORLD_TRAIN_SUCCESS",
         json_value!({"final_loss": final_loss})
     );
+
+    Ok(())
+}
+
+async fn run_execute_action(
+    ctx: &CliContext,
+    client: LlmClient,
+    prompt_handle: &str,
+    vars_json: Option<String>,
+    out_path: Option<String>,
+    ingest: bool, // 🎯 NOUVEAU PARAMÈTRE
+) -> RaiseResult<()> {
+    user_info!("AI_EXECUTE_START", json_value!({"prompt": prompt_handle}));
+
+    // 1. Parsing des variables via la façade json
+    let vars: Option<JsonValue> = if let Some(s) = vars_json {
+        Some(json::deserialize_from_str(&s)?)
+    } else {
+        None
+    };
+
+    // 2. Initialisation du moteur de prompt avec le storage du contexte
+    let prompt_engine = PromptEngine::new(ctx.storage.clone(), &ctx.active_domain, &ctx.active_db);
+
+    // 3. Compilation et Hydratation du Blueprint
+    user_info!(
+        "AI_PROMPT_COMPILING",
+        json_value!({"handle": prompt_handle})
+    );
+    let system_prompt = prompt_engine.compile(prompt_handle, vars.as_ref()).await?;
+
+    // 4. Inférence LLM
+    println!("🤖 Inférence RAISE en cours ({})...", prompt_handle);
+    let response = client
+        .ask(
+            raise::ai::llm::client::LlmBackend::LocalLlama,
+            &system_prompt,
+            "",
+        )
+        .await?;
+
+    // 5. Nettoyage JSON via la Toolbox officielle
+    let clean_json = extract_json_from_llm(&response);
+
+    // 🎯 5.BIS L'INGESTION AUTOMATIQUE (C'EST ICI QUE TOUT SE JOUE !)
+    if ingest {
+        println!("📥 Routage ontologique et ingestion dans le Graphe Arcadia...");
+        let ids = ingest_arcadia_elements(
+            &ctx.storage,
+            &ctx.active_domain,
+            &ctx.active_db,
+            &clean_json,
+        )
+        .await?;
+        println!(
+            "✅ {} entités validées et sauvegardées avec succès !",
+            ids.len()
+        );
+    }
+
+    // 6. Persistance via la façade fs (Optionnel, même si on a ingéré)
+    match out_path {
+        Some(p) => {
+            let path = PathBuf::from(&p);
+            // On utilise write_async de fs.rs qui accepte le contenu en AsRef<[u8]>
+            fs::write_async(&path, clean_json).await?;
+            user_success!("AI_EXECUTE_SUCCESS", json_value!({"out_file": p}));
+            println!("✅ Artefact JSON brut sauvegardé dans : {}", p);
+        }
+        None => {
+            // Si on n'a pas demandé d'ingestion ni de fichier de sortie, on affiche le JSON.
+            if !ingest {
+                println!("\n📦 --- RÉSULTAT DU BLUEPRINT ---");
+                println!("{}", clean_json);
+            }
+            user_success!("AI_EXECUTE_SUCCESS", json_value!({}));
+        }
+    }
 
     Ok(())
 }

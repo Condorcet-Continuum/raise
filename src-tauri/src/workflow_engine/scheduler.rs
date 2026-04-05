@@ -204,7 +204,7 @@ impl WorkflowScheduler {
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<()> {
         instance.updated_at = UtcClock::now().timestamp();
-        let json_val = serde_json::to_value(&instance).unwrap();
+        let json_val = json::serialize_to_value(&instance).unwrap();
         manager
             .upsert_document("workflow_instances", json_val)
             .await?;

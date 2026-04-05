@@ -62,7 +62,7 @@ impl Agent for DynamicAgent {
         // 3. Compiler le System Prompt dynamiquement
         let prompt_engine =
             PromptEngine::new(ctx.db.clone(), &config.system_domain, &config.system_db);
-        let system_prompt = prompt_engine.compile(prompt_id).await?;
+        let system_prompt = prompt_engine.compile(prompt_id, None).await?;
 
         // 4. Charger la session et préparer le contexte utilisateur
         let mut session = load_session(ctx)
@@ -398,7 +398,7 @@ mod tests {
             .unwrap();
 
         // 4. Mocks d'exécution
-        inject_mock_component(&manager, "llm", json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await;
         let llm = LlmClient::new(&manager).await.unwrap();
 
         use candle_nn::VarMap;

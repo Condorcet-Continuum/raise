@@ -51,9 +51,7 @@ pub mod test_utils {
 
         // 3. Initialisation du namespace de test spécifique (TEST_SPACE / TEST_DB)
         let mgr = CollectionsManager::new(&sandbox.storage, TEST_SPACE, TEST_DB);
-        mgr.init_db()
-            .await
-            .expect("Erreur init_db pour l'espace de test");
+        DbSandbox::mock_db(&mgr).await.unwrap();
 
         // 4. Création des datasets
         create_mock_dataset(&data_root).await;

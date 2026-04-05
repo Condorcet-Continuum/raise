@@ -38,6 +38,30 @@ macro_rules! user_info {
     }};
 }
 
+/// Affiche une information de trace ultra-verbeuse (mode développeur)
+#[macro_export]
+macro_rules! user_trace {
+    ($key:expr) => {{
+        let msg = $crate::utils::context::i18n::t($key);
+        tracing::trace!(
+            target: "user_notification",
+            event_id = $key,
+            severity = "trace",
+            "🔍 {}", msg
+        );
+    }};
+    ($key:expr, $context:expr) => {{
+        let msg = $crate::utils::context::i18n::t($key);
+        tracing::trace!(
+            target: "user_notification",
+            event_id = $key,
+            severity = "trace",
+            context = %$context,
+            "🔍 {}", msg
+        );
+    }};
+}
+
 /// Affiche un succès (vert) à l'utilisateur
 #[macro_export]
 macro_rules! user_success {

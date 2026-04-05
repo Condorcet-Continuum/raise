@@ -33,7 +33,10 @@ impl RagRetriever {
 
         let collection_name = "raise_knowledge_base".to_string();
 
-        println!("📚 [RAG] Initialisation du backend : CANDLE (100% Natif)");
+        user_info!(
+            "INF_RAG_CANDLE_INIT",
+            json_value!({"backend": "CANDLE", "device": "Native"})
+        );
 
         let device = Device::Cpu;
         let store_dir = storage_path.join("vector_store");
@@ -156,6 +159,7 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_candle_end_to_end() {
         let _guard = get_hf_lock().lock().await;
@@ -193,6 +197,7 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_candle_empty_results() {
         let _guard = get_hf_lock().lock().await;
@@ -223,6 +228,7 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_candle_persistence() {
         let _guard = get_hf_lock().lock().await;
@@ -260,6 +266,7 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_chunking_logic() {
         let _guard = get_hf_lock().lock().await;

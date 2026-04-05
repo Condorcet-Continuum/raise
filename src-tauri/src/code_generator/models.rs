@@ -1,7 +1,6 @@
 use crate::utils::prelude::*;
 
 /// 🌐 Langages cibles supportés par l'AST Weaver.
-/// Déplacé ici pour être accessible globalement dans le module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serializable, Deserializable)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetLanguage {
@@ -17,16 +16,17 @@ pub enum TargetLanguage {
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeElementType {
+    ImportBlock,
     Function,
+    TestModule,
+    TestFunction,
+    ImplBlock,
+    Trait,
     Struct,
     Enum,
-    Trait,
-    Impl,
-    ModuleDeclaration,
-    TypeAlias,
     Constant,
-    ModuleHeader, // Pour les imports (use) et macros globales
-    TestModule,   // Pour le bloc #[cfg(test)]
+    Macro,
+    TypeAlias,
 }
 
 /// 🔒 Gestion sémantique de la visibilité.
@@ -36,36 +36,82 @@ pub enum Visibility {
     Public,
     Private,
     Crate,
-    Restricted(String),
+    Protected,
 }
 
 /// 🧩 L'unité atomique du Jumeau Numérique (Code).
-/// Utilise les alias RAISE pour la cohérence IA.
-#[derive(Debug, Clone, Serializable, Deserializable)]
+/// 🎯 FIX : Ajout de PartialEq et Eq pour satisfaire la comparaison du Module
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq)]
 pub struct CodeElement {
-    /// Identifiant sémantique unique (ex: "ref:functions:engine_start").
-    pub handle: String,
+    // 🔗 Liens topologiques
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module_id: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+
+    // 🏷️ Identité
     pub element_type: CodeElementType,
+    pub handle: String,
     pub visibility: Visibility,
-    /// Signature brute pour le moteur 'syn'.
+
+    // 🧠 Contexte IA
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attributes: Vec<String>, // Ex: ["#[cfg(test)]", "#[derive(Debug)]"]
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>, // Les docstrings (///)
+
+    // ⚙️ Code physique
     pub signature: String,
-    /// Corps optionnel (None pour les interfaces/traits).
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    /// Liste des handles requis pour le tri topologique.
+
+    // 🌳 Graphe
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<String>,
-    /// Métadonnées Arcadia (ex: "arcadia_layer": "LA").
+
+    #[serde(default, skip_serializing_if = "UnorderedMap::is_empty")]
+    pub metadata: UnorderedMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DocElementType {
+    MarkdownSection,
+    Frontmatter,
+    MermaidDiagram,
+    CodeBlock,
+}
+
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq)]
+pub struct DocElement {
+    pub module_id: Option<String>,
+    pub parent_id: Option<String>,
+    pub element_type: DocElementType,
+    pub handle: String,
+    pub title: String,
+    pub heading_level: Option<u32>,
+    pub content: String,
+    pub language: String, // "markdown", "mermaid", "rust", etc.
+
+    #[serde(default)]
+    pub elements: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "UnorderedMap::is_empty")]
     pub metadata: UnorderedMap<String, String>,
 }
 
 /// 📄 Représentation d'un fichier source physique.
-#[derive(Debug, Clone, Serializable, Deserializable)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq)]
 pub struct Module {
-    /// Utilisation de UniqueId (Alias Uuid).
-    pub id: UniqueId,
     pub name: String,
-    /// Éléments contenus dans le module.
+    pub path: PathBuf,
     pub elements: Vec<CodeElement>,
-    pub path: PathBuf, // Alias sémantique
 }
 
 impl Module {
@@ -81,7 +127,6 @@ impl Module {
         }
 
         Ok(Self {
-            id: UniqueId::new_v4(),
             name: name.to_string(),
             elements: Vec::new(),
             path,
@@ -125,6 +170,14 @@ mod tests {
         metadata.insert("layer".to_string(), "Physical".to_string());
 
         let element = CodeElement {
+            // 🎯 FIX : Ajout des nouveaux champs manquants pour que le test compile !
+            module_id: None,
+            parent_id: None,
+            attributes: vec![],
+            docs: None,
+            elements: vec![],
+
+            // Anciens champs
             handle: "fn_core".to_string(),
             element_type: CodeElementType::Function,
             visibility: Visibility::Public,

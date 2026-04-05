@@ -81,6 +81,14 @@ mod tests {
 
     fn create_mock_element(handle: &str, deps: Vec<&str>) -> CodeElement {
         CodeElement {
+            // 🎯 NOUVEAUX CHAMPS (Initialisation par défaut pour le mock)
+            module_id: None,
+            parent_id: None,
+            attributes: vec![],
+            docs: None,
+            elements: vec![],
+
+            // Champs existants
             handle: handle.to_string(),
             element_type: CodeElementType::Function,
             visibility: Visibility::Public,
@@ -122,8 +130,8 @@ mod tests {
 
     #[test]
     fn test_missing_dependency_resilience() {
-        // Une dépendance externe (ex: std::fs) ne doit pas bloquer le tri
-        let e1 = create_mock_element("write_file", vec!["std::fs::File"]);
+        // Une dépendance externe (ex: fs::File) ne doit pas bloquer le tri
+        let e1 = create_mock_element("write_file", vec!["fs::File"]);
 
         let result = sort_elements_topologically(vec![e1]);
         assert!(result.is_ok());

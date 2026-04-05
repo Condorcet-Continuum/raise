@@ -1,8 +1,6 @@
 // FICHIER : src-tauri/src/json_db/jsonld/vocabulary.rs
 
 use crate::utils::prelude::*;
-use std::future::Future;
-use std::pin::Pin;
 
 // --- STRUCTURES ---
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
@@ -173,7 +171,7 @@ impl VocabularyRegistry {
     pub fn load_all_ontologies<'a>(
         &'a mut self,
         root: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = RaiseResult<()>> + Send + 'a>> {
+    ) -> Pinned<Box<dyn AsyncFuture<Output = RaiseResult<()>> + Send + 'a>> {
         Box::pin(async move {
             let mut entries = match fs::read_dir_async(root).await {
                 Ok(e) => e,
@@ -499,7 +497,7 @@ mod tests {
         // 1. Initialisation de l'environnement isolé
         let sandbox = DbSandbox::new().await;
         let mgr = CollectionsManager::new(&sandbox.storage, "system_test", "quality_db");
-        mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&mgr).await.unwrap();
 
         // 2. Création des collections nécessaires
         mgr.create_collection(

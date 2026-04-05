@@ -27,11 +27,15 @@ pub enum NodeType {
     Parallel,    // Exécution simultanée de plusieurs tâches/agents
     GateHitl,    // Validation humaine (Human In The Loop) pour approuver une phase
     QualityGate, // (Ex-GatePolicy) Vérification auto via les QualityRules (AST)
-    CallMcp,     // Appel outil externe direct (Model Context Protocol)
-    Wasm,        // Exécution d'un module WebAssembly
-    Milestone,   // NOUVEAU: Jalon bloquant marquant la fin d'une phase majeure
-    SubProject,  // NOUVEAU: Appel à un autre workflow (Sous-graphe)
-    End,         // Fin du flux
+
+    Genetics,   // Optimisation topologique via Algorithmes Génétiques (CPU/Rayon)
+    WorldModel, // Simulation d'impact via GNN et Candle (CPU/GPU)
+
+    CallMcp,    // Appel outil externe direct (Model Context Protocol)
+    Wasm,       // Exécution d'un module WebAssembly
+    Milestone,  // Jalon bloquant marquant la fin d'une phase majeure
+    SubProject, // Appel à un autre workflow (Sous-graphe)
+    End,        // Fin du flux
 }
 
 /// Statut d'exécution d'une instance ou d'un nœud

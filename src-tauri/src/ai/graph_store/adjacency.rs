@@ -118,7 +118,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
+        AgentDbSandbox::mock_db(&manager).await.unwrap();
 
         // Création des collections MBSE virtuelles
         manager

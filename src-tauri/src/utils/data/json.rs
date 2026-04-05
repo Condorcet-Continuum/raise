@@ -92,6 +92,25 @@ pub fn deep_merge_values(a: &mut JsonValue, b: JsonValue) {
     }
 }
 
+/// 🤖 IA NOTE : Désérialise une chaîne YAML en un type `T`.
+/// Utilise le moteur `serde_yaml` avec la gestion d'erreur structurée de RAISE.
+pub fn deserialize_from_yaml<T: DeserializableOwned>(content: &str) -> RaiseResult<T> {
+    match serde_yaml::from_str(content) {
+        Ok(val) => Ok(val),
+        Err(e) => {
+            // On capture l'erreur YAML dans notre système d'observabilité
+            crate::raise_error!(
+                "ERR_YAML_DESERIALIZATION",
+                error = e.to_string(),
+                context = crate::utils::data::json::json_value!({
+                    "engine": "serde_yaml",
+                    "content_preview": content.chars().take(100).collect::<String>()
+                })
+            )
+        }
+    }
+}
+
 // --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {

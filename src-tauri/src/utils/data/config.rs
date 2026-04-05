@@ -317,6 +317,50 @@ impl AppConfig {
         );
     }
 
+    /// Récupère la configuration du LLM de manière stricte et explicite
+    pub async fn get_llm_settings(
+        manager: &CollectionsManager<'_>,
+    ) -> RaiseResult<(String, String)> {
+        // 1. Récupération de la section avec pattern matching strict
+        let settings = match Self::get_component_settings(manager, "ai_llm").await {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_LLM_FETCH_FAILED",
+                error = e,
+                context =
+                    json_value!({ "action": "get_component_settings", "component": "ai_llm" })
+            ),
+        };
+
+        // 2. Extraction du modèle
+        let model = match settings["rust_model_file"].as_str() {
+        Some(m) => m.to_string(),
+        None => raise_error!(
+            "ERR_CONFIG_LLM_MODEL_MISSING",
+            error = "La clé 'rust_model_file' est introuvable ou n'est pas une chaîne de caractères.",
+            context = json_value!({
+                "component": "ai_llm",
+                "settings_dump": settings // 🎯 L'IA/Dev verra exactement ce que contenait le JSON !
+            })
+        ),
+    };
+
+        // 3. Extraction du Tokenizer
+        let tokenizer = match settings["rust_tokenizer_file"].as_str() {
+        Some(t) => t.to_string(),
+        None => raise_error!(
+            "ERR_CONFIG_LLM_TOKENIZER_MISSING",
+            error = "La clé 'rust_tokenizer_file' est introuvable ou n'est pas une chaîne de caractères.",
+            context = json_value!({
+                "component": "ai_llm",
+                "settings_dump": settings
+            })
+        ),
+    };
+
+        Ok((model, tokenizer))
+    }
+
     fn load_production_config(env: &str) -> RaiseResult<Self> {
         let system_json = Self::load_collection_doc("configs", |v| {
             v.get("core")

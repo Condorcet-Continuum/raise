@@ -59,7 +59,7 @@ mod integration_tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
+        AgentDbSandbox::mock_db(&manager).await.unwrap();
 
         let device = Device::Cpu;
         let store_dir = sandbox.domain_root.join("vector_store");

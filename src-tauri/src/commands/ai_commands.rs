@@ -24,7 +24,61 @@ use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 // 🎯 IMPORT POUR L'EXPORT DE DATASET
 use crate::ai::training::dataset::{extract_domain_data, TrainingExample};
 
+use crate::ai::agents::prompt_engine::PromptEngine; //
+use crate::ai::agents::tools::extract_json_from_llm; //
+use crate::ai::llm::client::{LlmBackend, LlmClient}; //
+
 use tauri::{command, State};
+
+/// 🎯 LOGIQUE CORE : Exécute un blueprint de prompt (Data-Driven)
+/// Cette fonction est le point d'entrée unique pour le CLI et l'UI.
+pub async fn ai_execute_blueprint_core(
+    storage: SharedRef<StorageEngine>,
+    domain: &str,
+    db: &str,
+    prompt_handle: &str,
+    vars: Option<JsonValue>,
+) -> RaiseResult<String> {
+    // 1. Initialisation du Manager et du Client LLM
+    let manager = CollectionsManager::new(storage.as_ref(), domain, db);
+    let client = LlmClient::new(&manager).await?;
+    // 2. Compilation via le PromptEngine
+    let prompt_engine = PromptEngine::new(storage, domain, db);
+    let system_prompt = prompt_engine.compile(prompt_handle, vars.as_ref()).await?;
+
+    // 3. Inférence LLM
+    let response = client
+        .ask(LlmBackend::LocalLlama, &system_prompt, "")
+        .await?;
+
+    // 4. Nettoyage JSON
+    Ok(extract_json_from_llm(&response))
+}
+
+/// 🖥️ COMMANDE TAURI : Expose la logique blueprint à l'interface graphique
+#[command]
+pub async fn ai_execute_blueprint(
+    storage: State<'_, SharedRef<StorageEngine>>,
+    domain: String,
+    db: String,
+    prompt_handle: String,
+    vars: Option<JsonValue>,
+) -> RaiseResult<String> {
+    let storage_ref = storage.inner().clone();
+    ai_execute_blueprint_core(storage_ref, &domain, &db, &prompt_handle, vars).await
+}
+
+#[command]
+pub async fn ai_export_dataset(
+    storage: State<'_, SharedRef<StorageEngine>>,
+    space: String,
+    db_name: String,
+    domain: String,
+) -> RaiseResult<Vec<TrainingExample>> {
+    let storage_ref = storage.inner().clone();
+    let manager = CollectionsManager::new(storage_ref.as_ref(), &space, &db_name); //
+    extract_domain_data(&manager, &domain).await
+}
 
 // --- STATES ---
 pub struct AiState(pub AsyncMutex<Option<SharedRef<AsyncMutex<AiOrchestrator>>>>);
@@ -287,18 +341,6 @@ pub async fn validate_arcadia_gnn(
         },
         "hypothesis_confirmed": confirmed
     }))
-}
-
-// 🎯 DÉPLACEMENT STRATÉGIQUE : La commande Tauri pour l'export Dataset
-#[command]
-pub async fn ai_export_dataset(
-    storage: tauri::State<'_, StorageEngine>,
-    space: String,
-    db_name: String,
-    domain: String,
-) -> RaiseResult<Vec<TrainingExample>> {
-    let manager = CollectionsManager::new(storage.inner(), &space, &db_name);
-    extract_domain_data(&manager, &domain).await
 }
 
 // =========================================================================

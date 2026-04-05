@@ -686,7 +686,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
 
         let engine = QueryEngine::new(&manager);
 
@@ -740,7 +740,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
 
         let engine = QueryEngine::new(&manager);
 
@@ -786,7 +786,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
         manager
             .create_collection(
                 "users",

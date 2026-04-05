@@ -102,7 +102,7 @@ certificateAuthorities:
 "#;
 
         let config: ConnectionProfile =
-            serde_yaml::from_str(yaml_data).expect("Échec du parsing YAML complet");
+            json::deserialize_from_yaml(yaml_data).expect("Échec du parsing YAML complet");
 
         assert_eq!(config.name, "raise-network");
         assert_eq!(config.organizations["Org1"].mspid, "Org1MSP");
@@ -121,7 +121,7 @@ peers: {}
 certificateAuthorities: {}
 "#;
         let config: ConnectionProfile =
-            serde_yaml::from_str(yaml_data).expect("Échec du parsing minimal");
+            json::deserialize_from_yaml(yaml_data).expect("Échec du parsing minimal");
         assert_eq!(config.name, "minimal");
         assert!(config.client.connection.is_none());
     }

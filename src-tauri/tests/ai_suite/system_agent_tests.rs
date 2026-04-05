@@ -7,6 +7,7 @@ use raise::ai::agents::intent_classifier::EngineeringIntent;
 // 🎯 FIX : DynamicAgent
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
+use raise::utils::testing::DbSandbox;
 
 #[async_test]
 #[serial_test::serial]
@@ -21,6 +22,7 @@ async fn test_system_agent_creates_function_end_to_end() {
         &env.sandbox.config.system_domain,
         &env.sandbox.config.system_db,
     );
+    DbSandbox::mock_db(&sys_mgr).await.unwrap();
     let _ = sys_mgr
         .create_collection(
             "prompts",
@@ -35,15 +37,19 @@ async fn test_system_agent_creates_function_end_to_end() {
         .await;
 
     sys_mgr.upsert_document("prompts", json_value!({
-        "_id": "ref:prompts:handle:prompt_system",
-        "role": "Architecte Système",
-        "identity": { "persona": "Tu es un Ingénieur Système expert certifié Arcadia (Couche SA)." },
-        "directives": ["Génère la fonction système (SystemFunction) demandée en format JSON."]
-    })).await.unwrap();
+            "handle": "prompt_system",
+            "role": "Architecte Système",
+            "identity": { 
+                "persona": "Tu es un Ingénieur Système expert certifié Arcadia (Couche SA).",
+                "tone": "analytique"
+            },
+            "environment": "Analyse Système (SA) du Continuum RAISE.", 
+            "directives": ["Génère la fonction système (SystemFunction) demandée en format JSON."]
+        })).await.unwrap();
 
-    let agent_urn = "ref:agents:handle:agent_system";
+    let agent_urn = "agent_system";
     sys_mgr.upsert_document("agents", json_value!({
-        "_id": agent_urn,
+        "handle": agent_urn,
         "base": {
             "name": { "fr": "System Architect" },
             "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_system", "temperature": 0.1 }
@@ -52,6 +58,7 @@ async fn test_system_agent_creates_function_end_to_end() {
 
     // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST ---
     let sa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "sa");
+    DbSandbox::mock_db(&sa_mgr).await.unwrap();
     sa_mgr
         .create_collection(
             "functions",

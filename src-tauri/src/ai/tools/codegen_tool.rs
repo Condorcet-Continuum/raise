@@ -121,6 +121,14 @@ impl McpTool for CodeGenTool {
         };
 
         module.elements.push(CodeElement {
+            // 🎯 NOUVEAUX CHAMPS (Topologie & IA)
+            module_id: None,
+            parent_id: None,
+            attributes: vec![],
+            docs: None,
+            elements: vec![],
+
+            // Champs existants
             handle: format!("comp:{}", component_id),
             element_type: CodeElementType::Function,
             visibility: Visibility::Public,
@@ -134,7 +142,7 @@ impl McpTool for CodeGenTool {
         match self.service.sync_module(module).await {
             Ok(path) => {
                 if lang == TargetLanguage::Rust {
-                    let _ = self.service.format_module(&path);
+                    let _ = self.service.format_module(&path).await;
                 }
                 McpToolResult::success(call.id, json_value!({ "path": path.to_string_lossy() }))
             }

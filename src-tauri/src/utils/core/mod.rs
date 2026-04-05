@@ -96,6 +96,14 @@ pub use std::num::NonZeroUsize as SafeSize; // 🎯 L'alias de sécurité !
 pub use lru::LruCache as MemoryCache; // 🎯 L'alias de la collection !
 
 // --- TRAITEMENT DE TEXTE (AI-Ready) ---
+
+/// 🤖 IA NOTE : Un itérateur qui permet d'examiner l'élément suivant sans le consommer.
+/// Crucial pour les parseurs LL(1) de ton WorldModel.
+pub use std::iter::Peekable as DataStreamPeekable;
+
+/// 🤖 IA NOTE : Un itérateur sur les caractères Unicode d'une chaîne.
+pub use std::str::Chars as TextChars;
+
 pub use regex;
 
 /// 🤖 IA NOTE : Moteur d'expression régulière compilé pour le parsing de texte.
@@ -120,6 +128,12 @@ pub use std::pin::Pin as Pinned; // 🎯 L'alias de sécurité mémoire
 // SYNC, RUNTIME & OWNERSHIP (Façade AI-Ready)
 // =========================================================================
 
+/// 🤖 IA NOTE : Alias sémantique pour std::ptr::copy_nonoverlapping.
+/// Transfère `count` éléments de la source à la destination.
+/// EXTRÊMEMENT RAPIDE mais REQUIERT un bloc `unsafe`.
+/// Les zones mémoire ne doivent PAS se chevaucher.
+pub use std::ptr::copy_nonoverlapping as memory_copy_fast;
+
 // --- Partage de propriété (Thread-Safe) ---
 /// 🤖 IA NOTE : Utilisez `SharedRef` pour partager la propriété d'une donnée immuable
 /// entre plusieurs threads ou tâches sans duplication mémoire.
@@ -142,6 +156,10 @@ pub use tokio::process::Command as AsyncCommand;
 pub use tokio::task::spawn as spawn_async_task;
 pub use tokio::task::spawn_blocking as spawn_cpu_task;
 pub use tokio::time::sleep as sleep_async;
+
+/// 🤖 IA NOTE : Arrête immédiatement le processus actuel avec un code de sortie spécifié.
+/// À utiliser avec parcimonie, de préférence après avoir logué l'état final.
+pub use std::process::exit as terminate_process; // 🎯 L'alias sémantique RAISE
 
 // 🤖 IA NOTE : Système de gestion de l'attention de l'agent.
 /// Permet de surveiller plusieurs flux (UI, Timer, Réseau) en simultané.
@@ -171,6 +189,19 @@ pub use std::borrow::Cow as CowData; // 🎯 L'alias pour l'optimisation mémoir
 /// 🤖 IA NOTE : Trait permettant la lecture optimisée via un buffer (ex: read_line, split).
 /// Indispensable pour traiter de gros fichiers sans saturer la RAM.
 pub use std::io::BufRead as BufferedRead; // 🎯 L'alias pour la lecture par lot
+
+// --- CONSTANTES & MATHÉMATIQUES (AI-Ready) ---
+
+/// 🤖 IA NOTE : La constante mathématique Pi (π) en précision simple (f32).
+/// Utilisée pour les calculs trigonométriques, les rotations et les noyaux de convolution.
+pub use std::f32::consts::PI as MATH_PI;
+
+// --- INTERFACES SYSTÈME (FFI) ---
+
+/// 🤖 IA NOTE : Une chaîne de caractères compatible avec le système d'exploitation.
+/// Contrairement à `String`, elle n'est pas forcément encodée en UTF-8 (ex: chemins Windows).
+/// À utiliser pour les arguments de ligne de commande et les noms de fichiers bruts.
+pub use std::ffi::OsStr as SystemStr; // 🎯 L'alias sémantique RAISE
 
 // =========================================================================
 // OBSERVABILITÉ & LOGGING (Façade AI-Ready)

@@ -7,7 +7,6 @@ use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 use crate::utils::io::audio::AudioListener;
 use crate::utils::prelude::*;
 
-use std::sync::Mutex;
 use tauri::{command, AppHandle, Emitter, Manager, State};
 
 /// État partagé pour gérer la session vocale asynchrone
@@ -15,7 +14,7 @@ pub struct VoiceState {
     pub engine: AsyncMutex<Option<WhisperEngine>>,
     pub is_listening: AsyncMutex<bool>,
     // On garde le listener natif dans un Mutex standard car cpal gère son propre thread OS
-    pub _listener: Mutex<Option<AudioListener>>,
+    pub _listener: SyncMutex<Option<AudioListener>>,
 }
 
 impl VoiceState {
@@ -23,7 +22,7 @@ impl VoiceState {
         Self {
             engine: AsyncMutex::new(None),
             is_listening: AsyncMutex::new(false),
-            _listener: Mutex::new(None),
+            _listener: SyncMutex::new(None),
         }
     }
 }

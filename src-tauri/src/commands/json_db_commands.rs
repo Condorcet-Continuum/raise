@@ -652,7 +652,7 @@ pub async fn jsondb_init_demo_rules(
         }
     }
     // 1. Sérialisation sécurisée
-    let pretty_json = match serde_json::to_string_pretty(&schema_content) {
+    let pretty_json = match json::serialize_to_string_pretty(&schema_content) {
         Ok(s) => s,
         Err(e) => raise_error!(
             "ERR_SERIALIZATION_FAIL",
@@ -773,7 +773,7 @@ pub async fn jsondb_init_model_rules(
     }
 
     // 2. Sérialisation sécurisée (on remplace le unwrap)
-    let pretty_json = match serde_json::to_string_pretty(&schema_content) {
+    let pretty_json = match json::serialize_to_string_pretty(&schema_content) {
         Ok(s) => s,
         Err(e) => raise_error!(
             "ERR_SERIALIZATION_FAIL",

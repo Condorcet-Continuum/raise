@@ -47,10 +47,10 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
 
     // 4. INITIALISATION DU MANAGER
     let mgr = CollectionsManager::new(&sandbox.storage, &space, &db);
-    mgr.init_db()
+
+    DbSandbox::mock_db(&mgr)
         .await
         .expect("❌ Échec de l'initialisation de l'index système");
-
     // =========================================================================
     // 🎯 AJOUT MAJEUR : PRÉ-CRÉATION DES COLLECTIONS POUR LE SANDBOX DE TESTS
     // =========================================================================
@@ -214,7 +214,7 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     .unwrap();
 
     // 6. INITIALISATION LLM
-    inject_mock_component(&mgr, "llm", json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })).await;
+    inject_mock_component(&mgr, "llm", json_value!({})).await;
 
     let client = match llm_mode {
         LlmMode::Enabled => {

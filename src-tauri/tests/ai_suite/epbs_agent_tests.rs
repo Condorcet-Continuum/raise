@@ -6,6 +6,7 @@ use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
+use raise::utils::testing::DbSandbox;
 
 #[async_test]
 #[serial_test::serial]
@@ -20,6 +21,7 @@ async fn test_epbs_agent_creates_configuration_item() {
         &env.sandbox.config.system_domain,
         &env.sandbox.config.system_db,
     );
+    DbSandbox::mock_db(&sys_mgr).await.unwrap();
     let _ = sys_mgr
         .create_collection(
             "prompts",
@@ -35,9 +37,13 @@ async fn test_epbs_agent_creates_configuration_item() {
 
     // 🎯 FIX : On "muscle" le prompt pour interdire au modèle de faire des phrases !
     sys_mgr.upsert_document("prompts", json_value!({
-        "_id": "ref:prompts:handle:prompt_epbs",
+        "handle": "prompt_epbs",
         "role": "Manager EPBS",
-        "identity": { "persona": "Tu es l'expert End-Product Breakdown Structure. Tu réponds EXCLUSIVEMENT en JSON strict." },
+        "identity": { 
+            "persona": "Tu es l'expert End-Product Breakdown Structure. Tu réponds EXCLUSIVEMENT en JSON strict.",
+            "tone": "robotique"
+        },
+        "environment": "Gestion de configuration industrielle (EPBS).",  
         "directives": [
             "Génère le ConfigurationItem en format JSON.",
             "NE FAIS AUCUNE PHRASE d'introduction ou d'excuse.",
@@ -45,12 +51,12 @@ async fn test_epbs_agent_creates_configuration_item() {
         ]
     })).await.unwrap();
 
-    let agent_urn = "ref:agents:handle:agent_epbs";
+    let agent_urn = "agent_epbs";
     sys_mgr
         .upsert_document(
             "agents",
             json_value!({
-                "_id": agent_urn,
+                "handle": agent_urn,
                 "base": {
                     "name": { "fr": "EPBS Manager" },
                     "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_epbs", "temperature": 0.0 } // 🎯 Température à 0 pour éviter la créativité
@@ -62,6 +68,7 @@ async fn test_epbs_agent_creates_configuration_item() {
 
     // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST ---
     let epbs_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "epbs");
+    DbSandbox::mock_db(&epbs_mgr).await.unwrap();
     epbs_mgr
         .create_collection(
             "configuration_items",

@@ -66,7 +66,14 @@ pub enum JsondbCommands {
     },
 
     // --- DB & COLLECTIONS ---
-    CreateDb,
+    CreateDb {
+        #[arg(
+            long,
+            required = true,
+            help = "URI du schéma d'index obligatoire (ex: db://_system/_system/schemas/v1/db/index-mbse.schema.json)"
+        )]
+        schema: String, // Changé de Option<String> à String
+    },
     DropDb {
         #[arg(long, short = 'f')]
         force: bool,
@@ -218,11 +225,16 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
 
     if !matches!(
         args.command,
-        JsondbCommands::CreateDb | JsondbCommands::DropDb { .. }
+        JsondbCommands::CreateDb { .. } | JsondbCommands::Usage
     ) && !storage.config.db_root(active_domain, active_db).exists()
     {
-        user_info!("JSONDB_BOOTSTRAP_AUTO", json_value!({"status": "starting"}));
-        let _ = col_mgr.init_db().await;
+        raise_error!(
+            "ERR_DB_NOT_FOUND",
+            error = format!("La base de données '{active_domain}/{active_db}' n'existe pas."),
+            context = json_value!({
+                "hint": format!("Initialisez d'abord la base avec : raise-cli jsondb --domain {} --db {} create-db --schema <URI>", active_domain, active_db)
+            })
+        );
     }
 
     match args.command {
@@ -288,9 +300,18 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
             );
         }
 
-        JsondbCommands::CreateDb => {
-            if col_mgr.init_db().await? {
-                user_success!(
+        JsondbCommands::CreateDb { schema } => {
+            user_info!(
+                "SYS_INFO",
+                "Initialisation stricte de la base de données..."
+            );
+
+            let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
+
+            let created = manager.create_db_with_schema(&schema).await?;
+
+            if created {
+                user_info!(
                     "JSONDB_INIT_SUCCESS",
                     json_value!({ "space": active_domain, "db": active_db })
                 );

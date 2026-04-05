@@ -3,12 +3,11 @@
 use crate::utils::prelude::*;
 
 use super::{driver, paths, IndexDefinition};
-// ✅ AJOUT : Import du StorageEngine
 use crate::json_db::storage::StorageEngine;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn update_btree_index(
-    storage: &StorageEngine, // ✅ MODIFIÉ
+    storage: &StorageEngine,
     space: &str,
     db: &str,
     collection: &str,

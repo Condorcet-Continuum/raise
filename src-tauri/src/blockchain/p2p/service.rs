@@ -79,7 +79,7 @@ pub fn spawn_p2p_service(
                     if let SwarmEvent::Behaviour(ArcadiaBehaviorEvent::Gossipsub(libp2p::gossipsub::Event::Message { message, .. })) = event {
 
                         // 🎯 DÉSÉRIALISATION (net_msg est maintenant utilisé)
-                        if let Ok(net_msg) = serde_json::from_slice::<ArcadiaNetMessage>(&message.data) {
+                        if let Ok(net_msg) = json::deserialize_from_bytes::<ArcadiaNetMessage>(&message.data) {
 
                             // On verrouille le consensus juste le temps du traitement
                             let mut engine = consensus_state.lock().await; // 🎯 consensus_state est utilisé !
@@ -97,7 +97,7 @@ pub fn spawn_p2p_service(
                                         };
 
                                         // On publie notre vote sur le réseau
-                                        if let Ok(vote_data) = serde_json::to_vec(&ArcadiaNetMessage::SubmitVote(my_vote)) {
+                                        if let Ok(vote_data) = json::serialize_to_bytes(&ArcadiaNetMessage::SubmitVote(my_vote)) {
                                             let topic = libp2p::gossipsub::IdentTopic::new("arcadia-consensus");
                                             let _ = swarm.behaviour_mut().gossipsub.publish(topic, vote_data);
                                         }
@@ -121,7 +121,7 @@ pub fn spawn_p2p_service(
 
                 // 2. ÉCOUTE DES COMMANDES INTERNES (Interface UI)
                 Some(command) = swarm_rx.recv() => {
-                    if let Ok(data) = serde_json::to_vec(&command) {
+                    if let Ok(data) = json::serialize_to_bytes(&command) {
                         let topic = libp2p::gossipsub::IdentTopic::new("arcadia-consensus");
                         let _ = swarm.behaviour_mut().gossipsub.publish(topic, data);
                     }
@@ -193,10 +193,11 @@ mod tests {
         let msg = ArcadiaNetMessage::SubmitVote(my_vote);
 
         // 1. Sérialisation (Simulation de la conversion en octets pour le réseau)
-        let payload = serde_json::to_vec(&msg).expect("Erreur de sérialisation du message réseau");
+        let payload =
+            json::serialize_to_bytes(&msg).expect("Erreur de sérialisation du message réseau");
 
-        // 2. Désérialisation (Simulation de 'serde_json::from_slice' dans la boucle d'écoute)
-        let parsed_msg = serde_json::from_slice::<ArcadiaNetMessage>(&payload);
+        // 2. Désérialisation (Simulation de 'json::deserialize_from_bytes' dans la boucle d'écoute)
+        let parsed_msg = json::deserialize_from_bytes::<ArcadiaNetMessage>(&payload);
 
         assert!(
             parsed_msg.is_ok(),

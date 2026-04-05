@@ -7,6 +7,7 @@ use raise::ai::agents::intent_classifier::EngineeringIntent;
 // 🎯 FIX : DynamicAgent
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
+use raise::utils::testing::DbSandbox;
 
 #[async_test]
 #[serial_test::serial]
@@ -21,6 +22,8 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
         &env.sandbox.config.system_domain,
         &env.sandbox.config.system_db,
     );
+    DbSandbox::mock_db(&sys_mgr).await.unwrap();
+
     let _ = sys_mgr
         .create_collection(
             "prompts",
@@ -34,16 +37,26 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
         )
         .await;
 
-    sys_mgr.upsert_document("prompts", json_value!({
-        "_id": "ref:prompts:handle:prompt_hardware",
-        "role": "Architecte Matériel",
-        "identity": { "persona": "Tu es un Ingénieur Hardware expert en Physical Architecture (PA)." },
-        "directives": ["Génère les Physical Nodes en JSON."]
-    })).await.unwrap();
+    sys_mgr
+        .upsert_document(
+            "prompts",
+            json_value!({
+                "handle": "prompt_hardware",
+                "role": "Architecte Matériel",
+                "identity": {
+                    "persona": "Tu es un Ingénieur Hardware expert en Physical Architecture (PA).",
+                    "tone": "précis"
+                },
+                "environment": "Conception de matériel et infrastructure Cloud.",
+                "directives": ["Génère les Physical Nodes en JSON."]
+            }),
+        )
+        .await
+        .unwrap();
 
-    let agent_urn = "ref:agents:handle:agent_hardware";
+    let agent_urn = "agent_hardware";
     sys_mgr.upsert_document("agents", json_value!({
-        "_id": agent_urn,
+        "handle": agent_urn,
         "base": {
             "name": { "fr": "Hardware Architect" },
             "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_hardware", "temperature": 0.1 }
@@ -52,6 +65,7 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() {
 
     // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST ---
     let pa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "pa");
+    DbSandbox::mock_db(&pa_mgr).await.unwrap();
     pa_mgr
         .create_collection(
             "physical_nodes",

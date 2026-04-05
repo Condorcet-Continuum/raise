@@ -113,12 +113,16 @@ pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
             user_info!("CODE_INGEST_START", json_value!({ "path": path }));
 
             let mut service = CodeGeneratorService::new(PathBuf::from(""));
-            if ctx.is_test_mode {
+            let schema_uri = if ctx.is_test_mode {
                 service = service.with_test_mode();
-            }
-
+                "db://_system/_system/schemas/v1/db/generic.schema.json" // Schéma de test
+            } else {
+                "db://_system/_system/schemas/v1/dapps/services/code_element.schema.json"
+            };
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
-            let count = service.ingest_file(&PathBuf::from(&path), &manager).await?;
+            let count = service
+                .ingest_file(&PathBuf::from(&path), &manager, schema_uri)
+                .await?;
 
             user_success!(
                 "CODE_INGESTED",
@@ -191,6 +195,16 @@ mod tests {
         let session_mgr = SessionManager::new(storage.clone());
         let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
 
+        let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
+        DbSandbox::mock_db(&manager).await.unwrap();
+        manager
+            .create_collection(
+                "code_elements",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await
+            .expect("Le setup de la collection 'code_elements' a échoué");
+
         // 1. SCÉNARIO INITIAL : Le développeur ou l'IA a créé un fichier de base
         let file_path = sandbox.storage.config.data_root.join("test_forgeron.rs");
         let path_str = file_path.to_string_lossy().to_string();
@@ -212,7 +226,6 @@ pub fn test_weave() {
         handle(args_ingest, ctx.clone()).await.unwrap();
 
         // 3. MUTATION EN BASE : L'Agent IA réfléchit et modifie le code dans la DB
-        let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
         let query = Query::new("code_elements");
         let db_result = QueryEngine::new(&manager)
             .execute_query(query)

@@ -7,6 +7,7 @@ use raise::ai::agents::intent_classifier::EngineeringIntent;
 // 🎯 FIX : DynamicAgent
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
+use raise::utils::testing::DbSandbox;
 
 #[async_test]
 #[serial_test::serial]
@@ -21,6 +22,7 @@ async fn test_data_agent_creates_class_and_enum() {
         &env.sandbox.config.system_domain,
         &env.sandbox.config.system_db,
     );
+    DbSandbox::mock_db(&sys_mgr).await.unwrap();
     let _ = sys_mgr
         .create_collection(
             "prompts",
@@ -43,18 +45,22 @@ async fn test_data_agent_creates_class_and_enum() {
         .upsert_document(
             "prompts",
             json_value!({
-                "_id": "ref:prompts:handle:prompt_data",
+                "handle": "prompt_data",
                 "role": "Architecte Données",
-                "identity": { "persona": "Tu es un Data Architect spécialisé en modélisation." },
+                "identity": {
+                    "persona": "Tu es un Data Architect spécialisé en modélisation.",
+                    "tone": "technique"
+                },
+                "environment": "Couche DATA du projet Condorcet.",
                 "directives": ["Génère les entités de données demandées en format JSON."]
             }),
         )
         .await
         .unwrap();
 
-    let agent_urn = "ref:agents:handle:agent_data";
+    let agent_urn = "agent_data";
     sys_mgr.upsert_document("agents", json_value!({
-        "_id": agent_urn,
+        "handle": agent_urn,
         "base": {
             "name": { "fr": "Data Architect" },
             "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_data", "temperature": 0.1 }
@@ -63,6 +69,7 @@ async fn test_data_agent_creates_class_and_enum() {
 
     // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST ---
     let data_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "data");
+    DbSandbox::mock_db(&data_mgr).await.unwrap();
     data_mgr
         .create_collection(
             "classes",

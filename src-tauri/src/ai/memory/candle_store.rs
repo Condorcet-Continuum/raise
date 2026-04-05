@@ -344,7 +344,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
+        AgentDbSandbox::mock_db(&manager).await.unwrap();
 
         // Le path passé ici est dorénavant ignoré, la db gère tout
         let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
@@ -399,7 +399,7 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        manager.init_db().await.unwrap();
+        AgentDbSandbox::mock_db(&manager).await.unwrap();
         let path = sandbox.domain_root.join("vectors");
         let col = "p";
 

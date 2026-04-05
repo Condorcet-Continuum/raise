@@ -73,11 +73,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        inject_mock_component(
-            &manager,
-            "llm", 
-             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
-        ).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();
         let domain_path = PathBuf::from("/data/domain");
@@ -114,11 +110,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        inject_mock_component(
-            &manager,
-            "llm", 
-            json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
-        ).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await;
 
         let llm = LlmClient::new(&manager).await.unwrap();
 

@@ -79,13 +79,12 @@ async fn test_semantic_consistency_json_ld() {
         .unwrap();
 
     // 2. On définit en dur les URIs complètes attendues (simulation du registre)
-    let expected_uris = vec![
+    let expected_uris = [
         "https://raise.io/ontology/arcadia/oa#OperationalActor",
         "https://raise.io/ontology/arcadia/sa#SystemFunction",
         "https://raise.io/ontology/arcadia/la#LogicalComponent",
     ];
-
-    let critical_mappings = vec![
+    let critical_mappings = [
         ("actors/actor.schema.json", "oa:OperationalActor"),
         ("arcadia/oa/actor.schema.json", "oa:OperationalActor"),
         (

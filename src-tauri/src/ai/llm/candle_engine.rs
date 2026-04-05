@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/ai/llm/candle_engine.rs
+
 use crate::utils::prelude::*;
 
 use candle_core::quantized::gguf_file;
@@ -17,69 +19,74 @@ impl CandleLlmEngine {
     pub async fn new(
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
-        // 1. Récupération de la configuration globale dynamique
-        let settings = AppConfig::get_component_settings(manager, "ai_llm").await?;
-
-        // 2. Lecture simple des paramètres
-        let model_filename = settings
-            .get("rust_model_file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("qwen2.5-1.5b-instruct-q4_k_m.gguf");
-        let tokenizer_filename = settings
-            .get("rust_tokenizer_file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("tokenizer.json");
-
-        // 3. Construction des chemins LOCAUX absolus (100% Hors-ligne)
-        let Some(home) = dirs::home_dir() else {
-            raise_error!(
-                "ERR_OS_HOME_NOT_FOUND",
-                error = "Impossible de localiser le répertoire personnel de l'utilisateur (HOME).",
-                context = json_value!({ "method": "dirs::home_dir" })
-            );
+        // 1. Récupération stricte de la configuration dynamique
+        let (model_filename, tokenizer_filename) = match AppConfig::get_llm_settings(manager).await
+        {
+            Ok(settings) => settings,
+            Err(e) => raise_error!(
+                "ERR_AI_ENGINE_CONFIG_FAILED",
+                error = "Impossible de charger la configuration LLM via la base de données.",
+                context = json_value!({"source": e.to_string()})
+            ),
         };
 
-        let base_path = home.join("raise_domain/_system/ai-assets/models");
-        let model_path = base_path.join(model_filename);
-        let tokenizer_path = base_path.join(tokenizer_filename);
+        // 2. Construction des chemins via la configuration métier (et non le système OS direct)
+        let config = AppConfig::get();
+        let base_path = match config.get_path("PATH_RAISE_DOMAIN") {
+            Some(p) => p.join("_system/ai-assets/models"),
+            None => raise_error!(
+                "ERR_CONFIG_DOMAIN_PATH_MISSING",
+                error =
+                    "Le chemin racine 'PATH_RAISE_DOMAIN' n'est pas défini dans la configuration."
+            ),
+        };
 
-        // 4. Vérification de sécurité stricte
-        if !model_path.exists() {
-            raise_error!(
+        let model_path = base_path.join(&model_filename);
+        let tokenizer_path = base_path.join(&tokenizer_filename);
+
+        // 3. Vérifications de sécurité avec Pattern Matching exhaustif
+        match model_path.exists() {
+            true => {}
+            false => raise_error!(
                 "ERR_AI_MODEL_FILE_NOT_FOUND",
-                error = format!("Modèle GGUF introuvable en local : {:?}", model_path),
-                context = json_value!({ "path": model_path.to_string_lossy() })
-            );
+                error = format!(
+                    "Le fichier GGUF configuré est introuvable : {:?}",
+                    model_path
+                ),
+                context = json_value!({ "path": model_path.to_string_lossy(), "model_name": model_filename })
+            ),
         }
-        if !tokenizer_path.exists() {
-            raise_error!(
+
+        match tokenizer_path.exists() {
+            true => {}
+            false => raise_error!(
                 "ERR_AI_TOKENIZER_FILE_NOT_FOUND",
-                error = format!("Tokenizer introuvable en local : {:?}", tokenizer_path),
-                context = json_value!({ "path": tokenizer_path.to_string_lossy() })
-            );
+                error = format!(
+                    "Le fichier Tokenizer configuré est introuvable : {:?}",
+                    tokenizer_path
+                ),
+                context = json_value!({ "path": tokenizer_path.to_string_lossy(), "tokenizer_name": tokenizer_filename })
+            ),
         }
 
         let device = AppConfig::device().clone();
-        println!("🚀 [Candle LLM] Moteur Qwen chargé sur : {:?}", device);
+        tracing::info!(
+            "🚀 [Candle LLM] Moteur Qwen ({}) chargé sur : {:?}",
+            model_filename,
+            device
+        );
 
-        // 6. Chargement du Tokenizer depuis le fichier local
+        // 4. Chargement du Tokenizer
         let tokenizer = match tokenizers::Tokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,
-            Err(e) => {
-                // La macro gère déjà le retour divergent
-                raise_error!(
-                    "ERR_AI_TOKENIZER_LOAD_FAILED",
-                    error = e,
-                    context = json_value!({
-                        "action": "initialize_tokenizer",
-                        "path": tokenizer_path.to_string_lossy(),
-                        "hint": "Le fichier 'tokenizer.json' est introuvable ou malformé. Vérifiez que le modèle a été correctement téléchargé dans le dossier 'assets/models'."
-                    })
-                )
-            }
+            Err(e) => raise_error!(
+                "ERR_AI_TOKENIZER_LOAD_FAILED",
+                error = e,
+                context = json_value!({ "path": tokenizer_path.to_string_lossy() })
+            ),
         };
 
-        // 7. Chargement du modèle GGUF depuis le fichier local
+        // 5. Chargement du modèle GGUF
         let mut file = match fs::open_sync(&model_path) {
             Ok(f) => f,
             Err(e) => raise_error!(
@@ -89,44 +96,36 @@ impl CandleLlmEngine {
             ),
         };
 
-        let model = match gguf_file::Content::read(&mut file) {
+        let model_content = match gguf_file::Content::read(&mut file) {
             Ok(m) => m,
             Err(e) => raise_error!(
                 "ERR_AI_MODEL_READ_CONTENT",
                 error = e,
-                context = json_value!({
-                    "action": "READ_GGUF_CONTENT",
-                    "path": model_path.to_string_lossy()
-                })
+                context = json_value!({ "path": model_path.to_string_lossy() })
             ),
         };
-        // 8. Initialisation de l'architecture Qwen2
-        let weights = match candle_transformers::models::quantized_qwen2::ModelWeights::from_gguf(
-            model, &mut file, &device,
-        ) {
+
+        // 6. Initialisation de l'architecture Qwen2
+        let weights = match model::ModelWeights::from_gguf(model_content, &mut file, &device) {
             Ok(w) => w,
             Err(e) => raise_error!(
                 "ERR_AI_QWEN2_WEIGHTS_LOAD",
                 error = e,
-                context = json_value!({
-                    "model_family": "Qwen2",
-                    "path": model_path.to_string_lossy()
-                })
+                context = json_value!({ "path": model_path.to_string_lossy() })
             ),
-        }; // 9. Initialisation du processeur de texte (Température 0.7 par défaut)
+        };
+
         let logits_processor = LogitsProcessor::new(299792458, Some(0.7), None);
 
-        // Retour de l'instance
         Ok(Self {
             model: weights,
             tokenizer,
             device,
-            logits_processor, // 🎯 On n'oublie pas de le retourner !
+            logits_processor,
         })
     }
 
     fn format_prompt(system_prompt: &str, user_prompt: &str) -> String {
-        // Format ChatML utilisé par Qwen 2.5
         format!(
             "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
             system_prompt, user_prompt
@@ -146,31 +145,35 @@ impl CandleLlmEngine {
             Err(e) => raise_error!(
                 "ERR_TOKENIZER_ENCODE",
                 error = e,
-                context = json_value!({
-                    "action": "encode_prompt",
-                    // Un petit plus pour l'IA : on capture un aperçu du prompt qui a fait planter !
-                    "prompt_preview": formatted_prompt.chars().take(50).collect::<String>()
-                })
+                context = json_value!({ "prompt_preview": formatted_prompt.chars().take(50).collect::<String>() })
             ),
         };
 
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = Vec::new();
-
         let mut index_pos = 0;
-        // Token standard de fin de message pour ChatML / Qwen
-        let eos_token_id = self.tokenizer.token_to_id("<|im_end|>").unwrap_or(151645);
-        // Token global de fin de texte pour Qwen
-        let stop_token_id = self
-            .tokenizer
-            .token_to_id("<|endoftext|>")
-            .unwrap_or(151643);
+
+        // 🎯 FIN DE LA MAGIE NOIRE : Résolution dynamique des IDs de stop tokens !
+        let eos_token_id = match self.tokenizer.token_to_id("<|im_end|>") {
+            Some(id) => id,
+            None => raise_error!(
+                "ERR_AI_MISSING_EOS_TOKEN",
+                error = "Le token <|im_end|> est absent du tokenizer. Ce modèle n'est pas formaté pour ChatML."
+            )
+        };
+
+        let stop_token_id = match self.tokenizer.token_to_id("<|endoftext|>") {
+            Some(id) => id,
+            None => raise_error!(
+                "ERR_AI_MISSING_STOP_TOKEN",
+                error = "Le token <|endoftext|> est absent du tokenizer."
+            ),
+        };
 
         for _i in 0..max_tokens {
             let context_size = if index_pos == 0 { tokens.len() } else { 1 };
             let start_pos = tokens.len().saturating_sub(context_size);
 
-            // 1. Tenseur d'entrée
             let input = match Tensor::new(&tokens[start_pos..], &self.device) {
                 Ok(t) => t,
                 Err(e) => raise_error!(
@@ -185,7 +188,6 @@ impl CandleLlmEngine {
                 Err(e) => raise_error!("ERR_AI_TENSOR_SHAPE_ERROR", error = e),
             };
 
-            // 2. Forward Pass
             let logits = match self.model.forward(&input, index_pos) {
                 Ok(l) => l,
                 Err(e) => raise_error!(
@@ -195,7 +197,6 @@ impl CandleLlmEngine {
                 ),
             };
 
-            // 3. Post-traitement (Extraction manuelle pour éviter le mismatch)
             let logits = match logits.squeeze(0) {
                 Ok(l) => l,
                 Err(e) => raise_error!("ERR_AI_TENSOR_SQUEEZE_FAILED", error = e),
@@ -211,7 +212,6 @@ impl CandleLlmEngine {
                 Err(e) => raise_error!("ERR_AI_DTYPE_CONVERSION_FAILED", error = e),
             };
 
-            // 4. Sampling
             let next_token = match self.logits_processor.sample(&logits) {
                 Ok(t) => t,
                 Err(e) => raise_error!("ERR_AI_SAMPLING_FAILED", error = e),
@@ -231,11 +231,7 @@ impl CandleLlmEngine {
             Err(e) => raise_error!(
                 "ERR_TOKENIZER_DECODE",
                 error = e,
-                context = json_value!({
-                    "action": "decode_tokens",
-                    // Info ultra-utile pour l'IA/Debug : combien de tokens ont fait planter le décodeur ?
-                    "token_count": generated_tokens.len()
-                })
+                context = json_value!({ "token_count": generated_tokens.len() })
             ),
         };
         Ok(result)
@@ -261,6 +257,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_quick_inference() {
         let sandbox = AgentDbSandbox::new().await;
+
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.system_domain,
@@ -268,11 +265,7 @@ mod tests {
         );
 
         // Appel magique de ton Mock Helper !
-        inject_mock_component(
-            &manager,
-            "llm",
-             json_value!({ "rust_tokenizer_file": "tokenizer.json", "rust_model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" })
-        ).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await;
 
         // On passe le manager au moteur
         let mut engine = CandleLlmEngine::new(&manager)

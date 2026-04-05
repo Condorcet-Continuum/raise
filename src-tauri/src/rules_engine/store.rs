@@ -60,7 +60,7 @@ impl<'a> RuleStore<'a> {
         }
 
         // 1. Sauvegarde persistante via le manager de JSON-DB
-        let mut doc = match serde_json::to_value(&rule) {
+        let mut doc = match json::serialize_to_value(&rule) {
             Ok(v) => v,
             Err(e) => raise_error!(
                 "ERR_RULE_SERIALIZATION_FAILED",

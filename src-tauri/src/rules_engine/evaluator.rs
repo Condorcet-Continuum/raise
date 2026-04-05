@@ -131,62 +131,38 @@ impl Evaluator {
             }
             Expr::Div(list) => {
                 if list.len() < 2 {
-                    // 🎯 EXEMPLE : Utilisation de raise_error! pour sortir immédiatement
-                    crate::raise_error!(
+                    raise_error!(
                         "ERR_RULE_INVALID_ARGS",
                         error = "L'opérateur Div requiert au moins 2 arguments"
                     );
                 }
                 let first_val = Box::pin(Self::evaluate(&list[0], context, provider)).await?;
-                // Extraction impérative avec typage f64 explicite
-                let num: f64 = match first_val.as_f64() {
+                let mut acc: f64 = match first_val.as_f64() {
                     Some(n) => n,
                     None => raise_error!(
                         "ERR_RULE_TYPE_MISMATCH",
-                        context = json_value!({
-                            "operation": "math_init",
-                            "expected": "number (f64)",
-                            "received": first_val,
-                            "item_index": 0,
-                            "hint": "La valeur initiale de cette opération doit être numérique."
-                        })
+                        error = "Le numérateur initial doit être un nombre"
                     ),
                 };
-                let den_val = Box::pin(Self::evaluate(&list[1], context, provider)).await?;
 
-                // Extraction impérative avec typage f64
-                let den: f64 = match den_val.as_f64() {
-                    Some(n) => {
-                        if n == 0.0 {
-                            raise_error!(
-                                "ERR_RULE_MATH_ERROR",
-                                context = json_value!({
-                                    "operation": "division",
-                                    "reason": "division_by_zero",
-                                    "hint": "Le dénominateur (index 1) est égal à zéro, ce qui est mathématiquement indéfini."
-                                })
-                            );
-                        }
-                        n
+                for e in list[1..].iter() {
+                    let current_val = Box::pin(Self::evaluate(e, context, provider)).await?;
+                    let val: f64 = match current_val.as_f64() {
+                        Some(n) => n,
+                        None => raise_error!(
+                            "ERR_RULE_TYPE_MISMATCH",
+                            error = "Les dénominateurs doivent être des nombres"
+                        ),
+                    };
+                    if val == 0.0 {
+                        raise_error!(
+                            "ERR_RULE_DIV_BY_ZERO",
+                            error = "Division par zéro interdite"
+                        );
                     }
-                    None => raise_error!(
-                        "ERR_RULE_TYPE_MISMATCH",
-                        context = json_value!({
-                            "operation": "division",
-                            "expected": "number (f64)",
-                            "received": den_val,
-                            "item_index": 1,
-                            "hint": "Le dénominateur doit être un nombre non nul."
-                        })
-                    ),
-                };
-                if den == 0.0 {
-                    crate::raise_error!(
-                        "ERR_RULE_DIV_BY_ZERO",
-                        error = "Division par zéro interdite"
-                    );
+                    acc /= val;
                 }
-                Ok(CowData::Owned(smart_number(num / den)))
+                Ok(CowData::Owned(smart_number(acc)))
             }
             Expr::Abs(e) => {
                 let val = Box::pin(Self::evaluate(e, context, provider)).await?;
@@ -253,7 +229,6 @@ impl Evaluator {
                         })
                     ),
                 };
-
                 let min = arr
                     .iter()
                     .filter_map(|v| v.as_f64())
@@ -290,6 +265,32 @@ impl Evaluator {
                 } else {
                     Ok(CowData::Owned(smart_number(max)))
                 }
+            }
+
+            Expr::Contains { list, value } => {
+                let list_val = Box::pin(Self::evaluate(list, context, provider)).await?;
+                let search_val = Box::pin(Self::evaluate(value, context, provider)).await?;
+
+                let found = match list_val.as_array() {
+                    Some(arr) => arr.contains(&*search_val),
+                    None => match list_val.as_str() {
+                        Some(s) => {
+                            let search_str = match search_val.as_str() {
+                                Some(ss) => ss,
+                                None => raise_error!(
+                                    "ERR_RULE_TYPE_MISMATCH",
+                                    context = json_value!({"expected": "string", "hint": "Recherche dans une chaîne nécessite une chaîne."})
+                                ),
+                            };
+                            s.contains(search_str)
+                        }
+                        None => raise_error!(
+                            "ERR_RULE_TYPE_MISMATCH",
+                            context = json_value!({ "operation": "CONTAINS", "expected": ["array", "string"], "received": list_val })
+                        ),
+                    },
+                };
+                Ok(CowData::Owned(JsonValue::Bool(found)))
             }
 
             // --- Collections & Itérations ---
@@ -549,10 +550,14 @@ impl Evaluator {
             Expr::Now => Ok(CowData::Owned(json_value!(UtcClock::now().to_rfc3339()))),
             Expr::DateAdd { date, days } => {
                 let d_val = Box::pin(Self::evaluate(date, context, provider)).await?;
-                let days_val = Box::pin(Self::evaluate(days, context, provider))
-                    .await?
-                    .as_i64()
-                    .unwrap_or(0);
+                let days_res = Box::pin(Self::evaluate(days, context, provider)).await?;
+                let days_val = match days_res.as_i64() {
+                    Some(d) => d,
+                    None => raise_error!(
+                        "ERR_RULE_TYPE_MISMATCH",
+                        context = json_value!({ "expected": "integer", "received": days_res, "hint": "DateAdd nécessite un nombre de jours entier." })
+                    ),
+                };
                 let d_str = match d_val.as_str() {
                     Some(s) => s,
                     None => raise_error!(
@@ -585,7 +590,12 @@ impl Evaluator {
                     );
                 }
             }
-
+            Expr::DateDiff { start: _, end: _ } => {
+                raise_error!(
+                    "ERR_NOT_IMPLEMENTED",
+                    error = "DateDiff n'est pas encore implémenté"
+                );
+            }
             // --- Lookup (ASYNCHRONE) ---
             Expr::Lookup {
                 collection,
@@ -600,9 +610,6 @@ impl Evaluator {
                     .unwrap_or(JsonValue::Null);
                 Ok(CowData::Owned(res))
             }
-
-            // Catch-all
-            _ => Ok(CowData::Owned(JsonValue::Null)),
         }
     }
 }

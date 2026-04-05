@@ -80,7 +80,7 @@ impl From<candle_core::Error> for AppError {
         crate::build_error!(
             "ERR_AI_MODEL_EXECUTION",
             error = format!("Erreur interne du modèle IA : {}", e),
-            context = json_value!({"engine": "candle_core"}) // 🎯 Utilisation de la nouvelle macro
+            context = json_value!({"engine": "candle_core"})
         )
     }
 }

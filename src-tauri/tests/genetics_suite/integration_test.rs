@@ -11,6 +11,7 @@ use raise::genetics::GeneticEngine;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*;
+use raise::utils::testing::DbSandbox;
 
 #[async_test]
 #[serial_test::serial]
@@ -18,6 +19,7 @@ use raise::utils::prelude::*;
 async fn test_genetics_integration_with_json_db() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let manager = CollectionsManager::new(&env.sandbox.storage, "testing", "arcadia");
+    DbSandbox::mock_db(&manager).await.unwrap();
 
     let _ = manager
         .create_collection("la", "db://_system/schemas/v1/db/generic.schema.json")

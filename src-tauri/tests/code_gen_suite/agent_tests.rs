@@ -6,6 +6,7 @@ use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{dynamic_agent::DynamicAgent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::prelude::*;
+use raise::utils::testing::DbSandbox;
 
 #[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
@@ -22,6 +23,7 @@ async fn test_software_agent_creates_component_end_to_end() {
         &env.sandbox.config.system_domain,
         &env.sandbox.config.system_db,
     );
+    DbSandbox::mock_db(&sys_mgr).await.unwrap();
     let _ = sys_mgr
         .create_collection(
             "prompts",
@@ -36,15 +38,15 @@ async fn test_software_agent_creates_component_end_to_end() {
         .await;
 
     sys_mgr.upsert_document("prompts", json_value!({
-        "_id": "ref:prompts:handle:prompt_software",
+        "handle": "prompt_software",
         "role": "Ingénieur Logiciel",
         "identity": { "persona": "Tu es un Développeur Rust Expert. Tu conçois la Logical Architecture (LA) et génères du code." },
         "directives": ["Génère le composant ou le code en format JSON."]
     })).await.unwrap();
 
-    let agent_urn = "ref:agents:handle:agent_software";
+    let agent_urn = "agent_software";
     sys_mgr.upsert_document("agents", json_value!({
-        "_id": agent_urn,
+        "handle": agent_urn,
         "base": {
             "name": { "fr": "Software Engineer" },
             "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_software", "temperature": 0.1 }
@@ -53,6 +55,7 @@ async fn test_software_agent_creates_component_end_to_end() {
 
     // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST (Couche LA) ---
     let la_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "la");
+    DbSandbox::mock_db(&la_mgr).await.unwrap();
     la_mgr
         .create_collection(
             "components",

@@ -3,6 +3,7 @@ pub mod dto;
 pub mod engine;
 pub mod evaluators;
 pub mod genomes;
+pub mod handler;
 pub mod operators;
 pub mod traits;
 pub mod types;

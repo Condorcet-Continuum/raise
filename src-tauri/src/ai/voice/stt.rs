@@ -126,7 +126,7 @@ impl WhisperEngine {
         };
 
         // 6. Chargement des filtres Mel (spécifique à l'audio)
-        let mel_bytes = match std::fs::read(&mel_path) {
+        let mel_bytes = match fs::read_sync(&mel_path) {
             Ok(b) => b,
             Err(e) => raise_error!(
                 "ERR_WHISPER_MEL_READ",
@@ -137,7 +137,7 @@ impl WhisperEngine {
 
         let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
         unsafe {
-            std::ptr::copy_nonoverlapping(
+            memory_copy_fast(
                 mel_bytes.as_ptr() as *const f32,
                 mel_filters.as_mut_ptr(),
                 mel_filters.len(),

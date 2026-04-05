@@ -33,14 +33,21 @@ impl<'a> CollectionsManager<'a> {
     }
 
     pub async fn init_db(&self) -> RaiseResult<bool> {
-        let expected_uri = "db://_system/_system/schemas/v1/db/index.schema.json";
-        let reg = self.get_registry_for_uri(expected_uri).await?;
+        self.init_db_with_schema("db://_system/_system/schemas/v1/db/index.schema.json")
+            .await
+    }
 
-        if reg.get_by_uri(expected_uri).is_none() {
+    pub async fn init_db_with_schema(&self, schema_uri: &str) -> RaiseResult<bool> {
+        let reg = self.get_registry_for_uri(schema_uri).await?;
+
+        if reg.get_by_uri(schema_uri).is_none() {
             raise_error!(
                 "ERR_DB_MISSING_CORE_SCHEMA",
-                error = "Le schéma JSON 'index.schema.json' est introuvable. Initialisation impossible.",
-                context = json_value!({ "required_schema": expected_uri })
+                error = format!(
+                    "Le schéma JSON '{}' est introuvable. Initialisation impossible.",
+                    schema_uri
+                ),
+                context = json_value!({ "required_schema": schema_uri })
             );
         }
 
@@ -50,20 +57,15 @@ impl<'a> CollectionsManager<'a> {
 
         let mut system_doc = existing_doc.unwrap_or_else(|| {
             json_value!({
-                "$schema": expected_uri,
+                "$schema": schema_uri,
                 "handle": format!("{}_{}", self.space, self.db),
                 "name": format!("{}_{}", self.space, self.db),
                 "space": self.space,
-                "database": self.db,
-                "version": 1,
-                "_p2p": { "revision": 1 },
-                "collections": {},
-                "rules": {},
-                "schemas": { "v1": {} }
+                "database": self.db
             })
         });
 
-        let validator = SchemaValidator::compile_with_registry(expected_uri, &reg)?;
+        let validator = SchemaValidator::compile_with_registry(schema_uri, &reg)?;
         validator.compute_then_validate(&mut system_doc)?;
 
         let created =
@@ -90,6 +92,76 @@ impl<'a> CollectionsManager<'a> {
         }
 
         Ok(created || is_new)
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. LA FONCTION D'INTÉGRITÉ (Gouvernance)
+    // ------------------------------------------------------------------------
+    async fn register_in_system_governance(&self) -> RaiseResult<()> {
+        // On ne s'auto-enregistre pas si on est déjà la base système
+        if self.space == "_system" && self.db == "raise" {
+            return Ok(());
+        }
+
+        user_info!(
+            "SYS_INFO",
+            "Auto-enregistrement dans la gouvernance centrale (_system/raise)..."
+        );
+        let sys_mgr = CollectionsManager::new(self.storage, "_system", "raise");
+
+        // 1. Upsert du Domaine
+        let domain_doc = json_value!({
+            "handle": self.space.clone(),
+            "name": { "fr": self.space.clone(), "en": self.space.clone() },
+            "status": "active"
+        });
+        let _ = sys_mgr.upsert_document("domains", domain_doc).await;
+
+        // 2. Upsert de la Base de Données
+        if let Ok(Some(dom)) = sys_mgr.get_document("domains", &self.space).await {
+            if let Some(dom_id) = dom.get("_id").and_then(|v| v.as_str()) {
+                let db_doc = json_value!({
+                    "handle": self.db.clone(),
+                    "domain_id": dom_id,
+                    "name": { "fr": self.db.clone(), "en": self.db.clone() },
+                    "is_system": false,
+                    "status": "active"
+                });
+                let _ = sys_mgr.upsert_document("databases", db_doc).await;
+            }
+        }
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. LE WRAPPER HAUT NIVEAU (Pour la production : CLI, API, UI)
+    // ------------------------------------------------------------------------
+    pub async fn create_db_with_schema(&self, schema_uri: &str) -> RaiseResult<bool> {
+        // On initialise physiquement la base
+        let created = self.init_db_with_schema(schema_uri).await?;
+
+        // Si elle vient d'être créée, on lance la gouvernance
+        if created {
+            // On recharge l'index système qui vient d'être hydraté (avec les valeurs par défaut du schéma)
+            if let Ok(index_doc) = self.load_index().await {
+                let idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
+
+                // On délègue à l'IndexManager le soin de créer les index manquants
+                if let Err(e) = idx_mgr.apply_indexes_from_config(&index_doc).await {
+                    user_warn!(
+                        "WRN_INDEX_AUTO_SYNC_FAILED",
+                        json_value!({
+                            "action": "auto_index_creation",
+                            "technical_error": e.to_string(),
+                            "hint": "La base est créée, mais la synchronisation des index secondaires a échoué."
+                        })
+                    );
+                }
+            }
+            self.register_in_system_governance().await?;
+        }
+
+        Ok(created)
     }
 
     pub async fn drop_db(&self) -> RaiseResult<bool> {
@@ -291,21 +363,37 @@ impl<'a> CollectionsManager<'a> {
     }
 
     async fn save_system_index(&self, doc: &mut JsonValue) -> RaiseResult<()> {
-        let expected_uri = "db://_system/_system/schemas/v1/db/index.schema.json".to_string();
-        if let Some(obj) = doc.as_object_mut() {
-            obj.insert(
-                "$schema".to_string(),
-                JsonValue::String(expected_uri.clone()),
+        let schema_uri = match doc.get("$schema").and_then(|v| v.as_str()) {
+            Some(uri) => uri.to_string(),
+            None => {
+                raise_error!(
+                    "ERR_DB_MISSING_INDEX_SCHEMA",
+                    error = "Le document d'index système ne possède pas de propriété '$schema'.",
+                    context = json_value!({ "action": "save_system_index" })
+                );
+            }
+        };
+
+        // Sécurité : On s'assure qu'on utilise bien un schéma de type 'index'
+        if !schema_uri.contains("/schemas/v1/db/index") {
+            raise_error!(
+                "ERR_DB_SECURITY_VIOLATION",
+                error = "Le schéma déclaré n'est pas un schéma d'index système autorisé.",
+                context = json_value!({
+                    "found_uri": schema_uri,
+                    "action": "enforce_system_integrity",
+                    "hint": "Un schéma d'index doit commencer par 'db://_system/_system/schemas/v1/db/index'."
+                })
             );
         }
 
-        let reg = self.get_registry_for_uri(&expected_uri).await?;
-        if reg.get_by_uri(&expected_uri).is_none() {
+        let reg = self.get_registry_for_uri(&schema_uri).await?;
+        if reg.get_by_uri(&schema_uri).is_none() {
             raise_error!(
                 "ERR_DB_SECURITY_VIOLATION",
                 error = "Schéma d'index système introuvable ou non autorisé.",
                 context = json_value!({
-                    "required_uri": expected_uri,
+                    "required_uri": schema_uri,
                     "action": "enforce_system_integrity",
                     "hint": "Le schéma 'index.schema.json' doit impérativement résider dans '_system/_system/schemas/v1/db'."
                 })
@@ -313,7 +401,7 @@ impl<'a> CollectionsManager<'a> {
         }
 
         if let Err(e) =
-            apply_business_rules(self, "_system_index", doc, None, &reg, &expected_uri).await
+            apply_business_rules(self, "_system_index", doc, None, &reg, &schema_uri).await
         {
             user_warn!(
                 "WRN_SYSTEM_RULE_INDEX_FAIL",
@@ -326,7 +414,7 @@ impl<'a> CollectionsManager<'a> {
             );
         }
 
-        if let Ok(validator) = SchemaValidator::compile_with_registry(&expected_uri, &reg) {
+        if let Ok(validator) = SchemaValidator::compile_with_registry(&schema_uri, &reg) {
             if let Err(e) = validator.compute_then_validate(doc) {
                 user_warn!(
                     "WRN_SYSTEM_INDEX_INVALID_RECOVER",
@@ -347,7 +435,17 @@ impl<'a> CollectionsManager<'a> {
     // --- GESTION DES COLLECTIONS ---
     pub async fn create_collection(&self, name: &str, schema_uri: &str) -> RaiseResult<()> {
         if !self.storage.config.db_root(&self.space, &self.db).exists() {
-            self.init_db().await?;
+            raise_error!(
+                "ERR_DB_NOT_FOUND",
+                error = format!(
+                    "Impossible de créer la collection '{}' car la base '{}/{}' n'existe pas.",
+                    name, self.space, self.db
+                ),
+                context = json_value!({
+                    "action": "create_collection",
+                    "hint": "Initialisez d'abord la base de données avec son schéma principal avant d'y ajouter des collections."
+                })
+            );
         }
         let final_schema_uri = self.build_schema_uri(schema_uri);
         let col_path = self
@@ -604,7 +702,7 @@ impl<'a> CollectionsManager<'a> {
         collection: &str,
         mut doc: JsonValue,
     ) -> RaiseResult<JsonValue> {
-        doc = self.resolve_document_references(doc).await?;
+        doc = self.resolve_document_references(collection, doc).await?;
         self.prepare_document(collection, &mut doc).await?;
         self.insert_raw(collection, &doc).await?;
         Ok(doc)
@@ -616,7 +714,9 @@ impl<'a> CollectionsManager<'a> {
         id: &str,
         patch_data: JsonValue,
     ) -> RaiseResult<JsonValue> {
-        let resolved_patch = self.resolve_document_references(patch_data).await?;
+        let resolved_patch = self
+            .resolve_document_references(collection, patch_data)
+            .await?;
         let old_doc_opt = self.get_document(collection, id).await?;
         let Some(mut doc) = old_doc_opt else {
             raise_error!(
@@ -654,7 +754,7 @@ impl<'a> CollectionsManager<'a> {
         collection: &str,
         mut data: JsonValue,
     ) -> RaiseResult<String> {
-        data = self.resolve_document_references(data).await?;
+        data = self.resolve_document_references(collection, data).await?;
 
         let id_opt = data
             .get("_id")
@@ -945,13 +1045,84 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    pub async fn resolve_document_references(&self, document: JsonValue) -> RaiseResult<JsonValue> {
-        resolve_refs_recursive(document, self).await
+    pub async fn resolve_document_references(
+        &self,
+        collection: &str,
+        mut document: JsonValue,
+    ) -> RaiseResult<JsonValue> {
+        let mut ref_keys: UniqueSet<String> = UniqueSet::new();
+
+        // 1. 🧠 INTROSPECTION DATA-DRIVEN : Analyse du Schéma JSON pour découvrir les clés étrangères
+        if let Ok(sys_uri) = self.resolve_schema_from_index(collection).await {
+            if !sys_uri.is_empty() {
+                if let Ok(reg) = self.get_registry_for_uri(&sys_uri).await {
+                    if let Some(schema) = reg.get_by_uri(&sys_uri) {
+                        if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+                            for (k, v) in props {
+                                let mut is_id_ref = false;
+
+                                // Analyse des références directes (ex: "service_id": { "$ref": "..._id" })
+                                if let Some(r) = v.get("$ref").and_then(|s| s.as_str()) {
+                                    if r.ends_with("_id") {
+                                        is_id_ref = true;
+                                    }
+                                }
+                                // Analyse des tableaux de références (ex: "components": { "items": { "$ref": "..._id" } })
+                                if let Some(items) = v.get("items") {
+                                    if let Some(r) = items.get("$ref").and_then(|s| s.as_str()) {
+                                        if r.ends_with("_id") {
+                                            is_id_ref = true;
+                                        }
+                                    }
+                                }
+
+                                if is_id_ref {
+                                    ref_keys.insert(k.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 🎯 APPLICATION CHIRURGICALE : Résolution uniquement sur les champs pertinents
+        if let Some(obj) = document.as_object_mut() {
+            // Sauvegarde de sécurité des métadonnées (Inutile de les scanner)
+            let schema_val = obj.remove("$schema");
+            let context_val = obj.remove("@context");
+
+            for (k, v) in obj.iter_mut() {
+                // Si le schéma a défini des clés étrangères, on s'y tient strictement.
+                // Sinon (mode dégradé pour collections sans schéma strict), on exclut les clés internes.
+                let should_resolve = if !ref_keys.is_empty() {
+                    ref_keys.contains(k)
+                } else {
+                    !k.starts_with('@') && !k.starts_with('_')
+                };
+
+                if should_resolve {
+                    *v = resolve_refs_recursive(v.clone(), self).await?;
+                }
+            }
+
+            // Restauration des métadonnées
+            if let Some(s) = schema_val {
+                obj.insert("$schema".to_string(), s);
+            }
+            if let Some(c) = context_val {
+                obj.insert("@context".to_string(), c);
+            }
+        } else {
+            document = resolve_refs_recursive(document, self).await?;
+        }
+
+        Ok(document)
     }
 
     fn compute_document_checksum(&self, doc: &JsonValue) -> String {
         use sha2::{Digest, Sha256};
-        let content = serde_json::to_vec(doc).unwrap_or_default();
+        let content = json::serialize_to_bytes(doc).unwrap_or_default();
         let mut hasher = Sha256::new();
         hasher.update(content);
         hex::encode(hasher.finalize())
@@ -1142,13 +1313,47 @@ fn set_value_by_path(doc: &mut JsonValue, path: &str, value: JsonValue) -> bool 
     false
 }
 
-fn parse_smart_link(s: &str) -> Option<(&str, &str, &str)> {
-    if !s.starts_with("ref:") {
-        return None;
-    }
-    let parts: Vec<&str> = s.splitn(4, ':').collect();
-    if parts.len() == 4 {
-        Some((parts[1], parts[2], parts[3]))
+pub enum SmartLink<'a> {
+    /// Format local : ref:collection:field:value
+    Local {
+        col: &'a str,
+        field: &'a str,
+        val: &'a str,
+    },
+    Absolute {
+        space: &'a str,
+        db: &'a str,
+        col: &'a str,
+        field: &'a str,
+        val: &'a str,
+    },
+}
+
+pub fn parse_smart_link(s: &str) -> Option<SmartLink<'_>> {
+    if s.starts_with("ref:") {
+        let parts: Vec<&str> = s.splitn(4, ':').collect();
+        if parts.len() == 4 {
+            Some(SmartLink::Local {
+                col: parts[1],
+                field: parts[2],
+                val: parts[3],
+            })
+        } else {
+            None
+        }
+    } else if let Some(without_scheme) = s.strip_prefix("db://") {
+        let parts: Vec<&str> = without_scheme.splitn(5, '/').collect();
+        if parts.len() == 5 {
+            Some(SmartLink::Absolute {
+                space: parts[0],
+                db: parts[1],
+                col: parts[2],
+                field: parts[3],
+                val: parts[4],
+            })
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -1161,23 +1366,59 @@ fn resolve_refs_recursive<'a>(
     Box::pin(async move {
         match data {
             JsonValue::String(s) => {
-                if let Some((col, field, val)) = parse_smart_link(&s) {
+                if let Some(link) = parse_smart_link(&s) {
+                    let (col, field, val, is_absolute, target_space, target_db) = match link {
+                        SmartLink::Local { col, field, val } => (col, field, val, false, "", ""),
+                        SmartLink::Absolute {
+                            space,
+                            db,
+                            col,
+                            field,
+                            val,
+                        } => (col, field, val, true, space, db),
+                    };
+
                     let mut query = Query::new(col);
                     query.filter = Some(QueryFilter {
                         operator: FilterOperator::And,
                         conditions: vec![Condition::eq(field, val.into())],
                     });
+                    query.limit = Some(1);
 
-                    let result = QueryEngine::new(col_mgr).execute_query(query).await?;
-                    if let Some(doc) = result.documents.first() {
-                        let id = doc
-                            .get("_id")
-                            .or_else(|| doc.get("_id"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                    // 🎯 FIX LIFETIME : On assigne le résultat à une variable intermédiaire
+                    // Cela force la destruction du QueryEngine temporaire dès la fin de l'instruction (au point-virgule)
+                    let doc_opt = if is_absolute {
+                        let remote_mgr =
+                            CollectionsManager::new(col_mgr.storage, target_space, target_db);
+                        let query_result = QueryEngine::new(&remote_mgr).execute_query(query).await;
+                        match query_result {
+                            Ok(res) => res.documents.into_iter().next(),
+                            Err(_) => None,
+                        }
+                    } else {
+                        let query_result = QueryEngine::new(col_mgr).execute_query(query).await;
+                        match query_result {
+                            Ok(res) => res.documents.into_iter().next(),
+                            Err(_) => None,
+                        }
+                    };
+
+                    if let Some(doc) = doc_opt {
+                        let id = doc.get("_id").and_then(|v| v.as_str()).unwrap_or("");
                         Ok(JsonValue::String(id.to_string()))
                     } else {
-                        Ok(JsonValue::String(s))
+                        raise_error!(
+                            "ERR_DB_DANGLING_REFERENCE",
+                            error = format!("Impossible de résoudre la référence : '{}' pointe vers une entité introuvable.", s),
+                            context = json_value!({
+                                "action": "resolve_document_references",
+                                "target_collection": col,
+                                "target_field": field,
+                                "target_value": val,
+                                "is_cross_domain": is_absolute,
+                                "hint": "L'intégrité référentielle exige que le document cible existe avant de pouvoir y faire référence."
+                            })
+                        );
                     }
                 } else {
                     Ok(JsonValue::String(s))
@@ -1218,7 +1459,10 @@ mod tests {
         let manager = CollectionsManager::new(&sandbox.storage, "system_test", "db_test");
 
         // 2. Exécution de l'initialisation
-        let created = manager.init_db().await.expect("L'initialisation a échoué");
+        //let created = mock_db().await.expect("L'initialisation a échoué");
+        let created = DbSandbox::mock_db(&manager)
+            .await
+            .expect("L'initialisation a échoué");
         assert!(created, "La DB aurait dû être créée pour la première fois");
 
         // 3. Lecture directe de l'index système généré (_system.json)
@@ -1278,7 +1522,7 @@ mod tests {
     async fn test_manager_get_document_integration() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
         manager
             .create_collection(
                 "users",
@@ -1303,7 +1547,7 @@ mod tests {
     async fn test_read_many_parallel() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
         manager
             .create_collection(
                 "items",
@@ -1336,7 +1580,7 @@ mod tests {
     async fn test_read_many_strict_integrity() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
         manager
             .create_collection(
                 "items",
@@ -1363,7 +1607,7 @@ mod tests {
     async fn test_crud_workflow() {
         let sandbox = DbSandbox::new().await;
         let mgr = CollectionsManager::new(&sandbox.storage, "test", "crud");
-        mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&mgr).await.unwrap();
 
         mgr.create_collection(
             "items",
@@ -1407,7 +1651,7 @@ mod tests {
     async fn test_upsert_idempotence() {
         let sandbox = DbSandbox::new().await;
         let mgr = CollectionsManager::new(&sandbox.storage, "test", "upsert");
-        mgr.init_db().await.unwrap();
+        DbSandbox::mock_db(&mgr).await.unwrap();
 
         mgr.create_collection(
             "configs",
@@ -1438,40 +1682,59 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_smart_link_valid() {
+    fn test_parse_smart_link_local_valid() {
         let input = "ref:oa_actors:name:Sécurité";
         let res = super::parse_smart_link(input);
         assert!(res.is_some());
-        let (col, field, val) = res.unwrap();
-        assert_eq!(col, "oa_actors");
-        assert_eq!(field, "name");
-        assert_eq!(val, "Sécurité");
+        if let super::SmartLink::Local { col, field, val } = res.unwrap() {
+            assert_eq!(col, "oa_actors");
+            assert_eq!(field, "name");
+            assert_eq!(val, "Sécurité");
+        } else {
+            panic!("Aurait dû être un lien local");
+        }
+    }
+
+    #[test]
+    fn test_parse_smart_link_absolute_valid() {
+        let input = "db://_system/_system/prompts/handle/prompt_mission_initializer";
+        let res = super::parse_smart_link(input);
+        assert!(res.is_some());
+        if let super::SmartLink::Absolute {
+            space,
+            db,
+            col,
+            field,
+            val,
+        } = res.unwrap()
+        {
+            assert_eq!(space, "_system");
+            assert_eq!(db, "_system");
+            assert_eq!(col, "prompts");
+            assert_eq!(field, "handle");
+            assert_eq!(val, "prompt_mission_initializer");
+        } else {
+            panic!("Aurait dû être un lien absolu");
+        }
     }
 
     #[test]
     fn test_parse_smart_link_invalid_prefix() {
         assert!(super::parse_smart_link("uuid:1234-5678").is_none());
+        assert!(super::parse_smart_link("http://google.com").is_none());
     }
 
     #[test]
     fn test_parse_smart_link_missing_parts() {
         assert!(super::parse_smart_link("ref:oa_actors:name").is_none());
-    }
-
-    #[test]
-    fn test_parse_smart_link_complex_value() {
-        let input = "ref:oa_actors:description:Ceci:est:une:description";
-        let res = super::parse_smart_link(input);
-        assert!(res.is_some());
-        let (_col, _field, val) = res.unwrap();
-        assert_eq!(val, "Ceci:est:une:description");
+        assert!(super::parse_smart_link("db://_system/_system/prompts").is_none());
     }
 
     #[async_test]
     async fn test_manager_delete_identity() {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
 
         manager
             .create_collection(
@@ -1541,7 +1804,7 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_fail", "db_fail");
 
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
         manager
             .create_collection(
                 "users",
@@ -1578,7 +1841,7 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
 
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
         manager
             .create_collection(
                 "users",
@@ -1613,7 +1876,7 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
 
-        manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&manager).await.unwrap();
 
         manager
             .create_collection(

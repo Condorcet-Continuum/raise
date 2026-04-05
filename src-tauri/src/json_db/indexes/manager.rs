@@ -306,6 +306,36 @@ impl<'a> IndexManager<'a> {
         }
         Ok(())
     }
+    pub async fn apply_indexes_from_config(&self, index_doc: &JsonValue) -> RaiseResult<()> {
+        // Astuce Rust : On instancie un manager mutable localement car create_index exige &mut self
+        let mut idx_mgr = IndexManager::new(self.storage, &self.space, &self.db);
+
+        if let Some(collections) = index_doc.get("collections").and_then(|c| c.as_object()) {
+            for (col_name, col_config) in collections {
+                // On cherche la directive d'infrastructure
+                if let Some(indexes) = col_config.get("x_indexes").and_then(|i| i.as_array()) {
+                    for idx_field in indexes {
+                        if let Some(field_name) = idx_field.as_str() {
+                            if !self.has_index(col_name, field_name).await {
+                                user_info!(
+                                    "INDEX_SYNC",
+                                    json_value!({ "col": col_name, "field": field_name, "action": "building" })
+                                );
+
+                                idx_mgr.create_index(col_name, field_name, "hash").await?;
+                            } else {
+                                user_trace!(
+                                    "INDEX_OK",
+                                    json_value!({ "col": col_name, "field": field_name })
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub async fn add_index_definition(

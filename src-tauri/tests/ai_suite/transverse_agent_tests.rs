@@ -7,6 +7,7 @@ use raise::ai::agents::intent_classifier::EngineeringIntent;
 // 🎯 FIX : DynamicAgent
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
+use raise::utils::testing::DbSandbox;
 
 #[async_test]
 #[serial_test::serial]
@@ -21,6 +22,8 @@ async fn test_transverse_agent_ivvq_cycle() {
         &env.sandbox.config.system_domain,
         &env.sandbox.config.system_db,
     );
+    DbSandbox::mock_db(&sys_mgr).await.unwrap();
+
     let _ = sys_mgr
         .create_collection(
             "prompts",
@@ -34,16 +37,26 @@ async fn test_transverse_agent_ivvq_cycle() {
         )
         .await;
 
-    sys_mgr.upsert_document("prompts", json_value!({
-        "_id": "ref:prompts:handle:prompt_quality",
-        "role": "Ingénieur Qualité Transverse",
-        "identity": { "persona": "Tu es le garant de la qualité et des exigences (Transverse)." },
-        "directives": ["Génère l'exigence (Requirement) ou la procédure de test en JSON."]
-    })).await.unwrap();
+    sys_mgr
+        .upsert_document(
+            "prompts",
+            json_value!({
+                "handle": "prompt_quality",
+                "role": "Ingénieur Qualité Transverse",
+                "identity": {
+                    "persona": "Tu es le garant de la qualité et des exigences (Transverse).",
+                    "tone": "rigoureux"
+                },
+                "environment": "Cycle IVVQ et gestion des exigences.",
+                "directives": ["Génère l'exigence (Requirement) ou la procédure de test en JSON."]
+            }),
+        )
+        .await
+        .unwrap();
 
-    let agent_urn = "ref:agents:handle:agent_quality";
+    let agent_urn = "agent_quality";
     sys_mgr.upsert_document("agents", json_value!({
-        "_id": agent_urn,
+        "handle": agent_urn,
         "base": {
             "name": { "fr": "Quality Manager" },
             "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_quality", "temperature": 0.1 }
@@ -52,6 +65,8 @@ async fn test_transverse_agent_ivvq_cycle() {
 
     // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST ---
     let transverse_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "transverse");
+    DbSandbox::mock_db(&transverse_mgr).await.unwrap();
+
     transverse_mgr
         .create_collection(
             "requirements",

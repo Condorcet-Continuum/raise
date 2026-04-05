@@ -48,7 +48,7 @@ impl AuditGenerator {
         let compliance_results = checkers
             .iter()
             .map(|c| c.check(tracer, docs))
-            .filter_map(|r| serde_json::to_value(r).ok())
+            .filter_map(|r| json::serialize_to_value(r).ok())
             .collect();
 
         // 3. Calcul des statistiques

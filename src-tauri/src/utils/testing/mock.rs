@@ -19,6 +19,9 @@ use crate::utils::data::UnorderedMap;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
+pub const MOCK_LLM_MODEL: &str = "Qwen2.5-7B-Instruct-Q4_K_M.gguf";
+pub const MOCK_LLM_TOKENIZER: &str = "tokenizer.json";
+
 // --- DÉFINITION DES SCHÉMAS STANDARDS POUR TESTS ---
 
 pub const SESSION_SCHEMA_MOCK: &str = r#"{
@@ -143,9 +146,14 @@ pub fn create_default_test_config() -> AppConfig {
         world_model: WorldModelConfig::default(),
         deep_learning: DeepLearningConfig::default(),
         paths,
+        /*
         active_dapp: "ref:dapps:handle:mock-dapp".to_string(),
         active_services: vec!["ref:services:handle:mock-service".to_string()],
         active_components: vec!["ref:components:handle:mock-comp-1".to_string()],
+        */
+        active_dapp: "mock-dapp-id".to_string(),
+        active_services: vec!["mock-service-id".to_string()],
+        active_components: vec!["mock-comp-id".to_string()],
         integrations: IntegrationsConfig::default(),
         simulation_context: SimulationContextConfig::default(),
     }
@@ -229,21 +237,39 @@ pub async fn inject_mock_user(manager: &CollectionsManager<'_>, userhandle: &str
 pub async fn inject_mock_component(
     manager: &CollectionsManager<'_>,
     comp_id: &str,
-    settings: JsonValue,
+    mut settings: JsonValue,
 ) {
-    // 🎯 Compatibilité ascendante : on redirige les vieux appels des tests vers la nouvelle nomenclature
+    // 1. Résolution explicite du handle
     let real_handle = match comp_id {
         "llm" => "ai_llm",
         "voice" => "ai_voice",
         "nlp" => "ai_nlp",
-        _ => comp_id,
+        other => other,
     };
 
-    // On reconstruit le Smart Link attendu par la nouvelle architecture
+    // 2. Injection des chemins ABSOLUS
+    if real_handle == "ai_llm" {
+        let models_dir = dirs::home_dir()
+            .unwrap_or_default()
+            .join("raise_domain/_system/ai-assets/models");
+
+        if settings["rust_model_file"].is_null() {
+            settings["rust_model_file"] = json_value!(models_dir
+                .join(MOCK_LLM_MODEL)
+                .to_string_lossy()
+                .to_string());
+        }
+        if settings["rust_tokenizer_file"].is_null() {
+            settings["rust_tokenizer_file"] = json_value!(models_dir
+                .join(MOCK_LLM_TOKENIZER)
+                .to_string_lossy()
+                .to_string());
+        }
+    }
+
     let ref_id = format!("ref:components:handle:{}", real_handle);
 
-    // On s'assure que la nouvelle collection de test existe
-    // On utilise generic.schema.json pour éviter d'avoir à moquer tous les schémas annexes dans la sandbox
+    // 3. Création de la collection (On ignore silencieusement si elle existe déjà dans les tests)
     let _ = manager
         .create_collection(
             "service_configs",
@@ -251,7 +277,6 @@ pub async fn inject_mock_component(
         )
         .await;
 
-    // On crée un document de test 100% conforme à l'attente de config.rs
     let doc = json_value!({
         "_id": format!("mock_config_{}", real_handle),
         "handle": format!("mock_config_{}", real_handle),
@@ -262,10 +287,14 @@ pub async fn inject_mock_component(
         }
     });
 
-    manager
-        .insert_raw("service_configs", &doc)
-        .await
-        .expect("Échec de l'injection de la configuration Mock dans service_configs");
+    // 4. Pattern matching strict au lieu de .expect() pour remonter l'erreur proprement
+    match manager.insert_raw("service_configs", &doc).await {
+        Ok(_) => {}
+        Err(e) => panic!(
+            "❌ Échec critique lors de l'injection de la configuration Mock pour {} : {:?}",
+            real_handle, e
+        ),
+    }
 }
 
 /// Injecte le schéma racine index.schema.json et les passe-partouts
@@ -470,7 +499,9 @@ impl DbSandbox {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        let _ = mgr.init_db().await;
+        let _ = mgr
+            .init_db_with_schema("db://_system/_system/schemas/v1/db/index.schema.json")
+            .await;
         let _ = mgr
             .create_collection(
                 "users",
@@ -484,6 +515,12 @@ impl DbSandbox {
             )
             .await;
         sandbox
+    }
+
+    pub async fn mock_db(manager: &CollectionsManager<'_>) -> RaiseResult<bool> {
+        manager
+            .init_db_with_schema("db://_system/_system/schemas/v1/db/index.schema.json")
+            .await
     }
 }
 
@@ -502,17 +539,20 @@ impl AgentDbSandbox {
 
         let temp_manager =
             CollectionsManager::new(&db, &base.config.system_domain, &base.config.system_db);
-        temp_manager
-            .init_db()
+        Self::mock_db(&temp_manager)
             .await
             .expect("Erreur lors de l'initialisation de la DB dans la Sandbox");
-
         Self {
             _dir: base._dir,
             db,
             config: base.config,
             domain_root,
         }
+    }
+    pub async fn mock_db(manager: &CollectionsManager<'_>) -> RaiseResult<bool> {
+        manager
+            .init_db_with_schema("db://_system/_system/schemas/v1/db/index.schema.json")
+            .await
     }
 }
 

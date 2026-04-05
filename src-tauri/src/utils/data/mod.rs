@@ -12,8 +12,8 @@ pub mod json;
 
 pub use json::{
     deep_merge_values, deserialize_from_bytes, deserialize_from_str, deserialize_from_value,
-    json_value, serialize_to_bytes, serialize_to_string, serialize_to_string_pretty,
-    serialize_to_value, JsonObject, JsonValue,
+    deserialize_from_yaml, json_value, serialize_to_bytes, serialize_to_string,
+    serialize_to_string_pretty, serialize_to_value, JsonObject, JsonValue,
 };
 
 pub use config::{AppConfig, CoreConfig, DeepLearningConfig, WorldModelConfig, CONFIG};

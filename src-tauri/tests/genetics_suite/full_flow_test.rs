@@ -11,12 +11,13 @@ use raise::genetics::GeneticEngine;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*;
+use raise::utils::testing::DbSandbox;
 
 #[async_test]
 async fn test_arcadia_to_genetics_pipeline() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let manager = CollectionsManager::new(&env.sandbox.storage, "test_workspace", "arcadia_db");
-
+    DbSandbox::mock_db(&manager).await.unwrap();
     // Injections de test
     let _ = manager
         .create_collection("la", "db://_system/schemas/v1/db/generic.schema.json")

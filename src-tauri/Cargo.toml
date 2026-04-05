@@ -84,9 +84,9 @@ text-splitter = "0.29.0"
 tiktoken-rs = "0.9.1"
 
 # --- STACK IA NATIVE (CANDLE) ---
-candle-core = "0.9.1"
-candle-nn = "0.9.1"
-candle-transformers = "0.9.1"
+candle-core = "0.10.2"
+candle-nn = "0.10.2"
+candle-transformers = "0.10.2"
 safetensors = "0.7.0"
 
 
@@ -96,8 +96,8 @@ fastembed = "5.5.0"
 
 # --- LA CAPTATION AUDIO ---
 cpal = "0.17.2"       # Accès au microphone (Windows/Mac/Linux)
-rubato = "1.0.1"     # Pour convertir le son en 16kHz proprement
-audioadapter = "2.0.0"  # Requis par la nouvelle API de rubato
+rubato = "2.0.0"     # Pour convertir le son en 16kHz proprement
+audioadapter = "3.0.0"  # Requis par la nouvelle API de rubato
 ringbuf = "0.4.7"     # Buffer Lock-free pour le flux audio temps réel
 
 
@@ -110,7 +110,7 @@ ed25519-dalek = { version = "2.1", features = [
     "rand_core",
     "serde",
 ] } # Pour la signature
-sha2 = "0.10" # Pour le hash du mandat
+sha2 = "0.11.0" # Pour le hash du mandat
 hex = "0.4" # Pour manipuler les signatures en string
 futures = "0.3.31"
 async-recursion = "1.1.1"

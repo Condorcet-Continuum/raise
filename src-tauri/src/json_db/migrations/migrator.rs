@@ -221,7 +221,8 @@ mod tests {
             &sandbox.config.system_domain,
             &sandbox.config.system_db,
         );
-        migrator.manager.init_db().await.unwrap();
+
+        DbSandbox::mock_db(&migrator.manager).await.unwrap();
 
         let m1 = Migration {
             id: "m1".to_string(),
@@ -296,7 +297,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        migrator.manager.init_db().await.unwrap();
+        DbSandbox::mock_db(&migrator.manager).await.unwrap();
 
         migrator
             .manager

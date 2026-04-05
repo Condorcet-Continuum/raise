@@ -191,6 +191,9 @@ mod tests {
         inject_mock_mapping(&manager).await;
 
         let oa_mgr = CollectionsManager::new(&sandbox.db, &sandbox.config.system_domain, "oa");
+        AgentDbSandbox::mock_db(&oa_mgr)
+            .await
+            .expect("Le setup de la DB 'la' a échoué");
         let _ = oa_mgr
             .create_collection(
                 "actors",

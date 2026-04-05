@@ -197,7 +197,7 @@ impl InnernetClient {
     async fn run_command<I, S>(&self, args: I) -> RaiseResult<ProcessOutput>
     where
         I: IntoIterator<Item = S>,
-        S: AsRef<std::ffi::OsStr>,
+        S: AsRef<SystemStr>,
     {
         // 1. Exécution et capture de l'erreur système
         let output = match AsyncCommand::new("innernet").args(args).output().await {

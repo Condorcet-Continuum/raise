@@ -51,7 +51,7 @@ use raise::spatial_engine;
 fn main() {
     if let Err(e) = AppConfig::init() {
         eprintln!("❌ Erreur fatale de configuration : {}", e);
-        std::process::exit(1);
+        terminate_process(1);
     }
     println!("🚀 Démarrage de RAISE...");
     context::init_logging();
@@ -410,8 +410,7 @@ mod tests {
         // 2. 🎯 LE CORRECTIF : On force l'initialisation de l'index système
         // Le dossier existe (créé par la Sandbox), mais on doit générer _system.json !
         let manager = CollectionsManager::new(&sandbox.storage, space, db);
-        manager
-            .init_db()
+        DbSandbox::mock_db(&manager)
             .await
             .expect("L'initialisation de l'index système a échoué");
 

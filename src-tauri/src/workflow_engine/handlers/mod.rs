@@ -7,12 +7,12 @@ pub mod mcp;
 pub mod policy;
 pub mod task;
 pub mod wasm;
+pub mod world_model;
 
 use crate::ai::orchestrator::AiOrchestrator;
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::plugins::manager::PluginManager;
 use crate::utils::prelude::*;
-// 🎯 NOUVEAU : Import du gestionnaire de collections
-use crate::json_db::collections::manager::CollectionsManager;
 
 use super::critic::WorkflowCritic;
 use super::tools::AgentTool;
@@ -24,7 +24,6 @@ pub struct HandlerContext<'a> {
     pub plugin_manager: &'a SharedRef<PluginManager>,
     pub critic: &'a WorkflowCritic,
     pub tools: &'a UnorderedMap<String, Box<dyn AgentTool>>,
-    // 🎯 NOUVEAU : Accès direct, asynchrone et mutualisé à la donnée (Data-Driven)
     pub manager: &'a CollectionsManager<'a>,
 }
 

@@ -24,6 +24,14 @@ async fn test_rust_module_synchronization() {
 
     let handle = "fn:calculer_gravite";
     module.elements.push(CodeElement {
+        // 🎯 NOUVEAUX CHAMPS (Topologie & IA)
+        module_id: None,
+        parent_id: None,
+        attributes: vec![],
+        docs: None,
+        elements: vec![],
+
+        // Champs existants
         handle: handle.to_string(),
         element_type: CodeElementType::Function,
         visibility: Visibility::Public,

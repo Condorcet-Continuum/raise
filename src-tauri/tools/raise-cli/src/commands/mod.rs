@@ -9,6 +9,7 @@ pub mod genetics;
 pub mod jsondb;
 pub mod model_engine;
 pub mod plugins;
+pub mod rules;
 pub mod spatial;
 pub mod traceability;
 pub mod utils;

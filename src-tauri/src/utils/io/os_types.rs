@@ -9,5 +9,8 @@ pub use std::process::Stdio as ProcessIoConfig;
 /// 🤖 IA NOTE : Représente le résultat de l'exécution d'un processus (status, stdout, stderr).
 pub use std::process::Output as ProcessOutput;
 
+/// 🤖 IA NOTE : Code de sortie d'un processus.
+pub use std::process::ExitStatus as ProcessExitStatus; // 🎯 Ajout pour la complétion
+
 /// 🤖 IA NOTE : Représente un processus en cours d'exécution.
 pub use std::process::Child as ProcessChild;

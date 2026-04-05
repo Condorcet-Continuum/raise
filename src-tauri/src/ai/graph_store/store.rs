@@ -245,8 +245,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        // 🎯 FIX : Initialisation des collections de test pour éviter l'erreur "ERR_DB_STRICT_SCHEMA_REQUIRED"
-        manager.init_db().await.unwrap();
+        AgentDbSandbox::mock_db(&manager).await.unwrap();
         manager
             .create_collection(
                 "la",

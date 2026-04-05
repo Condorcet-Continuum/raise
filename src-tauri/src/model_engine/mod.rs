@@ -1,6 +1,7 @@
 // FICHIER : src-tauri/src/model_engine/mod.rs
 
 // 1. Modules Fondamentaux (Le cœur du moteur)
+pub mod ingestion;
 pub mod loader;
 pub mod types;
 
@@ -16,6 +17,7 @@ pub mod validators; // Vérification de cohérence
 // Loader & Modèle
 pub use loader::ModelLoader;
 // 🎯 PURE GRAPH : Suppression de TransverseModel
+pub use ingestion::ModelIngestionService;
 pub use types::{ArcadiaElement, NameType, ProjectMeta, ProjectModel};
 
 // Transformers (Software, Hardware, System)

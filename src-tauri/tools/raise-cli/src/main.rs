@@ -93,6 +93,7 @@ struct Cli {
 enum Commands {
     Workflow(commands::workflow::WorkflowArgs),
     ModelEngine(commands::model_engine::ModelArgs),
+    Rules(commands::rules::RulesArgs),
     Jsondb(commands::jsondb::JsondbArgs),
     Ai(commands::ai::AiArgs),
     Dl(commands::dl::DlArgs),
@@ -189,11 +190,34 @@ async fn main() -> RaiseResult<()> {
 
     // 7. AUTO-LOGIN AVEC L'UTILISATEUR RÉSOLU
     if active_user == "unknown_user" {
-        raise_error!(
-            "CLI_USER_NOT_FOUND",
-            context =
-                json_value!({"action": "cli_auto_login", "hint": "Aucun utilisateur résolu."})
+        user_warn!(
+            "CLI_GHOST_MODE",
+            json_value!({"hint": "Aucun utilisateur résolu. Le CLI démarre en mode restreint (Setup)."})
         );
+    } else {
+        match ctx.session_mgr.start_session(&active_user).await {
+            Ok(_) => {
+                user_info!(
+                    "CLI_START_INITIALIZED",
+                    json_value!({
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "active_user": ctx.active_user,
+                        "active_domain": ctx.active_domain,
+                        "active_db": ctx.active_db
+                    })
+                );
+            }
+            Err(e) => {
+                user_warn!(
+                    "CLI_SESSION_UNAVAILABLE",
+                    json_value!({
+                        "user": active_user,
+                        "technical_error": e.to_string(),
+                        "hint": "Si le système est vierge, utilisez 'jsondb create-db' pour l'initialiser."
+                    })
+                );
+            }
+        }
     }
 
     if let Err(e) = ctx.session_mgr.start_session(&active_user).await {
@@ -375,6 +399,7 @@ async fn execute_command(cmd: Commands, ctx: CliContext) -> RaiseResult<()> {
     match cmd {
         Commands::Workflow(args) => commands::workflow::handle(args, ctx).await,
         Commands::ModelEngine(args) => commands::model_engine::handle(args, ctx).await,
+        Commands::Rules(args) => commands::rules::handle(args, ctx).await,
         Commands::Jsondb(args) => commands::jsondb::handle(args, ctx).await,
         Commands::Ai(args) => commands::ai::handle(args, ctx).await,
         Commands::Dl(args) => commands::dl::handle(args, ctx).await,
