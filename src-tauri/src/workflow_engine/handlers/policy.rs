@@ -11,7 +11,7 @@ pub struct GatePolicyHandler;
 #[async_interface]
 impl NodeHandler for GatePolicyHandler {
     fn node_type(&self) -> NodeType {
-        NodeType::QualityGate // 🎯 FIX : Renommé de GatePolicy à QualityGate
+        NodeType::QualityGate
     }
 
     async fn execute(
@@ -26,14 +26,16 @@ impl NodeHandler for GatePolicyHandler {
             .and_then(|v| v.as_str())
             .unwrap_or("UNKNOWN");
 
-        tracing::info!("🛡️ [Handler] Vérification Veto : {}", rule_name);
+        // 🎯 FIX : Macro d'observabilité RAISE
+        user_info!("WF_POLICY_CHECK_START", json_value!({ "rule": rule_name }));
 
         let ast_val = match node.params.get("ast") {
             Some(ast) => ast,
             None => {
-                tracing::warn!(
-                    "⚠️ Aucune règle AST pour le Veto '{}'. Blocage (Fail-Safe).",
-                    rule_name
+                // 🎯 FIX : Macro d'observabilité RAISE
+                user_warn!(
+                    "WF_POLICY_NO_AST",
+                    json_value!({ "rule": rule_name, "action": "Fail-Safe Block" })
                 );
                 return Ok(ExecutionStatus::Failed);
             }
@@ -42,7 +44,11 @@ impl NodeHandler for GatePolicyHandler {
         let expr: Expr = match json::deserialize_from_value(ast_val.clone()) {
             Ok(e) => e,
             Err(e) => {
-                tracing::error!("❌ AST malformé pour '{}' : {}. Blocage.", rule_name, e);
+                // 🎯 FIX : Macro d'observabilité RAISE
+                user_error!(
+                    "WF_POLICY_MALFORMED_AST",
+                    json_value!({ "rule": rule_name, "error": e.to_string() })
+                );
                 return Ok(ExecutionStatus::Failed);
             }
         };
@@ -58,15 +64,24 @@ impl NodeHandler for GatePolicyHandler {
                 };
 
                 if is_triggered {
-                    tracing::error!("🚨 VETO DYNAMIQUE DÉCLENCHÉ : {}", rule_name);
+                    // 🎯 FIX : Macro d'observabilité RAISE
+                    user_error!(
+                        "WF_POLICY_VETO_TRIGGERED",
+                        json_value!({ "rule": rule_name })
+                    );
                     Ok(ExecutionStatus::Failed)
                 } else {
-                    tracing::info!("✅ Veto non déclenché : {}", rule_name);
+                    // 🎯 FIX : Macro d'observabilité RAISE
+                    user_success!("WF_POLICY_PASSED", json_value!({ "rule": rule_name }));
                     Ok(ExecutionStatus::Completed)
                 }
             }
             Err(e) => {
-                tracing::error!("❌ Erreur d'évaluation (Fail-Safe) : {}", e);
+                // 🎯 FIX : Macro d'observabilité RAISE
+                user_error!(
+                    "WF_POLICY_EVAL_ERROR",
+                    json_value!({ "rule": rule_name, "error": e.to_string() })
+                );
                 Ok(ExecutionStatus::Failed)
             }
         }
@@ -141,7 +156,7 @@ mod tests {
         let ast = json_value!({ "gt": [{"var": "sensor_vibration"}, {"val": 8.0}] });
         let node = WorkflowNode {
             id: "v1".into(),
-            r#type: NodeType::QualityGate, // 🎯 FIX
+            r#type: NodeType::QualityGate,
             name: "VETO: VIBRATION".into(),
             params: json_value!({ "rule": "VIBRATION_MAX", "ast": ast }),
         };
@@ -172,7 +187,7 @@ mod tests {
         let ast = json_value!({ "gt": [{"var": "sensor_vibration"}, {"val": 8.0}] });
         let node = WorkflowNode {
             id: "v2".into(),
-            r#type: NodeType::QualityGate, // 🎯 FIX
+            r#type: NodeType::QualityGate,
             name: "VETO: VIBRATION".into(),
             params: json_value!({ "rule": "VIBRATION_MAX", "ast": ast }),
         };
@@ -202,7 +217,7 @@ mod tests {
 
         let node = WorkflowNode {
             id: "v3".into(),
-            r#type: NodeType::QualityGate, // 🎯 FIX
+            r#type: NodeType::QualityGate,
             name: "VETO: NO_AST".into(),
             params: json_value!({ "rule": "MISSING_RULES" }),
         };
@@ -232,7 +247,7 @@ mod tests {
 
         let node = WorkflowNode {
             id: "v4".into(),
-            r#type: NodeType::QualityGate, // 🎯 FIX
+            r#type: NodeType::QualityGate,
             name: "VETO: BROKEN_AST".into(),
             params: json_value!({ "rule": "BROKEN", "ast": "Ceci n'est pas un JSON valide" }),
         };

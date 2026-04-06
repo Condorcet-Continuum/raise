@@ -209,10 +209,10 @@ mod tests {
             .await
             .unwrap();
         manager.upsert_document("mandates", json_value!({
-            "handle": "man_123",
             "handle": "mandate-123",
             "name": "Mandat 123",
-            "meta": { "author": "Admin", "version": "1.0", "status": "ACTIVE" },
+            // 🎯 FIX : Utilisation de mandator_id avec un UUID valide au lieu de "author"
+            "meta": { "mandator_id": "00000000-0000-0000-0000-000000000000", "version": "1.0", "status": "ACTIVE" },
             "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": {} },
             "hardLogic": {
                 "vetos": [{ "rule": "ISO_26262_CHK", "active": true, "action": "STOP", "ast": {"Eq": [{"Var": "x"}, {"Val": 1}]} }]

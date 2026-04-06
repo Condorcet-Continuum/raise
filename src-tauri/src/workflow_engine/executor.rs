@@ -70,7 +70,7 @@ impl WorkflowExecutor {
 
         tracing::info!(
             "🏗️ Workflow compilé : {} ({} noeuds)",
-            workflow.handle, // 🎯 FIX : Utilisation du handle métier sémantique
+            workflow.handle,
             workflow.nodes.len()
         );
 
@@ -100,7 +100,6 @@ impl WorkflowExecutor {
         if let Some(handler) = self.handlers.get(&node.r#type) {
             handler.execute(node, context, &shared_ctx).await
         } else {
-            // 🎯 FIX : Utilisation de raise_error! pour l'observabilité standard RAISE
             raise_error!(
                 "ERR_WF_HANDLER_NOT_FOUND",
                 context = json_value!({
@@ -124,7 +123,6 @@ mod tests {
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::tools::SystemMonitorTool;
 
-    /// 🎯 Helper utilisé par test_gate_pause (Supprime le warning dead_code)
     async fn create_test_executor_with_tools(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &AppConfig,
@@ -152,7 +150,6 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gate_pause() {
-        // 🎯 FIX : Restauration du test qui appelle create_test_executor_with_tools
         let sandbox = AgentDbSandbox::new().await;
         let executor = create_test_executor_with_tools(sandbox.db.clone(), &sandbox.config).await;
         let manager = CollectionsManager::new(
@@ -184,7 +181,7 @@ mod tests {
             &sandbox.config.system_db,
         );
 
-        // Mocks JSON alignés sur les schémas stricts (Handle et Name obligatoires)
+        // Mocks JSON alignés sur les schémas stricts
         manager
             .create_collection(
                 "workflow_definitions",
@@ -219,7 +216,8 @@ mod tests {
                 json_value!({
                     "handle": "mandate-1",
                     "name": "Mandat de Test",
-                    "meta": { "author": "Test", "version": "1.0", "status": "ACTIVE" },
+                    // 🎯 FIX : Utilisation de mandator_id avec un UUID valide au lieu de "author"
+                    "meta": { "mandator_id": "00000000-0000-0000-0000-000000000000", "version": "1.0", "status": "ACTIVE" },
                     "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": {} },
                     "hardLogic": { "vetos": [] },
                     "observability": { "heartbeatMs": 100 }
@@ -236,7 +234,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Note: L'insertion utilise des handles sémantiques. Le moteur json_db générera l'_id.
         manager
             .upsert_document(
                 "missions",

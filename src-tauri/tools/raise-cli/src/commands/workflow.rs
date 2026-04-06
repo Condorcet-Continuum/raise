@@ -148,7 +148,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             user_success!(
                 "MANDATE_IMPORT_SUCCESS",
                 json_value!({
-                    "author": mandate.meta.author,
+                    "mandator_id": mandate.meta.mandator_id,
                     "version": mandate.meta.version,
                     "active_domain": ctx.active_domain,
                     "active_user": ctx.active_user,
@@ -170,7 +170,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 "MISSION_COMPILE_SUCCESS",
                 json_value!({
                     "mission_id": mission_id,
-                    "graph_handle": definition.handle, // 🎯 FIX : definition.id -> definition.handle
+                    "graph_handle": definition.handle,
                     "status": "compiled",
                 })
             );
@@ -190,11 +190,9 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 })
             );
 
-            // 🎯 Injection du contexte dans le helper
             let mut scheduler = init_cli_engine(&ctx).await?;
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-            // 🎯 Data-Driven : on charge la mission
             scheduler.load_mission(&mission_id, &manager).await?;
 
             let instance = scheduler
@@ -203,18 +201,17 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             user_success!(
                 "INSTANCE_CREATION_SUCCESS",
                 json_value!({
-                    "instance_handle": instance.handle, // 🎯 FIX : instance.id -> instance.handle
+                    "instance_handle": instance.handle,
                     "status": "initialized",
                     "timestamp": UtcClock::now().to_rfc3339()
                 })
             );
             let final_status = scheduler
-                .execute_instance_loop(&instance.handle, &manager) // 🎯 FIX : instance.id -> instance.handle
+                .execute_instance_loop(&instance.handle, &manager)
                 .await?;
 
             match final_status {
                 ExecutionStatus::Completed => {
-                    // 🎯 Mise en conformité stricte JSON
                     user_success!("WORKFLOW_COMPLETED", json_value!({"status": "finished"}));
                 }
                 ExecutionStatus::Paused => {
@@ -222,7 +219,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                         "WORKFLOW_PAUSED_HITL",
                         json_value!({
                             "reason": "manual_validation_required",
-                            "instance_handle": instance.handle // 🎯 FIX
+                            "instance_handle": instance.handle
                         })
                     );
                 }
@@ -256,11 +253,9 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 })
             );
 
-            // 🎯 Injection du contexte
             let mut scheduler = init_cli_engine(&ctx).await?;
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-            // On a besoin de charger la définition pour exécuter la boucle
             let doc = manager
                 .get_document("workflow_instances", &instance_id)
                 .await
@@ -271,12 +266,10 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
 
             scheduler.load_mission(&mission_id, &manager).await?;
 
-            // Application de la décision humaine
             scheduler
                 .resume_node(&instance_id, &node_id, approved, &manager)
                 .await?;
 
-            // Relance de la machine
             user_info!(
                 "ENGINE",
                 json_value!({"action": "Relance de la boucle d'exécution..."})
@@ -315,16 +308,14 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             {
                 Ok(Some(doc)) => {
                     let instance: WorkflowInstance = json::deserialize_from_value(doc).unwrap();
-                    // 1. Suivi du statut de la machine à états
                     user_info!(
                         "INSTANCE_STATE_SYNC",
                         json_value!({
                             "status": format!("{:?}", instance.status),
-                            "instance_handle": instance.handle // 🎯 FIX : instance.id -> instance.handle
+                            "instance_handle": instance.handle
                         })
                     );
 
-                    // 2. Monitoring de la topologie active
                     user_info!(
                         "INSTANCE_NODES_SNAPSHOT",
                         json_value!({
@@ -333,7 +324,6 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                         })
                     );
 
-                    // 3. Récupération du dernier événement de trace
                     if let Some(last_log) = instance.logs.last() {
                         user_info!("INSTANCE_LAST_EVENT", json_value!({ "log": last_log }));
                     }
@@ -352,14 +342,12 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
         WorkflowCommands::SetSensor { value } => {
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-            // 2. Création de l'entité Jumeau Numérique
             let sensor_doc = json_value!({
-                "_id": "vibration_z", // Identifiant unique du capteur
+                "_id": "vibration_z",
                 "value": value,
                 "updatedAt": UtcClock::now().to_rfc3339()
             });
 
-            // 3. Persistance dans la collection 'digital_twin' (IPC par la donnée)
             manager.upsert_document("digital_twin", sensor_doc).await?;
 
             user_success!(
@@ -476,7 +464,7 @@ mod tests {
         let valid_mandate = json_value!({
             "handle": "mandate_cli_test_123",
             "name": { "fr": "Mandat de Test" },
-            "meta": { "author": "CLI_Tester", "version": "1.0.0", "status": "ACTIVE" },
+            "meta": { "mandator_id": "00000000-0000-0000-0000-000000000000", "version": "1.0.0", "status": "ACTIVE" },
             "governance": { "strategy": "SAFETY_FIRST", "condorcetWeights": { "sec": 1.0 } },
             "hardLogic": { "vetos": [] },
             "observability": { "heartbeatMs": 100 }
@@ -512,8 +500,9 @@ mod tests {
             .unwrap()
             .expect("Le mandat n'a pas été sauvegardé dans la collection 'mandates' !");
 
+        // 🎯 FIX : On vérifie bien le `mandator_id` en UUID et non l'ancien `author`
         assert_eq!(
-            doc["meta"]["author"], "CLI_Tester",
+            doc["meta"]["mandator_id"], "00000000-0000-0000-0000-000000000000",
             "Le mandat trouvé ne correspond pas"
         );
     }

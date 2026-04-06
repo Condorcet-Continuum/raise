@@ -5,6 +5,7 @@
 // =========================================================================
 
 // --- 1. CORE, ERREURS & FONDATIONS (Synchronisés avec core/mod.rs) ---
+pub use crate::utils::context::i18n::I18nString;
 pub use crate::utils::core::error::{anyhow, AnyResult, AppError, Context, RaiseResult};
 pub use crate::utils::core::{
     async_interface, // 🎯 Alias de async_trait::async_trait

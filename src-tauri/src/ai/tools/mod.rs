@@ -2,6 +2,7 @@
 
 pub mod codegen_tool;
 pub mod file_system;
+pub mod git_tool;
 pub mod query_db;
 
 // Export pour faciliter l'usage

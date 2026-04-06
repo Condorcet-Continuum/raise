@@ -46,7 +46,6 @@ pub async fn post_authenticated_async<T: Serializable, R: DeserializableOwned>(
             request_builder = request_builder.header("Authorization", format!("Bearer {}", tk));
         }
 
-        // 🎯 Utilisation STRICTE de la macro métier Raise au lieu de tracing::debug!
         crate::user_debug!(
             "NET_POST_ATTEMPT",
             json_value!({ "url": url, "attempt": attempt, "max_retries": max_retries })
@@ -60,7 +59,6 @@ pub async fn post_authenticated_async<T: Serializable, R: DeserializableOwned>(
                     return match response.json::<R>().await {
                         Ok(data) => Ok(data),
                         Err(e) => {
-                            // 🎯 Utilisation de raise_error!
                             crate::raise_error!(
                                 "ERR_NET_JSON_DECODE",
                                 error = e,
@@ -110,7 +108,6 @@ pub async fn post_authenticated_async<T: Serializable, R: DeserializableOwned>(
         }
 
         sleep_async(delay).await;
-        // 🎯 Remplacement de std::cmp::min par la méthode .min() native du type Duration
         delay = delay.min(TimeDuration::from_secs(10));
     }
 }

@@ -10,10 +10,43 @@ use crate::utils::core::{SharedRef, StaticCell, SyncRwLock};
 // 3. Données : Collections Sémantiques et Configuration
 use crate::utils::data::config::AppConfig;
 use crate::utils::data::json::{self, json_value};
-use crate::utils::data::{Deserializable, UnorderedMap};
+use crate::utils::data::{Deserializable, OrderedMap, Serializable, UnorderedMap};
 
 // 4. Macros RAISE Globales
 use crate::raise_error;
+
+/// 🎯 TYPE SÉMANTIQUE RAISE : Gère les chaînes multilingues du Knowledge Graph.
+/// Aligné sur 'i18nNonEmptyString' des schémas JSON.
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum I18nString {
+    /// Format simple : "Mon Nom"
+    Single(String),
+    /// Format multilingue : {"fr": "Mon Nom", "en": "My Name"}
+    Multi(OrderedMap<String, String>),
+}
+
+impl I18nString {
+    /// Récupère la traduction pour une langue donnée avec fallback.
+    pub fn get_text(&self, lang: &str) -> String {
+        match self {
+            Self::Single(s) => s.clone(),
+            Self::Multi(map) => map
+                .get(lang)
+                .or_else(|| map.get("en")) // Fallback anglais
+                .or_else(|| map.values().next()) // Fallback premier élément
+                .cloned()
+                .unwrap_or_default(),
+        }
+    }
+}
+
+// Implémentation pratique pour faciliter les tests
+impl From<&str> for I18nString {
+    fn from(s: &str) -> Self {
+        Self::Single(s.to_string())
+    }
+}
 
 // --- STRUCTURES DE DÉSÉRIALISATION (Internes) ---
 

@@ -5,7 +5,9 @@ pub mod critic;
 pub mod executor;
 pub mod handlers;
 pub mod mandate;
+pub mod rbac;
 pub mod scheduler;
+pub mod squad;
 pub mod state_machine;
 pub mod tools;
 
