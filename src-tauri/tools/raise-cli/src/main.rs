@@ -164,7 +164,7 @@ async fn main() -> RaiseResult<()> {
     // ---------------------------------------------------------
     // 🛡️ MOTEUR DE RÉSILIENCE (WAL Crash Recovery)
     // ---------------------------------------------------------
-    
+
     match raise::json_db::transactions::wal::recover_pending_transactions(
         &storage.config,
         &config.mount_points.system.domain,
