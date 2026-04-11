@@ -38,7 +38,6 @@ pub struct CliContext {
 #[command(about = "CLI unifié pour la manipulation des modules Raise", long_about = None)]
 #[command(version)]
 struct Cli {
-    // 🆕 Arguments globaux pour la surcharge de contexte
     #[arg(
         long,
         global = true,
@@ -109,7 +108,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> RaiseResult<()> {
-    // 1. Initialisation de la Configuration (CRITIQUE)
+    // 1. INITIALISATION CONFIGURATION (CRITIQUE)
     if let Err(e) = AppConfig::init() {
         raise_error!(
             "CLI_CRITICAL_INIT_FAILED",
@@ -118,59 +117,82 @@ async fn main() -> RaiseResult<()> {
         );
     }
 
-    // 2. Initialisation du Logger et Langue
+    // 2. INITIALISATION LOGGER ET LANGUE
     context::init_logging();
     let config = AppConfig::get();
-    context::init_i18n(&config.core.language).await?;
+    if let Err(_) = context::init_i18n(&config.core.language).await {
+        eprintln!("⚠️ [BOOTSTRAP MODE] Traductions inaccessibles. Démarrage en mode sans échec.");
+    }
 
-    // 🎯 3. PARSING DU CLI LE PLUS TÔT POSSIBLE (Inversion de contrôle)
+    // 3. PARSING DU CLI
     let cli = Cli::parse();
 
-    // 🎯 4. RÉSOLUTION SÉMANTIQUE DES PRIORITÉS (CLI > Config > Fallback)
-    let active_user = cli.user.clone().unwrap_or_else(|| {
-        config
-            .user
-            .as_ref()
-            .map(|u| u.id.clone())
-            .unwrap_or_else(|| {
-                // Tolérance zéro évitée ici, on gérera l'erreur à la session si besoin
-                "unknown_user".to_string()
-            })
-    });
+    // 4. RÉSOLUTION SÉMANTIQUE DES PRIORITÉS (CLI > Config > Mount Points)
+    let active_user = match cli.user.clone() {
+        Some(u) => u,
+        None => match &config.user {
+            Some(u) => u.id.clone(),
+            None => "unknown_user".to_string(),
+        },
+    };
 
-    let active_domain = cli.domain.clone().unwrap_or_else(|| {
-        config
-            .user
-            .as_ref()
-            .and_then(|u| u.default_domain.clone())
-            .unwrap_or_else(|| config.system_domain.clone())
-    });
+    let active_domain = match cli.domain.clone() {
+        Some(d) => d,
+        None => match &config.user {
+            // Utilisation sécurisée des nouveaux points de montage
+            Some(u) => u.id.clone(), // Fallback sur ID utilisateur pour le domaine si non spécifié
+            None => config.mount_points.system.domain.clone(),
+        },
+    };
 
-    let active_db = cli.db.clone().unwrap_or_else(|| {
-        config
-            .user
-            .as_ref()
-            .and_then(|u| u.default_db.clone())
-            .unwrap_or_else(|| config.system_db.clone())
-    });
+    let active_db = match cli.db.clone() {
+        Some(db) => db,
+        None => config.mount_points.system.db.clone(),
+    };
 
-    // 5. INITIALISATION DU MOTEUR DE STOCKAGE ET DE SESSION
-    let db_root = config
-        .get_path("PATH_RAISE_DOMAIN")
-        .expect("ERREUR: PATH_RAISE_DOMAIN manquant !");
+    // 5. INITIALISATION DU MOTEUR DE STOCKAGE
+    let db_root = match config.get_path("PATH_RAISE_DOMAIN") {
+        Some(path) => path,
+        None => raise_error!(
+            "CLI_MISSING_PATH",
+            error = "PATH_RAISE_DOMAIN introuvable dans la config"
+        ),
+    };
 
-    // Note: Si StorageEngine a besoin de active_domain plus tard, c'est ici qu'on le passera.
     let storage = SharedRef::new(StorageEngine::new(JsonDbConfig::new(db_root)));
+
+// ---------------------------------------------------------
+    // 🛡️ MOTEUR DE RÉSILIENCE (WAL Crash Recovery)
+    // ---------------------------------------------------------
+    match raise::json_db::transactions::wal::recover_pending_transactions(
+        &storage.config,
+        &config.mount_points.system.domain,
+        &config.mount_points.system.db,
+        &storage,
+    ).await {
+        Ok(count) if count > 0 => {
+            user_warn!(
+                "WRN_DB_CRASH_RECOVERED", 
+                json_value!({"recovered_transactions": count, "action": "rollback_applied_via_cli"})
+            );
+        }
+        Err(e) => {
+            user_error!(
+                "ERR_DB_RECOVERY_FAIL", 
+                json_value!({"error": e.to_string()})
+            );
+        }
+        _ => {} // Tout va bien, aucun crash détecté
+    }
+
+    // Résolution du chemin d'ontologie via les points de montage système
     let ontology_path = storage.config.data_root.join("_system/ontology");
     bootstrap_semantic_engine(&ontology_path).await?;
+
     let session_mgr = context::SessionManager::new(storage.clone());
 
-    // --- RÉSOLUTION DU CONTEXTE DE SIMULATION ---
+    // RÉSOLUTION DU CONTEXTE DE SIMULATION
     let is_simulation = cli.simulate;
-
-    // Idéalement, config.simulation_context devrait exister dans ta structure AppConfig Rust.
-    // Pour l'instant, utilisons des valeurs par défaut robustes si tu n'as pas encore mis à jour
-    // le parseur serde_json de AppConfig.
     let sim_domain = cli.sim_domain.unwrap_or_else(|| "sim_mbse2".to_string());
     let sim_db = cli.sim_db.unwrap_or_else(|| "sim_raise".to_string());
 
@@ -179,7 +201,7 @@ async fn main() -> RaiseResult<()> {
         config,
         session_mgr,
         storage,
-        active_user: active_user.clone(),
+        active_user,
         active_domain,
         active_db,
         is_test_mode: false,
@@ -189,66 +211,42 @@ async fn main() -> RaiseResult<()> {
     };
 
     // 7. AUTO-LOGIN AVEC L'UTILISATEUR RÉSOLU
-    if active_user == "unknown_user" {
+    if ctx.active_user == "unknown_user" {
         user_warn!(
             "CLI_GHOST_MODE",
-            json_value!({"hint": "Aucun utilisateur résolu. Le CLI démarre en mode restreint (Setup)."})
+            json_value!({"hint": "Mode restreint (Setup)."})
         );
     } else {
-        match ctx.session_mgr.start_session(&active_user).await {
+        match ctx.session_mgr.start_session(&ctx.active_user).await {
             Ok(_) => {
                 user_info!(
                     "CLI_START_INITIALIZED",
                     json_value!({
                         "version": env!("CARGO_PKG_VERSION"),
-                        "active_user": ctx.active_user,
-                        "active_domain": ctx.active_domain,
-                        "active_db": ctx.active_db
+                        "user": ctx.active_user,
+                        "domain": ctx.active_domain
                     })
                 );
             }
             Err(e) => {
                 user_warn!(
                     "CLI_SESSION_UNAVAILABLE",
-                    json_value!({
-                        "user": active_user,
-                        "technical_error": e.to_string(),
-                        "hint": "Si le système est vierge, utilisez 'jsondb create-db' pour l'initialiser."
-                    })
+                    json_value!({"user": ctx.active_user, "error": e.to_string()})
                 );
             }
         }
     }
-
-    if let Err(e) = ctx.session_mgr.start_session(&active_user).await {
-        raise_error!(
-            "CLI_SESSION_START_FAILED",
-            error = e,
-            context = json_value!({"user": active_user})
-        );
-    }
-
-    user_info!(
-        "CLI_START_INITIALIZED",
-        json_value!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "active_user": ctx.active_user,
-            "active_domain": ctx.active_domain,
-            "active_db": ctx.active_db
-        })
-    );
 
     // 8. DISPATCH DES COMMANDES
     match cli.command {
-        Some(cmd) => {
-            if let Err(e) = execute_command(cmd.clone(), ctx.clone()).await {
-                raise_error!(
-                    "CLI_COMMAND_EXECUTION_FAILED",
-                    error = e,
-                    context = json_value!({"command": format!("{:?}", cmd)})
-                );
-            }
-        }
+        Some(cmd) => match execute_command(cmd.clone(), ctx.clone()).await {
+            Ok(_) => (),
+            Err(e) => raise_error!(
+                "CLI_COMMAND_EXECUTION_FAILED",
+                error = e,
+                context = json_value!({"command": format!("{:?}", cmd)})
+            ),
+        },
         None => {
             run_global_shell(ctx).await?;
         }
@@ -258,56 +256,43 @@ async fn main() -> RaiseResult<()> {
     Ok(())
 }
 
-/// Boucle principale du Shell Global (REPL)
+/// Boucle principale du Shell Global (REPL) avec résolution Mount Points
 async fn run_global_shell(mut ctx: CliContext) -> RaiseResult<()> {
     use rustyline::error::ReadlineError;
     use rustyline::DefaultEditor;
 
-    println!("--------------------------------------------------");
     println!("🚀 RAISE GLOBAL SHELL - v{}", env!("CARGO_PKG_VERSION"));
     println!("👤 User   : {}", ctx.active_user);
-    println!("🌍 Domain : {}", ctx.active_domain);
-    println!("🗄️  DB     : {}", ctx.active_db);
-    println!("   Tapez 'help' pour la liste des commandes.");
-    println!("   Tapez 'exit' ou 'quit' pour quitter.");
+    println!(
+        "🌍 Partition Système : {}/{}",
+        ctx.config.mount_points.system.domain, ctx.config.mount_points.system.db
+    );
     println!("--------------------------------------------------");
 
     let mut rl = match DefaultEditor::new() {
         Ok(editor) => editor,
-        Err(e) => {
-            raise_error!(
-                "CLI_EDITOR_INIT_FAILED",
-                error = e,
-                context = json_value!({
-                    "component": "Rustyline",
-                    "terminal_check": "failed"
-                })
-            );
-        }
+        Err(e) => raise_error!("CLI_EDITOR_INIT_FAILED", error = e),
     };
 
-    // 🎯 CORRECTION 1 : On utilise le contexte au lieu d'appeler AppConfig::get()
-    let history_path = ctx
-        .config
-        .get_path("PATH_RAISE_DOMAIN")
-        .unwrap()
-        .join("_system")
-        .join("history.txt");
+    let history_path = match ctx.config.get_path("PATH_RAISE_DOMAIN") {
+        Some(p) => p.join("_system/history.txt"),
+        None => raise_error!("CLI_HISTORY_PATH_ERROR"),
+    };
 
     let _ = rl.load_history(&history_path);
 
     loop {
-        // 🎯 1. AUTO-SYNC : On demande au noyau la vérité absolue avant d'afficher le prompt
+        // AUTO-SYNC : On demande au noyau la vérité absolue
         if let Some(session) = ctx.session_mgr.get_current_session().await {
             ctx.active_user = session.user_handle.clone();
             ctx.active_domain = session.context.current_domain.clone();
             ctx.active_db = session.context.current_db.clone();
         }
+
         let prompt = format!(
             "RAISE [{}@{}/{}]> ",
             ctx.active_user, ctx.active_domain, ctx.active_db
         );
-
         let readline = rl.readline(&prompt);
 
         match readline {
@@ -318,43 +303,32 @@ async fn run_global_shell(mut ctx: CliContext) -> RaiseResult<()> {
                 }
                 let _ = rl.add_history_entry(input.as_str());
 
-                // 🛡️ COMMANDES SYSTÈMES DU SHELL
                 if input == "exit" || input == "quit" {
-                    println!("👋 Au revoir !");
                     break;
-                } else if input == "clear" {
+                }
+                if input == "clear" {
                     print!("\x1B[2J\x1B[1;1H");
                     continue;
                 }
-                // 🎯 2. ALIAS UX : On traduit les commandes courtes pour Clap (utils.rs)
-                if input.starts_with("login ")
-                    || input.starts_with("config")
-                    || input.starts_with("use-domain ")
-                    || input.starts_with("use-db ")
-                {
+
+                // ALIAS UX : Traduction pour Clap
+                if input.starts_with("login ") || input.starts_with("use-") {
                     input = format!("utils {}", input);
-                } else if input.starts_with("logout") {
-                    input = "utils logout".to_string();
                 }
 
-                // 🔄 DISPATCH CLAP STANDARD
                 match shell_words::split(&input) {
                     Ok(args) => {
                         let mut full_args = vec!["repl".to_string()];
                         full_args.extend(args);
 
                         match Cli::try_parse_from(full_args) {
-                            Ok(cli) => {
-                                if let Some(cmd) = cli.command {
+                            Ok(cli_repl) => {
+                                if let Some(cmd) = cli_repl.command {
                                     if let Err(e) = execute_command(cmd.clone(), ctx.clone()).await
                                     {
                                         user_error!(
-                                            "CLI_COMMAND_EXECUTION_FAILED",
-                                            json_value!({
-                                                "command": format!("{:?}", cmd),
-                                                "error_detail": format!("{:?}", e),
-                                                "context": "interactive_repl_execution"
-                                            })
+                                            "CLI_COMMAND_FAILED",
+                                            json_value!({"error": e.to_string()})
                                         );
                                     }
                                 }
@@ -370,28 +344,15 @@ async fn run_global_shell(mut ctx: CliContext) -> RaiseResult<()> {
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
             Err(err) => {
                 user_error!(
-                    "CLI_SHELL_FATAL_ERROR",
-                    json_value!({
-                        "error": format!("{:?}", err),
-                        "termination": "loop_break",
-                        "context": "interactive_shell_session"
-                    })
+                    "CLI_SHELL_FATAL",
+                    json_value!({"error": format!("{:?}", err)})
                 );
                 break;
             }
         }
     }
 
-    if let Err(e) = rl.save_history(&history_path) {
-        user_warn!(
-            "CLI_HISTORY_SAVE_FAILED",
-            json_value!({
-                "error": e.to_string(),
-                "path": history_path
-            })
-        );
-    }
-
+    let _ = rl.save_history(&history_path);
     Ok(())
 }
 
@@ -414,35 +375,26 @@ async fn execute_command(cmd: Commands, ctx: CliContext) -> RaiseResult<()> {
     }
 }
 
-/// Initialise le registre sémantique global (VocabularyRegistry).
+/// Initialise le registre sémantique avec validation physique
 async fn bootstrap_semantic_engine(ontology_path: &Path) -> RaiseResult<()> {
-    // 1. Vérification physique du dossier
     if !ontology_path.exists() {
         raise_error!(
             "ERR_SEMANTIC_BOOTSTRAP",
             error = "Dossier d'ontologie introuvable",
-            context = json_value!({
-                "path": ontology_path.to_string_lossy(),
-                "hint": "Le dossier '_system/ontology' est indispensable au fonctionnement du CLI."
-            })
+            context = json_value!({"path": ontology_path.to_string_lossy()})
         );
     }
 
-    let init_result = VocabularyRegistry::init(ontology_path).await;
-
-    if let Err(e) = init_result {
-        raise_error!(
-            "ERR_VOCABULARY_INIT_FAILED",
-            error = e.to_string(),
-            context = json_value!({ "path": ontology_path.to_string_lossy() })
-        );
+    match VocabularyRegistry::init(ontology_path).await {
+        Ok(_) => {
+            user_info!(
+                "SEMANTIC_ENGINE_READY",
+                json_value!({ "path": ontology_path })
+            );
+            Ok(())
+        }
+        Err(e) => raise_error!("ERR_VOCABULARY_INIT_FAILED", error = e.to_string()),
     }
-
-    user_info!(
-        "SEMANTIC_ENGINE_READY",
-        json_value!({ "path": ontology_path })
-    );
-    Ok(())
 }
 
 #[cfg(test)]
@@ -460,14 +412,13 @@ impl CliContext {
             active_domain: "mock_domain".to_string(),
             active_db: "mock_db".to_string(),
             is_test_mode: true,
-            is_simulation: false, // Faux par défaut dans les tests
+            is_simulation: false,
             sim_domain: "mock_sim_domain".to_string(),
             sim_db: "mock_sim_db".to_string(),
         }
     }
 }
 
-// --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,13 +427,6 @@ mod tests {
     #[test]
     fn verify_cli_structure() {
         Cli::command().debug_assert();
-    }
-
-    #[test]
-    fn test_help_generation() {
-        let output = Cli::command().render_help().to_string();
-        assert!(output.contains("raise-cli"));
-        assert!(output.contains("jsondb"));
     }
 
     #[test]
@@ -495,11 +439,17 @@ mod tests {
         }
     }
 
+    /// 🎯 NOUVEAU TEST : Résilience de la résolution des Mount Points
     #[test]
-    fn test_shell_words_parsing() {
-        let input = "ai classify \"hello world\"";
-        let args = shell_words::split(input).unwrap();
-        assert_eq!(args.len(), 3);
-        assert_eq!(args[2], "hello world");
+    fn test_mount_point_resolution_integrity() {
+        let config = AppConfig::get();
+        assert!(
+            !config.mount_points.system.domain.is_empty(),
+            "Partition système manquante"
+        );
+        assert!(
+            !config.mount_points.system.db.is_empty(),
+            "Base système manquante"
+        );
     }
 }

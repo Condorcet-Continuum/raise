@@ -9,30 +9,32 @@ use raise::model_engine::arcadia;
 use raise::model_engine::loader::ModelLoader;
 use raise::model_engine::validators::{DynamicValidator, ModelValidator};
 use raise::rules_engine::ast::{Expr, Rule};
-use raise::utils::prelude::*;
+use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 #[async_test]
-async fn test_full_stack_integration() {
+async fn test_full_stack_integration() -> RaiseResult<()> {
     // =========================================================================
-    // ÉTAPE 1 : Infrastructure (JSON-DB)
+    // ÉTAPE 1 : Infrastructure (JSON-DB & Mount Points)
     // =========================================================================
     let env = setup_test_env(LlmMode::Disabled).await;
 
+    // 🎯 RÉSILIENCE : Utilisation des partitions injectées par la Sandbox
     let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
-    // Injection du mapping ontologique
-    let sys_mgr = CollectionsManager::new(
-        &env.sandbox.storage,
-        &env.sandbox.config.system_domain,
-        &env.sandbox.config.system_db,
-    );
+    // Résolution dynamique du point de montage système
+    let system_domain = &env.sandbox.config.mount_points.system.domain;
+    let system_db = &env.sandbox.config.mount_points.system.db;
 
-    let _ = sys_mgr
-        .create_collection(
-            "configs",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await;
+    let sys_mgr = CollectionsManager::new(&env.sandbox.storage, system_domain, system_db);
+
+    let generic_schema = "db://_system/_system/schemas/v1/db/generic.schema.json";
+
+    match sys_mgr.create_collection("configs", generic_schema).await {
+        Ok(_) => user_info!("INF_TEST_CONFIG_COLL_READY"),
+        Err(e) => raise_error!("ERR_TEST_SETUP_FAIL", error = e.to_string()),
+    }
+
+    // Injection du mapping ontologique pour le Loader
     sys_mgr
         .upsert_document(
             "configs",
@@ -43,11 +45,10 @@ async fn test_full_stack_integration() {
                 ]
             }),
         )
-        .await
-        .unwrap();
+        .await?;
 
     // =========================================================================
-    // ÉTAPE 2 : Peuplement des Données
+    // ÉTAPE 2 : Peuplement des Données (MBSE Arcadia)
     // =========================================================================
     let valid_json = json_value!({
         "_id": "UUID_VALID_1",
@@ -62,29 +63,23 @@ async fn test_full_stack_integration() {
         arcadia::PROP_ID: "UUID_INVALID_1",
         arcadia::PROP_NAME: "UndocumentedThing",
         "@type": "LogicalComponent",
-        // 🎯 FIX : On déclare explicitement le champ à 'null' pour que
-        // l'évaluateur de règles trouve la variable et déclenche la violation.
         arcadia::PROP_DESCRIPTION: null
     });
 
-    manager
-        .create_collection(
-            "la",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await
-        .unwrap();
-    manager
-        .insert_raw("la", &valid_json)
-        .await
-        .expect("Insert A failed");
-    manager
-        .insert_raw("la", &invalid_json)
-        .await
-        .expect("Insert B failed");
+    manager.create_collection("la", generic_schema).await?;
+
+    match manager.insert_raw("la", &valid_json).await {
+        Ok(_) => (),
+        Err(e) => raise_error!("ERR_TEST_DATA_INJECTION", error = e.to_string()),
+    }
+
+    match manager.insert_raw("la", &invalid_json).await {
+        Ok(_) => (),
+        Err(e) => raise_error!("ERR_TEST_DATA_INJECTION", error = e.to_string()),
+    }
 
     // =========================================================================
-    // ÉTAPE 3 : Définition des Règles
+    // ÉTAPE 3 : Définition des Règles (AST)
     // =========================================================================
     let rule_expr = Expr::Not(Box::new(Expr::Eq(vec![
         Expr::Var(arcadia::PROP_DESCRIPTION.to_string()),
@@ -104,8 +99,13 @@ async fn test_full_stack_integration() {
     // =========================================================================
     let loader = ModelLoader::new_with_manager(manager);
 
-    let count = loader.index_project().await.expect("Indexation failed");
-    assert_eq!(count, 2, "Le loader aurait dû trouver 2 éléments");
+    match loader.index_project().await {
+        Ok(count) => {
+            assert_eq!(count, 2, "Le loader aurait dû trouver 2 éléments");
+            user_success!("SUC_TEST_INDEXATION_OK", json_value!({"count": count}));
+        }
+        Err(e) => raise_error!("ERR_TEST_INDEXATION_FAIL", error = e.to_string()),
+    }
 
     let validator = DynamicValidator::new(vec![rule]);
     let issues = validator.validate_full(&loader).await;
@@ -113,12 +113,47 @@ async fn test_full_stack_integration() {
     // =========================================================================
     // ÉTAPE 5 : Vérification des Résultats
     // =========================================================================
-    assert_eq!(
-        issues.len(),
-        1,
-        "Il devrait y avoir exactement 1 violation de règle"
-    );
+    assert_eq!(issues.len(), 1, "Il devrait y avoir exactement 1 violation");
     assert_eq!(issues[0].element_id, "UUID_INVALID_1");
 
-    println!("✅ Test E2E réussi : Le nouveau moteur dynamique fonctionne en flux complet !");
+    user_success!("SUC_TEST_E2E_FULL_STACK_VALIDATED");
+    Ok(())
+}
+
+// =========================================================================
+// NOUVEAUX TESTS : RÉSILIENCE ET POINTS DE MONTAGE
+// =========================================================================
+
+#[cfg(test)]
+mod resilience_tests {
+    use super::*;
+
+    /// 🎯 Test la résilience face à la résolution des partitions via Mount Points
+    #[async_test]
+    async fn test_e2e_mount_point_integrity() -> RaiseResult<()> {
+        let env = setup_test_env(LlmMode::Disabled).await;
+        // Validation SSOT de la partition système injectée dans la sandbox
+        assert!(!env.sandbox.config.mount_points.system.domain.is_empty());
+        assert!(!env.sandbox.config.mount_points.system.db.is_empty());
+        Ok(())
+    }
+
+    /// 🎯 Test la résilience du loader en cas de partition manquante (Match...raise_error)
+    #[async_test]
+    async fn test_e2e_loader_missing_partition_resilience() -> RaiseResult<()> {
+        let env = setup_test_env(LlmMode::Disabled).await;
+
+        // On initialise un loader sur une partition qui n'existe pas physiquement
+        let ghost_mgr = CollectionsManager::new(&env.sandbox.storage, "ghost_space", "ghost_db");
+        let loader = ModelLoader::new_with_manager(ghost_mgr);
+
+        match loader.index_project().await {
+            Ok(count) => {
+                // Si la partition n'existe pas, l'indexation doit retourner 0 sans paniquer
+                assert_eq!(count, 0);
+                Ok(())
+            }
+            Err(e) => raise_error!("ERR_TEST_LOADER_CRASH", error = e.to_string()),
+        }
+    }
 }

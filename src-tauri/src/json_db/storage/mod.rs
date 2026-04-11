@@ -42,6 +42,8 @@ pub struct StorageEngine {
     pub config: JsonDbConfig,
     // ✅ OPTIMISATION : Une clé structurée plutôt qu'une chaîne de caractères formatée !
     pub cache: cache::Cache<(String, String, String, String), JsonValue>,
+    //  Registre de verrous exclusifs pour les index système (Anti Race-Condition)
+    pub index_locks: SharedRef<SyncRwLock<UnorderedMap<String, SharedRef<AsyncMutex<()>>>>>,
 }
 
 impl StorageEngine {
@@ -49,9 +51,19 @@ impl StorageEngine {
         Self {
             config,
             cache: cache::Cache::new(1000, None),
+            index_locks: SharedRef::new(SyncRwLock::new(UnorderedMap::new())),
         }
     }
+    pub fn get_index_lock(&self, space: &str, db: &str) -> SharedRef<AsyncMutex<()>> {
+        let key = format!("{}/{}", space, db);
 
+        // Verrou synchrone ultra-court juste pour lire/écrire dans la HashMap
+        let mut map = self.index_locks.write().unwrap();
+
+        map.entry(key)
+            .or_insert_with(|| SharedRef::new(AsyncMutex::new(())))
+            .clone()
+    }
     /// Lit un document en cherchant d'abord dans le cache LRU
     pub async fn read_document(
         &self,
@@ -161,5 +173,68 @@ mod tests {
 
         engine.delete_document("s", "d", "c", "1").await.unwrap();
         assert!(engine.cache.get(&key).await.is_none());
+    }
+
+    #[async_test]
+    async fn test_index_lock_prevents_race_condition() {
+        let dir = tempdir().unwrap();
+        let config = JsonDbConfig::new(dir.path().to_path_buf());
+
+        // On wrap l'engine dans un Arc/SharedRef pour pouvoir le cloner dans 50 threads
+        let engine = SharedRef::new(StorageEngine::new(config.clone()));
+        let space = "concurrent_space";
+        let db = "concurrent_db";
+
+        // 1. Initialisation d'un faux fichier d'index avec un compteur à 0
+        let sys_path = config.db_root(space, db).join("_system.json");
+        fs::ensure_dir_async(sys_path.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write_json_atomic_async(&sys_path, &json_value!({"counter": 0}))
+            .await
+            .unwrap();
+
+        let mut handles = Vec::new();
+
+        // 2. On lance 50 "transactions" en parallèle absolu !
+        for _ in 0..50 {
+            let engine_clone = engine.clone();
+            let sys_path_clone = sys_path.clone();
+
+            handles.push(spawn_async_task(async move {
+                // 🎯 LA MAGIE EST ICI : On réclame le verrou exclusif pour cette base
+                let lock = engine_clone.get_index_lock("concurrent_space", "concurrent_db");
+                let _guard = lock.lock().await; // Attente passive asynchrone sans bloquer le CPU
+
+                // --- DÉBUT DE LA ZONE CRITIQUE ---
+                // a. Lecture
+                let mut doc: JsonValue = fs::read_json_async(&sys_path_clone).await.unwrap();
+
+                // b. Modification (On perd virtuellement un peu de temps pour exacerber le risque)
+                let current = doc["counter"].as_i64().unwrap();
+                doc["counter"] = json_value!(current + 1);
+
+                // c. Écriture
+                fs::write_json_atomic_async(&sys_path_clone, &doc)
+                    .await
+                    .unwrap();
+                // --- FIN DE LA ZONE CRITIQUE ---
+
+                // Le verrou est relâché automatiquement ici quand `_guard` sort de la portée (Drop)
+            }));
+        }
+
+        // 3. On attend que nos 50 kamikazes aient terminé
+        for handle in handles {
+            let _ = handle.await;
+        }
+
+        // 4. L'HEURE DE VÉRITÉ
+        let final_doc: JsonValue = fs::read_json_async(&sys_path).await.unwrap();
+
+        assert_eq!(
+            final_doc["counter"], 50,
+            "💥 RACE CONDITION DÉTECTÉE ! Le verrou a failli, des mises à jour ont été écrasées."
+        );
     }
 }

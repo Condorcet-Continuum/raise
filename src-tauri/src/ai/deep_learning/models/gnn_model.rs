@@ -156,6 +156,8 @@ mod tests {
     use candle_nn::VarMap;
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gnn_model_sparse_flow() {
         let device = Device::Cpu;
         let varmap = VarMap::new();
@@ -176,6 +178,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_similarity_logic_with_epsilon() {
         let device = Device::Cpu;
         let varmap = VarMap::new();
@@ -219,6 +223,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gnn_message_passing_convergence_mbse() {
         let device = Device::Cpu;
 

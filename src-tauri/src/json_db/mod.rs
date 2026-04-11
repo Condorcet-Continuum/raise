@@ -1,6 +1,7 @@
 // FICHIER : src-tauri/src/json_db/mod.rs
 
 pub mod collections;
+pub mod graph;
 pub mod indexes;
 pub mod jsonld;
 pub mod migrations;
@@ -8,7 +9,6 @@ pub mod query;
 pub mod schema;
 pub mod storage;
 pub mod transactions;
-
 // ============================================================================
 // UTILITAIRES DE TEST (Intégrés)
 // ============================================================================
@@ -16,6 +16,7 @@ pub mod transactions;
 pub mod test_utils {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::json_db::storage::JsonDbConfig;
+
     use crate::utils::prelude::*;
     use crate::utils::testing::DbSandbox;
 
@@ -178,6 +179,8 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::test_utils::*;
+    use crate::json_db::transactions::Operation;
+    use crate::utils::data::config;
     use crate::utils::prelude::*;
     #[async_test]
     async fn test_env_initialization() {
@@ -188,12 +191,36 @@ mod tests {
         assert!(data_root.exists());
 
         // Test que l'injection centralisée a fonctionné
-        let sys_schemas_dir = env.cfg.db_schemas_root("_system", "_system").join("v1");
+        let sys_schemas_dir = env
+            .cfg
+            .db_schemas_root(config::BOOTSTRAP_DOMAIN, config::BOOTSTRAP_DB)
+            .join("v1");
         let has_index = sys_schemas_dir.join("db/index.schema.json").exists();
 
         assert!(
             has_index,
             "L'index.schema.json maître doit être présent dans le dossier temporaire"
         );
+    }
+
+    #[test]
+    fn test_operation_undo_serialization() {
+        // On vérifie que le "Before-Image" est bien conservé lors de la sérialisation
+        let old_doc = json_value!({"status": "old"});
+        let new_doc = json_value!({"status": "new"});
+
+        let op = Operation::Update {
+            collection: "users".into(),
+            id: "user_123".into(),
+            previous_document: Some(old_doc),
+            document: new_doc,
+        };
+
+        let serialized = json::serialize_to_string(&op).unwrap();
+
+        // Le JSON généré DOIT contenir l'état précédent
+        assert!(serialized.contains("\"previous_document\":{\"status\":\"old\"}"));
+        assert!(serialized.contains("\"document\":{\"status\":\"new\"}"));
+        assert!(serialized.contains("\"Update\""));
     }
 }

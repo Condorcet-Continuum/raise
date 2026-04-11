@@ -77,6 +77,7 @@ pub use crate::utils::io::{
 };
 
 // --- 3. DATA, JSON & COLLECTIONS ---
+pub use crate::utils::data::compute::{execute_compute_plan, ComputeOperatorFn, COMPUTE_REGISTRY};
 pub use crate::utils::data::config::{
     AppConfig,
     CoreConfig,

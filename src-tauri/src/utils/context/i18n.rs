@@ -7,6 +7,7 @@ use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 // 2. Core : Concurrence et Erreurs
 use crate::utils::core::error::RaiseResult;
 use crate::utils::core::{SharedRef, StaticCell, SyncRwLock};
+
 // 3. Données : Collections Sémantiques et Configuration
 use crate::utils::data::config::AppConfig;
 use crate::utils::data::json::{self, json_value};
@@ -27,21 +28,21 @@ pub enum I18nString {
 }
 
 impl I18nString {
-    /// Récupère la traduction pour une langue donnée avec fallback.
+    /// Récupère la traduction pour une langue donnée avec fallback sécurisé (sans panique).
     pub fn get_text(&self, lang: &str) -> String {
         match self {
             Self::Single(s) => s.clone(),
             Self::Multi(map) => map
                 .get(lang)
-                .or_else(|| map.get("en")) // Fallback anglais
-                .or_else(|| map.values().next()) // Fallback premier élément
+                .or_else(|| map.get("en"))
+                .or_else(|| map.values().next())
                 .cloned()
                 .unwrap_or_default(),
         }
     }
 }
 
-// Implémentation pratique pour faciliter les tests
+// Implémentation pratique
 impl From<&str> for I18nString {
     fn from(s: &str) -> Self {
         Self::Single(s.to_string())
@@ -64,11 +65,10 @@ struct TranslationItem {
 }
 
 // --- SINGLETON GLOBAL ---
-// Utilisation de SharedRef<RwLock> pour garantir la thread-safety entre Tauri et les services
 static TRANSLATOR: StaticCell<SharedRef<SyncRwLock<Translator>>> = StaticCell::new();
 
 pub struct Translator {
-    pub translations: UnorderedMap<String, String>, // 🎯 Remplacé
+    pub translations: UnorderedMap<String, String>,
     pub current_lang: String,
 }
 
@@ -80,20 +80,26 @@ impl Translator {
         }
     }
 
-    /// Charge une langue spécifique depuis la collection 'locales' en base de données.
+    /// Charge une langue spécifique depuis la collection 'locales' du point de montage système.
     pub async fn load_from_db(&mut self, storage: &StorageEngine, lang: &str) -> RaiseResult<()> {
-        let docs = match collections::list_all(storage, "_system", "_system", "locales").await {
+        let app_config = AppConfig::get();
+        let sys_domain = &app_config.mount_points.system.domain;
+        let sys_db = &app_config.mount_points.system.db;
+
+        // 🎯 Rigueur : Match complet sur la lecture DB
+        let docs = match collections::list_all(storage, sys_domain, sys_db, "locales").await {
             Ok(d) => d,
             Err(e) => raise_error!(
                 "ERR_I18N_DB_READ",
                 error = e,
-                context = json_value!({ "requested_lang": lang }) // 🎯 Remplacé
+                context =
+                    json_value!({ "requested_lang": lang, "domain": sys_domain, "db": sys_db })
             ),
         };
 
         for doc_val in docs {
             if doc_val.get("locale").and_then(|v| v.as_str()) == Some(lang) {
-                // 🎯 Utilisation de notre façade json
+                // 🎯 Rigueur : Match complet sur la désérialisation
                 let document: LocaleDocument = match json::deserialize_from_value(doc_val) {
                     Ok(doc) => doc,
                     Err(e) => raise_error!(
@@ -110,12 +116,13 @@ impl Translator {
                     .collect();
 
                 self.current_lang = lang.to_string();
+
                 tracing::info!(
                     target: "system_core",
                     event_id = "I18N_LOCALE_LOADED",
                     language = lang,
                     key_count = self.translations.len(),
-                    "🌍 Langue chargée depuis la base de données."
+                    "🌍 Langue chargée depuis le point de montage système."
                 );
 
                 return Ok(());
@@ -130,10 +137,10 @@ impl Translator {
     }
 
     pub fn t(&self, key: &str) -> String {
-        self.translations
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| key.to_string())
+        match self.translations.get(key) {
+            Some(val) => val.clone(),
+            None => key.to_string(), // Fallback sur la clé technique si absente
+        }
     }
 }
 
@@ -142,12 +149,14 @@ impl Translator {
 pub async fn init_i18n(lang: &str) -> RaiseResult<()> {
     let config = AppConfig::get();
 
-    let Some(db_root) = config.get_path("PATH_RAISE_DOMAIN") else {
-        raise_error!(
+    // 🎯 Rigueur : Match complet au lieu de let-else
+    let db_root = match config.get_path("PATH_RAISE_DOMAIN") {
+        Some(p) => p,
+        None => raise_error!(
             "ERR_I18N_CONFIG_MISSING",
             error = "PATH_RAISE_DOMAIN est manquant dans la configuration",
             context = json_value!({ "lang": lang })
-        );
+        ),
     };
 
     let db_config = JsonDbConfig::new(db_root);
@@ -159,6 +168,7 @@ pub async fn init_i18n(lang: &str) -> RaiseResult<()> {
     let translator_handle =
         TRANSLATOR.get_or_init(|| SharedRef::new(SyncRwLock::new(Translator::new())));
 
+    // 🎯 Rigueur : Match complet sur le verrou
     match translator_handle.write() {
         Ok(mut guard) => {
             guard.translations = temp_translator.translations;
@@ -173,12 +183,13 @@ pub async fn init_i18n(lang: &str) -> RaiseResult<()> {
 }
 
 pub fn t(key: &str) -> String {
-    if let Some(arc) = TRANSLATOR.get() {
-        if let Ok(read_guard) = arc.read() {
-            return read_guard.t(key);
-        }
+    match TRANSLATOR.get() {
+        Some(arc) => match arc.read() {
+            Ok(read_guard) => read_guard.t(key),
+            Err(_) => key.to_string(), // Fallback minimal de sécurité
+        },
+        None => key.to_string(),
     }
-    key.to_string()
 }
 
 // --- TESTS UNITAIRES ---
@@ -190,22 +201,21 @@ mod tests {
     use crate::utils::core::UniqueId;
     use crate::utils::testing::mock::AgentDbSandbox;
 
+    // 🎯 Modification : Les tests renvoient un RaiseResult pour utiliser l'opérateur '?' au lieu de unwrap()
     #[tokio::test]
-    async fn test_translator_full_flow() {
+    async fn test_translator_full_flow() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+
+        // 🎯 FIX : Utilisation des nouveaux mount_points
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
 
         manager
-            .create_collection(
-                "locales",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
+            .create_collection("locales", "v1/db/generic.schema.json")
+            .await?;
 
         let doc = json_value!({
             "_id": UniqueId::new_v4().to_string(),
@@ -215,41 +225,47 @@ mod tests {
                 { "key": "ERROR", "value": "Une erreur est survenue" }
             ]
         });
-        manager.insert_raw("locales", &doc).await.unwrap();
+
+        manager.insert_raw("locales", &doc).await?;
 
         let mut translator = Translator::new();
-        translator
-            .load_from_db(&sandbox.db, "fr")
-            .await
-            .expect("Echec load FR");
+        match translator.load_from_db(&sandbox.db, "fr").await {
+            Ok(_) => {}
+            Err(e) => panic!("Échec inattendu du chargement FR: {:?}", e),
+        };
 
         assert_eq!(translator.current_lang, "fr");
         assert_eq!(translator.t("WELCOME"), "Bienvenue sur RAISE");
         assert_eq!(translator.t("UNKNOWN"), "UNKNOWN");
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_translator_missing_language_error() {
+    async fn test_translator_missing_language_error() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+
+        // 🎯 FIX : Utilisation des nouveaux mount_points
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
 
         manager
-            .create_collection(
-                "locales",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
+            .create_collection("locales", "v1/db/generic.schema.json")
+            .await?;
 
         let mut translator = Translator::new();
-        let result = translator.load_from_db(&sandbox.db, "jp").await;
 
-        assert!(result.is_err());
-        let AppError::Structured(data) = result.unwrap_err();
-        assert_eq!(data.code, "ERR_I18N_NOT_FOUND");
+        // 🎯 Rigueur : Match pour intercepter précisément l'erreur attendue
+        match translator.load_from_db(&sandbox.db, "jp").await {
+            Ok(_) => panic!("Le chargement d'une langue inexistante aurait dû échouer."),
+            Err(AppError::Structured(data)) => {
+                assert_eq!(data.code, "ERR_I18N_NOT_FOUND");
+            }
+        }
+
+        Ok(())
     }
 }

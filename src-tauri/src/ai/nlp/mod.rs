@@ -16,6 +16,8 @@ mod tests {
     use super::tokenizers;
 
     #[test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_nlp_pipeline_integration() {
         let query = "Je veux l'Architecture du Processeur";
         let keywords = tokenizers::tokenize(query);

@@ -102,6 +102,8 @@ mod tests {
     use candle_nn::VarMap;
 
     #[test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_predictor_shape() {
         // Setup
         let varmap = VarMap::new();

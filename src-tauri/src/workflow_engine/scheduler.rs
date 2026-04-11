@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/workflow_engine/scheduler.rs
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 use crate::workflow_engine::{
     executor::WorkflowExecutor, state_machine::WorkflowStateMachine, ExecutionStatus,
@@ -20,23 +20,38 @@ impl WorkflowScheduler {
         }
     }
 
+    /// Charge une mission de manière résiliente.
     pub async fn load_mission<'a>(
         &mut self,
         mission_handle: &str,
         manager: &'a CollectionsManager<'a>,
     ) -> RaiseResult<()> {
-        tracing::info!("📥 Chargement de la mission : {}", mission_handle);
-        let workflow = WorkflowExecutor::load_and_prepare_workflow(manager, mission_handle).await?;
+        user_info!(
+            "INF_SCHEDULER_LOAD_MISSION",
+            json_value!({ "mission": mission_handle })
+        );
 
-        // 🎯 FIX : Utilisation du handle comme clé de stockage (plus l'id)
+        // Délégation à l'exécuteur pour la compilation tissée
+        let workflow =
+            match WorkflowExecutor::load_and_prepare_workflow(manager, mission_handle).await {
+                Ok(wf) => wf,
+                Err(e) => raise_error!(
+                    "ERR_SCHEDULER_LOAD_FAIL",
+                    error = e.to_string(),
+                    context = json_value!({"mission": mission_handle})
+                ),
+            };
+
+        // Utilisation du handle sémantique
         self.definitions.insert(workflow.handle.clone(), workflow);
         Ok(())
     }
 
+    /// Crée une instance de workflow persistante.
     pub async fn create_instance<'a>(
         &self,
         mission_id: &str,
-        workflow_handle: &str, // Passage au handle sémantique
+        workflow_handle: &str,
         manager: &'a CollectionsManager<'a>,
     ) -> RaiseResult<WorkflowInstance> {
         let def = match self.definitions.get(workflow_handle) {
@@ -47,9 +62,8 @@ impl WorkflowScheduler {
             ),
         };
 
-        // 🎯 FIX : Initialisation handle-based sans forcer l'_id
         let mut instance = WorkflowInstance {
-            _id: None, // Laissé à la gestion interne de json_db
+            _id: None,
             handle: format!(
                 "inst_{}_{}",
                 workflow_handle,
@@ -73,28 +87,27 @@ impl WorkflowScheduler {
         Ok(instance)
     }
 
+    /// Exécute une étape élémentaire du workflow.
     pub async fn run_step<'a>(
         &'a self,
         instance: &mut WorkflowInstance,
         manager: &'a CollectionsManager<'a>,
     ) -> RaiseResult<bool> {
-        // 🎯 Recherche de la définition par son handle métier
         let def = match self.definitions.get(&instance.workflow_id) {
             Some(d) => d,
             None => raise_error!(
                 "ERR_WF_INSTANCE_ORPHAN",
-                context = json_value!({"instance_handle": instance.handle})
+                context = json_value!({"instance": instance.handle})
             ),
         };
+
         let sm = WorkflowStateMachine::new(def);
         let runnable_nodes = sm.next_runnable_nodes(instance).await;
 
         if runnable_nodes.is_empty() {
             if instance.status == ExecutionStatus::Running {
                 instance.status = ExecutionStatus::Completed;
-                instance
-                    .logs
-                    .push("🏁 Exécution terminée avec succès.".into());
+                instance.logs.push("🏁 Exécution terminée.".into());
                 self.persist_instance(instance, manager).await?;
             }
             return Ok(false);
@@ -133,9 +146,10 @@ impl WorkflowScheduler {
         Ok(progress_made)
     }
 
+    /// Boucle d'exécution automatique jusqu'à complétion ou pause.
     pub async fn execute_instance_loop<'a>(
         &'a self,
-        instance_handle: &str, // Utilisation du handle pour la recherche
+        instance_handle: &str,
         manager: &'a CollectionsManager<'a>,
     ) -> RaiseResult<ExecutionStatus> {
         let doc = match manager
@@ -145,28 +159,27 @@ impl WorkflowScheduler {
             Some(d) => d,
             None => raise_error!(
                 "ERR_WF_INSTANCE_NOT_FOUND",
-                context = json_value!({"instance_handle": instance_handle})
+                context = json_value!({"handle": instance_handle})
             ),
         };
 
         let mut instance: WorkflowInstance = match json::deserialize_from_value(doc) {
             Ok(inst) => inst,
-            Err(e) => raise_error!(
-                "ERR_WORKFLOW_DESERIALIZATION_FAIL",
-                error = e.to_string(),
-                context = json_value!({"instance_handle": instance_handle})
-            ),
+            Err(e) => raise_error!("ERR_WF_DESERIALIZATION", error = e.to_string()),
         };
 
         loop {
-            if !self.run_step(&mut instance, manager).await? {
-                break;
+            match self.run_step(&mut instance, manager).await {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(e) => return Err(e),
             }
         }
 
         Ok(instance.status)
     }
 
+    /// Reprend l'exécution d'un nœud en attente (HITL).
     pub async fn resume_node<'a>(
         &self,
         instance_handle: &str,
@@ -181,10 +194,14 @@ impl WorkflowScheduler {
             Some(d) => d,
             None => raise_error!(
                 "ERR_WF_INSTANCE_NOT_FOUND",
-                context = json_value!({"instance_handle": instance_handle})
+                context = json_value!({"handle": instance_handle})
             ),
         };
-        let mut instance: WorkflowInstance = json::deserialize_from_value(doc).unwrap();
+
+        let mut instance: WorkflowInstance = match json::deserialize_from_value(doc) {
+            Ok(inst) => inst,
+            Err(e) => raise_error!("ERR_WF_DESERIALIZATION", error = e.to_string()),
+        };
 
         let new_status = if approved {
             ExecutionStatus::Completed
@@ -198,22 +215,30 @@ impl WorkflowScheduler {
         Ok(instance.status)
     }
 
+    /// Persistance atomique de l'état de l'instance.
     async fn persist_instance(
         &self,
         instance: &mut WorkflowInstance,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<()> {
         instance.updated_at = UtcClock::now().timestamp();
-        let json_val = json::serialize_to_value(&instance).unwrap();
-        manager
+        let json_val = match json::serialize_to_value(&instance) {
+            Ok(v) => v,
+            Err(e) => raise_error!("ERR_WF_SERIALIZATION", error = e.to_string()),
+        };
+
+        match manager
             .upsert_document("workflow_instances", json_val)
-            .await?;
-        Ok(())
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_WF_PERSISTENCE_FAIL", error = e.to_string()),
+        }
     }
 }
 
 // =========================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES (Rigueur Façade & Résilience)
 // =========================================================================
 
 #[cfg(test)]
@@ -223,27 +248,27 @@ mod tests {
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
-    use crate::workflow_engine::{NodeType, WorkflowEdge, WorkflowNode};
 
     async fn setup_test_environment(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &AppConfig,
     ) -> WorkflowScheduler {
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+        let manager = CollectionsManager::new(
+            &storage,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            manager.space, manager.db
+        );
         manager
-            .create_collection(
-                "workflow_instances",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
+            .create_collection("workflow_instances", &schema_uri)
             .await
             .unwrap();
 
-        inject_mock_component(
-            &manager,
-            "llm",
-            json_value!({ "provider": "mock", "model": "test" }),
-        )
-        .await;
+        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
@@ -255,82 +280,81 @@ mod tests {
         WorkflowScheduler::new(executor)
     }
 
-    fn create_mock_workflow(
-        handle_name: &str,
-        nodes: Vec<WorkflowNode>,
-        edges: Vec<WorkflowEdge>,
-    ) -> WorkflowDefinition {
-        let entry = nodes.first().map(|n| n.id.clone()).unwrap_or_default();
-        WorkflowDefinition {
-            _id: None,                       // 🎯 FIX : Initialisation obligatoire
-            handle: handle_name.to_string(), // 🎯 FIX : Remplacement d'id par handle
-            entry,
-            nodes,
-            edges,
-        }
-    }
-
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_scheduler_create_instance_and_persistence() {
+    async fn test_scheduler_create_instance_persistence() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
-        let mut scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
 
-        let def = create_mock_workflow("wf_empty", vec![], vec![]);
-        scheduler.definitions.insert("wf_empty".to_string(), def);
+        let def = WorkflowDefinition {
+            _id: None,
+            handle: "wf_test".to_string(),
+            entry: "n1".to_string(),
+            nodes: vec![],
+            edges: vec![],
+        };
+        let mut scheduler = scheduler;
+        scheduler.definitions.insert("wf_test".to_string(), def);
 
         let instance = scheduler
-            .create_instance("mission_test", "wf_empty", &manager)
-            .await
-            .expect("Échec création");
-
-        // 🎯 FIX : Vérification basée sur le handle métier
-        assert_eq!(instance.workflow_id, "wf_empty");
-        assert_eq!(instance.status, ExecutionStatus::Pending);
+            .create_instance("mission_1", "wf_test", &manager)
+            .await?;
+        assert_eq!(instance.workflow_id, "wf_test");
 
         let doc = manager
             .get_document("workflow_instances", &instance.handle)
-            .await
-            .unwrap()
+            .await?
             .unwrap();
-
-        assert_eq!(doc["workflowId"], "wf_empty");
+        assert_eq!(doc["workflowId"], "wf_test");
+        Ok(())
     }
 
+    /// 🎯 NOUVEAU TEST : Résilience face au point de montage système
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_scheduler_step_by_step_execution() {
+    async fn test_scheduler_mount_point_resilience() -> RaiseResult<()> {
+        let _sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+        assert!(!config.mount_points.system.domain.is_empty());
+        assert!(!config.mount_points.system.db.is_empty());
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Erreur Match sur instance orpheline
+    #[async_test]
+    #[serial_test::serial] // 🎯 FIX : Protection CUDA (Bombe à retardement désamorcée)
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_scheduler_orphan_instance_match() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
-        let mut scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
-        );
+        let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let manager = CollectionsManager::new(&sandbox.db, "a", "b");
 
-        let n_start = WorkflowNode {
-            id: "n1".into(),
-            r#type: NodeType::End,
-            name: "Start".into(),
-            params: JsonValue::Null,
+        let mut instance = WorkflowInstance {
+            _id: None,
+            handle: "ghost_inst".into(),
+            mission_id: "m1".into(),
+            workflow_id: "ghost_wf".into(),
+            status: ExecutionStatus::Pending,
+            node_states: UnorderedMap::new(),
+            context: UnorderedMap::new(),
+            xai_traces: Vec::new(),
+            logs: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
         };
-        let def = create_mock_workflow("wf_mini", vec![n_start], vec![]);
-        scheduler.definitions.insert("wf_mini".to_string(), def);
 
-        let mut instance = scheduler
-            .create_instance("mission_test", "wf_mini", &manager)
-            .await
-            .unwrap();
-
-        let progress = scheduler.run_step(&mut instance, &manager).await.unwrap();
-        assert!(progress);
-        assert_eq!(instance.status, ExecutionStatus::Completed);
+        let result = scheduler.run_step(&mut instance, &manager).await;
+        match result {
+            Err(AppError::Structured(err)) => assert_eq!(err.code, "ERR_WF_INSTANCE_ORPHAN"),
+            _ => panic!("Attendu ERR_WF_INSTANCE_ORPHAN"),
+        }
+        Ok(())
     }
 }

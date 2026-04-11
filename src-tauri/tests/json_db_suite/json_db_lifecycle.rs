@@ -53,12 +53,9 @@ async fn test_collection_drop_cleans_system_index() {
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let collection = "temp_collection_to_drop";
 
-    mgr.create_collection(
-        collection,
-        "db://_system/_system/schemas/v1/db/generic.schema.json",
-    )
-    .await
-    .expect("❌ Échec création");
+    mgr.create_collection(collection, "v1/db/generic.schema.json")
+        .await
+        .expect("❌ Échec création");
 
     // 🎯 FIX : Annotation de type explicite pour lever l'ambiguïté
     let sys_json: JsonValue = mgr.load_index().await.expect("❌ Lecture via manager");
@@ -81,14 +78,10 @@ async fn test_system_index_strict_conformance() {
     let env = setup_test_env(LlmMode::Disabled).await;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
-    mgr.create_collection(
-        "init_trigger",
-        "db://_system/_system/schemas/v1/db/generic.schema.json",
-    )
-    .await
-    .unwrap();
+    mgr.create_collection("init_trigger", "v1/db/generic.schema.json")
+        .await
+        .unwrap();
 
-    // 🎯 FIX : Annotation de type explicite
     let doc: JsonValue = mgr
         .load_index()
         .await
@@ -96,17 +89,20 @@ async fn test_system_index_strict_conformance() {
 
     assert!(doc.get("_id").is_some());
 
-    let expected_schema = "db://_system/_system/schemas/v1/db/index.schema.json";
+    let expected_schema = format!(
+        "db://{}/{}/schemas/v1/db/index.schema.json",
+        env.sandbox.config.mount_points.system.domain, env.sandbox.config.mount_points.system.db
+    );
 
     assert_eq!(
         doc.get("$schema").and_then(|v| v.as_str()),
-        Some(expected_schema)
+        Some(expected_schema.as_str())
     );
 
     let registry = SchemaRegistry::from_db(&env.sandbox.storage.config, &env.space, &env.db)
         .await
         .unwrap();
-    let validator = SchemaValidator::compile_with_registry(expected_schema, &registry).unwrap();
+    let validator = SchemaValidator::compile_with_registry(&expected_schema, &registry).unwrap();
 
     validator
         .validate(&doc)

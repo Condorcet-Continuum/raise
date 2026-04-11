@@ -3,6 +3,8 @@
 use crate::utils::prelude::*;
 // 🎯 NOUVEAU : Import du contexte
 use super::handlers::HandlerContext;
+pub mod system_tools;
+pub use system_tools::SystemMonitorTool;
 
 /// Définition d'un Outil que l'Agent (ou le Workflow) peut appeler.
 #[async_interface]
@@ -23,9 +25,6 @@ pub trait AgentTool: Send + Sync + FmtDebug {
         context: &HandlerContext<'_>,
     ) -> RaiseResult<JsonValue>;
 }
-
-pub mod system_tools;
-pub use system_tools::SystemMonitorTool;
 
 #[cfg(test)]
 mod tests {

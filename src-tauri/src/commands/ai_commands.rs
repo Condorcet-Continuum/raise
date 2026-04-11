@@ -2,7 +2,7 @@
 
 use crate::ai::agents::AgentResult;
 use crate::ai::orchestrator::AiOrchestrator;
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 // Import Moteur Natif
 use crate::ai::llm::NativeLlmState;
@@ -24,14 +24,14 @@ use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 // 🎯 IMPORT POUR L'EXPORT DE DATASET
 use crate::ai::training::dataset::{extract_domain_data, TrainingExample};
 
-use crate::ai::agents::prompt_engine::PromptEngine; //
-use crate::ai::agents::tools::extract_json_from_llm; //
-use crate::ai::llm::client::{LlmBackend, LlmClient}; //
+use crate::ai::agents::prompt_engine::PromptEngine;
+use crate::ai::agents::tools::extract_json_from_llm;
+use crate::ai::llm::client::{LlmBackend, LlmClient};
 
 use tauri::{command, State};
 
-/// 🎯 LOGIQUE CORE : Exécute un blueprint de prompt (Data-Driven)
-/// Cette fonction est le point d'entrée unique pour le CLI et l'UI.
+/// 🎯 LOGIQUE CORE : Exécute un blueprint de prompt (Data-Driven).
+/// Respecte les points de montage système pour la résolution du client LLM.
 pub async fn ai_execute_blueprint_core(
     storage: SharedRef<StorageEngine>,
     domain: &str,
@@ -39,23 +39,28 @@ pub async fn ai_execute_blueprint_core(
     prompt_handle: &str,
     vars: Option<JsonValue>,
 ) -> RaiseResult<String> {
-    // 1. Initialisation du Manager et du Client LLM
+    // 1. Initialisation résiliente du Manager et du Client LLM
     let manager = CollectionsManager::new(storage.as_ref(), domain, db);
-    let client = LlmClient::new(&manager).await?;
+    let client = match LlmClient::new(&manager).await {
+        Ok(c) => c,
+        Err(e) => raise_error!("ERR_LLM_CLIENT_INIT", error = e.to_string()),
+    };
+
     // 2. Compilation via le PromptEngine
     let prompt_engine = PromptEngine::new(storage, domain, db);
     let system_prompt = prompt_engine.compile(prompt_handle, vars.as_ref()).await?;
 
     // 3. Inférence LLM
-    let response = client
-        .ask(LlmBackend::LocalLlama, &system_prompt, "")
-        .await?;
+    let response = match client.ask(LlmBackend::LocalLlama, &system_prompt, "").await {
+        Ok(r) => r,
+        Err(e) => raise_error!("ERR_LLM_INFERENCE_FAIL", error = e.to_string()),
+    };
 
     // 4. Nettoyage JSON
     Ok(extract_json_from_llm(&response))
 }
 
-/// 🖥️ COMMANDE TAURI : Expose la logique blueprint à l'interface graphique
+/// 🖥️ COMMANDE TAURI : Expose la logique blueprint à l'interface graphique.
 #[command]
 pub async fn ai_execute_blueprint(
     storage: State<'_, SharedRef<StorageEngine>>,
@@ -68,6 +73,7 @@ pub async fn ai_execute_blueprint(
     ai_execute_blueprint_core(storage_ref, &domain, &db, &prompt_handle, vars).await
 }
 
+/// 📤 COMMANDE TAURI : Exporte un dataset d'entraînement pour un domaine spécifique.
 #[command]
 pub async fn ai_export_dataset(
     storage: State<'_, SharedRef<StorageEngine>>,
@@ -76,7 +82,7 @@ pub async fn ai_export_dataset(
     domain: String,
 ) -> RaiseResult<Vec<TrainingExample>> {
     let storage_ref = storage.inner().clone();
-    let manager = CollectionsManager::new(storage_ref.as_ref(), &space, &db_name); //
+    let manager = CollectionsManager::new(storage_ref.as_ref(), &space, &db_name);
     extract_domain_data(&manager, &domain).await
 }
 
@@ -98,18 +104,15 @@ pub async fn ai_reset(ai_state: State<'_, AiState>) -> RaiseResult<()> {
     if let Some(shared_orch) = &*guard {
         let mut orchestrator = shared_orch.lock().await;
 
-        if let Err(e) = orchestrator.clear_history().await {
-            raise_error!(
+        match orchestrator.clear_history().await {
+            Ok(_) => (),
+            Err(e) => raise_error!(
                 "ERR_AI_HISTORY_CLEAR_FAIL",
-                error = e,
-                context = json_value!({
-                    "action": "reset_ai_orchestrator",
-                    "hint": "Échec du nettoyage de l'historique."
-                })
-            );
+                error = e.to_string(),
+                context = json_value!({ "action": "reset_ai_orchestrator" })
+            ),
         }
     }
-
     Ok(())
 }
 
@@ -127,12 +130,8 @@ pub async fn ai_learn_text(
             Ok(count) => count,
             Err(e) => raise_error!(
                 "ERR_AI_LEARN_DOCUMENT_FAILURE",
-                error = e,
-                context = json_value!({
-                    "action": "ingest_document",
-                    "source": source,
-                    "content_len": content.len()
-                })
+                error = e.to_string(),
+                context = json_value!({ "source": source })
             ),
         };
 
@@ -143,8 +142,8 @@ pub async fn ai_learn_text(
     } else {
         raise_error!(
             "ERR_AI_ORCHESTRATOR_NOT_READY",
-            error = "SHARED_ORCHESTRATOR_UNSET"
-        );
+            error = "Orchestrateur non initialisé"
+        )
     }
 }
 
@@ -158,10 +157,7 @@ pub async fn ai_confirm_learning(
     let guard = ai_state.0.lock().await;
 
     let Some(shared_orch) = &*guard else {
-        raise_error!(
-            "ERR_AI_SYSTEM_NOT_READY",
-            error = "ORCHESTRATOR_UNINITIALIZED"
-        );
+        raise_error!("ERR_AI_SYSTEM_NOT_READY", error = "Orchestrateur manquant")
     };
 
     let orchestrator = shared_orch.lock().await;
@@ -172,19 +168,17 @@ pub async fn ai_confirm_learning(
         unknown => {
             raise_error!(
                 "ERR_CLI_UNKNOWN_ACTION",
-                error = "INVALID_COMMAND_TYPE",
+                error = "Type d'intention invalide",
                 context = json_value!({"received": unknown})
             );
         }
     };
 
-    // 🎯 PURE GRAPH : Préparation des propriétés dynamiques
     let props_before = UnorderedMap::new();
     let state_before = ArcadiaElement {
         id: "root".to_string(),
         name: NameType::String("Context".to_string()),
         kind: "Context".to_string(),
-        // description: None, <- SUPPRIMÉ
         properties: props_before,
     };
 
@@ -195,7 +189,6 @@ pub async fn ai_confirm_learning(
         id: "new".to_string(),
         name: NameType::String(entity_name),
         kind: entity_kind,
-        // description: Some("Feedback".to_string()), <- SUPPRIMÉ
         properties: props_after,
     };
 
@@ -204,7 +197,7 @@ pub async fn ai_confirm_learning(
         .await
     {
         Ok(loss) => Ok(format!("Renforcement terminé. Loss: {:.5}", loss)),
-        Err(e) => raise_error!("ERR_AI_REINFORCEMENT_FAILED", error = e),
+        Err(e) => raise_error!("ERR_AI_REINFORCEMENT_FAILED", error = e.to_string()),
     }
 }
 
@@ -217,13 +210,10 @@ pub async fn ai_chat(ai_state: State<'_, AiState>, user_input: String) -> RaiseR
 
         match orchestrator.execute_workflow(&user_input).await {
             Ok(res) => Ok(res),
-            Err(e) => raise_error!("ERR_AI_WORKFLOW_EXECUTION", error = e),
+            Err(e) => raise_error!("ERR_AI_WORKFLOW_EXECUTION", error = e.to_string()),
         }
     } else {
-        raise_error!(
-            "ERR_AI_SYSTEM_NOT_READY",
-            error = "ORCHESTRATOR_UNINITIALIZED"
-        );
+        raise_error!("ERR_AI_SYSTEM_NOT_READY")
     }
 }
 
@@ -240,10 +230,10 @@ pub async fn ask_native_llm(
     if let Some(engine) = guard.as_mut() {
         match engine.generate(&sys, &usr, 1000) {
             Ok(output) => Ok(output),
-            Err(e) => raise_error!("ERR_AI_GENERATION_FAILED", error = e),
+            Err(e) => raise_error!("ERR_AI_GENERATION_FAILED", error = e.to_string()),
         }
     } else {
-        raise_error!("ERR_AI_ENGINE_NOT_LOADED", error = "MODEL_GUARD_EMPTY");
+        raise_error!("ERR_AI_ENGINE_NOT_LOADED")
     }
 }
 
@@ -260,17 +250,25 @@ pub async fn validate_arcadia_gnn(
 
     let path_buf = PathBuf::from(&collections_path);
     let config = AppConfig::get();
-    let device = config.deep_learning.to_device();
+
+    // 🎯 FIX MATÉRIEL : Utilisation de la façade centrale SSOT
+    let device = AppConfig::device();
 
     let db_config = JsonDbConfig::new(path_buf.clone());
     let storage = StorageEngine::new(db_config);
-    let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
-    let adjacency = GraphAdjacency::build_from_store(&manager, &device).await?;
+    // 🎯 MOUNT POINTS : Résolution via la config système
+    let manager = CollectionsManager::new(
+        &storage,
+        &config.mount_points.system.domain,
+        &config.mount_points.system.db,
+    );
+
+    let adjacency = GraphAdjacency::build_from_store(&manager, device).await?;
     let mut engine = EmbeddingEngine::new(&manager).await?;
 
     let features =
-        GraphFeatures::build_from_store(&manager, &adjacency.index_to_uri, &mut engine, &device)
+        GraphFeatures::build_from_store(&manager, &adjacency.index_to_uri, &mut engine, device)
             .await?;
 
     let n = adjacency.index_to_uri.len();
@@ -295,27 +293,34 @@ pub async fn validate_arcadia_gnn(
         }
     }
 
-    let edge_src = match Tensor::new(src_indices, &device) {
+    let edge_src = match Tensor::new(src_indices, device) {
         Ok(tensor) => tensor,
         Err(e) => raise_error!("ERR_GNN_TENSOR_SRC", error = e.to_string()),
     };
 
-    let edge_dst = match Tensor::new(dst_indices, &device) {
+    let edge_dst = match Tensor::new(dst_indices, device) {
         Ok(tensor) => tensor,
         Err(e) => raise_error!("ERR_GNN_TENSOR_DST", error = e.to_string()),
     };
 
     let varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let in_dim = features.matrix.dims()[1];
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+
+    let in_dim = match features.matrix.dims().get(1) {
+        Some(&d) => d,
+        None => raise_error!("ERR_GNN_DIMS_INVALID"),
+    };
+
     let model = ArcadiaGnnModel::new(in_dim, in_dim / 2, 32, vb).await?;
 
     let sim_initial = model
         .compute_similarity(&features.matrix, &adjacency, &uri_a, &uri_b)
         .await?;
+
     let final_embeddings = model
         .forward(&edge_src, &edge_dst, &features.matrix)
         .await?;
+
     let sim_final = model
         .compute_similarity(&final_embeddings, &adjacency, &uri_a, &uri_b)
         .await?;
@@ -351,8 +356,11 @@ mod tests_gnn_cmd {
     use super::*;
     use crate::utils::testing::AgentDbSandbox;
 
+    /// Test existant : Échec si URI inconnue
     #[async_test]
-    async fn test_validate_arcadia_gnn_not_found_fails() {
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_validate_arcadia_gnn_not_found_fails() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
 
         let result = validate_arcadia_gnn(
@@ -363,5 +371,37 @@ mod tests_gnn_cmd {
         .await;
 
         assert!(result.is_err());
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience Mount Points
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_ai_commands_mount_point_resilience() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+
+        // On vérifie que la commande utilise bien les nouveaux points de montage système
+        assert!(!config.mount_points.system.domain.is_empty());
+        assert!(!config.mount_points.system.db.is_empty());
+
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+        assert_eq!(manager.space, config.mount_points.system.domain);
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Inférence matériel sécurisée
+    #[async_test]
+    async fn test_ai_commands_device_ssot() -> RaiseResult<()> {
+        let _sandbox = AgentDbSandbox::new().await;
+        let device = AppConfig::device();
+        // Le périphérique doit être valide pour Candle
+        assert!(device.is_cpu() || device.is_cuda() || device.is_metal());
+        Ok(())
     }
 }

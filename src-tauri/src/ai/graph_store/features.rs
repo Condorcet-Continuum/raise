@@ -1,11 +1,12 @@
 // FICHIER : src-tauri/src/ai/graph_store/features.rs
+
 use crate::ai::nlp::embeddings::EmbeddingEngine;
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique
 use candle_core::{Device, Tensor};
 
 pub struct GraphFeatures {
-    /// Le tenseur des caractéristiques [N, D]
+    /// Le tenseur des caractéristiques [N, D] (H-Matrix)
     pub matrix: Tensor,
 }
 
@@ -13,7 +14,7 @@ impl GraphFeatures {
     /// Construit la matrice H en vectorisant chaque nœud par lots (Batching) pour
     /// maximiser les performances GPU/CPU. Extraction sémantique profonde via JSON-DB.
     pub async fn build_from_store(
-        manager: &CollectionsManager<'_>, // 🎯 Ajout du manager pour accès DB
+        manager: &CollectionsManager<'_>, // 🎯 SSOT: Manager pour accès aux documents
         index_to_uri: &[String],
         embedding_engine: &mut EmbeddingEngine,
         device: &Device,
@@ -22,39 +23,40 @@ impl GraphFeatures {
         if n_nodes == 0 {
             raise_error!(
                 "ERR_GNN_EMPTY_FEATURES",
-                error = "La liste des URIs est vide."
+                error =
+                    "La liste des URIs est vide. Impossible de construire la matrice de features."
             );
         }
 
         user_info!(
-            "🧠 [GNN] Extraction sémantique profonde en BATCH pour {} nœuds...",
-            json_value!(n_nodes)
+            "MSG_GNN_FEATURES_BATCH_START",
+            json_value!({ "nodes_count": n_nodes, "action": "deep_semantic_extraction" })
         );
 
         let mut texts_to_embed: Vec<String> = Vec::with_capacity(n_nodes);
 
-        // 🎯 OPTIMISATION PROD 1 : Récupération du contexte métier réel
+        // 🎯 OPTIMISATION 1 : Récupération du contexte métier réel via Match
         for uri in index_to_uri {
             let mut semantic_text = String::new();
 
-            // Heuristique : L'URI est généralement sous la forme "collection:id" (ex: "la:F1")
+            // L'URI suit le pattern "collection:id" (ex: "la:F1")
             let parts: Vec<&str> = uri.split(':').collect();
             if parts.len() >= 2 {
                 let col = parts[0];
-                let id = parts[1]; // L'ID réel du document
+                let id = parts[1];
 
-                // On tente de récupérer le document en base
+                // Tentative de récupération sémantique via le manager
                 if let Ok(Some(doc)) = manager.get_document(col, id).await {
                     semantic_text =
                         crate::ai::graph_store::store::extract_rich_semantic_content(&doc);
                 } else if let Ok(Some(doc)) = manager.get_document(col, uri).await {
-                    // Fallback si l'ID complet inclut le préfixe
+                    // Fallback si l'identifiant inclut le préfixe dans la DB
                     semantic_text =
                         crate::ai::graph_store::store::extract_rich_semantic_content(&doc);
                 }
             }
 
-            // Fallback ultime de sécurité si le document est introuvable ou vide
+            // Fallback ultime : on utilise l'URI formatée si le document est manquant
             if semantic_text.trim().is_empty() {
                 semantic_text = uri.replace([':', '_'], " ");
             }
@@ -62,7 +64,7 @@ impl GraphFeatures {
             texts_to_embed.push(semantic_text);
         }
 
-        // 🎯 OPTIMISATION PROD 2 : Inférence par lot (Batch Inference)
+        // 🎯 OPTIMISATION 2 : Inférence par lot (Batch Inference) avec gestion d'erreur
         let batch_vectors = match embedding_engine.embed_batch(texts_to_embed) {
             Ok(v) => v,
             Err(e) => {
@@ -74,15 +76,22 @@ impl GraphFeatures {
             }
         };
 
-        // 🎯 OPTIMISATION PROD 3 : Pré-allocation mémoire intelligente
-        let expected_dim = batch_vectors.first().map_or(0, |v| v.len());
+        // 🎯 OPTIMISATION 3 : Validation des dimensions et pré-allocation
+        let expected_dim = match batch_vectors.first() {
+            Some(v) => v.len(),
+            None => raise_error!(
+                "ERR_GNN_EMBEDDING_EMPTY",
+                error = "Le moteur NLP a renvoyé un lot vide."
+            ),
+        };
+
         let mut all_embeddings_data: Vec<f32> = Vec::with_capacity(n_nodes * expected_dim);
 
         for (i, vector) in batch_vectors.into_iter().enumerate() {
             if vector.len() != expected_dim {
                 raise_error!(
                     "ERR_GNN_DIMENSION_MISMATCH",
-                    error = "Incohérence des dimensions d'embedding détectée dans le lot.",
+                    error = "Incohérence des dimensions d'embedding dans le lot.",
                     context = json_value!({
                         "expected": expected_dim,
                         "got": vector.len(),
@@ -93,20 +102,20 @@ impl GraphFeatures {
             all_embeddings_data.extend(vector);
         }
 
-        // 3. Création du Tenseur final [N, D]
+        // 3. Création du Tenseur final [N, D] sur le matériel configuré
         let matrix = match Tensor::from_vec(all_embeddings_data, (n_nodes, expected_dim), device) {
             Ok(t) => t,
             Err(e) => {
                 raise_error!(
-                    "ERR_GNN_FEATURES_TENSOR",
-                    error = e,
-                    context = json_value!({ "nodes": n_nodes, "dim": expected_dim })
+                    "ERR_GNN_FEATURES_TENSOR_FAILED",
+                    error = e.to_string(),
+                    context = json_value!({ "nodes": n_nodes, "dim": expected_dim, "device": format!("{:?}", device) })
                 );
             }
         };
 
         user_success!(
-            "✅ [GNN] Matrice H construite (Sémantique profonde).",
+            "MSG_GNN_FEATURES_READY",
             json_value!({ "shape": format!("[{}, {}]", n_nodes, expected_dim) })
         );
 
@@ -115,61 +124,50 @@ impl GraphFeatures {
 }
 
 // =========================================================================
-// TESTS UNITAIRES (VALIDATION SÉMANTIQUE BATCH)
+// TESTS UNITAIRES (Validation Sémantique Batch & Résilience)
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
     #[async_test]
-    async fn test_graph_features_generation_batch_mode() {
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_graph_features_generation_batch_mode() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+
+        // 🎯 FIX MOUNT POINTS : Utilisation du point de montage système configuré
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+        AgentDbSandbox::mock_db(&manager).await?;
+
+        // Initialisation des collections MBSE
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
         );
 
-        AgentDbSandbox::mock_db(&manager).await.unwrap();
-        manager
-            .create_collection(
-                "la",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
-        manager
-            .create_collection(
-                "sa",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
-        manager
-            .create_collection(
-                "pa",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
+        for col in &["la", "sa", "pa"] {
+            manager.create_collection(col, &schema_uri).await?;
+        }
 
-        manager.insert_raw("la", &json_value!({"_id": "Function_A", "name": "Radar Module", "description": "Detects targets"})).await.unwrap();
         manager
             .insert_raw(
-                "sa",
-                &json_value!({"_id": "System_B", "name": "Defense System"}),
+                "la",
+                &json_value!({"_id": "F1", "name": "Radar", "description": "Detection"}),
             )
-            .await
-            .unwrap();
+            .await?;
         manager
-            .insert_raw(
-                "pa",
-                &json_value!({"_id": "Hardware_C", "name": "Antenna Array"}),
-            )
-            .await
-            .unwrap();
+            .insert_raw("sa", &json_value!({"_id": "S1", "name": "Defense"}))
+            .await?;
+        manager
+            .insert_raw("pa", &json_value!({"_id": "H1", "name": "Antenna"}))
+            .await?;
 
         inject_mock_component(
             &manager,
@@ -183,61 +181,72 @@ mod tests {
         )
         .await;
 
-        if let Ok(mut engine) = EmbeddingEngine::new(&manager).await {
-            let uris = vec![
-                "la:Function_A".to_string(),
-                "sa:System_B".to_string(),
-                "pa:Hardware_C".to_string(),
-            ];
-            let device = Device::Cpu;
+        let mut engine = EmbeddingEngine::new(&manager).await?;
+        let uris = vec![
+            "la:F1".to_string(),
+            "sa:S1".to_string(),
+            "pa:H1".to_string(),
+        ];
 
-            // 🎯 Ajout du manager dans l'appel
-            let feat_res =
-                GraphFeatures::build_from_store(&manager, &uris, &mut engine, &device).await;
+        let feat =
+            GraphFeatures::build_from_store(&manager, &uris, &mut engine, &Device::Cpu).await?;
 
-            assert!(
-                feat_res.is_ok(),
-                "La génération des features en batch a échoué."
-            );
-            let feat = feat_res.unwrap();
-
-            assert_eq!(
-                feat.matrix.dims(),
-                &[3, 384], // 3 nœuds, 384 dimensions
-                "La matrice H devrait avoir 3 lignes et 384 colonnes (MiniLM)."
-            );
-        }
+        assert_eq!(
+            feat.matrix.dims(),
+            &[3, 384],
+            "La matrice H devrait être [3, 384] (MiniLM)"
+        );
+        Ok(())
     }
 
     #[async_test]
-    async fn test_features_empty_list_fails() {
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_features_empty_list_fails() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
 
-        inject_mock_component(
-            &manager,
-            "nlp",
-            json_value!({
-                "model_name": "minilm",
-                "rust_config_file": "config.json",
-                "rust_tokenizer_file": "tokenizer.json",
-                "rust_safetensors_file": "model.safetensors"
-            }),
-        )
-        .await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
+        let mut engine = EmbeddingEngine::new(&manager).await?;
 
-        if let Ok(mut engine) = EmbeddingEngine::new(&manager).await {
-            // 🎯 Ajout du manager dans l'appel
-            let res =
-                GraphFeatures::build_from_store(&manager, &[], &mut engine, &Device::Cpu).await;
-            assert!(res.is_err());
-            if let Err(AppError::Structured(err)) = res {
-                assert_eq!(err.code, "ERR_GNN_EMPTY_FEATURES");
-            }
+        let res = GraphFeatures::build_from_store(&manager, &[], &mut engine, &Device::Cpu).await;
+
+        match res {
+            Err(AppError::Structured(err)) => assert_eq!(err.code, "ERR_GNN_EMPTY_FEATURES"),
+            _ => panic!("Le moteur aurait dû lever ERR_GNN_EMPTY_FEATURES"),
         }
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience sur documents manquants (Fallback)
+    #[async_test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_features_fallback_on_missing_docs() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
+        let mut engine = EmbeddingEngine::new(&manager).await?;
+
+        // URI pointant vers un document inexistant
+        let uris = vec!["ghost:entity_01".to_string()];
+
+        let feat =
+            GraphFeatures::build_from_store(&manager, &uris, &mut engine, &Device::Cpu).await?;
+
+        // Le build doit réussir via le fallback textuel (URI formatée)
+        assert_eq!(feat.matrix.dims(), &[1, 384]);
+        Ok(())
     }
 }

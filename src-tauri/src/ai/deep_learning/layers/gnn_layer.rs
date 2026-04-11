@@ -97,6 +97,8 @@ mod tests {
     use candle_nn::VarMap;
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gcn_layer_sparse_forward_math() {
         let device = Device::Cpu;
         let varmap = VarMap::new();

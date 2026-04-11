@@ -2,30 +2,18 @@
 use raise::utils::prelude::*;
 
 use crate::common::{setup_test_env, LlmMode};
-use raise::json_db::collections;
 use raise::json_db::collections::manager::CollectionsManager;
 
 #[async_test]
 async fn test_end_to_end_rules_execution() {
     // 1. SETUP ROBUSTE
     let env = setup_test_env(LlmMode::Disabled).await;
-    let config = &env.sandbox.storage.config;
-
-    // ✅ NOUVEAU : On crée une référence directe au StorageEngine
     let storage = &env.sandbox.storage;
-
-    // On utilise l'espace et la DB fournis par l'environnement
     let space = &env.space;
     let db = &env.db;
 
-    // L'init_db est déjà fait par setup_test_env, mais on peut le rappeler par sécurité
-    // (create_db est idempotent)
-    CollectionsManager::new(storage, space, db)
-        .init_db()
-        .await
-        .unwrap();
     let manager = CollectionsManager::new(storage, space, db);
-    manager.init_db().await.unwrap();
+    // manager.init_db() est déjà appelé dans setup_test_env()
 
     // 🎯 FIX STRICT SCHEMA : On déclare légalement la collection _system_rules
     manager
@@ -35,6 +23,7 @@ async fn test_end_to_end_rules_execution() {
         )
         .await
         .unwrap();
+
     // 2. CRÉATION DU SCHÉMA
     let schema_content = json_value!({
         "type": "object",
@@ -66,17 +55,15 @@ async fn test_end_to_end_rules_execution() {
         ]
     });
 
-    // On écrit le schéma dans le dossier temporaire du test (le config reste utile ici)
-    let schema_inv_path = config
-        .db_schemas_root(space, db)
-        .join("v1/invoices/default.json");
+    // ✅ CORRECTION "ZÉRO DETTE" : On passe par le manager pour créer le schéma proprement
+    manager
+        .create_schema_def("v1/invoices/default.json", schema_content)
+        .await
+        .unwrap();
 
-    fs::create_dir_all_sync(schema_inv_path.parent().unwrap()).unwrap();
-    fs::write_sync(&schema_inv_path, schema_content.to_string()).unwrap();
-
-    // 3. Création collection
-    // ✅ CORRECTION : Remplacement de `config` par `storage`
-    collections::create_collection(storage, space, db, "invoices")
+    // 3. CRÉATION DE LA COLLECTION via le Manager
+    manager
+        .create_collection("invoices", "v1/invoices/default.json")
         .await
         .unwrap();
 
@@ -88,14 +75,13 @@ async fn test_end_to_end_rules_execution() {
         "price": 50
     });
 
-    // ✅ CORRECTION : Remplacement de `config` par `storage`
-    let result =
-        collections::insert_with_schema(storage, space, db, "invoices/default.json", invoice_input)
-            .await
-            .expect("Insert invoice failed");
+    // ✅ CORRECTION : Utilisation de insert_with_schema du Manager (Gère les _id, les $schema et l'AST)
+    let result = manager
+        .insert_with_schema("invoices", invoice_input)
+        .await
+        .expect("Insert invoice failed");
 
     // 5. VALIDATIONS
     assert_eq!(result["total"], 100.0);
-    // INV-U_DEV-100
     assert_eq!(result["ref"], "INV-U_DEV-100");
 }

@@ -85,11 +85,13 @@ pub enum Operation {
     Update {
         collection: String,
         id: String,
+        previous_document: Option<JsonValue>,
         document: JsonValue,
     },
     Delete {
         collection: String,
         id: String,
+        previous_document: Option<JsonValue>,
     },
 }
 

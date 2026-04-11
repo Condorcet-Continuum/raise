@@ -20,14 +20,14 @@ impl SchemaRegistry {
     pub fn new() -> Self {
         Self {
             by_uri: UnorderedMap::new(),
-            base_prefix: "db://unknown/unknown/schemas/v1/".to_string(),
+            base_prefix: "db://unknown/unknown/schemas/v2/".to_string(),
             schemas_root: None,
         }
     }
 
     pub async fn from_db(config: &JsonDbConfig, space: &str, db: &str) -> RaiseResult<Self> {
-        let base_prefix = format!("db://{}/{}/schemas/v1/", space, db);
-        let schemas_root = config.db_schemas_root(space, db).join("v1");
+        let base_prefix = format!("db://{}/{}/schemas/", space, db);
+        let schemas_root = config.db_schemas_root(space, db);
 
         let mut registry = Self {
             by_uri: UnorderedMap::new(),
@@ -37,34 +37,36 @@ impl SchemaRegistry {
 
         let app_config = AppConfig::get();
 
-        // 🎯 LECTURE ASCENDANTE : On charge toutes les strates dans la mémoire (UnorderedMap)
-        // 1. Noyau système dur (_system/_system)
+        // 🎯 FIX : Chargement en cascade via les Points de Montage stricts
+
+        // 1. Noyau Système
         registry
-            .load_domain_schemas(config, "_system", "_system")
+            .load_domain_schemas(
+                config,
+                &app_config.mount_points.system.domain,
+                &app_config.mount_points.system.db,
+            )
             .await?;
 
-        // 2. Système configuré
-        if app_config.system_domain != "_system" || app_config.system_db != "_system" {
-            registry
-                .load_domain_schemas(config, &app_config.system_domain, &app_config.system_db)
-                .await?;
-        }
+        // 2. Raise Core
+        registry
+            .load_domain_schemas(
+                config,
+                &app_config.mount_points.raise.domain,
+                &app_config.mount_points.raise.db,
+            )
+            .await?;
 
-        // 3. Workstation
-        if let Some(ws) = &app_config.workstation {
-            if let (Some(d), Some(b)) = (&ws.default_domain, &ws.default_db) {
-                registry.load_domain_schemas(config, d, b).await?;
-            }
-        }
+        // 3. Workspace MBSE
+        registry
+            .load_domain_schemas(
+                config,
+                &app_config.mount_points.simulation.domain,
+                &app_config.mount_points.simulation.db,
+            )
+            .await?;
 
-        // 4. Utilisateur
-        if let Some(user) = &app_config.user {
-            if let (Some(d), Some(b)) = (&user.default_domain, &user.default_db) {
-                registry.load_domain_schemas(config, d, b).await?;
-            }
-        }
-
-        // 5. Domaine courant (space/db)
+        // 4. Domaine courant (si différent)
         registry.load_domain_schemas(config, space, db).await?;
 
         Ok(registry)
@@ -77,15 +79,49 @@ impl SchemaRegistry {
         space: &str,
         db: &str,
     ) -> RaiseResult<()> {
-        let prefix = format!("db://{}/{}/schemas/v1/", space, db);
-        let root = config.db_schemas_root(space, db).join("v1");
+        let root = config.db_schemas_root(space, db);
+
         if fs::exists_async(&root).await {
-            self.scan_directory(&root, &root, &prefix).await?;
+            let mut entries = match fs::read_dir_async(&root).await {
+                Ok(e) => e,
+                Err(e) => raise_error!(
+                    "ERR_FS_READ_DIR",
+                    error = e,
+                    context = json_value!({ "path": root, "action": "load_domain_schemas" })
+                ),
+            };
+
+            while let Some(entry) = match entries.next_entry().await {
+                Ok(e) => e,
+                Err(e) => raise_error!(
+                    "ERR_FS_SCAN_NEXT_ENTRY",
+                    error = e,
+                    context = json_value!({"path": root})
+                ),
+            } {
+                let path = entry.path();
+                let file_type = match entry.file_type().await {
+                    Ok(ft) => ft,
+                    Err(e) => raise_error!(
+                        "ERR_FS_GET_FILE_TYPE",
+                        error = e,
+                        context = json_value!({"path": path})
+                    ),
+                };
+
+                if file_type.is_dir() {
+                    let dir_name = entry.file_name().to_string_lossy().to_string();
+                    if dir_name.starts_with('v') {
+                        let prefix = format!("db://{}/{}/schemas/{}/", space, db, dir_name);
+                        self.scan_directory(&path, &path, &prefix).await?;
+                    }
+                }
+            }
         }
         Ok(())
     }
 
-    #[async_recursive] // Adapte le chemin de la macro selon tes imports
+    #[async_recursive]
     async fn scan_directory(
         &mut self,
         root: &Path,
@@ -113,14 +149,12 @@ impl SchemaRegistry {
             };
 
             if file_type.is_dir() {
-                // 🎯 On passe le préfixe à la récursion
                 self.scan_directory(root, &path, prefix).await?;
             } else if file_type.is_file() && path.extension().is_some_and(|e| e == "json") {
                 if let Ok(content) = fs::read_to_string_async(&path).await {
                     if let Ok(schema) = json::deserialize_from_str(&content) {
                         if let Ok(rel_path) = path.strip_prefix(root) {
-                            let rel_str = rel_path.to_string_lossy().replace("\\", "/");
-                            // 🎯 L'URI utilise le préfixe du contexte chargé, pas forcément celui de la base
+                            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
                             let uri = format!("{}{}", prefix, rel_str);
                             self.register(uri, schema);
                         }
@@ -141,44 +175,58 @@ impl SchemaRegistry {
             return Some(schema);
         }
 
-        // 2. 🎯 FALLBACK INTELLIGENT (Virtualisation en mémoire)
-        if let Some(idx) = uri.find("/schemas/v1/") {
-            let relative_path = &uri[idx + "/schemas/v1/".len()..];
-            let app_config = AppConfig::get();
+        // 2. 🎯 FALLBACK INTELLIGENT (Virtualisation en mémoire vers les mount_points)
+        if let Some(idx) = uri.find("/schemas/") {
+            let remainder = &uri[idx + "/schemas/".len()..];
+            let parts: Vec<&str> = remainder.splitn(2, '/').collect();
 
-            // A. Domaine Utilisateur
-            if let Some(user) = &app_config.user {
-                if let (Some(d), Some(b)) = (&user.default_domain, &user.default_db) {
-                    let user_uri = format!("db://{}/{}/schemas/v1/{}", d, b, relative_path);
-                    if let Some(schema) = self.by_uri.get(&user_uri) {
-                        return Some(schema);
-                    }
+            if parts.len() == 2 {
+                let version = parts[0];
+                let relative_path = parts[1];
+                let app_config = AppConfig::get();
+
+                // A. Workspace MBSE
+                let mod_uri = format!(
+                    "db://{}/{}/schemas/{}/{}",
+                    app_config.mount_points.modeling.domain,
+                    app_config.mount_points.modeling.db,
+                    version,
+                    relative_path
+                );
+                if let Some(schema) = self.by_uri.get(&mod_uri) {
+                    return Some(schema);
                 }
-            }
 
-            // B. Domaine Workstation
-            if let Some(ws) = &app_config.workstation {
-                if let (Some(d), Some(b)) = (&ws.default_domain, &ws.default_db) {
-                    let ws_uri = format!("db://{}/{}/schemas/v1/{}", d, b, relative_path);
-                    if let Some(schema) = self.by_uri.get(&ws_uri) {
-                        return Some(schema);
-                    }
+                // B. Raise Core
+                let raise_uri = format!(
+                    "db://{}/{}/schemas/{}/{}",
+                    app_config.mount_points.raise.domain,
+                    app_config.mount_points.raise.db,
+                    version,
+                    relative_path
+                );
+                if let Some(schema) = self.by_uri.get(&raise_uri) {
+                    return Some(schema);
                 }
-            }
 
-            // C. Domaine Système Configuré
-            let sys_uri = format!(
-                "db://{}/{}/schemas/v1/{}",
-                app_config.system_domain, app_config.system_db, relative_path
-            );
-            if let Some(schema) = self.by_uri.get(&sys_uri) {
-                return Some(schema);
-            }
+                // C. Noyau Système Configuré
+                let sys_uri = format!(
+                    "db://{}/{}/schemas/{}/{}",
+                    app_config.mount_points.system.domain,
+                    app_config.mount_points.system.db,
+                    version,
+                    relative_path
+                );
+                if let Some(schema) = self.by_uri.get(&sys_uri) {
+                    return Some(schema);
+                }
 
-            // D. Noyau Dur (_system/_system)
-            let hard_sys_uri = format!("db://_system/_system/schemas/v1/{}", relative_path);
-            if let Some(schema) = self.by_uri.get(&hard_sys_uri) {
-                return Some(schema);
+                // D. _system/_system en ultime recours
+                let hard_sys_uri =
+                    format!("db://_system/_system/schemas/{}/{}", version, relative_path);
+                if let Some(schema) = self.by_uri.get(&hard_sys_uri) {
+                    return Some(schema);
+                }
             }
         }
 
@@ -192,13 +240,14 @@ impl SchemaRegistry {
     pub fn uri(&self, relative_path: &str) -> String {
         format!("{}{}", self.base_prefix, relative_path)
     }
+
     // ============================================================================
     // OPÉRATIONS DDL (Réservées au module json_db)
     // ============================================================================
 
     /// Résout le chemin physique d'un schéma sur le disque
     fn get_physical_path(&self, uri: &str) -> RaiseResult<PathBuf> {
-        // 🎯 Utilisation de let-else au lieu de ok_or_else
+        // 🎯 FIX : Retrait du "return" devant raise_error!
         let Some(root) = self.schemas_root.as_ref() else {
             raise_error!(
                 "ERR_SCHEMA_NO_ROOT",
@@ -206,13 +255,14 @@ impl SchemaRegistry {
             );
         };
 
-        let Some(rel_path) = uri.strip_prefix(&self.base_prefix) else {
+        let Some(idx) = uri.find("/schemas/") else {
             raise_error!(
                 "ERR_SCHEMA_URI_MISMATCH",
-                error = format!("L'URI '{}' n'appartient pas à ce registre.", uri)
+                error = format!("URI invalide : {}", uri)
             );
         };
 
+        let rel_path = &uri[idx + "/schemas/".len()..];
         Ok(root.join(rel_path))
     }
 
@@ -235,7 +285,6 @@ impl SchemaRegistry {
         schema: JsonValue,
     ) -> RaiseResult<()> {
         if self.by_uri.contains_key(uri) {
-            // 🎯 Appel direct (la macro fait le return Err toute seule)
             raise_error!(
                 "ERR_SCHEMA_ALREADY_EXISTS",
                 error = format!("Le schéma '{}' existe déjà.", uri)
@@ -262,6 +311,7 @@ impl SchemaRegistry {
         prop_name: &str,
         prop_def: JsonValue,
     ) -> RaiseResult<()> {
+        // 🎯 FIX : Retrait du "return" devant raise_error!
         let Some(mut schema) = self.by_uri.get(uri).cloned() else {
             raise_error!(
                 "ERR_SCHEMA_NOT_FOUND",
@@ -294,6 +344,7 @@ impl SchemaRegistry {
         prop_name: &str,
         prop_def: JsonValue,
     ) -> RaiseResult<()> {
+        // 🎯 FIX : Retrait du "return" devant raise_error!
         let Some(mut schema) = self.by_uri.get(uri).cloned() else {
             raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
         };
@@ -316,6 +367,7 @@ impl SchemaRegistry {
         uri: &str,
         prop_name: &str,
     ) -> RaiseResult<()> {
+        // 🎯 FIX : Retrait du "return" devant raise_error!
         let Some(mut schema) = self.by_uri.get(uri).cloned() else {
             raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
         };
@@ -341,48 +393,81 @@ impl SchemaRegistry {
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::utils::io::fs::tempdir;
     use crate::utils::testing::mock::inject_mock_config;
 
     #[async_test]
-    async fn test_registry_loading() -> RaiseResult<()> {
+    async fn test_registry_loading_multi_versions() -> RaiseResult<()> {
         inject_mock_config().await;
-        // 1. Setup environnement
-        let dir = tempdir().unwrap();
+
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Erreur lors de la création du dossier temporaire : {:?}", e),
+        };
+
         let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let _storage = StorageEngine::new(config.clone()); // Juste pour init
+        let _storage = StorageEngine::new(config.clone());
 
         let space = "s1";
         let db = "d1";
 
-        // Création structure : schemas/v1/users/user.schema.json
-        let schema_dir = config.db_schemas_root(space, db).join("v1/users");
-        fs::ensure_dir_async(&schema_dir)
-            .await
-            .expect("Échec création dossier");
+        // Création structure v1
+        let schema_dir_v1 = config.db_schemas_root(space, db).join("v1/users");
+        if let Err(e) = fs::ensure_dir_async(&schema_dir_v1).await {
+            panic!("Échec création dossier v1 : {:?}", e);
+        }
 
-        let schema_content = json_value!({
-            "type": "object",
-            "properties": { "name": { "type": "string" } }
-        });
-        fs::write_json_atomic_async(&schema_dir.join("user.schema.json"), &schema_content)
-            .await
-            .expect("Échec écriture schéma");
+        if let Err(e) = fs::write_json_atomic_async(
+            &schema_dir_v1.join("user.schema.json"),
+            &json_value!({ "type": "object" }),
+        )
+        .await
+        {
+            panic!("Échec de l'écriture du schéma v1 : {:?}", e);
+        }
 
-        // 2. Chargement
+        // Création structure v2
+        let schema_dir_v2 = config.db_schemas_root(space, db).join("v2/users");
+        if let Err(e) = fs::ensure_dir_async(&schema_dir_v2).await {
+            panic!("Échec création dossier v2 : {:?}", e);
+        }
+        if let Err(e) = fs::write_json_atomic_async(
+            &schema_dir_v2.join("user.schema.json"),
+            &json_value!({ "type": "object" }),
+        )
+        .await
+        {
+            panic!("Échec de l'écriture du schéma v2 : {:?}", e);
+        }
+
         let reg = SchemaRegistry::from_db(&config, space, db).await?;
 
-        // 3. Vérification
-        let expected_uri = format!("db://{}/{}/schemas/v1/users/user.schema.json", space, db);
-        assert!(reg.get_by_uri(&expected_uri).is_some());
-        assert_eq!(reg.uri("users/user.schema.json"), expected_uri);
+        // Vérification que les deux versions cohabitent
+        assert!(reg
+            .get_by_uri(&format!(
+                "db://{}/{}/schemas/v1/users/user.schema.json",
+                space, db
+            ))
+            .is_some());
+
+        assert!(reg
+            .get_by_uri(&format!(
+                "db://{}/{}/schemas/v2/users/user.schema.json",
+                space, db
+            ))
+            .is_some());
 
         Ok(())
     }
+
     #[async_test]
     async fn test_schema_ddl_operations() -> RaiseResult<()> {
         inject_mock_config().await;
 
-        let dir = tempdir().unwrap();
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Erreur lors de la création du dossier temporaire : {:?}", e),
+        };
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let space = "s1";
         let db = "d1";
@@ -401,7 +486,10 @@ mod tests {
         // 2. ADD PROPERTY
         reg.add_property(&uri, "price", json_value!({ "type": "number" }))
             .await?;
-        let schema_after_add = reg.get_by_uri(&uri).unwrap();
+        let schema_after_add = match reg.get_by_uri(&uri) {
+            Some(s) => s,
+            None => panic!("Le schéma devrait exister après ajout de propriété"),
+        };
         assert!(schema_after_add["properties"]["price"].is_object());
 
         // 3. ALTER PROPERTY
@@ -411,22 +499,38 @@ mod tests {
             json_value!({ "type": "number", "minimum": 0 }),
         )
         .await?;
-        let schema_after_alter = reg.get_by_uri(&uri).unwrap();
+
+        let schema_after_alter = match reg.get_by_uri(&uri) {
+            Some(s) => s,
+            None => panic!("Le schéma devrait exister après altération de propriété"),
+        };
         assert_eq!(schema_after_alter["properties"]["price"]["minimum"], 0);
 
         // 4. DROP PROPERTY
         reg.drop_property(&uri, "name").await?;
-        let schema_after_drop_prop = reg.get_by_uri(&uri).unwrap();
-        assert!(schema_after_drop_prop["properties"]
-            .as_object()
-            .unwrap()
-            .get("name")
-            .is_none());
+
+        let schema_after_drop_prop = match reg.get_by_uri(&uri) {
+            Some(s) => s,
+            None => panic!("Le schéma devrait exister après suppression de propriété"),
+        };
+        let has_name = match schema_after_drop_prop
+            .get("properties")
+            .and_then(|p| p.as_object())
+        {
+            Some(obj) => obj.contains_key("name"),
+            None => false,
+        };
+        assert!(!has_name, "La propriété 'name' devrait avoir disparu");
 
         // 5. DROP SCHEMA
         reg.drop_schema(&uri).await?;
         assert!(reg.get_by_uri(&uri).is_none());
-        assert!(!fs::exists_async(&reg.get_physical_path(&uri).unwrap()).await);
+
+        let path = match reg.get_physical_path(&uri) {
+            Ok(p) => p,
+            Err(e) => panic!("Impossible de résoudre le chemin physique : {:?}", e),
+        };
+        assert!(!fs::exists_async(&path).await);
 
         Ok(())
     }

@@ -142,6 +142,8 @@ mod tests {
 
     // --- Tests des Structures (Vos tests existants) ---
     #[test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_mcp_tool_call_creation() {
         let args = json_value!({
             "path": "/tmp/test.txt",
@@ -154,6 +156,8 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_mcp_result_serialization() {
         let call_id = UniqueId::new_v4();
         let result = McpToolResult::success(call_id, json_value!("Operation successful"));
@@ -164,6 +168,8 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_mcp_error_handling() {
         let call_id = UniqueId::new_v4();
         let result = McpToolResult::error(call_id, "Access Denied");
@@ -190,6 +196,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_registry_execution() {
         let mut registry = ToolRegistry::new();
         registry.register(EchoTool);

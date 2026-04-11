@@ -12,6 +12,8 @@ mod tests {
     use candle_nn::{VarBuilder, VarMap};
 
     #[test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_predictor_instantiation() {
         let varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);

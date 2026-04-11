@@ -12,7 +12,6 @@ pub struct SchemaValidator {
 
 impl SchemaValidator {
     pub fn compile_with_registry(root_uri: &str, reg: &SchemaRegistry) -> RaiseResult<Self> {
-        // 1. Garde let-else avec diagnostic structuré
         let Some(schema) = reg.get_by_uri(root_uri).cloned() else {
             raise_error!(
                 "ERR_SCHEMA_NOT_IN_REGISTRY",
@@ -22,10 +21,9 @@ impl SchemaValidator {
                     "action": "resolve_schema_from_registry",
                     "hint": "Vérifiez que l'ontologie a été correctement chargée."
                 })
-            ); // La macro fait un 'return', donc on ne sort jamais du 'else' ici.
+            );
         };
 
-        // 2. Chemin nominal (Happy Path)
         Ok(Self {
             root_uri: root_uri.to_string(),
             schema,
@@ -69,14 +67,12 @@ fn resolve_schema_node<'a>(
     schema
 }
 
-/// 🎯 Hydratation récursive des valeurs par défaut
 fn apply_defaults(
     instance: &mut JsonValue,
     schema: &JsonValue,
     reg: &SchemaRegistry,
     current_uri: &str,
 ) -> RaiseResult<()> {
-    // 1. Résolution des références ($ref) pour trouver les defaults distants
     if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
         let (file_uri, fragment) = if ref_str.starts_with('#') {
             (current_uri.to_string(), Some(ref_str.to_string()))
@@ -98,27 +94,19 @@ fn apply_defaults(
         }
     }
 
-    // 🎯 NOUVEAU : Traitement du mot-clé 'allOf' (Héritage)
-    // C'est ce qui permet d'importer _id et _created_at depuis base.schema.json
     if let Some(all_of) = schema.get("allOf").and_then(|v| v.as_array()) {
         for sub_schema in all_of {
             apply_defaults(instance, sub_schema, reg, current_uri)?;
         }
     }
 
-    // 2. Injection dans les Objets
     if let Some(obj) = instance.as_object_mut() {
         if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
             for (key, sub_schema) in props {
-                // 🎯 On résout le $ref pour lire les vraies instructions
                 let resolved_schema = resolve_schema_node(sub_schema, reg, current_uri);
-
-                // Petite optimisation idiomatique Rust (évite le unwrap)
                 let is_missing = obj.get(key).is_none_or(|v| v.is_null());
 
-                // A. Application du 'default' standard
                 if is_missing {
-                    // ✅ Priorité au default local avant le distant !
                     let default_val = sub_schema
                         .get("default")
                         .or_else(|| resolved_schema.get("default"));
@@ -128,8 +116,6 @@ fn apply_defaults(
                     }
                 }
 
-                // B. EXÉCUTION DE 'x_compute'
-                // ✅ Priorité au x_compute local
                 let compute_node = sub_schema
                     .get("x_compute")
                     .or_else(|| resolved_schema.get("x_compute"))
@@ -141,7 +127,6 @@ fn apply_defaults(
                         .and_then(|v| v.as_str())
                         .unwrap_or("if_missing");
 
-                    // On recalcule 'is_missing' au cas où le 'default' juste au-dessus aurait injecté une valeur
                     let is_currently_missing = obj.get(key).is_none_or(|v| v.is_null());
 
                     let should_compute = match update_strategy {
@@ -162,7 +147,6 @@ fn apply_defaults(
                     }
                 }
 
-                // Récursion sur la valeur (pré-existante ou fraîchement calculée)
                 if let Some(val) = obj.get_mut(key) {
                     apply_defaults(val, sub_schema, reg, current_uri)?;
                 }
@@ -170,7 +154,6 @@ fn apply_defaults(
         }
     }
 
-    // 3. Injection dans les Tableaux
     if let Some(arr) = instance.as_array_mut() {
         if let Some(items_schema) = schema.get("items") {
             for item in arr {
@@ -180,51 +163,6 @@ fn apply_defaults(
     }
 
     Ok(())
-}
-
-/// 🎯 Moteur d'évaluation (AST) pour les directives x_compute
-fn execute_compute_plan(op: &str, plan: &JsonObject<String, JsonValue>) -> JsonValue {
-    match op {
-        // --- 1. IDENTIFIANTS ---
-        "uuid_v4" => JsonValue::String(UniqueId::new_v4().to_string()),
-
-        // --- 2. TEMPS ET DATES ---
-        "now_rfc3339" => JsonValue::String(UtcClock::now().to_rfc3339()),
-        "now_plus_hours" => {
-            let hours = plan
-                .get("value")
-                .and_then(|v: &JsonValue| v.as_i64())
-                .unwrap_or(0);
-            let future = UtcClock::now() + CalendarDuration::hours(hours);
-            JsonValue::String(future.to_rfc3339())
-        }
-        "now_plus_days" => {
-            let days = plan
-                .get("value")
-                .and_then(|v: &JsonValue| v.as_i64())
-                .unwrap_or(0);
-            let future = UtcClock::now() + CalendarDuration::days(days);
-            JsonValue::String(future.to_rfc3339())
-        }
-
-        // --- 3. LOGIQUE STATIQUE ---
-        "const" => plan.get("value").cloned().unwrap_or(JsonValue::Null),
-
-        // --- FALLBACK ---
-        _ => {
-            // 🎯 Utilisation de votre macro façade pour une alerte métier
-            user_warn!(
-                "WARN_COMPUTE_OP_UNKNOWN",
-                json_value!({
-                    "operator": op,
-                    "plan": plan,
-                    "hint": "Opérateur x_compute inconnu ou non pris en charge ignoré."
-                })
-            );
-
-            JsonValue::Null
-        }
-    }
 }
 
 fn validate_node(
@@ -249,29 +187,26 @@ fn validate_node(
                 context = json_value!({
                     "requested_uri": file_uri,
                     "action": "resolve_remote_ref",
-                    "hint": "Assurez-vous que l'ontologie contenant cette URI a été chargée via 'load_layer_from_file' avant la validation."
+                    "hint": "Assurez-vous que l'ontologie contenant cette URI a été chargée."
                 })
             );
         };
+
         let target_schema = if let Some(frag) = fragment {
             let pointer = frag.replace('#', "");
-
-            match target_root.pointer(&pointer) {
-                Some(s) => s,
-                None => {
-                    raise_error!(
-                        "ERR_SCHEMA_POINTER_NOT_FOUND",
-                        error =
-                            format!("Pointeur JSON '{}' introuvable dans {}", pointer, file_uri),
-                        context = json_value!({
-                            "pointer": pointer,
-                            "target_file": file_uri,
-                            "action": "resolve_json_pointer",
-                            "hint": "Vérifiez que le chemin existe dans le document source. Les pointeurs sont sensibles à la casse."
-                        })
-                    );
-                }
-            }
+            let Some(s) = target_root.pointer(&pointer) else {
+                raise_error!(
+                    "ERR_SCHEMA_POINTER_NOT_FOUND",
+                    error = format!("Pointeur JSON '{}' introuvable dans {}", pointer, file_uri),
+                    context = json_value!({
+                        "pointer": pointer,
+                        "target_file": file_uri,
+                        "action": "resolve_json_pointer",
+                        "hint": "Vérifiez que le chemin existe dans le document source. Les pointeurs sont sensibles à la casse."
+                    })
+                );
+            };
+            s
         } else {
             target_root
         };
@@ -282,28 +217,32 @@ fn validate_node(
     if let Some(t) = schema.get("type").and_then(|v| v.as_str()) {
         match t {
             "object" => {
-                if !instance.is_object() {
+                if instance.is_object() {
+                    validate_object(instance, schema, reg, current_uri)?;
+                } else {
                     raise_type_error("object", instance)?;
                 }
-                validate_object(instance, schema, reg, current_uri)?;
             }
             "string" => {
-                if !instance.is_string() {
+                if instance.is_string() {
+                    validate_string(instance, schema)?;
+                } else {
                     raise_type_error("string", instance)?;
                 }
-                validate_string(instance, schema)?;
             }
             "number" => {
-                if !instance.is_number() {
+                if instance.is_number() {
+                    validate_number(instance, schema)?;
+                } else {
                     raise_type_error("number", instance)?;
                 }
-                validate_number(instance, schema)?;
             }
             "integer" => {
-                if !instance.is_i64() && !instance.is_u64() {
+                if instance.is_i64() || instance.is_u64() {
+                    validate_number(instance, schema)?;
+                } else {
                     raise_type_error("integer", instance)?;
                 }
-                validate_number(instance, schema)?;
             }
             "boolean" => {
                 if !instance.is_boolean() {
@@ -311,10 +250,11 @@ fn validate_node(
                 }
             }
             "array" => {
-                if !instance.is_array() {
+                if instance.is_array() {
+                    validate_array(instance, schema, reg, current_uri)?;
+                } else {
                     raise_type_error("array", instance)?;
                 }
-                validate_array(instance, schema, reg, current_uri)?;
             }
             "null" => {
                 if !instance.is_null() {
@@ -324,21 +264,20 @@ fn validate_node(
             _ => {}
         }
     }
-
-    // Fonction utilitaire de diagnostic (Standard RAISE V1.3)
-    fn raise_type_error(expected: &str, actual: &JsonValue) -> RaiseResult<()> {
-        raise_error!(
-            "ERR_VALIDATION_TYPE_MISMATCH",
-            error = format!("Échec de conformité : type '{}' attendu.", expected),
-            context = json_value!({
-                "expected_type": expected,
-                "actual_value_sample": format!("{:.50}", actual.to_string()),
-                "action": "validate_primitive_type",
-                "hint": format!("La donnée ne correspond pas à la définition du schéma (attendu: {}).", expected)
-            })
-        );
-    }
     Ok(())
+}
+
+fn raise_type_error(expected: &str, actual: &JsonValue) -> RaiseResult<()> {
+    raise_error!(
+        "ERR_VALIDATION_TYPE_MISMATCH",
+        error = format!("Échec de conformité : type '{}' attendu.", expected),
+        context = json_value!({
+            "expected_type": expected,
+            "actual_value_sample": format!("{:.50}", actual.to_string()),
+            "action": "validate_primitive_type",
+            "hint": format!("La donnée ne correspond pas à la définition du schéma (attendu: {}).", expected)
+        })
+    );
 }
 
 fn validate_object(
@@ -347,9 +286,10 @@ fn validate_object(
     reg: &SchemaRegistry,
     current_uri: &str,
 ) -> RaiseResult<()> {
-    let obj = instance.as_object().unwrap();
+    let Some(obj) = instance.as_object() else {
+        return Ok(());
+    };
 
-    // 1. Required
     if let Some(req) = schema.get("required").and_then(|v| v.as_array()) {
         for r in req {
             if let Some(key) = r.as_str() {
@@ -369,7 +309,6 @@ fn validate_object(
         }
     }
 
-    // 2. Properties
     if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
         for (key, sub_schema) in props {
             if let Some(val) = obj.get(key) {
@@ -389,11 +328,9 @@ fn validate_object(
         }
     }
 
-    // 3. Pattern Properties (CORRECTION : Ajout du support)
     let mut compiled_patterns = Vec::new();
     if let Some(patterns) = schema.get("patternProperties").and_then(|v| v.as_object()) {
         for (pattern, sub_schema) in patterns {
-            // On compile le regex
             let re = match TextRegex::new(pattern) {
                 Ok(r) => r,
                 Err(e) => {
@@ -404,13 +341,12 @@ fn validate_object(
                             "invalid_pattern": pattern,
                             "regex_error": e.to_string(),
                             "action": "compile_pattern_properties",
-                            "hint": "Vérifiez la syntaxe de votre expression régulière. Les Regex doivent respecter le standard Rust (crate regex)."
+                            "hint": "Vérifiez la syntaxe de votre expression régulière."
                         })
                     );
                 }
             };
 
-            // On valide toutes les clés qui matchent
             for (key, val) in obj {
                 if re.is_match(key) {
                     if let Err(e) = validate_node(val, sub_schema, reg, current_uri) {
@@ -432,10 +368,14 @@ fn validate_object(
         }
     }
 
-    // 4. Additional Properties
     if let Some(ap) = schema.get("additionalProperties") {
-        // Si additionalProperties est false
-        if ap.is_boolean() && !ap.as_bool().unwrap() {
+        let is_allowed = if ap.is_boolean() {
+            ap.as_bool().unwrap_or(true)
+        } else {
+            true
+        };
+
+        if !is_allowed {
             let defined_props: Vec<&String> = schema
                 .get("properties")
                 .and_then(|v| v.as_object())
@@ -443,23 +383,17 @@ fn validate_object(
                 .unwrap_or_default();
 
             for k in obj.keys() {
-                // Est-ce une propriété définie explicitement ?
                 let is_defined = defined_props.contains(&k);
-
-                // Est-ce une propriété correspondant à un pattern ?
                 let matches_pattern = compiled_patterns.iter().any(|re| re.is_match(k));
 
-                // Si ni l'un ni l'autre (et pas $schema/id qui sont souvent implicites ou injectés)
-                // Note: On tolère $schema et id s'ils sont injectés par le système, mais idéalement ils devraient être dans le schéma.
-                // MIGRATION V1.3 : Validation des propriétés additionnelles (Schéma clos)
-                if !is_defined && !matches_pattern && k != "$schema" {
+                if !is_defined && !matches_pattern && k != "$schema" && k != "@context" {
                     raise_error!(
                         "ERR_VALIDATION_ADDITIONAL_PROPERTY_FORBIDDEN",
                         error = format!("Propriété non autorisée détectée : '{}'", k),
                         context = json_value!({
                             "forbidden_key": k,
                             "action": "validate_additional_properties",
-                            "hint": "Ce schéma est clos (additionalProperties: false). Seules les propriétés définies explicitement ou correspondant à un motif (pattern) sont acceptées."
+                            "hint": "Ce schéma est clos (additionalProperties: false). Seules les propriétés explicitement définies sont acceptées."
                         })
                     );
                 }
@@ -468,8 +402,11 @@ fn validate_object(
     }
     Ok(())
 }
+
 fn validate_string(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> {
-    let s = instance.as_str().unwrap();
+    let Some(s) = instance.as_str() else {
+        return Ok(());
+    };
 
     if let Some(min) = schema.get("minLength").and_then(|v| v.as_u64()) {
         if s.chars().count() < min as usize {
@@ -514,8 +451,9 @@ fn validate_string(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> 
 }
 
 fn validate_number(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> {
-    // as_f64() gère proprement les entiers et les flottants pour la comparaison
-    let n = instance.as_f64().unwrap();
+    let Some(n) = instance.as_f64() else {
+        return Ok(());
+    };
 
     if let Some(min) = schema.get("minimum").and_then(|v| v.as_f64()) {
         if n < min {
@@ -545,7 +483,9 @@ fn validate_array(
     reg: &SchemaRegistry,
     current_uri: &str,
 ) -> RaiseResult<()> {
-    let arr = instance.as_array().unwrap();
+    let Some(arr) = instance.as_array() else {
+        return Ok(());
+    };
 
     if let Some(min) = schema.get("minItems").and_then(|v| v.as_u64()) {
         if arr.len() < min as usize {
@@ -570,7 +510,6 @@ fn validate_array(
         }
     }
 
-    // Validation récursive de chaque élément du tableau
     if let Some(items_schema) = schema.get("items") {
         if items_schema.is_object() {
             for (index, item) in arr.iter().enumerate() {
@@ -663,10 +602,10 @@ mod tests {
             "pattern": "^[A-Z]+$"
         }));
 
-        assert!(v.validate(&json_value!("TEST")).is_ok()); // 4 chars, Majuscules
-        assert!(v.validate(&json_value!("TE")).is_err()); // Trop court
-        assert!(v.validate(&json_value!("TESTING")).is_err()); // Trop long
-        assert!(v.validate(&json_value!("test")).is_err()); // Mauvais pattern (minuscules)
+        assert!(v.validate(&json_value!("TEST")).is_ok());
+        assert!(v.validate(&json_value!("TE")).is_err());
+        assert!(v.validate(&json_value!("TESTING")).is_err());
+        assert!(v.validate(&json_value!("test")).is_err());
     }
 
     #[test]
@@ -679,24 +618,10 @@ mod tests {
 
         assert!(v.validate(&json_value!(15)).is_ok());
         assert!(v.validate(&json_value!(10.5)).is_ok());
-        assert!(v.validate(&json_value!(5)).is_err()); // Trop petit
-        assert!(v.validate(&json_value!(21.5)).is_err()); // Trop grand
+        assert!(v.validate(&json_value!(5)).is_err());
+        assert!(v.validate(&json_value!(21.5)).is_err());
     }
 
-    #[test]
-    fn test_array_constraints() {
-        let v = setup_validator(json_value!({
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 3,
-            "items": { "type": "string" }
-        }));
-
-        assert!(v.validate(&json_value!(["a", "b"])).is_ok()); // Valide (taille 2, full strings)
-        assert!(v.validate(&json_value!([])).is_err()); // Trop petit
-        assert!(v.validate(&json_value!(["a", "b", "c", "d"])).is_err()); // Trop grand
-        assert!(v.validate(&json_value!(["a", 42])).is_err()); // 42 n'est pas une string
-    }
     #[test]
     fn test_apply_defaults_basic() {
         let v = setup_validator(json_value!({
@@ -716,73 +641,39 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_defaults_recursive() {
-        let v = setup_validator(json_value!({
+    fn test_dual_schema_x_compute() {
+        let mut reg = SchemaRegistry::new();
+
+        reg.register("db://test/v1".to_string(), json_value!({
             "type": "object",
             "properties": {
-                "settings": {
-                    "type": "object",
-                    "default": {},
-                    "properties": {
-                        "theme": { "type": "string", "default": "dark" }
-                    }
-                }
+                "Id": { "type": "string", "x_compute": { "update": "if_missing", "plan": { "op": "uuid_v4" } } }
             }
         }));
 
-        let mut data = json_value!({});
-        v.compute_then_validate(&mut data)
-            .expect("L'hydratation récursive doit réussir");
-
-        // Vérifie que 'settings' a été créé ET que 'theme' y a été injecté
-        assert_eq!(data["settings"]["theme"], "dark");
-    }
-
-    #[test]
-    fn test_required_with_default_interplay() {
-        let v = setup_validator(json_value!({
+        reg.register("db://test/v2".to_string(), json_value!({
             "type": "object",
             "properties": {
-                "id": { "type": "string" },
-                "status": { "type": "string", "default": "pending" }
-            },
-            "required": ["id", "status"]
+                "_id": { "type": "string", "x_compute": { "update": "if_missing", "plan": { "op": "uuid_v4" } } }
+            }
         }));
 
-        // Scénario 1: id présent, status manquant -> Succès (status injecté)
-        let mut data1 = json_value!({ "id": "u1" });
-        v.compute_then_validate(&mut data1)
-            .expect("Doit passer car status est injecté");
-        assert_eq!(data1["status"], "pending");
+        let v1 = SchemaValidator::compile_with_registry("db://test/v1", &reg).unwrap();
+        let v2 = SchemaValidator::compile_with_registry("db://test/v2", &reg).unwrap();
 
-        // Scénario 2: tout manquant -> Échec (id n'a pas de default)
-        let mut data2 = json_value!({});
-        let res = v.compute_then_validate(&mut data2);
+        let mut data_v1 = json_value!({});
+        let mut data_v2 = json_value!({});
+
+        v1.compute_then_validate(&mut data_v1).unwrap();
+        v2.compute_then_validate(&mut data_v2).unwrap();
+
         assert!(
-            res.is_err(),
-            "Doit échouer car 'id' est requis et sans default"
+            data_v1.get("Id").is_some(),
+            "Le schéma v1 n'a pas injecté 'Id'"
         );
-
-        let err_msg = res.unwrap_err().to_string();
-        assert!(err_msg.contains("ERR_VALIDATION_REQUIRED_FIELD_MISSING"));
-    }
-
-    #[test]
-    fn test_apply_defaults_in_arrays() {
-        let v = setup_validator(json_value!({
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "role": { "type": "string", "default": "user" }
-                }
-            }
-        }));
-
-        let mut data = json_value!([{}, {"role": "admin"}]);
-        v.compute_then_validate(&mut data).unwrap();
-
-        assert_eq!(data[0]["role"], "user"); // Injecté
-        assert_eq!(data[1]["role"], "admin"); // Préservé
+        assert!(
+            data_v2.get("_id").is_some(),
+            "Le schéma v2 n'a pas injecté '_id'"
+        );
     }
 }

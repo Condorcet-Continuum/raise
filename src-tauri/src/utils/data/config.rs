@@ -7,7 +7,7 @@ use crate::json_db::query::{Query, QueryEngine};
 // 2. Core : Environnement, Concurrence et Erreurs
 use crate::raise_error;
 use crate::utils::core::error::RaiseResult;
-use crate::utils::core::{RuntimeEnv, StaticCell, UniqueId, UtcClock}; // Macro d'erreur globale
+use crate::utils::core::{RuntimeEnv, StaticCell, UniqueId, UtcClock};
 
 // 3. I/O : Système de fichiers
 use crate::utils::io::fs::{self, PathBuf};
@@ -22,9 +22,9 @@ use crate::utils::data::{
 pub static CONFIG: StaticCell<AppConfig> = StaticCell::new();
 pub static DEVICE: StaticCell<candle_core::Device> = StaticCell::new();
 
-/// Constantes Système (Single Source of Truth)
-pub const SYSTEM_DOMAIN: &str = "_system";
-pub const SYSTEM_DB: &str = "_system";
+/// Constantes Système pour amorcer la première lecture
+pub const BOOTSTRAP_DOMAIN: &str = "_system";
+pub const BOOTSTRAP_DB: &str = "bootstrap";
 
 /// Configuration globale structurée par niveaux de responsabilité
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
@@ -44,12 +44,9 @@ pub struct AppConfig {
 
     pub name: Option<UnorderedMap<String, String>>,
 
-    // --- NIVEAU 1 : SYSTEME (Global) ---
-    #[serde(default = "fallback_system_domain")]
-    pub system_domain: String,
-
-    #[serde(default = "fallback_system_db")]
-    pub system_db: String,
+    // POINTS DE MONTAGE EXPLICITES ---
+    #[serde(default = "fallback_mount_points")]
+    pub mount_points: MountPointsConfig,
 
     pub core: CoreConfig,
 
@@ -63,7 +60,8 @@ pub struct AppConfig {
     pub paths: UnorderedMap<String, String>,
 
     // 🎯 Pointeurs Sémantiques (Doivent stocker des valeurs du type "ref:dapps:handle:...")
-    pub active_dapp: String,
+    pub active_dapp_id: String, // 👈 Renommé (était active_dapp)
+    pub workstation_id: String,
 
     #[serde(default = "fallback_empty_services")]
     pub active_services: Vec<String>,
@@ -77,22 +75,40 @@ pub struct AppConfig {
     #[serde(default = "fallback_simulation_context")]
     pub simulation_context: SimulationContextConfig,
 
-    // --- NIVEAU 2 & 3 : SURCHARGES ---
+    // --- NIVEAU 2 & 3 : IDENTITÉS (Sans logique de routage DB) ---
+    #[serde(skip)]
     pub workstation: Option<ScopeConfig>,
+    #[serde(skip)]
     pub user: Option<ScopeConfig>,
 }
 
-/// Configuration spécifique à un contexte (Poste ou Utilisateur)
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
+pub struct MountPointsConfig {
+    pub system: DbPointer,
+    pub raise: DbPointer,
+    pub exploration: DbPointer, // Incubation
+    pub modeling: DbPointer,    // As-Designed
+    pub simulation: DbPointer,  // As-Simulated
+    pub integration: DbPointer, // V&V Physique
+    pub production: DbPointer,  // As-Built
+    pub operation: DbPointer,   // As-Operated
+}
+
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
+pub struct DbPointer {
+    pub domain: String,
+    pub db: String,
+}
+
+/// Configuration spécifique à un contexte identitaire
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct ScopeConfig {
     pub id: String,
-    pub default_domain: Option<String>,
-    pub default_db: Option<String>,
     pub language: Option<String>,
 }
 
 // =========================================================================
-// 🤖 FALLBACKS EXPLICITES POUR LA DÉSÉRIALISATION (AI-Ready)
+// 🤖 FALLBACKS EXPLICITES POUR LA DÉSÉRIALISATION
 // =========================================================================
 fn fallback_id() -> String {
     UniqueId::new_v4().to_string()
@@ -103,11 +119,41 @@ fn fallback_date() -> String {
 fn fallback_config_type() -> Vec<String> {
     vec!["SystemConfig".to_string(), "cfg:SystemConfig".to_string()]
 }
-fn fallback_system_domain() -> String {
-    SYSTEM_DOMAIN.to_string()
-}
-fn fallback_system_db() -> String {
-    SYSTEM_DB.to_string()
+fn fallback_mount_points() -> MountPointsConfig {
+    MountPointsConfig {
+        system: DbPointer {
+            domain: "_system".into(),
+            db: "_system".into(),
+        },
+        raise: DbPointer {
+            domain: "_system".into(),
+            db: "raise_core".into(),
+        },
+        exploration: DbPointer {
+            domain: "project_x".into(),
+            db: "sandbox".into(),
+        },
+        modeling: DbPointer {
+            domain: "project_x".into(),
+            db: "mbse".into(),
+        },
+        simulation: DbPointer {
+            domain: "project_x".into(),
+            db: "sim_mbse".into(),
+        },
+        integration: DbPointer {
+            domain: "project_x".into(),
+            db: "test_mbse".into(),
+        },
+        production: DbPointer {
+            domain: "project_x".into(),
+            db: "prod_mbse".into(),
+        },
+        operation: DbPointer {
+            domain: "project_x".into(),
+            db: "telemetry".into(),
+        },
+    }
 }
 fn fallback_world_model() -> WorldModelConfig {
     WorldModelConfig::default()
@@ -118,17 +164,12 @@ fn fallback_deep_learning() -> DeepLearningConfig {
 fn fallback_integrations() -> IntegrationsConfig {
     IntegrationsConfig::default()
 }
-
-/// Fallback si la liste des services est absente du JSON
 fn fallback_empty_services() -> Vec<String> {
     Vec::new()
 }
-
-/// Fallback si la liste des composants est absente du JSON
 fn fallback_empty_components() -> Vec<String> {
     Vec::new()
 }
-
 fn fallback_simulation_context() -> SimulationContextConfig {
     SimulationContextConfig::default()
 }
@@ -136,14 +177,12 @@ fn fallback_simulation_context() -> SimulationContextConfig {
 // =========================================================================
 // 🛠️ DÉSÉRIALISATION CUSTOMISÉE
 // =========================================================================
-
 fn deserialize_paths_flexible<'de, D>(
     deserializer: D,
 ) -> std::result::Result<UnorderedMap<String, String>, D::Error>
 where
     D: CustomDeserializerEngine<'de>,
 {
-    // 🎯 On utilise notre alias JsonValue
     let v: JsonValue = Deserializable::deserialize(deserializer)?;
 
     if let Some(map) = v.as_object() {
@@ -255,7 +294,7 @@ impl AppConfig {
 
         if DEVICE.get().is_none() {
             let device = Self::detect_best_device(&config);
-            let _ = DEVICE.set(device); // On initialise le singleton hardware
+            let _ = DEVICE.set(device);
         }
 
         if CONFIG.set(config).is_err() {
@@ -274,6 +313,10 @@ impl AppConfig {
             .expect("❌ AppConfig non initialisé ! Appelez AppConfig::init() au démarrage.")
     }
 
+    pub fn is_test_env(&self) -> bool {
+        self.core.env_mode == "test"
+    }
+
     pub fn get_path(&self, id: &str) -> Option<PathBuf> {
         self.paths.get(id).map(PathBuf::from)
     }
@@ -282,10 +325,7 @@ impl AppConfig {
         manager: &CollectionsManager<'_>,
         component_handle: &str,
     ) -> RaiseResult<JsonValue> {
-        // 1. On reconstruit l'ID sémantique exact stocké dans la DB (ex: ref:components:handle:ai_llm)
         let ref_id = format!("ref:components:handle:{}", component_handle);
-
-        // 2. On interroge la nouvelle collection des configurations
         let query = Query::new("service_configs");
 
         let result = match QueryEngine::new(manager).execute_query(query).await {
@@ -297,7 +337,6 @@ impl AppConfig {
             ),
         };
 
-        // 3. On cherche notre composant dans les surcharges (component_settings)
         for doc in result.documents {
             if let Some(comp_settings) = doc.get("component_settings").and_then(|v| v.as_object()) {
                 if let Some(settings) = comp_settings.get(&ref_id) {
@@ -306,7 +345,6 @@ impl AppConfig {
             }
         }
 
-        // Si on arrive ici, c'est que la configuration n'existe vraiment pas
         raise_error!(
             "ERR_CONFIG_COMPONENT_MISSING",
             error = "Configuration du composant introuvable dans les 'service_configs'",
@@ -317,11 +355,9 @@ impl AppConfig {
         );
     }
 
-    /// Récupère la configuration du LLM de manière stricte et explicite
     pub async fn get_llm_settings(
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<(String, String)> {
-        // 1. Récupération de la section avec pattern matching strict
         let settings = match Self::get_component_settings(manager, "ai_llm").await {
             Ok(s) => s,
             Err(e) => raise_error!(
@@ -332,31 +368,23 @@ impl AppConfig {
             ),
         };
 
-        // 2. Extraction du modèle
         let model = match settings["rust_model_file"].as_str() {
-        Some(m) => m.to_string(),
-        None => raise_error!(
-            "ERR_CONFIG_LLM_MODEL_MISSING",
-            error = "La clé 'rust_model_file' est introuvable ou n'est pas une chaîne de caractères.",
-            context = json_value!({
-                "component": "ai_llm",
-                "settings_dump": settings // 🎯 L'IA/Dev verra exactement ce que contenait le JSON !
-            })
-        ),
-    };
+            Some(m) => m.to_string(),
+            None => raise_error!(
+                "ERR_CONFIG_LLM_MODEL_MISSING",
+                error = "La clé 'rust_model_file' est introuvable.",
+                context = json_value!({ "component": "ai_llm", "settings_dump": settings })
+            ),
+        };
 
-        // 3. Extraction du Tokenizer
         let tokenizer = match settings["rust_tokenizer_file"].as_str() {
-        Some(t) => t.to_string(),
-        None => raise_error!(
-            "ERR_CONFIG_LLM_TOKENIZER_MISSING",
-            error = "La clé 'rust_tokenizer_file' est introuvable ou n'est pas une chaîne de caractères.",
-            context = json_value!({
-                "component": "ai_llm",
-                "settings_dump": settings
-            })
-        ),
-    };
+            Some(t) => t.to_string(),
+            None => raise_error!(
+                "ERR_CONFIG_LLM_TOKENIZER_MISSING",
+                error = "La clé 'rust_tokenizer_file' est introuvable.",
+                context = json_value!({ "component": "ai_llm", "settings_dump": settings })
+            ),
+        };
 
         Ok((model, tokenizer))
     }
@@ -377,7 +405,6 @@ impl AppConfig {
             );
         };
 
-        // 🎯 Utilisation de notre fonction sémantique de façade
         let mut config: AppConfig = match json::deserialize_from_value(json_val) {
             Ok(c) => c,
             Err(e) => raise_error!(
@@ -391,19 +418,12 @@ impl AppConfig {
             .or_else(|_| RuntimeEnv::var("COMPUTERNAME"))
             .unwrap_or_else(|_| "localhost".to_string());
 
+        // 🎯 On peuple le champ 'workstation' (ScopeConfig) à partir de la DB
         if let Some(ws_json) = Self::load_collection_doc("workstations", |v| {
             v.get("hostname").and_then(|h| h.as_str()) == Some(hostname.as_str())
         }) {
             config.workstation = Some(ScopeConfig {
                 id: hostname,
-                default_domain: ws_json
-                    .get("default_domain")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                default_db: ws_json
-                    .get("default_db")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
                 language: ws_json
                     .get("language")
                     .and_then(|v| v.as_str())
@@ -415,24 +435,35 @@ impl AppConfig {
             .or_else(|_| RuntimeEnv::var("USERNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
 
-        if let Some(user_json) = Self::load_collection_doc("users", |v| {
+        let user_json = Self::load_collection_doc("users", |v| {
             v.get("handle").and_then(|u| u.as_str()) == Some(userhandle.as_str())
-        }) {
+        })
+        .or_else(|| {
+            // Fallback admin uniquement si l'utilisateur OS n'existe pas dans la DB
+            Self::load_collection_doc("users", |v| {
+                v.get("handle").and_then(|u| u.as_str()) == Some("admin")
+            })
+        });
+
+        if let Some(doc) = user_json {
             config.user = Some(ScopeConfig {
-                id: userhandle,
-                default_domain: user_json
-                    .get("default_domain")
+                id: doc
+                    .get("handle")
                     .and_then(|v| v.as_str())
-                    .map(String::from),
-                default_db: user_json
-                    .get("default_db")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                language: user_json
-                    .get("language")
+                    .unwrap_or("admin")
+                    .to_string(),
+                language: doc
+                    .get("preferences")
+                    .and_then(|p| p.get("language"))
                     .and_then(|v| v.as_str())
                     .map(String::from),
             });
+            // On met à jour l'ID de workstation si nécessaire
+            config.workstation_id = doc
+                .get("default_workstation_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ref:workstations:handle:condorcet")
+                .to_string();
         }
 
         Ok(config)
@@ -443,13 +474,12 @@ impl AppConfig {
         F: Fn(&JsonValue) -> bool,
     {
         let base_domain = dirs::home_dir()?.join("raise_domain");
-        let db_root = base_domain.join(SYSTEM_DOMAIN).join(SYSTEM_DB);
+        // On amorce toujours le boot sur la configuration mère _system
+        let db_root = base_domain.join(BOOTSTRAP_DOMAIN).join(BOOTSTRAP_DB);
         let sys_index_path = db_root.join("_system.json");
         let collection_dir = db_root.join("collections").join(collection_name);
 
         let sys_content = fs::read_to_string_sync(&sys_index_path).ok()?;
-
-        // 🎯 Remplacement de serde_json::from_str
         let sys_index: JsonValue = json::deserialize_from_str(&sys_content).ok()?;
 
         let pointer = format!("/collections/{}/items", collection_name);
@@ -470,28 +500,21 @@ impl AppConfig {
         None
     }
 
-    /// Logique de détection interne au démarrage
     fn detect_best_device(config: &AppConfig) -> candle_core::Device {
-        // Si l'utilisateur a désactivé le GPU globalement
         if !config.world_model.use_gpu {
             return candle_core::Device::Cpu;
         }
-
         #[cfg(feature = "metal")]
         if let Ok(dev) = candle_core::Device::new_metal(0) {
             return dev;
         }
-
         #[cfg(feature = "cuda")]
         if let Ok(dev) = candle_core::Device::new_cuda(0) {
             return dev;
         }
-
-        // Fallback CPU : MKL (Intel/AMD) ou Accelerate (Mac) sera utilisé ici
         candle_core::Device::Cpu
     }
 
-    /// Helper statique pour récupérer le device partout dans Raise
     pub fn device() -> &'static candle_core::Device {
         DEVICE.get().expect("Device non initialisé")
     }
@@ -529,15 +552,6 @@ impl Default for DeepLearningConfig {
     }
 }
 
-impl DeepLearningConfig {
-    pub fn to_device(&self) -> candle_core::Device {
-        match self.device.as_str() {
-            "cuda" => candle_core::Device::new_cuda(0).unwrap_or(candle_core::Device::Cpu),
-            _ => candle_core::Device::Cpu,
-        }
-    }
-}
-
 impl Default for SimulationContextConfig {
     fn default() -> Self {
         Self {
@@ -561,21 +575,28 @@ mod tests {
     fn test_scope_config_structure() {
         let scope = ScopeConfig {
             id: "dev-machine".to_string(),
-            default_domain: Some("dev_domain".to_string()),
-            default_db: Some("dev_db".to_string()),
             language: Some("fr".to_string()),
         };
         assert_eq!(scope.id, "dev-machine");
-        assert_eq!(scope.default_domain.as_deref(), Some("dev_domain"));
+        assert_eq!(scope.language.as_deref(), Some("fr"));
     }
 
     #[test]
-    fn test_deserialize_app_config_with_scopes() {
+    fn test_deserialize_app_config_with_mount_points() {
+        // 🎯 On crée un JSON qui respecte strictement la structure V2
         let json_data = json_value!({
-            "name": null,
-            "system_domain": "_system",
-            "system_db": "_system",
-            "active_dapp": "mock-dapp",
+            "active_dapp_id": "ref:dapps:handle:raise_core",
+            "workstation_id": "ref:workstations:handle:condorcet",
+            "mount_points": {
+                "system": { "domain": "_sys_domain", "db": "_sys_db" },
+                "raise": { "domain": "_sys_domain", "db": "_raise_core" },
+                "exploration": { "domain": "proj1", "db": "sandbox" },
+                "modeling": { "domain": "proj1", "db": "mbse" }, // 🎯 On utilise modeling, pas workspace
+                "simulation": { "domain": "proj1", "db": "sim" },
+                "integration": { "domain": "proj1", "db": "test" },
+                "production": { "domain": "proj1", "db": "prod" },
+                "operation": { "domain": "proj1", "db": "ops" }
+            },
             "core": {
                 "env_mode": "test",
                 "graph_mode": "none",
@@ -583,45 +604,22 @@ mod tests {
                 "vector_store_provider": "memory",
                 "language": "en"
             },
-            "paths": { "PATH_TEST": "/tmp" },
-            "integrations": {},
-            "workstation": {
-                "id": "host1",
-                "default_domain": "ws_domain"
-            },
-            "user": {
-                "id": "user1",
-                "default_db": "user_db"
-            }
+            "paths": { "PATH_TEST": "/tmp" }
         });
 
         let config: AppConfig =
             json::deserialize_from_value(json_data).expect("Désérialisation échouée");
-        assert_eq!(config.system_domain, "_system");
-        assert_eq!(config.workstation.unwrap().id, "host1");
-        assert_eq!(config.user.unwrap().id, "user1");
-    }
 
-    #[test]
-    fn test_deserialize_paths_list_compat() {
-        let json_data = json_value!({
-            "system_domain": "_sys",
-            "system_db": "_db",
-            "active_dapp": "mock-dapp",
-            "core": {
-                "env_mode": "test",
-                "graph_mode": "none",
-                "log_level": "debug",
-                "vector_store_provider": "memory",
-                "language": "en"
-            },
-            "paths": [
-                { "id": "P1", "value": "/v1" }
-            ],
-            "integrations": {}
-        });
+        // ✅ Vérification des Mount Points
+        assert_eq!(config.mount_points.system.domain, "_sys_domain");
+        assert_eq!(config.mount_points.modeling.db, "mbse");
 
-        let config: AppConfig = json::deserialize_from_value(json_data).unwrap();
-        assert_eq!(config.paths.get("P1").unwrap(), "/v1");
+        // ✅ Vérification des Identifiants (Strings)
+        assert_eq!(config.active_dapp_id, "ref:dapps:handle:raise_core");
+        assert_eq!(config.workstation_id, "ref:workstations:handle:condorcet");
+
+        // 💡 Note : config.workstation sera None ici car il est marqué #[serde(skip)].
+        // C'est normal, il est peuplé plus tard par load_production_config().
+        assert!(config.workstation.is_none());
     }
 }

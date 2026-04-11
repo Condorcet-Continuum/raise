@@ -1,11 +1,11 @@
-// src-tauri/src/ai/agents/context.rs
+// FICHIER : src-tauri/src/ai/agents/context.rs
 
 use crate::utils::prelude::*;
 
 use crate::ai::llm::client::LlmClient;
 use crate::ai::world_model::NeuroSymbolicEngine;
 use crate::code_generator::CodeGeneratorService;
-use crate::json_db::storage::StorageEngine; // 🎯 IMPORT DU CERVEAU
+use crate::json_db::storage::StorageEngine;
 
 /// Chemins structurels du projet RAISE
 #[derive(Clone)]
@@ -22,7 +22,7 @@ pub struct AgentContext {
     pub db: SharedRef<StorageEngine>,
     pub llm: LlmClient,
     pub codegen: SharedRef<CodeGeneratorService>,
-    pub world_engine: SharedRef<NeuroSymbolicEngine>, // 🎯 INJECTION DU CERVEAU
+    pub world_engine: SharedRef<NeuroSymbolicEngine>,
     pub paths: AgentPaths,
 }
 
@@ -32,7 +32,7 @@ impl AgentContext {
         session_id: &str,
         db: SharedRef<StorageEngine>,
         llm: LlmClient,
-        world_engine: SharedRef<NeuroSymbolicEngine>, // 🎯 NOUVEAU PARAMÈTRE
+        world_engine: SharedRef<NeuroSymbolicEngine>,
         domain_root: PathBuf,
         dataset_root: PathBuf,
     ) -> Self {
@@ -42,7 +42,7 @@ impl AgentContext {
             db,
             llm,
             codegen: SharedRef::new(CodeGeneratorService::new(domain_root.clone())),
-            world_engine, // 🎯 ASSIGNATION
+            world_engine,
             paths: AgentPaths {
                 domain_root,
                 dataset_root,
@@ -55,41 +55,55 @@ impl AgentContext {
     }
 }
 
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
-    use candle_nn::VarMap; // 🎯 Import pour le mock du World Model
+    use candle_nn::VarMap;
 
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_context_initialization_with_session() {
+    async fn test_context_initialization_with_session() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+
+        // 🎯 FIX MOUNT POINTS : Utilisation du point de montage système pour injecter le composant
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
 
         inject_mock_component(&manager, "llm", json_value!({})).await;
 
-        let llm = LlmClient::new(&manager).await.unwrap();
+        // 🎯 Rigueur : Match sur la création du client LLM
+        let llm = match LlmClient::new(&manager).await {
+            Ok(client) => client,
+            Err(e) => panic!("Échec de l'initialisation du LlmClient : {:?}", e),
+        };
+
         let domain_path = PathBuf::from("/data/domain");
         let dataset_path = PathBuf::from("/data/dataset");
 
-        // 🎯 Mock du World Model pour le test
         let wm_config = crate::utils::data::config::WorldModelConfig::default();
-        let world_engine =
-            SharedRef::new(NeuroSymbolicEngine::new(wm_config, VarMap::new()).unwrap());
+
+        // 🎯 Rigueur : Match sur la création du World Model
+        let world_engine = match NeuroSymbolicEngine::new(wm_config, VarMap::new()) {
+            Ok(engine) => SharedRef::new(engine),
+            Err(e) => panic!("Échec de l'initialisation du NeuroSymbolicEngine : {:?}", e),
+        };
 
         let ctx = AgentContext::new(
             "agent_001",
             "session_abc",
             sandbox.db.clone(),
             llm,
-            world_engine, // 🎯 Injection
+            world_engine,
             domain_path.clone(),
             dataset_path.clone(),
         )
@@ -97,34 +111,42 @@ mod tests {
 
         assert_eq!(ctx.agent_id, "agent_001");
         assert_eq!(ctx.session_id, "session_abc");
+
+        Ok(())
     }
 
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_empty_identifiers_validation() {
+    async fn test_empty_identifiers_validation() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+
+        // 🎯 FIX MOUNT POINTS
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
 
         inject_mock_component(&manager, "llm", json_value!({})).await;
 
-        let llm = LlmClient::new(&manager).await.unwrap();
+        let llm = match LlmClient::new(&manager).await {
+            Ok(client) => client,
+            Err(e) => panic!("Échec LLM : {:?}", e),
+        };
 
-        // 🎯 Mock du World Model pour le test
         let wm_config = crate::utils::data::config::WorldModelConfig::default();
-        let world_engine =
-            SharedRef::new(NeuroSymbolicEngine::new(wm_config, VarMap::new()).unwrap());
+        let world_engine = match NeuroSymbolicEngine::new(wm_config, VarMap::new()) {
+            Ok(engine) => SharedRef::new(engine),
+            Err(e) => panic!("Échec Neuro : {:?}", e),
+        };
 
         let ctx = AgentContext::new(
             "",
             "",
             sandbox.db.clone(),
             llm,
-            world_engine, // 🎯 Injection
+            world_engine,
             PathBuf::new(),
             PathBuf::new(),
         )
@@ -132,6 +154,8 @@ mod tests {
 
         assert!(ctx.agent_id.is_empty());
         assert!(ctx.session_id.is_empty());
+
+        Ok(())
     }
 
     #[test]

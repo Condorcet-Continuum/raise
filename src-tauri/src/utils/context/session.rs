@@ -16,11 +16,10 @@ use crate::utils::data::json::{self, json_value};
 use crate::utils::data::UnorderedMap;
 
 // 4. Data : Traits pour les Macros #[derive(...)]
-// (On importe tes alias métier pour qu'ils soient reconnus par serde/Rust)
 use crate::utils::data::{Deserializable, Serializable};
 
 // --- MODÈLES DE DONNÉES ---
-#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)] // 🎯 Traits métiers
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
     Active,
@@ -33,7 +32,7 @@ pub enum SessionStatus {
 pub struct SessionContext {
     pub current_domain: String,
     pub current_db: String,
-    pub active_dapp: String,
+    pub active_dapp_id: String,
 }
 
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
@@ -67,7 +66,7 @@ pub struct Session {
     pub context: SessionContext,
 
     #[serde(default = "fallback_cached_permissions")]
-    pub cached_permissions: Option<UnorderedMap<String, CrudPolicy>>, // 🎯 Remplacé
+    pub cached_permissions: Option<UnorderedMap<String, CrudPolicy>>,
 }
 
 fn fallback_session_type() -> Vec<String> {
@@ -96,103 +95,141 @@ impl SessionManager {
 
     fn get_db_manager(&self) -> CollectionsManager<'_> {
         let config = AppConfig::get();
-        CollectionsManager::new(&self.storage, &config.system_domain, &config.system_db)
+        CollectionsManager::new(
+            &self.storage,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        )
     }
 
-    pub async fn start_session(&self, target_user: &str) -> RaiseResult<Session> {
+    #[allow(clippy::single_match)]
+    pub async fn start_session(&self, requested_user: &str) -> RaiseResult<Session> {
         let mgr = self.get_db_manager();
         let config = AppConfig::get();
 
-        // 1. VÉRIFICATION DU USER DANS JSON_DB
+        let actual_user = match &config.user {
+            Some(scope) => scope.id.clone(),
+            None => {
+                if config.is_test_env() {
+                    requested_user.to_string()
+                } else {
+                    "admin".to_string()
+                }
+            }
+        };
+
+        if requested_user != actual_user {
+            tracing::warn!(
+                target: "system_core",
+                "Fallback identitaire : Requête '{}' rejetée, session ouverte en tant que '{}'",
+                requested_user, actual_user
+            );
+        }
+
         let mut query = Query::new("users");
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
-            conditions: vec![Condition::eq("handle", json_value!(target_user))],
+            conditions: vec![Condition::eq("handle", json_value!(&actual_user))],
         });
 
         let qe = QueryEngine::new(&mgr);
         let res = qe.execute_query(query).await?;
 
-        let Some(doc) = res.documents.first() else {
-            // 🎯 UTILISATION DE RAISE_ERROR!
-            raise_error!(
-                "ERR_USER_NOT_FOUND",
-                error = format!(
-                    "L'utilisateur '{}' est introuvable dans le système.",
-                    target_user
-                ),
-                context = json_value!({"handle": target_user, "action": "start_session"})
-            );
+        let doc = match res.documents.first() {
+            Some(d) => d,
+            None => {
+                raise_error!(
+                    "ERR_USER_NOT_FOUND",
+                    error = format!(
+                        "L'utilisateur critique '{}' est introuvable dans le bootstrap.",
+                        actual_user
+                    ),
+                    context = json_value!({"handle": actual_user, "action": "start_session"})
+                );
+            }
         };
 
-        // 2. EXTRACTION DES PRÉFÉRENCES ET DE L'ID
-        let def_domain = doc
-            .get("default_domain")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&config.system_domain)
-            .to_string();
-        let def_db = doc
-            .get("default_db")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&config.system_db)
-            .to_string();
-        let user_id = doc
+        let def_domain = match doc.get("default_domain").and_then(|v| v.as_str()) {
+            Some(v) => v.to_string(),
+            None => config.mount_points.modeling.domain.clone(),
+        };
+
+        let def_db = match doc.get("default_db").and_then(|v| v.as_str()) {
+            Some(v) => v.to_string(),
+            None => config.mount_points.modeling.db.clone(),
+        };
+
+        let user_id = match doc
             .get("_id")
             .or_else(|| doc.get("id"))
             .and_then(|v| v.as_str())
-            .unwrap_or(target_user)
-            .to_string();
+        {
+            Some(v) => v.to_string(),
+            None => actual_user.clone(),
+        };
 
         let ctx = SessionContext {
             current_domain: def_domain,
             current_db: def_db,
-            active_dapp: config.active_dapp.clone(),
+            active_dapp_id: config.active_dapp_id.clone(),
         };
 
         let now = UtcClock::now();
-        let session_handle = format!("session_{}_active", target_user);
 
-        // 3. RECHERCHE D'UNE SESSION EXISTANTE (Pour éviter les doublons CLI)
+        let session_handle = format!("session_{}_active", actual_user);
+
         let mut session_query = Query::new("sessions");
         session_query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
             conditions: vec![Condition::eq("handle", json_value!(&session_handle))],
         });
 
-        let existing_doc = QueryEngine::new(&mgr)
-            .execute_query(session_query)
-            .await
-            .ok()
-            .and_then(|res| res.documents.into_iter().next());
+        let existing_doc = match QueryEngine::new(&mgr).execute_query(session_query).await {
+            Ok(res) => res.documents.into_iter().next(),
+            Err(_) => None,
+        };
 
-        let hydrated_doc = if let Some(doc) = existing_doc {
-            // 🎯 METTRE À JOUR LA SESSION EXISTANTE (Évite les doublons)
-            let id = doc.get("_id").unwrap().as_str().unwrap().to_string();
-            let patch = json_value!({
-                "last_activity_at": now.to_rfc3339(),
-                "context": ctx,
-            });
-            mgr.update_document("sessions", &id, patch).await?
-        } else {
-            // 🎯 CRÉER LA SESSION SI ELLE N'EXISTE PAS
-            let payload = json_value!({
-                "handle": session_handle,
-                "user_id": user_id,
-                "user_handle": target_user,
-                "status": "active",
-                "last_activity_at": now.to_rfc3339(),
-                "context": ctx,
-            });
-            mgr.insert_with_schema("sessions", payload).await?
+        let hydrated_doc = match existing_doc {
+            Some(d) => {
+                let id = match d.get("_id").and_then(|v| v.as_str()) {
+                    Some(i) => i.to_string(),
+                    None => {
+                        raise_error!(
+                            "ERR_SESSION_CORRUPTED",
+                            error = "Session existante sans identifiant _id",
+                            context = json_value!({"action": "start_session"})
+                        );
+                    }
+                };
+                let patch = json_value!({
+                    "last_activity_at": now.to_rfc3339(),
+                    "context": ctx,
+                });
+                mgr.update_document("sessions", &id, patch).await?
+            }
+            None => {
+                let payload = json_value!({
+                    "handle": session_handle,
+                    "user_id": user_id,
+                    "user_handle": actual_user,
+                    "status": "active",
+                    "expires_at": "2099-12-31T23:59:59Z",
+                    "last_activity_at": now.to_rfc3339(),
+                    "context": ctx,
+                });
+                mgr.insert_with_schema("sessions", payload).await?
+            }
         };
 
         let session: Session = match json::deserialize_from_value(hydrated_doc) {
             Ok(s) => s,
-            Err(e) => raise_error!(
-                "ERR_SESSION_DESERIALIZE",
-                error = e,
-                context = json_value!({ "action": "read_from_jsondb" })
-            ),
+            Err(e) => {
+                raise_error!(
+                    "ERR_SESSION_DESERIALIZE",
+                    error = e,
+                    context = json_value!({ "action": "read_from_jsondb" })
+                );
+            }
         };
 
         let mut lock = self.current_session.write().await;
@@ -201,11 +238,11 @@ impl SessionManager {
         Ok(session)
     }
 
+    #[allow(clippy::single_match)]
     pub async fn switch_domain(&self, target_domain: &str) -> RaiseResult<SessionContext> {
         let mgr = self.get_db_manager();
         let config = AppConfig::get();
 
-        // 1. VÉRIFIER LE DOMAINE
         let mut dom_query = Query::new("domains");
         dom_query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
@@ -213,54 +250,66 @@ impl SessionManager {
         });
 
         let res = QueryEngine::new(&mgr).execute_query(dom_query).await?;
-        let Some(dom_doc) = res.documents.first() else {
-            // 🎯 UTILISATION DE RAISE_ERROR!
-            raise_error!(
-                "ERR_DOMAIN_NOT_FOUND",
-                error = format!("Le domaine '{}' n'existe pas.", target_domain),
-                context = json_value!({"target_domain": target_domain})
-            );
+        let dom_doc = match res.documents.first() {
+            Some(d) => d,
+            None => {
+                raise_error!(
+                    "ERR_DOMAIN_NOT_FOUND",
+                    error = format!("Le domaine '{}' n'existe pas.", target_domain),
+                    context = json_value!({"target_domain": target_domain})
+                );
+            }
         };
 
-        let domain_uuid = dom_doc
+        let domain_uuid = match dom_doc
             .get("_id")
             .or_else(|| dom_doc.get("id"))
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        {
+            Some(v) => v.to_string(),
+            None => "".to_string(),
+        };
 
-        // 2. TROUVER LA DB PAR DÉFAUT
         let db_query = Query::new("databases");
         let domain_ref = format!("ref:domains:handle:{}", target_domain);
 
-        let mut auto_db = config.system_db.clone();
-        if let Ok(db_res) = QueryEngine::new(&mgr).execute_query(db_query).await {
-            for doc in db_res.documents {
-                let doc_domain_id = doc.get("domain_id").and_then(|v| v.as_str()).unwrap_or("");
-                if doc_domain_id == domain_uuid || doc_domain_id == domain_ref {
-                    if let Some(h) = doc.get("handle").and_then(|v| v.as_str()) {
-                        auto_db = h.to_string();
-                        break;
+        let mut auto_db = config.mount_points.modeling.db.clone();
+        match QueryEngine::new(&mgr).execute_query(db_query).await {
+            Ok(db_res) => {
+                for doc in db_res.documents {
+                    let doc_domain_id = doc
+                        .get("domain_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    if doc_domain_id == domain_uuid || doc_domain_id == domain_ref {
+                        match doc.get("handle").and_then(|v| v.as_str()) {
+                            Some(h) => {
+                                auto_db = h.to_string();
+                                break;
+                            }
+                            None => {}
+                        }
                     }
                 }
             }
+            Err(_) => {}
         }
 
-        // 3. METTRE À JOUR LA SESSION
         self.update_session_context(target_domain, &auto_db).await
     }
 
+    #[allow(clippy::single_match)]
     pub async fn switch_db(&self, target_db: &str) -> RaiseResult<SessionContext> {
         let mgr = self.get_db_manager();
 
         let current_domain = {
             let lock = self.current_session.read().await;
-            lock.as_ref()
-                .map(|s| s.context.current_domain.clone())
-                .unwrap_or_default()
+            match lock.as_ref() {
+                Some(s) => s.context.current_domain.clone(),
+                None => "".to_string(),
+            }
         };
 
-        // 1. RÉCUPÉRER L'UUID DU DOMAINE ACTIF
         let mut dom_query = Query::new("domains");
         dom_query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
@@ -268,18 +317,23 @@ impl SessionManager {
         });
 
         let mut domain_uuid = String::new();
-        if let Ok(res) = QueryEngine::new(&mgr).execute_query(dom_query).await {
-            if let Some(doc) = res.documents.first() {
-                domain_uuid = doc
-                    .get("_id")
-                    .or_else(|| doc.get("id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-            }
+        match QueryEngine::new(&mgr).execute_query(dom_query).await {
+            Ok(res) => match res.documents.first() {
+                Some(doc) => {
+                    domain_uuid = match doc
+                        .get("_id")
+                        .or_else(|| doc.get("id"))
+                        .and_then(|v| v.as_str())
+                    {
+                        Some(v) => v.to_string(),
+                        None => "".to_string(),
+                    };
+                }
+                None => {}
+            },
+            Err(_) => {}
         }
 
-        // 2. VÉRIFIER L'APPARTENANCE
         let mut db_query = Query::new("databases");
         db_query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
@@ -287,23 +341,25 @@ impl SessionManager {
         });
 
         let res = QueryEngine::new(&mgr).execute_query(db_query).await?;
-        let Some(db_doc) = res.documents.first() else {
-            // 🎯 UTILISATION DE RAISE_ERROR!
-            raise_error!(
-                "ERR_DB_NOT_FOUND",
-                error = format!("La base de données '{}' est introuvable.", target_db),
-                context = json_value!({"target_db": target_db, "current_domain": current_domain})
-            );
+        let db_doc = match res.documents.first() {
+            Some(d) => d,
+            None => {
+                raise_error!(
+                    "ERR_DB_NOT_FOUND",
+                    error = format!("La base de données '{}' est introuvable.", target_db),
+                    context =
+                        json_value!({"target_db": target_db, "current_domain": current_domain})
+                );
+            }
         };
 
         let doc_domain_id = db_doc
             .get("domain_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .unwrap_or_default();
         let domain_ref = format!("ref:domains:handle:{}", current_domain);
 
         if doc_domain_id != domain_uuid && doc_domain_id != domain_ref {
-            // 🎯 UTILISATION DE RAISE_ERROR!
             raise_error!(
                 "ERR_DB_NOT_IN_DOMAIN",
                 error = "Cette base de données n'appartient pas au domaine actif.",
@@ -315,12 +371,11 @@ impl SessionManager {
             );
         }
 
-        // 3. METTRE À JOUR LA SESSION
         self.update_session_context(&current_domain, target_db)
             .await
     }
 
-    // Fonction utilitaire interne pour persister le contexte
+    #[allow(clippy::single_match)]
     async fn update_session_context(
         &self,
         new_domain: &str,
@@ -329,40 +384,50 @@ impl SessionManager {
         let mut session_to_update = None;
         let mut new_ctx = None;
 
-        if let Some(session) = self.current_session.write().await.as_mut() {
-            session.context.current_domain = new_domain.to_string();
-            session.context.current_db = new_db.to_string();
-            session.updated_at = UtcClock::now().to_rfc3339();
+        let mut lock = self.current_session.write().await;
+        match lock.as_mut() {
+            Some(session) => {
+                session.context.current_domain = new_domain.to_string();
+                session.context.current_db = new_db.to_string();
+                session.updated_at = UtcClock::now().to_rfc3339();
 
-            session_to_update = Some((session.id.clone(), session.updated_at.clone()));
-            new_ctx = Some(session.context.clone());
-        }
-
-        if let Some((id, updated_at)) = session_to_update {
-            if let Some(ctx) = &new_ctx {
-                let mgr = self.get_db_manager();
-                let patch = json_value!({
-                    "updated_at": updated_at,
-                    "context": {
-                        "current_domain": ctx.current_domain,
-                        "current_db": ctx.current_db,
-                        "active_dapp": ctx.active_dapp
-                    }
-                });
-                let _ = mgr.update_document("sessions", &id, patch).await;
+                session_to_update = Some((session.id.clone(), session.updated_at.clone()));
+                new_ctx = Some(session.context.clone());
             }
+            None => {}
+        }
+        drop(lock);
+
+        match session_to_update {
+            Some((id, updated_at)) => match &new_ctx {
+                Some(ctx) => {
+                    let mgr = self.get_db_manager();
+                    let patch = json_value!({
+                        "updated_at": updated_at,
+                        "context": {
+                            "current_domain": ctx.current_domain,
+                            "current_db": ctx.current_db,
+                            "active_dapp": ctx.active_dapp_id
+                        }
+                    });
+                    match mgr.update_document("sessions", &id, patch).await {
+                        Ok(_) => {}
+                        Err(_) => {} // Ignoré silencieusement pour ne pas bloquer le run
+                    }
+                }
+                None => {}
+            },
+            None => {}
         }
 
-        let Some(ctx) = new_ctx else {
-            // 🎯 UTILISATION DE RAISE_ERROR!
-            raise_error!(
+        match new_ctx {
+            Some(ctx) => Ok(ctx),
+            None => raise_error!(
                 "ERR_NO_ACTIVE_SESSION",
                 error = "Impossible de mettre à jour le contexte : aucune session active.",
                 context = json_value!({"action": "update_session_context"})
-            );
-        };
-
-        Ok(ctx)
+            ),
+        }
     }
 
     pub async fn get_current_session(&self) -> Option<Session> {
@@ -370,41 +435,58 @@ impl SessionManager {
         lock.clone()
     }
 
+    #[allow(clippy::single_match)]
     pub async fn touch(&self) -> RaiseResult<()> {
         let mut session_to_update = None;
 
-        if let Some(session) = self.current_session.write().await.as_mut() {
-            let now = UtcClock::now().to_rfc3339(); // 🎯 Remplacé
-            session.last_activity_at = now.clone();
-            session.updated_at = now;
-            session_to_update = Some(session.clone());
+        let mut lock = self.current_session.write().await;
+        match lock.as_mut() {
+            Some(session) => {
+                let now = UtcClock::now().to_rfc3339();
+                session.last_activity_at = now.clone();
+                session.updated_at = now;
+                session_to_update = Some(session.clone());
+            }
+            None => {}
         }
+        drop(lock);
 
-        if let Some(session) = session_to_update {
-            let mgr = self.get_db_manager();
-            let patch = json_value!({
-                "last_activity_at": session.last_activity_at,
-                "updated_at": session.updated_at
-            });
-            let _ = mgr.update_document("sessions", &session.id, patch).await;
+        match session_to_update {
+            Some(session) => {
+                let mgr = self.get_db_manager();
+                let patch = json_value!({
+                    "last_activity_at": session.last_activity_at,
+                    "updated_at": session.updated_at
+                });
+                match mgr.update_document("sessions", &session.id, patch).await {
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+            }
+            None => {}
         }
 
         Ok(())
     }
 
+    #[allow(clippy::single_match)]
     pub async fn end_session(&self) -> RaiseResult<()> {
-        let session_id_to_delete = {
-            let mut lock = self.current_session.write().await;
-            if let Some(session) = lock.take() {
-                Some(session.id)
-            } else {
-                None
-            }
+        let mut lock = self.current_session.write().await;
+        let session_id_to_delete = match lock.take() {
+            Some(session) => Some(session.id),
+            None => None,
         };
+        drop(lock);
 
-        if let Some(id) = session_id_to_delete {
-            let mgr = self.get_db_manager();
-            let _ = mgr.delete_document("sessions", &id).await;
+        match session_id_to_delete {
+            Some(id) => {
+                let mgr = self.get_db_manager();
+                match mgr.delete_document("sessions", &id).await {
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+            }
+            None => {}
         }
 
         Ok(())
@@ -419,118 +501,123 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::testing::mock::{inject_mock_user, AgentDbSandbox};
 
-    // 🤖 Identité fixe pour l'agent de test
     const TEST_AGENT: &str = "Astra-Bot-Tester";
 
     #[tokio::test]
-    async fn test_session_manager_initial_state() {
+    async fn test_session_manager_initial_state() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
         assert!(manager.get_current_session().await.is_none());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_start_session_populates_context_from_config() {
+    async fn test_start_session_populates_context_from_config() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = TEST_AGENT;
 
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         inject_mock_user(&db_mgr, userhandle).await;
 
-        // 🎯 On se connecte avec le nom de l'agent injecté
-        let session = manager.start_session(userhandle).await.unwrap();
+        let session = manager.start_session(userhandle).await?;
 
         assert_eq!(session.user_handle, userhandle);
         assert_eq!(session.status, SessionStatus::Active);
 
-        // 🎯 FIX ASSERTION : On vérifie que la surcharge utilisateur (mbse2) est appliquée
-        // et non le défaut du système (_system).
         assert_eq!(session.context.current_domain, "mbse2");
         assert_eq!(session.context.current_db, "drones");
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_start_session_persists_to_db() {
+    async fn test_start_session_persists_to_db() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = TEST_AGENT;
 
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         inject_mock_user(&db_mgr, userhandle).await;
 
-        let session = manager.start_session(userhandle).await.unwrap();
+        let session = manager.start_session(userhandle).await?;
 
-        let doc_opt = db_mgr.get_document("sessions", &session.id).await.unwrap();
+        let doc_opt = db_mgr.get_document("sessions", &session.id).await?;
         assert!(doc_opt.is_some());
         assert_eq!(doc_opt.unwrap()["user_handle"], userhandle);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_session_touch_updates_db() {
+    async fn test_session_touch_updates_db() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = TEST_AGENT;
 
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         inject_mock_user(&db_mgr, userhandle).await;
 
-        let session = manager.start_session(userhandle).await.unwrap();
+        let session = manager.start_session(userhandle).await?;
         let initial_activity = session.last_activity_at.clone();
 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        manager.touch().await.unwrap();
+        manager.touch().await?;
 
         let mem_session = manager.get_current_session().await.unwrap();
         assert!(mem_session.last_activity_at > initial_activity);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_end_session_deletes_from_db() {
+    async fn test_end_session_deletes_from_db() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = TEST_AGENT;
 
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         inject_mock_user(&db_mgr, userhandle).await;
 
-        let session = manager.start_session(userhandle).await.unwrap();
-        manager.end_session().await.unwrap();
+        let session = manager.start_session(userhandle).await?;
+        manager.end_session().await?;
 
-        let doc_opt = db_mgr.get_document("sessions", &session.id).await.unwrap();
+        let doc_opt = db_mgr.get_document("sessions", &session.id).await?;
         assert!(doc_opt.is_none());
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_concurrent_session_reads() {
+    async fn test_concurrent_session_reads() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = "Bot-Parallel";
 
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         inject_mock_user(&db_mgr, userhandle).await;
 
-        manager.start_session(userhandle).await.unwrap();
+        manager.start_session(userhandle).await?;
 
         let mut tasks = vec![];
         for _ in 0..10 {
@@ -541,7 +628,12 @@ mod tests {
             }));
         }
         for t in tasks {
-            t.await.unwrap();
+            match t.await {
+                Ok(_) => {}
+                Err(e) => panic!("Thread paniqué : {:?}", e),
+            }
         }
+
+        Ok(())
     }
 }

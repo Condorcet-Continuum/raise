@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/workflow_engine/handlers/wasm.rs
 use super::{HandlerContext, NodeHandler};
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 use crate::workflow_engine::{ExecutionStatus, NodeType, WorkflowNode};
 
 pub struct WasmHandler;
@@ -17,44 +17,58 @@ impl NodeHandler for WasmHandler {
         context: &mut UnorderedMap<String, JsonValue>,
         shared_ctx: &HandlerContext<'_>,
     ) -> RaiseResult<ExecutionStatus> {
-        let plugin_id = node
-            .params
-            .get("plugin_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&node.id);
+        // 1. Identification du plugin via Match
+        let plugin_id = match node.params.get("plugin_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => &node.id,
+        };
 
-        tracing::info!("🔮 [WASM Hub] Appel du plugin : {}", plugin_id);
+        user_info!("INF_WASM_INVOKING", json_value!({ "plugin_id": plugin_id }));
 
+        // 2. Extraction sécurisée du contexte de mandat
         let mandate_ctx = context.get("_mandate").cloned();
 
+        // 3. Exécution via le PluginManager avec gestion de la résilience
         match shared_ctx
             .plugin_manager
             .run_plugin_with_context(plugin_id, mandate_ctx)
             .await
         {
             Ok((exit_code, signals)) => {
+                // Injection des signaux dans le contexte du workflow
                 for signal in signals {
-                    tracing::info!("📡 [SIGNAL PLUGIN] {} : {:?}", plugin_id, signal);
+                    user_info!(
+                        "INF_WASM_SIGNAL",
+                        json_value!({ "plugin": plugin_id, "signal": signal })
+                    );
                     context.insert(format!("{}_signal", plugin_id), signal);
                 }
 
                 if exit_code == 1 {
+                    user_success!("SUC_WASM_COMPLETED", json_value!({ "plugin": plugin_id }));
                     Ok(ExecutionStatus::Completed)
                 } else {
-                    tracing::warn!(
-                        "⛔ [WASM VETO] Plugin a retourné un échec (Code {})",
-                        exit_code
+                    user_warn!(
+                        "WRN_WASM_VETO",
+                        json_value!({ "plugin": plugin_id, "exit_code": exit_code })
                     );
                     Ok(ExecutionStatus::Failed)
                 }
             }
             Err(e) => {
-                tracing::error!("❌ [WASM ERROR] Échec exécution : {}", e);
+                user_error!(
+                    "ERR_WASM_EXECUTION",
+                    json_value!({ "plugin": plugin_id, "error": e.to_string() })
+                );
                 Ok(ExecutionStatus::Failed)
             }
         }
     }
 }
+
+// =========================================================================
+// TESTS UNITAIRES (Conformité Façade & Résilience Mount Points)
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -66,7 +80,7 @@ mod tests {
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
 
-    async fn setup_dummy_context<'a>(
+    async fn setup_wasm_test_context<'a>(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &'a AppConfig,
         sandbox_db: &'a crate::json_db::storage::StorageEngine,
@@ -77,19 +91,19 @@ mod tests {
         UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
         CollectionsManager<'a>,
     ) {
-        let manager = CollectionsManager::new(sandbox_db, &config.system_domain, &config.system_db);
+        // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config système
+        let manager = CollectionsManager::new(
+            sandbox_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
 
-        inject_mock_component(
-            &manager,
-            "llm",
-            json_value!({ "provider": "mock", "model": "test" }),
-        )
-        .await;
+        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
 
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
-            .unwrap();
+            .expect("Orchestrator setup failed");
 
         let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
 
@@ -105,11 +119,11 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_wasm_handler_missing_plugin_fails_safely() {
+    async fn test_wasm_handler_missing_plugin_fails_safely() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
-
+        let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
-            setup_dummy_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
+            setup_wasm_test_context(sandbox.db.clone(), &config, &sandbox.db).await;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
@@ -118,7 +132,6 @@ mod tests {
             tools: &tools,
             manager: &manager,
         };
-        let handler = WasmHandler;
 
         let node = WorkflowNode {
             id: "wasm_1".into(),
@@ -128,8 +141,41 @@ mod tests {
         };
 
         let mut data_ctx = UnorderedMap::new();
-        let result = handler.execute(&node, &mut data_ctx, &ctx).await.unwrap();
+        let result = WasmHandler.execute(&node, &mut data_ctx, &ctx).await?;
 
         assert_eq!(result, ExecutionStatus::Failed);
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Inférence résiliente du plugin_id par défaut
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_wasm_handler_default_id_inference() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+        let (orch, pm, critic, tools, manager) =
+            setup_wasm_test_context(sandbox.db.clone(), &config, &sandbox.db).await;
+
+        let ctx = HandlerContext {
+            orchestrator: &orch,
+            plugin_manager: &pm,
+            critic: &critic,
+            tools: &tools,
+            manager: &manager,
+        };
+
+        let node = WorkflowNode {
+            id: "my_auto_plugin".into(),
+            r#type: NodeType::Wasm,
+            name: "Auto ID Test".into(),
+            params: json_value!({}), // Pas de plugin_id spécifié
+        };
+
+        let mut data_ctx = UnorderedMap::new();
+        // L'exécution échoue car le plugin n'existe pas, mais on valide que l'ID est bien déduit de l'ID du nœud
+        let result = WasmHandler.execute(&node, &mut data_ctx, &ctx).await?;
+        assert_eq!(result, ExecutionStatus::Failed);
+        Ok(())
     }
 }

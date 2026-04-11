@@ -8,9 +8,10 @@ use crate::utils::core::{RuntimeEnv, SharedRef, UniqueId, UtcClock};
 use crate::utils::io::fs::{self, tempdir, Path, PathBuf, TempDir};
 
 // 2. Data : Configuration, JSON et Traits
+// 🎯 FIX : On importe BOOTSTRAP_DB et BOOTSTRAP_DOMAIN au lieu de SYSTEM_...
 use crate::utils::data::config::{
-    AppConfig, CoreConfig, DeepLearningConfig, IntegrationsConfig, SimulationContextConfig,
-    WorldModelConfig, CONFIG, SYSTEM_DB, SYSTEM_DOMAIN,
+    AppConfig, CoreConfig, DbPointer, DeepLearningConfig, IntegrationsConfig, MountPointsConfig,
+    SimulationContextConfig, WorldModelConfig, BOOTSTRAP_DB, BOOTSTRAP_DOMAIN, CONFIG,
 };
 use crate::utils::data::json::{self, json_value, JsonValue};
 use crate::utils::data::UnorderedMap;
@@ -24,10 +25,12 @@ pub const MOCK_LLM_TOKENIZER: &str = "tokenizer.json";
 
 // --- DÉFINITION DES SCHÉMAS STANDARDS POUR TESTS ---
 
+// Dans mock.rs
+
 pub const SESSION_SCHEMA_MOCK: &str = r#"{
     "type": "object",
     "properties": {
-        "_id": {
+        "_id": { 
             "type": "string",
             "x_compute": {
                 "engine": "plan/v1",
@@ -36,54 +39,26 @@ pub const SESSION_SCHEMA_MOCK: &str = r#"{
                 "plan": { "op": "uuid_v4" }
             }
         },
-        "_created_at": {
+        "_created_at": { 
             "type": "string",
-            "x_compute": {
-                "engine": "plan/v1",
-                "scope": "root",
-                "update": "if_missing",
-                "plan": { "op": "now_rfc3339" }
-            }
+            "x_compute": { "plan": { "op": "now_rfc3339" }, "update": "if_missing" }
         },
-        "_updated_at": {
+        "_updated_at": { 
             "type": "string",
-            "x_compute": {
-                "engine": "plan/v1",
-                "scope": "root",
-                "update": "always",
-                "plan": { "op": "now_rfc3339" }
-            }
+            "x_compute": { "plan": { "op": "now_rfc3339" }, "update": "always" }
         },
-        "@type": {
-            "type": "array",
-            "items": { "type": "string" },
-            "x_compute": {
-                "engine": "plan/v1",
-                "scope": "root",
-                "update": "if_missing",
-                "plan": { "op": "const", "value": ["Session", "cfg:Session"] }
-            }
-        },
+        "@type": { "type": "array", "items": { "type": "string" } },
         "user_id": { "type": "string" },
-        "user_name": { "type": "string" },
+        "user_handle": { "type": "string" },
         "status": { "type": "string", "enum": ["active", "idle", "expired", "revoked"] },
-        "expires_at": { 
-            "type": "string", 
-            "format": "date-time",
-            "x_compute": {
-                "engine": "plan/v1",
-                "scope": "root",
-                "update": "if_missing",
-                "plan": { "op": "now_rfc3339" }
-            }
-        },
+        "expires_at": { "type": "string", "format": "date-time" },
         "last_activity_at": { "type": "string", "format": "date-time" },
         "context": { 
             "type": "object",
-            "required": ["current_domain", "current_db", "active_dapp"]
+            "required": ["current_domain", "current_db", "active_dapp_id"] 
         }
     },
-    "required": ["_id", "_created_at", "_updated_at", "user_id", "status", "expires_at", "context"]
+    "required": ["user_id", "status", "context"]
 }"#;
 
 pub const USER_SCHEMA_MOCK: &str = r#"{
@@ -132,8 +107,41 @@ pub fn create_default_test_config() -> AppConfig {
             "en".to_string(),
             "Default Test Config".to_string(),
         )])),
-        system_domain: SYSTEM_DOMAIN.to_string(),
-        system_db: SYSTEM_DB.to_string(),
+        // 🎯 FIX : Utilisation stricte de BOOTSTRAP_DOMAIN et BOOTSTRAP_DB
+        mount_points: MountPointsConfig {
+            system: DbPointer {
+                domain: BOOTSTRAP_DOMAIN.to_string(),
+                db: BOOTSTRAP_DB.to_string(),
+            },
+            raise: DbPointer {
+                domain: BOOTSTRAP_DOMAIN.to_string(),
+                db: "raise_core".to_string(),
+            },
+            exploration: DbPointer {
+                domain: "project_x".into(),
+                db: "sandbox".into(),
+            },
+            modeling: DbPointer {
+                domain: "project_x".into(),
+                db: "mbse".into(),
+            },
+            simulation: DbPointer {
+                domain: "project_x".into(),
+                db: "sim_mbse".into(),
+            },
+            integration: DbPointer {
+                domain: "project_x".into(),
+                db: "test_mbse".into(),
+            },
+            production: DbPointer {
+                domain: "project_x".into(),
+                db: "prod_mbse".into(),
+            },
+            operation: DbPointer {
+                domain: "project_x".into(),
+                db: "telemetry".into(),
+            },
+        },
         workstation: None,
         user: None,
         core: CoreConfig {
@@ -146,12 +154,8 @@ pub fn create_default_test_config() -> AppConfig {
         world_model: WorldModelConfig::default(),
         deep_learning: DeepLearningConfig::default(),
         paths,
-        /*
-        active_dapp: "ref:dapps:handle:mock-dapp".to_string(),
-        active_services: vec!["ref:services:handle:mock-service".to_string()],
-        active_components: vec!["ref:components:handle:mock-comp-1".to_string()],
-        */
-        active_dapp: "mock-dapp-id".to_string(),
+        active_dapp_id: "mock-dapp-id".to_string(),
+        workstation_id: "mock-workstation-id".to_string(),
         active_services: vec!["mock-service-id".to_string()],
         active_components: vec!["mock-comp-id".to_string()],
         integrations: IntegrationsConfig::default(),
@@ -211,8 +215,9 @@ pub fn load_test_sandbox() -> RaiseResult<AppConfig> {
         }
     }
 
-    config.system_domain = SYSTEM_DOMAIN.to_string();
-    config.system_db = SYSTEM_DB.to_string();
+    // 🎯 FIX : Sécurisation du Mount Point système de la Sandbox avec BOOTSTRAP_*
+    config.mount_points.system.domain = BOOTSTRAP_DOMAIN.to_string();
+    config.mount_points.system.db = BOOTSTRAP_DB.to_string();
 
     Ok(config)
 }
@@ -228,10 +233,10 @@ pub async fn inject_mock_user(manager: &CollectionsManager<'_>, userhandle: &str
         "role": "engineer"
     });
 
-    manager
-        .insert_with_schema("users", user_doc)
-        .await
-        .expect("Échec injection agent de test");
+    match manager.insert_with_schema("users", user_doc).await {
+        Ok(_) => {}
+        Err(e) => panic!("Échec de l'injection de l'agent de test : {:?}", e),
+    }
 }
 
 pub async fn inject_mock_component(
@@ -239,7 +244,6 @@ pub async fn inject_mock_component(
     comp_id: &str,
     mut settings: JsonValue,
 ) {
-    // 1. Résolution explicite du handle
     let real_handle = match comp_id {
         "llm" => "ai_llm",
         "voice" => "ai_voice",
@@ -247,7 +251,6 @@ pub async fn inject_mock_component(
         other => other,
     };
 
-    // 2. Injection des chemins ABSOLUS
     if real_handle == "ai_llm" {
         let models_dir = dirs::home_dir()
             .unwrap_or_default()
@@ -269,12 +272,8 @@ pub async fn inject_mock_component(
 
     let ref_id = format!("ref:components:handle:{}", real_handle);
 
-    // 3. Création de la collection (On ignore silencieusement si elle existe déjà dans les tests)
     let _ = manager
-        .create_collection(
-            "service_configs",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
+        .create_collection("service_configs", "/v1/db/generic.schema.json")
         .await;
 
     let doc = json_value!({
@@ -287,7 +286,6 @@ pub async fn inject_mock_component(
         }
     });
 
-    // 4. Pattern matching strict au lieu de .expect() pour remonter l'erreur proprement
     match manager.insert_raw("service_configs", &doc).await {
         Ok(_) => {}
         Err(e) => panic!(
@@ -297,33 +295,38 @@ pub async fn inject_mock_component(
     }
 }
 
-/// Injecte le schéma racine index.schema.json et les passe-partouts
 pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
-    let schema_dir = db_cfg.db_schemas_root("_system", "_system").join("v1/db");
-
-    // 🎯 Utilisation de notre façade asynchrone FS
+    // 🎯 Dynamique selon la config
+    let schema_dir = db_cfg
+        .db_schemas_root(BOOTSTRAP_DOMAIN, BOOTSTRAP_DB)
+        .join("v1/db");
     let _ = fs::create_dir_all_async(&schema_dir).await;
 
-    // 1. Schéma de migration (🎯 json_value!)
+    let base_uri = format!("db://{}/{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB);
+
     let migration_schema = json_value!({
-        "$id": "db://_system/_system/schemas/v1/db/migration.schema.json",
+        "$id": format!("{}/schemas/v2/system/db/migration.schema.json", base_uri),
         "type": "object",
         "properties": {
-            "_id": { "type": "string" },
-            "version": { "type": "string" }
+            "$schema": { "type": "string" },
+            "_id": {
+                "type": "string",
+                "x_compute": { "plan": { "op": "uuid_v4" }, "update": "if_missing" }
+            },
+            "handle": { "type": "string" },
+            "name": { "type": "object" },
+            "version": { "type": "string" },
+            "description": { "type": "string" },
+            "applied_at": { "type": "string" }
         },
-        "required": ["_id", "version"]
+        "required": ["$schema", "_id", "handle", "name", "version", "description", "applied_at"]
     });
-
-    // 🎯 Façade fs
     let _ =
         fs::write_json_atomic_async(&schema_dir.join("migration.schema.json"), &migration_schema)
             .await;
 
-    // 2. Schéma d'index avec 'properties' explicites pour l'hydratation
     let core_schema = json_value!({
-        "$id": "db://_system/_system/schemas/v1/db/index.schema.json",
-        // ... (Reste de la définition du schéma inchangée mais formatée proprement) ...
+        "$id": format!("{}/schemas/v1/db/index.schema.json", base_uri),
         "type": "object",
         "properties": {
             "_id": {
@@ -340,7 +343,7 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
                     "_migrations": {
                         "type": "object",
                         "default": {
-                            "schema": "db://_system/_system/schemas/v1/db/migration.schema.json",
+                            "schema": format!("{}/schemas/v1/db/migration.schema.json", base_uri),
                             "items": []
                         }
                     }
@@ -353,7 +356,7 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
                     "_system_rules": {
                         "type": "object",
                         "default": {
-                            "schema": "db://_system/_system/schemas/v1/db/rule.schema.json",
+                            "schema": format!("{}/schemas/v1/db/rule.schema.json", base_uri),
                             "items": []
                         }
                     }
@@ -366,9 +369,8 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
     });
     let _ = fs::write_json_atomic_async(&schema_dir.join("index.schema.json"), &core_schema).await;
 
-    // Schéma générique
     let generic_schema = json_value!({
-        "$id": "db://_system/_system/schemas/v1/db/generic.schema.json",
+        "$id": format!("{}/schemas/v1/db/generic.schema.json", base_uri),
         "type": "object",
         "properties": {
             "_id": {
@@ -401,28 +403,31 @@ pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
 }
 
 pub async fn inject_collection_schema(domain_root: &Path, collection_name: &str, content: &str) {
-    let schemas_dir = domain_root.join("_system/_system/schemas/v1/mock");
+    let schemas_dir = domain_root.join(format!(
+        "{}/{}/schemas/v1/mock",
+        BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+    ));
     let _ = fs::create_dir_all_async(&schemas_dir).await;
 
     let schema_uri = format!(
-        "db://_system/_system/schemas/v1/mock/{}.schema.json",
-        collection_name
+        "db://{}/{}/schemas/v1/mock/{}.schema.json",
+        BOOTSTRAP_DOMAIN, BOOTSTRAP_DB, collection_name
     );
     let schema_file = schemas_dir.join(format!("{}.schema.json", collection_name));
 
-    // 🎯 Remplacement de serde_json par json::from_str (Façade data)
-    let mut json_val: JsonValue = json::deserialize_from_str(content).unwrap_or(json_value!({}));
+    let mut json_val: JsonValue = match json::deserialize_from_str(content) {
+        Ok(v) => v,
+        Err(_) => json_value!({}),
+    };
 
     if let Some(obj) = json_val.as_object_mut() {
-        obj.insert("$id".to_string(), JsonValue::String(schema_uri.clone())); // 🎯 JsonValue::String
+        obj.insert("$id".to_string(), JsonValue::String(schema_uri.clone()));
     }
 
-    // 🎯 Remplacement de tokio::fs::write par notre façade fs
     let _ = fs::write_async(&schema_file, json_val.to_string().as_bytes()).await;
 
-    // 2. Créer le dossier de la collection ET son _meta.json indispensable !
     let col_dir = domain_root
-        .join("_system/_system/collections")
+        .join(format!("{}/{}/collections", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB))
         .join(collection_name);
     let _ = fs::create_dir_all_async(&col_dir).await;
 
@@ -444,7 +449,6 @@ pub async fn inject_mock_config() {
         let _ = CONFIG.set(config);
     }
     if crate::utils::data::config::DEVICE.get().is_none() {
-        // 🎯 On utilise la détection intelligente au lieu de forcer le CPU
         let test_device = if cfg!(feature = "cuda") {
             candle_core::Device::new_cuda(0).unwrap_or(candle_core::Device::Cpu)
         } else {
@@ -471,7 +475,10 @@ impl DbSandbox {
         inject_mock_config().await;
         let mut config = AppConfig::get().clone();
 
-        let dir = tempdir().expect("Création du dossier temporaire échouée");
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Création du dossier temporaire échouée : {:?}", e),
+        };
         let root_path = dir.path().to_path_buf();
 
         config.paths.insert(
@@ -482,7 +489,6 @@ impl DbSandbox {
         let db_cfg = JsonDbConfig::new(root_path.clone());
         inject_schema_to_path(&db_cfg).await;
 
-        // 🎯 1. Préparation physique des schémas de mocks
         inject_collection_schema(&root_path, "sessions", SESSION_SCHEMA_MOCK).await;
         inject_collection_schema(&root_path, "users", USER_SCHEMA_MOCK).await;
 
@@ -493,40 +499,42 @@ impl DbSandbox {
             config,
         };
 
-        // 🎯 2. Déclaration officielle des collections dans l'index système
         let mgr = CollectionsManager::new(
             &sandbox.storage,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
+        let base_uri = format!("db://{}/{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB);
         let _ = mgr
-            .init_db_with_schema("db://_system/_system/schemas/v1/db/index.schema.json")
+            .init_db_with_schema(&format!("{}/schemas/v1/db/index.schema.json", base_uri))
             .await;
         let _ = mgr
             .create_collection(
                 "users",
-                "db://_system/_system/schemas/v1/mock/users.schema.json",
+                &format!("{}/schemas/v1/mock/users.schema.json", base_uri),
             )
             .await;
         let _ = mgr
             .create_collection(
                 "sessions",
-                "db://_system/_system/schemas/v1/mock/sessions.schema.json",
+                &format!("{}/schemas/v1/mock/sessions.schema.json", base_uri),
             )
             .await;
         sandbox
     }
 
     pub async fn mock_db(manager: &CollectionsManager<'_>) -> RaiseResult<bool> {
-        manager
-            .init_db_with_schema("db://_system/_system/schemas/v1/db/index.schema.json")
-            .await
+        let uri = format!(
+            "db://{}/{}/schemas/v1/db/index.schema.json",
+            BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+        );
+        manager.init_db_with_schema(&uri).await
     }
 }
 
 pub struct AgentDbSandbox {
     _dir: TempDir,
-    pub db: SharedRef<StorageEngine>, // 🎯 SharedRef remplace Arc
+    pub db: SharedRef<StorageEngine>,
     pub config: AppConfig,
     pub domain_root: PathBuf,
 }
@@ -534,14 +542,24 @@ pub struct AgentDbSandbox {
 impl AgentDbSandbox {
     pub async fn new() -> Self {
         let base = DbSandbox::new().await;
-        let db = SharedRef::new(base.storage); // 🎯 SharedRef
+        let db = SharedRef::new(base.storage);
         let domain_root = base.config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
-        let temp_manager =
-            CollectionsManager::new(&db, &base.config.system_domain, &base.config.system_db);
-        Self::mock_db(&temp_manager)
-            .await
-            .expect("Erreur lors de l'initialisation de la DB dans la Sandbox");
+        // 🎯 FIX MOUNT POINTS
+        let temp_manager = CollectionsManager::new(
+            &db,
+            &base.config.mount_points.system.domain,
+            &base.config.mount_points.system.db,
+        );
+
+        match Self::mock_db(&temp_manager).await {
+            Ok(_) => {}
+            Err(e) => panic!(
+                "Erreur lors de l'initialisation de la DB dans la Sandbox : {:?}",
+                e
+            ),
+        }
+
         Self {
             _dir: base._dir,
             db,
@@ -549,15 +567,18 @@ impl AgentDbSandbox {
             domain_root,
         }
     }
+
     pub async fn mock_db(manager: &CollectionsManager<'_>) -> RaiseResult<bool> {
-        manager
-            .init_db_with_schema("db://_system/_system/schemas/v1/db/index.schema.json")
-            .await
+        let uri = format!(
+            "db://{}/{}/schemas/v1/db/index.schema.json",
+            BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+        );
+        manager.init_db_with_schema(&uri).await
     }
 }
 
 pub struct GlobalDbSandbox {
-    pub db: SharedRef<StorageEngine>, // 🎯 SharedRef
+    pub db: SharedRef<StorageEngine>,
     pub config: &'static AppConfig,
     pub domain_root: PathBuf,
 }
@@ -570,19 +591,25 @@ impl GlobalDbSandbox {
 
         let cfg_db = JsonDbConfig::new(db_root.clone());
         let storage = StorageEngine::new(cfg_db.clone());
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
+
+        // 🎯 FIX MOUNT POINTS
+        let manager = CollectionsManager::new(
+            &storage,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
 
         let _ = manager.drop_db().await;
         inject_schema_to_path(&cfg_db).await;
         inject_collection_schema(&db_root, "sessions", SESSION_SCHEMA_MOCK).await;
 
-        manager
-            .init_db()
-            .await
-            .expect("Impossible d'initialiser la GlobalDbSandbox");
+        match manager.init_db().await {
+            Ok(_) => {}
+            Err(e) => panic!("Impossible d'initialiser la GlobalDbSandbox : {:?}", e),
+        }
 
         Self {
-            db: SharedRef::new(storage), // 🎯 SharedRef
+            db: SharedRef::new(storage),
             config,
             domain_root: db_root,
         }
@@ -598,66 +625,81 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_inject_schema_to_path_creates_valid_file() {
+    async fn test_inject_schema_to_path_creates_valid_file() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let db_cfg = JsonDbConfig::new(dir.path().to_path_buf());
 
         inject_schema_to_path(&db_cfg).await;
 
         let schema_file = db_cfg
-            .db_schemas_root("_system", "_system")
+            .db_schemas_root(BOOTSTRAP_DOMAIN, BOOTSTRAP_DB)
             .join("v1/db/index.schema.json");
 
-        // 🎯 Façade FS
         assert!(
             fs::exists_async(&schema_file).await,
             "Le fichier index.schema.json n'a pas été créé"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_inject_collection_schema_writes_correctly() {
+    async fn test_inject_collection_schema_writes_correctly() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let root_path = dir.path().to_path_buf();
 
         let mock_schema = r#"{"type": "object"}"#;
         inject_collection_schema(&root_path, "test_collection", mock_schema).await;
 
-        let meta_file = root_path.join("_system/_system/collections/test_collection/_meta.json");
-        // 🎯 Façade FS
+        let meta_file = root_path.join(format!(
+            "{}/{}/collections/test_collection/_meta.json",
+            BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+        ));
+
         assert!(
             fs::exists_async(&meta_file).await,
             "_meta.json n'a pas été créé"
         );
 
-        let schema_file =
-            root_path.join("_system/_system/schemas/v1/mock/test_collection.schema.json");
-        // 🎯 Façade FS
+        let schema_file = root_path.join(format!(
+            "{}/{}/schemas/v1/mock/test_collection.schema.json",
+            BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+        ));
+
         assert!(
             fs::exists_async(&schema_file).await,
             "Le schéma n'a pas été placé dans le registre"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_agent_db_sandbox_initializes_and_injects_sessions() {
+    async fn test_agent_db_sandbox_initializes_and_injects_sessions() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
 
-        let session_meta_path = sandbox
-            .domain_root
-            .join("_system/_system/collections/sessions/_meta.json");
+        let session_meta_path = sandbox.domain_root.join(format!(
+            "{}/{}/collections/sessions/_meta.json",
+            BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+        ));
 
-        // 🎯 Façade FS
         assert!(
             fs::exists_async(&session_meta_path).await,
             "Le _meta.json de session manque dans la sandbox !"
         );
 
-        // 🎯 Façade FS
-        let content = fs::read_to_string_async(&session_meta_path).await.unwrap();
+        let content = match fs::read_to_string_async(&session_meta_path).await {
+            Ok(c) => c,
+            Err(e) => panic!("Impossible de lire _meta.json : {:?}", e),
+        };
+
+        let expected_schema_uri = format!(
+            "db://{}/{}/schemas/v1/mock/sessions.schema.json",
+            BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+        );
         assert!(
-            content.contains("db://_system/_system/schemas/v1/mock/sessions.schema.json"),
+            content.contains(&expected_schema_uri),
             "Le lien URI vers le mock de session est cassé"
         );
+
+        Ok(())
     }
 }

@@ -612,7 +612,9 @@ impl<'a> QueryEngine<'a> {
         let mut resolved_paths = Vec::new();
 
         if let Ok(content) = fs::read_to_string_async(&index_path).await {
-            if let Ok(index_json) = crate::utils::json::deserialize_from_str::<JsonValue>(&content)
+            // 🎯 FIX : Utilisation de notre façade `crate::utils::data::json`
+            if let Ok(index_json) =
+                crate::utils::data::json::deserialize_from_str::<JsonValue>(&content)
             {
                 if let Some(collections) = index_json
                     .pointer("/collections")
@@ -659,7 +661,7 @@ mod tests {
             let idx = self.indexes.clone();
             let f = field.to_string();
             Box::pin(async move {
-                let guard = idx.lock().unwrap();
+                let guard = idx.lock().expect("Lock poisoned");
                 guard.contains_key(&f)
             })
         }
@@ -672,21 +674,22 @@ mod tests {
             let idx = self.indexes.clone();
             let f = field.to_string();
             Box::pin(async move {
-                let guard = idx.lock().unwrap();
+                let guard = idx.lock().expect("Lock poisoned");
                 Ok(guard.get(&f).cloned().unwrap_or_default())
             })
         }
     }
 
+    // 🎯 FIX : Retourne RaiseResult<()> et utilisation de `mount_points`
     #[async_test]
-    async fn test_full_query_execution() {
+    async fn test_full_query_execution() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
             &sandbox.storage,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         let engine = QueryEngine::new(&manager);
 
@@ -695,24 +698,20 @@ mod tests {
                 "users",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
-        // ✅ CORRECTION : "_id" au lieu de "id"
         manager
             .insert_raw(
                 "users",
                 &json_value!({"_id": "1", "age": 20, "role": "user"}),
             )
-            .await
-            .unwrap();
+            .await?;
         manager
             .insert_raw(
                 "users",
                 &json_value!({"_id": "2", "age": 30, "role": "admin"}),
             )
-            .await
-            .unwrap();
+            .await?;
 
         let query = Query {
             collection: "users".into(),
@@ -726,21 +725,23 @@ mod tests {
             projection: None,
         };
 
-        let result = engine.execute_query(query).await.unwrap();
+        let result = engine.execute_query(query).await?;
         assert_eq!(result.total_count, 1);
-        // ✅ CORRECTION : "_id"
         assert_eq!(result.documents[0]["_id"], "2");
+
+        Ok(())
     }
 
+    // 🎯 FIX : Retourne RaiseResult<()> et utilisation de `mount_points`
     #[async_test]
-    async fn test_smart_like_and_array() {
+    async fn test_smart_like_and_array() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
             &sandbox.storage,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         let engine = QueryEngine::new(&manager);
 
@@ -749,14 +750,11 @@ mod tests {
                 "docs",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
-        // ✅ CORRECTION : "_id" au lieu de "id"
         manager
             .insert_raw("docs", &json_value!({"_id": "1", "tags": ["rust", "code"]}))
-            .await
-            .unwrap();
+            .await?;
 
         let query = Query {
             collection: "docs".into(),
@@ -774,36 +772,35 @@ mod tests {
             projection: None,
         };
 
-        let result = engine.execute_query(query).await.unwrap();
+        let result = engine.execute_query(query).await?;
         assert_eq!(result.total_count, 1);
+
+        Ok(())
     }
 
+    // 🎯 FIX : Retourne RaiseResult<()> et utilisation de `mount_points`
     #[async_test]
-    async fn test_query_engine_uses_mock_index() {
+    async fn test_query_engine_uses_mock_index() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
             &sandbox.storage,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
         manager
             .create_collection(
                 "users",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
-        // ✅ CORRECTION : "_id" au lieu de "id"
         manager
             .insert_raw("users", &json_value!({"_id": "1", "role": "admin"}))
-            .await
-            .unwrap();
+            .await?;
         manager
             .insert_raw("users", &json_value!({"_id": "2", "role": "user"}))
-            .await
-            .unwrap();
+            .await?;
 
         let mut idx_map = UnorderedMap::new();
         idx_map.insert("role".to_string(), vec!["1".to_string()]);
@@ -825,20 +822,22 @@ mod tests {
             projection: None,
         };
 
-        let result = engine.execute_query(query).await.unwrap();
+        let result = engine.execute_query(query).await?;
 
         assert_eq!(result.total_count, 1);
-        // ✅ CORRECTION : "_id"
         assert_eq!(result.documents[0]["_id"], "1");
+
+        Ok(())
     }
 
+    // 🎯 FIX : Retourne RaiseResult<()> et utilisation de `mount_points`
     #[async_test]
-    async fn test_evaluate_condition_logic() {
+    async fn test_evaluate_condition_logic() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
             &sandbox.storage,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         let engine = QueryEngine::new(&manager);
 
@@ -851,5 +850,7 @@ mod tests {
             &Condition::contains("tags", json_value!("a")),
             "col"
         ));
+
+        Ok(())
     }
 }

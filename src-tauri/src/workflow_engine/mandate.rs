@@ -231,14 +231,19 @@ impl Mandate {
                     )
                 })?;
 
-                let expr: Expr = json::deserialize_from_value(ast_val.clone()).map_err(|e| {
-                    build_error!(
-                        "ERR_JSON_DESERIALIZE",
-                        error = format!("Échec du parsing AST : {}", e),
-                        context = json_value!({ "rule": rule_name })
-                    )
-                })?;
-
+                let expr: Expr = match json::deserialize_from_value(ast_val.clone()) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        raise_error!(
+                            "ERR_JSON_DESERIALIZE",
+                            error = format!("Échec du parsing AST : {}", e),
+                            context = json_value!({
+                                "rule": rule_name,
+                                "hint": "Vérifiez la structure récursive de l'AST dans la base de données."
+                            })
+                        );
+                    }
+                };
                 Analyzer::validate_depth(&expr, 50)?;
                 let deps = Analyzer::get_dependencies(&expr).into_iter().collect();
                 Ok(deps)

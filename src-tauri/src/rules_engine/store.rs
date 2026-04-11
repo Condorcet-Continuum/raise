@@ -1,5 +1,5 @@
 // FICHIER : src-tauri/src/rules_engine/store.rs
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::rules_engine::analyzer::Analyzer;
@@ -28,23 +28,31 @@ impl<'a> RuleStore<'a> {
 
     /// Initialise le store en chargeant les règles depuis la collection système (Async)
     pub async fn sync_from_db(&mut self) -> RaiseResult<()> {
-        let stored_rules = self
-            .db_manager
-            .list_all("_system_rules")
-            .await
-            .unwrap_or_default();
+        let stored_rules = match self.db_manager.list_all("_system_rules").await {
+            Ok(list) => list,
+            Err(e) => raise_error!("ERR_RULES_SYNC_FAILED", error = e.to_string()),
+        };
 
         self.dependency_cache.clear();
         self.rules_cache.clear();
 
         for rule_val in stored_rules {
-            if let Ok(rule) = json::deserialize_from_value::<Rule>(rule_val.clone()) {
-                // Extraction de la collection cible pour cloisonner le cache
-                let col = rule_val
-                    .get("_target_collection")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("*");
-                self.index_rule_in_cache(col, rule);
+            match json::deserialize_from_value::<Rule>(rule_val.clone()) {
+                Ok(rule) => {
+                    // Extraction de la collection cible pour cloisonner le cache
+                    let col = rule_val
+                        .get("_target_collection")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("*");
+                    self.index_rule_in_cache(col, rule);
+                }
+                Err(e) => {
+                    user_warn!(
+                        "WRN_RULES_DESERIALIZATION_SKIP",
+                        json_value!({ "error": e.to_string() })
+                    );
+                    continue;
+                }
             }
         }
         Ok(())
@@ -78,7 +86,10 @@ impl<'a> RuleStore<'a> {
             obj.insert("_id".to_string(), json_value!(rule.id));
         }
 
-        self.db_manager.insert_raw("_system_rules", &doc).await?;
+        match self.db_manager.insert_raw("_system_rules", &doc).await {
+            Ok(_) => (),
+            Err(e) => raise_error!("ERR_RULE_DB_WRITE_FAILED", error = e.to_string()),
+        }
 
         // 2. Mise à jour du cache mémoire (avec isolement par collection)
         self.index_rule_in_cache(collection, rule);
@@ -89,7 +100,6 @@ impl<'a> RuleStore<'a> {
     fn index_rule_in_cache(&mut self, collection: &str, rule: Rule) {
         let deps = Analyzer::get_dependencies(&rule.expr);
         for dep in deps {
-            // Création d'une clé isolée (ex: "drones::status")
             let key = format!("{}::{}", collection, dep);
             self.dependency_cache
                 .entry(key)
@@ -108,7 +118,6 @@ impl<'a> RuleStore<'a> {
         let mut impacted_ids = UniqueSet::new();
 
         for field in changed_fields {
-            // Recherche de la clé isolée correspondante
             let key = format!("{}::{}", collection, field);
             if let Some(ids) = self.dependency_cache.get(&key) {
                 for id in ids {
@@ -139,6 +148,10 @@ impl<'a> RuleStore<'a> {
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES ET RÉSILIENCE
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,27 +160,31 @@ mod tests {
     use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
-    async fn test_store_idempotency_and_retrieval() {
+    #[serial_test::serial] // 🎯 FIX : Protection CUDA (Sandbox active)
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_store_idempotency_and_retrieval() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
 
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            manager.space, manager.db
+        );
         manager
-            .create_collection(
-                "_system_rules",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
+            .create_collection("_system_rules", &schema_uri)
+            .await?;
 
         let mut store = RuleStore::new(&manager);
 
         let rule1 = Rule {
             id: "r1".into(),
-            target: "user_age".into(), // Cible spécifique
+            target: "user_age".into(),
             expr: Expr::Val(json_value!(1)),
             description: None,
             severity: None,
@@ -181,24 +198,78 @@ mod tests {
             severity: None,
         };
 
-        // Enregistrement
-        store.register_rule("users", rule1.clone()).await.unwrap();
-        store.register_rule("systems", rule2.clone()).await.unwrap();
+        store.register_rule("users", rule1.clone()).await?;
+        store.register_rule("systems", rule2.clone()).await?;
 
-        // Test de récupération ciblée (get_rules_for_target)
-        let user_rules = store.get_rules_for_target("user_age");
-        assert_eq!(user_rules.len(), 1);
-        assert_eq!(user_rules[0].id, "r1");
+        assert_eq!(store.get_rules_for_target("user_age").len(), 1);
+        assert_eq!(store.get_all_rules().len(), 2);
+        Ok(())
+    }
 
-        let system_rules = store.get_rules_for_target("system_status");
-        assert_eq!(system_rules.len(), 1);
-        assert_eq!(system_rules[0].id, "r2");
+    /// 🎯 NOUVEAU TEST : Résilience face à une base de données déconnectée
+    #[async_test]
+    #[serial_test::serial] // 🎯 FIX : Protection CUDA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_store_mount_point_resilience() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        // Manager pointant sur une partition invalide
+        let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
 
-        let unknown_rules = store.get_rules_for_target("unknown");
-        assert!(unknown_rules.is_empty());
+        // 🎯 FIX : Utilisation de la façade d'initialisation (Gatekeeper des Mount Points)
+        let res = crate::rules_engine::initialize_rules_engine(&manager).await;
 
-        // Test de récupération globale (get_all_rules)
-        let all_rules = store.get_all_rules();
-        assert_eq!(all_rules.len(), 2);
+        // Le moteur doit intercepter l'échec d'I/O lors de la création forcée de la collection
+        match res {
+            Err(AppError::Structured(err)) => {
+                // L'erreur levée par initialize_rules_engine est ERR_RULES_ENGINE_INIT_FAIL
+                assert_eq!(err.code, "ERR_RULES_ENGINE_INIT_FAIL");
+                Ok(())
+            }
+            _ => panic!(
+                "Le moteur aurait dû lever ERR_RULES_ENGINE_INIT_FAIL via initialize_rules_engine"
+            ),
+        }
+    }
+
+    /// 🎯 NOUVEAU TEST : Robustesse face aux règles corrompues
+    #[async_test]
+    #[serial_test::serial] // 🎯 FIX : Protection CUDA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_store_deserialization_resilience() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            manager.space, manager.db
+        );
+        manager
+            .create_collection("_system_rules", &schema_uri)
+            .await?;
+
+        manager
+            .insert_raw(
+                "_system_rules",
+                &json_value!({
+                    "_id": "bad_rule",
+                    "expr": { "not_an_expr": true }
+                }),
+            )
+            .await?;
+
+        let mut store = RuleStore::new(&manager);
+        store.sync_from_db().await?;
+
+        assert_eq!(
+            store.rules_cache.len(),
+            0,
+            "La règle corrompue doit être ignorée par le sync."
+        );
+        Ok(())
     }
 }

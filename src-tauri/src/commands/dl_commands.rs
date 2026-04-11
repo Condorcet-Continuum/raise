@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/commands/dl_commands.rs
 
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 // Imports Deep Learning
 use crate::ai::deep_learning::{
@@ -31,15 +31,41 @@ impl Default for DlState {
     }
 }
 
-// --- COMMANDES DEEP LEARNING ---
+// --- COMMANDES DEEP LEARNING (INTERFACE TAURI) ---
 
 #[command]
 pub fn init_dl_model(state: State<'_, DlState>) -> RaiseResult<String> {
+    init_dl_model_internal(&state)
+}
+
+#[command]
+pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> RaiseResult<Vec<f32>> {
+    run_dl_prediction_internal(&state, input)
+}
+
+#[command]
+pub fn train_dl_step(state: State<'_, DlState>, input: Vec<f32>, target: u32) -> RaiseResult<f64> {
+    train_dl_step_internal(&state, input, target)
+}
+
+#[command]
+pub fn save_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<String> {
+    save_dl_model_internal(&state, path)
+}
+
+#[command]
+pub fn load_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<String> {
+    load_dl_model_internal(&state, path)
+}
+
+// --- LOGIQUE INTERNE (TESTABLE SANS TAURI::STATE) ---
+
+fn init_dl_model_internal(state: &DlState) -> RaiseResult<String> {
     let config = &AppConfig::get().deep_learning;
-    let device = config.to_device();
+    let device = AppConfig::device(); // 🎯 Façade SSOT
 
     let varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
 
     let model = match SequenceNet::new(
         config.input_size,
@@ -51,35 +77,37 @@ pub fn init_dl_model(state: State<'_, DlState>) -> RaiseResult<String> {
         Err(e) => raise_error!(
             "ERR_AI_MODEL_INIT_FAIL",
             error = e.to_string(),
-            context = json_value!({
-                "input_size": config.input_size,
-                "hidden_size": config.hidden_size,
-                "output_size": config.output_size
-            })
+            context = json_value!({ "input_size": config.input_size })
         ),
     };
 
-    *state.model.lock().unwrap() = Some(model);
-    *state.varmap.lock().unwrap() = Some(varmap);
+    let mut mg = match state.model.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
+    let mut vg = match state.varmap.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
+
+    *mg = Some(model);
+    *vg = Some(varmap);
     Ok("OK".to_string())
 }
 
-#[command]
-pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> RaiseResult<Vec<f32>> {
+fn run_dl_prediction_internal(state: &DlState, input: Vec<f32>) -> RaiseResult<Vec<f32>> {
     let config = &AppConfig::get().deep_learning;
-    let device = config.to_device();
+    let device = AppConfig::device();
 
-    let guard = state.model.lock().unwrap();
+    let guard = match state.model.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
+
     if let Some(model) = &*guard {
-        // 🎯 FIX: Typage explicite (1usize) pour que le compilateur déduise la Shape
-        let t = match Tensor::from_vec(input.clone(), (1usize, 1usize, config.input_size), &device)
-        {
+        let t = match Tensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
             Ok(tensor) => tensor,
-            Err(e) => raise_error!(
-                "ERR_MODEL_INPUT_TENSOR",
-                error = e.to_string(),
-                context = json_value!({ "expected_shape": [1, 1, config.input_size] })
-            ),
+            Err(e) => raise_error!("ERR_MODEL_INPUT_TENSOR", error = e.to_string()),
         };
 
         let out = match model.forward(&t) {
@@ -92,98 +120,135 @@ pub fn run_dl_prediction(state: State<'_, DlState>, input: Vec<f32>) -> RaiseRes
             Err(e) => raise_error!("ERR_MODEL_OUTPUT_CONVERSION", error = e.to_string()),
         }
     } else {
-        raise_error!("ERR_MODEL_NOT_LOADED", error = "MODEL_GUARD_IS_NONE");
+        raise_error!("ERR_MODEL_NOT_LOADED")
     }
 }
 
-#[command]
-pub fn train_dl_step(state: State<'_, DlState>, input: Vec<f32>, target: u32) -> RaiseResult<f64> {
+fn train_dl_step_internal(state: &DlState, input: Vec<f32>, target: u32) -> RaiseResult<f64> {
     let config = &AppConfig::get().deep_learning;
-    let device = config.to_device();
+    let device = AppConfig::device();
 
-    let mg = state.model.lock().unwrap();
-    let vg = state.varmap.lock().unwrap();
+    let mg = match state.model.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
+    let vg = match state.varmap.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
 
-    if let (Some(model), Some(vars)) = (&*mg, &*vg) {
-        let t_in = match Tensor::from_vec(input, (1usize, 1usize, config.input_size), &device) {
-            Ok(t) => t,
-            Err(e) => raise_error!("ERR_TRAIN_INPUT_TENSOR", error = e.to_string()),
-        };
+    match (&*mg, &*vg) {
+        (Some(model), Some(vars)) => {
+            let t_in = match Tensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_TRAIN_INPUT_TENSOR", error = e.to_string()),
+            };
 
-        let t_tgt = match Tensor::from_vec(vec![target], (1usize, 1usize), &device) {
-            Ok(t) => t,
-            Err(e) => raise_error!("ERR_TRAIN_TARGET_TENSOR", error = e.to_string()),
-        };
+            let t_tgt = match Tensor::from_vec(vec![target], (1usize, 1usize), device) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_TRAIN_TARGET_TENSOR", error = e.to_string()),
+            };
 
-        let mut trainer = match Trainer::from_config(vars, config) {
-            Ok(t) => t,
-            Err(e) => raise_error!("ERR_TRAINER_INIT", error = e.to_string()),
-        };
+            let mut trainer = match Trainer::from_config(vars, config) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_TRAINER_INIT", error = e.to_string()),
+            };
 
-        match trainer.train_step(model, &t_in, &t_tgt) {
-            Ok(loss) => Ok(loss),
-            Err(e) => raise_error!("ERR_TRAIN_STEP_FAILURE", error = e.to_string()),
+            match trainer.train_step(model, &t_in, &t_tgt) {
+                Ok(loss) => Ok(loss),
+                Err(e) => raise_error!("ERR_TRAIN_STEP_FAILURE", error = e.to_string()),
+            }
+        }
+        _ => raise_error!("ERR_TRAIN_COMPONENTS_MISSING"),
+    }
+}
+
+fn save_dl_model_internal(state: &DlState, path: String) -> RaiseResult<String> {
+    let vg = match state.varmap.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
+
+    if let Some(vars) = &*vg {
+        match serialization::save_model(vars, PathBuf::from(&path)) {
+            Ok(_) => Ok(format!("Model saved to {}", path)),
+            Err(e) => raise_error!("ERR_MODEL_SAVE_FAILURE", error = e.to_string()),
         }
     } else {
+        raise_error!("ERR_MODEL_SAVE_EMPTY")
+    }
+}
+
+fn load_dl_model_internal(state: &DlState, path: String) -> RaiseResult<String> {
+    let config = &AppConfig::get().deep_learning;
+    let path_buf = PathBuf::from(&path);
+
+    if !path_buf.exists() {
         raise_error!(
-            "ERR_TRAIN_COMPONENTS_MISSING",
-            error = "MODEL_OR_VARS_UNSET"
+            "ERR_DL_MODEL_NOT_FOUND",
+            context = json_value!({"path": path})
         );
     }
-}
 
-#[command]
-pub fn save_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<String> {
-    let vg = state.varmap.lock().unwrap();
-    if let Some(vars) = &*vg {
-        let path_buf = PathBuf::from(path);
-        let path_display = path_buf.to_string_lossy().to_string();
-
-        if let Err(e) = serialization::save_model(vars, path_buf) {
-            raise_error!(
-                "ERR_MODEL_SAVE_FAILURE",
-                error = e.to_string(),
-                context = json_value!({"path": path_display})
-            );
-        }
-
-        Ok(format!("Model successfully saved to {}", path_display))
-    } else {
-        raise_error!("ERR_MODEL_SAVE_EMPTY", error = "NO_VARIABLES_IN_GUARD");
-    }
-}
-
-#[command]
-pub fn load_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<String> {
-    let config = &AppConfig::get().deep_learning;
-
-    let m = match serialization::load_model(PathBuf::from(path.clone()), config) {
+    let m = match serialization::load_model(path_buf, config) {
         Ok(model) => model,
-        Err(e) => raise_error!(
-            "ERR_DL_MODEL_LOAD_FAIL",
-            error = e.to_string(),
-            context = json_value!({"path": path})
-        ),
+        Err(e) => raise_error!("ERR_DL_MODEL_LOAD_FAIL", error = e.to_string()),
     };
 
     let mut model_guard = match state.model.lock() {
         Ok(guard) => guard,
-        Err(_) => raise_error!(
-            "ERR_SYS_MUTEX_POISONED",
-            context = json_value!({"component": "DlState.model"})
-        ),
-    };
-
-    let mut varmap_guard = match state.varmap.lock() {
-        Ok(guard) => guard,
-        Err(_) => raise_error!(
-            "ERR_SYS_MUTEX_POISONED",
-            context = json_value!({"component": "DlState.varmap"})
-        ),
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
     };
 
     *model_guard = Some(m);
-    *varmap_guard = None;
-
     Ok("Loaded".to_string())
+}
+
+// =========================================================================
+// TESTS UNITAIRES ET RÉSILIENCE
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::testing::mock;
+
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_dl_commands_initialization() -> RaiseResult<()> {
+        mock::inject_mock_config().await;
+        let state = DlState::new();
+        // 🎯 FIX: Appel de la logique interne au lieu de la commande Tauri
+        let res = init_dl_model_internal(&state);
+        assert!(res.is_ok());
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_resilience_uninitialized_prediction() -> RaiseResult<()> {
+        // 🎯 FIX : Initialisation de la config globale pour éviter la panique sur AppConfig::get()
+        mock::inject_mock_config().await;
+
+        let state = DlState::new();
+        // 🎯 FIX : Vérification que la prédiction échoue proprement si le modèle n'est pas chargé
+        let res = run_dl_prediction_internal(&state, vec![0.1]);
+        assert!(res.is_err());
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_dl_device_ssot() -> RaiseResult<()> {
+        // 🎯 FIX : Initialisation du matériel pour éviter la panique sur AppConfig::device()
+        mock::inject_mock_config().await;
+
+        let device = AppConfig::device();
+        // Le périphérique doit être valide pour le moteur Candle
+        assert!(device.is_cpu() || device.is_cuda() || device.is_metal());
+        Ok(())
+    }
 }

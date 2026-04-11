@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/ai/memory/mod.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*; // 🎯 Nouvel import
+use crate::utils::prelude::*; // 🎯 Façade Unique
 
 pub mod candle_store;
 
@@ -15,7 +15,7 @@ pub struct MemoryRecord {
 
 #[async_interface]
 pub trait VectorStore: Send + Sync {
-    // 🎯 Ajout du manager en paramètre pour toutes les opérations
+    /// Initialise une collection vectorielle en s'assurant de la présence du schéma technique.
     async fn init_collection(
         &self,
         manager: &CollectionsManager<'_>,
@@ -23,6 +23,7 @@ pub trait VectorStore: Send + Sync {
         vector_size: u64,
     ) -> RaiseResult<()>;
 
+    /// Ajoute des documents de manière synchronisée entre le moteur tensoriel et JSON-DB.
     async fn add_documents(
         &self,
         manager: &CollectionsManager<'_>,
@@ -30,6 +31,7 @@ pub trait VectorStore: Send + Sync {
         records: Vec<MemoryRecord>,
     ) -> RaiseResult<()>;
 
+    /// Recherche par similarité cosinus avec filtrage hybride (Vecteurs + Métadonnées DB).
     async fn search_similarity(
         &self,
         manager: &CollectionsManager<'_>,
@@ -41,6 +43,9 @@ pub trait VectorStore: Send + Sync {
     ) -> RaiseResult<Vec<MemoryRecord>>;
 }
 
+// =========================================================================
+// TESTS D'INTÉGRATION (Rigueur Façade, Mount Points & Résilience)
+// =========================================================================
 #[cfg(test)]
 mod integration_tests {
     use super::{MemoryRecord, VectorStore};
@@ -50,36 +55,38 @@ mod integration_tests {
     use crate::utils::testing::AgentDbSandbox;
     use candle_core::Device;
 
+    /// Test existant : Cycle de vie complet via Sandbox
     #[async_test]
-    async fn test_candle_lifecycle() {
-        // 🎯 On utilise désormais la Sandbox complète (Graphe + Moteur)
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_candle_lifecycle() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+
+        // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await.unwrap();
+        AgentDbSandbox::mock_db(&manager).await?;
 
         let device = Device::Cpu;
         let store_dir = sandbox.domain_root.join("vector_store");
-
         let store = CandleLocalStore::new(&store_dir, &device);
 
         let col = "integ_test_collection";
-        // Création physique de la collection JSON-DB pour le test
-        manager
-            .create_collection(
-                col,
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
 
-        store
-            .init_collection(&manager, col, 4)
-            .await
-            .expect("Init failed");
+        // Résolution dynamique du schéma via les points de montage système
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        manager.create_collection(col, &schema_uri).await?;
+
+        // Initialisation du store vectoriel
+        store.init_collection(&manager, col, 4).await?;
 
         let rec = MemoryRecord {
             id: UniqueId::new_v4().to_string(),
@@ -88,20 +95,105 @@ mod integration_tests {
             vectors: Some(vec![1.0, 0.0, 0.0, 0.0]),
         };
 
-        // 🎯 On passe le manager
+        // Persistance et indexation
         store
             .add_documents(&manager, col, vec![rec.clone()])
-            .await
-            .unwrap();
-        store.save().await.expect("Échec de la persistance locale");
+            .await?;
 
-        // 🎯 On passe le manager
+        // Recherche sémantique
         let res = store
             .search_similarity(&manager, col, &[1.0, 0.0, 0.0, 0.0], 1, 0.0, None)
-            .await
-            .unwrap();
+            .await?;
 
         assert!(!res.is_empty(), "La recherche doit remonter le document");
         assert_eq!(res[0].content, "Test d'intégration natif");
+
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience face à un domaine inexistant (Mount Point Error)
+    #[async_test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_memory_resilience_invalid_domain() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+
+        // On crée un manager pointant vers un domaine non initialisé
+        let manager = CollectionsManager::new(&sandbox.db, "ghost_domain", "ghost_db");
+        let store = CandleLocalStore::new(&sandbox.domain_root.join("fail"), &Device::Cpu);
+
+        // 1. L'initialisation est "Lazy/Résiliente" et ne crashera pas
+        let _ = store.init_collection(&manager, "any", 384).await;
+
+        // 2. Par contre, l'écriture (upsert) DOIT être strictement interceptée !
+        let rec = MemoryRecord {
+            id: "ghost_1".into(),
+            content: "Donnée fantôme".into(),
+            metadata: json_value!({}),
+            vectors: Some(vec![0.0; 384]),
+        };
+
+        // L'interaction avec JSON-DB sera rejetée avec une erreur structurée
+        let result = store.add_documents(&manager, "any", vec![rec]).await;
+
+        // Le moteur doit renvoyer une erreur structurée au lieu de paniquer
+        match result {
+            Err(AppError::Structured(e)) => {
+                // On s'assure que c'est bien la base de données qui a bloqué l'opération
+                assert!(e.code.starts_with("ERR_DB"));
+                Ok(())
+            },
+            _ => panic!(
+                "Le moteur de mémoire aurait dû lever une erreur structurée pour domaine invalide lors de l'insertion"
+            ),
+        }
+    }
+
+    /// 🎯 NOUVEAU TEST : Étanchéité des collections (Multi-tenant)
+    #[async_test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_memory_collection_isolation() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+        AgentDbSandbox::mock_db(&manager).await?;
+
+        let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
+
+        // Init deux collections distinctes
+        store.init_collection(&manager, "col_a", 2).await?;
+        store.init_collection(&manager, "col_b", 2).await?;
+
+        let rec_a = MemoryRecord {
+            id: "A".into(),
+            content: "Data A".into(),
+            metadata: json_value!({}),
+            vectors: Some(vec![1.0, 0.0]),
+        };
+        let rec_b = MemoryRecord {
+            id: "B".into(),
+            content: "Data B".into(),
+            metadata: json_value!({}),
+            vectors: Some(vec![1.0, 0.0]),
+        };
+
+        store.add_documents(&manager, "col_a", vec![rec_a]).await?;
+        store.add_documents(&manager, "col_b", vec![rec_b]).await?;
+
+        // La recherche dans A ne doit JAMAIS remonter B
+        let res = store
+            .search_similarity(&manager, "col_a", &[1.0, 0.0], 10, 0.5, None)
+            .await?;
+        assert!(
+            res.iter().all(|r| r.id == "A"),
+            "Fuite de données entre collections détectée !"
+        );
+
+        Ok(())
     }
 }

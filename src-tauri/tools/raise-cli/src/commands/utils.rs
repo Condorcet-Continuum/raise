@@ -3,7 +3,7 @@
 use clap::{Args, Subcommand};
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
-use raise::utils::prelude::*;
+use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 // 🎯 Import du contexte global CLI
 use crate::CliContext;
@@ -53,30 +53,37 @@ pub enum UtilsCommands {
 }
 
 pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
-    // Heartbeat automatique pour signaler l'activité à chaque appel
-    let _ = ctx.session_mgr.touch().await;
+    // Heartbeat automatique pour signaler l'activité
+    match ctx.session_mgr.touch().await {
+        Ok(_) => user_debug!("SESSION_TOUCHED"),
+        Err(e) => user_error!(
+            "ERR_SESSION_HEARTBEAT",
+            json_value!({"error": e.to_string()})
+        ),
+    }
 
     match args.command {
         UtilsCommands::Info => {
             println!("--- 🛠️ RAISE SYSTEM INFO ---");
 
-            // 1. STATUT DE LA SESSION (Via le contexte)
-            if let Some(session) = ctx.session_mgr.get_current_session().await {
-                user_info!(
-                    "CLI_SESSION_ACTIVE",
-                    json_value!({
-                        "user_id": session.user_id,
-                        "status": format!("{:?}", session.status),
-                        "session_id": session.id,
-                        "domain": session.context.current_domain,
-                        "db": session.context.current_db,
-                    })
-                );
-            } else {
-                user_warn!(
+            // 1. STATUT DE LA SESSION
+            match ctx.session_mgr.get_current_session().await {
+                Some(session) => {
+                    user_info!(
+                        "CLI_SESSION_ACTIVE",
+                        json_value!({
+                            "user_id": session.user_id,
+                            "status": format!("{:?}", session.status),
+                            "session_id": session.id,
+                            "domain": session.context.current_domain,
+                            "db": session.context.current_db,
+                        })
+                    );
+                }
+                None => user_warn!(
                     "CLI_SESSION_INACTIVE",
                     json_value!({"hint": "Aucune session n'est détectée."})
-                );
+                ),
             }
 
             // 2. VERSIONS ET ENVIRONNEMENT
@@ -88,37 +95,25 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
                 })
             );
 
-            // 3. VÉRIFICATION DU MOTEUR LLM
-            let mut provider = String::from("Non configuré");
-            let mut model = String::from("Inconnu");
-
-            // 🎯 On utilise directement les valeurs résolues du contexte !
+            // 3. VÉRIFICATION DU MOTEUR LLM VIA MOUNT POINTS
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
-
-            if let Ok(settings) = AppConfig::get_component_settings(&manager, "llm").await {
-                // `settings` est déjà un JsonValue, on peut le requêter directement
-                provider = settings
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Local")
-                    .to_string();
-                model = settings
-                    .get("rust_model_file")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Inconnu")
-                    .to_string();
+            match AppConfig::get_component_settings(&manager, "llm").await {
+                Ok(settings) => {
+                    user_info!(
+                        "LLM_ENGINE_STATUS",
+                        json_value!({
+                            "provider": settings.get("provider").and_then(|v| v.as_str()).unwrap_or("Local"),
+                            "model": settings.get("rust_model_file").and_then(|v| v.as_str()).unwrap_or("Inconnu"),
+                            "is_active": true,
+                            "domain": ctx.active_domain
+                        })
+                    );
+                }
+                Err(_) => user_warn!(
+                    "LLM_ENGINE_OFFLINE",
+                    json_value!({"hint": "Composant LLM non configuré"})
+                ),
             }
-
-            user_info!(
-                "LLM_ENGINE_STATUS",
-                json_value!({
-                    "provider": provider,
-                    "model": model,
-                    "is_active": provider != "Non configuré",
-                    "domain": ctx.active_domain, // 🎯 Traçabilité !
-                    "db": ctx.active_db
-                })
-            );
 
             // 4. VÉRIFICATION SYSTÈME DE FICHIERS
             if let Some(path) = ctx.config.get_path("PATH_RAISE_DOMAIN") {
@@ -134,218 +129,143 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
             );
         }
 
-        UtilsCommands::Whoami => {
-            // 🎯 Utilisation de get_current_session()
-            match ctx.session_mgr.get_current_session().await {
-                Some(session) => {
-                    user_info!(
-                        "CURRENT_USER",
-                        json_value!({
-                            "userhandle": session.user_id,
-                            "active_domain": ctx.active_domain,
-                            "active_db": ctx.active_db,
-                            "session_id": session.id,
-                            "created_at": session.created_at,
-                            "last_activity": session.last_activity_at
-                        })
-                    );
-                }
-                None => {
-                    user_warn!(
-                        "NO_ACTIVE_SESSION",
-                        json_value!({"hint": "Utilisez 'utils login <userhandle>' pour vous connecter."})
-                    );
-                }
-            }
-        }
-
-        UtilsCommands::Login { userhandle } => {
-            // 🎯 Utilisation de start_session() qui gère mémoire + DB
-            user_info!("AUTH_START", json_value!({ "target_user": userhandle }));
-
-            let session = ctx.session_mgr.start_session(&userhandle).await?;
-
-            user_success!(
-                "AUTH_SUCCESS",
-                json_value!({
-                    "user": session.user_id,
-                    "session_id": session.id,
-                    "message": "Session manuelle établie et persistée."
-                })
-            );
-        }
-
-        UtilsCommands::Logout => {
-            // 🎯 Utilisation de end_session() pour le nettoyage complet
-            if let Some(session) = ctx.session_mgr.get_current_session().await {
-                let user_id = session.user_id.clone();
-                ctx.session_mgr.end_session().await?;
-
-                user_success!(
-                    "AUTH_LOGOUT",
+        UtilsCommands::Whoami => match ctx.session_mgr.get_current_session().await {
+            Some(session) => {
+                user_info!(
+                    "CURRENT_USER",
                     json_value!({
-                        "previous_user": user_id,
-                        "status": "disconnected",
-                        "cleanup": "success"
+                        "userhandle": session.user_id,
+                        "active_domain": ctx.active_domain,
+                        "active_db": ctx.active_db,
+                        "session_id": session.id
                     })
                 );
-            } else {
+            }
+            None => {
                 user_warn!(
-                    "LOGOUT_SKIPPED",
-                    json_value!({"reason": "No active session to terminate"})
+                    "NO_ACTIVE_SESSION",
+                    json_value!({"hint": "Utilisez 'utils login <userhandle>' pour vous connecter."})
                 );
             }
+        },
+
+        UtilsCommands::Login { userhandle } => {
+            user_info!("AUTH_START", json_value!({ "target_user": userhandle }));
+            match ctx.session_mgr.start_session(&userhandle).await {
+                Ok(session) => user_success!(
+                    "AUTH_SUCCESS",
+                    json_value!({"user": session.user_id, "session_id": session.id})
+                ),
+                Err(e) => raise_error!("ERR_AUTH_FAILED", error = e.to_string()),
+            }
         }
+
+        UtilsCommands::Logout => match ctx.session_mgr.get_current_session().await {
+            Some(_) => match ctx.session_mgr.end_session().await {
+                Ok(_) => user_success!("AUTH_LOGOUT", json_value!({"status": "disconnected"})),
+                Err(e) => raise_error!("ERR_LOGOUT_FAIL", error = e.to_string()),
+            },
+            None => user_warn!(
+                "LOGOUT_SKIPPED",
+                json_value!({"reason": "No active session to terminate"})
+            ),
+        },
 
         UtilsCommands::Config { action, key, value } => {
             match action.to_lowercase().as_str() {
-                // 👁️ AFFICHER LA CONFIGURATION
                 "show" => {
                     let session = ctx.session_mgr.get_current_session().await;
                     user_info!(
                         "CLI_CURRENT_CONFIG",
                         json_value!({
-                            "context": {
-                                "active_user": ctx.active_user,
-                                "active_domain": ctx.active_domain,
-                                "active_db": ctx.active_db,
-                            },
+                            "context": { "user": ctx.active_user, "domain": ctx.active_domain },
                             "session": session,
-                            "global_config": {
-                                "system_domain": ctx.config.system_domain,
-                                "system_db": ctx.config.system_db,
-                                "env_mode": ctx.config.core.env_mode,
-                                "language": ctx.config.core.language,
-                                "log_level": ctx.config.core.log_level,
+                            "mount_points": {
+                                "system_domain": ctx.config.mount_points.system.domain,
+                                "system_db": ctx.config.mount_points.system.db
                             }
                         })
                     );
                 }
-
-                // ✏️ MODIFIER LA CONFIGURATION UTILISATEUR
                 "set" => {
-                    let Some(k) = key else {
-                        user_warn!(
-                            "CLI_USAGE",
-                            json_value!({"hint": "Usage: utils config set <key> <value>"})
-                        );
-                        return Ok(());
-                    };
-                    let Some(v) = value else {
-                        user_warn!(
-                            "CLI_USAGE",
-                            json_value!({"hint": "Usage: utils config set <key> <value>"})
-                        );
-                        return Ok(());
+                    let (k, v) = match (key, value) {
+                        (Some(k), Some(v)) => (k, v),
+                        _ => {
+                            user_warn!(
+                                "CLI_USAGE",
+                                json_value!({"hint": "Usage: utils config set <key> <value>"})
+                            );
+                            return Ok(());
+                        }
                     };
 
-                    let sys_mgr = CollectionsManager::new(&ctx.storage, "_system", "_system");
+                    // Utilisation des Mount Points Système pour la gestion utilisateur
+                    let sys_mgr = CollectionsManager::new(
+                        &ctx.storage,
+                        &ctx.config.mount_points.system.domain,
+                        &ctx.config.mount_points.system.db,
+                    );
 
-                    // 1. Trouver le document de l'utilisateur courant
                     let mut query = Query::new("users");
                     query.filter = Some(QueryFilter {
                         operator: FilterOperator::And,
                         conditions: vec![Condition::eq("handle", json_value!(&ctx.active_user))],
                     });
 
-                    let res = QueryEngine::new(&sys_mgr).execute_query(query).await?;
-
-                    if let Some(doc) = res.documents.first() {
-                        let id = doc.get("_id").and_then(|id| id.as_str()).unwrap_or("");
-
-                        // 2. Création du patch JSON (gère un niveau d'imbrication max, ex: core.log_level)
-                        let patch = if k.contains('.') {
-                            let parts: Vec<&str> = k.split('.').collect();
-                            let mut inner = raise::utils::data::json::JsonObject::new();
-                            inner.insert(parts[1].to_string(), json_value!(v.clone()));
-
-                            let mut outer = raise::utils::data::json::JsonObject::new();
-                            outer.insert(parts[0].to_string(), JsonValue::Object(inner));
-                            JsonValue::Object(outer)
-                        } else {
-                            let mut map = raise::utils::data::json::JsonObject::new();
-                            map.insert(k.clone(), json_value!(v.clone()));
-                            JsonValue::Object(map)
-                        };
-
-                        // 3. Mise à jour persistante dans JsonDB
-                        match sys_mgr.update_document("users", id, patch).await {
-                            Ok(_) => {
-                                user_success!(
-                                    "CONFIG_UPDATED",
-                                    json_value!({
-                                        "user": ctx.active_user,
-                                        "key": k,
-                                        "new_value": v,
-                                        "hint": "Re-tapez 'login <votre_nom>' pour rafraîchir la session avec ces nouveaux paramètres !"
-                                    })
-                                );
-                            }
-                            Err(e) => {
+                    let engine = QueryEngine::new(&sys_mgr);
+                    match engine.execute_query(query).await {
+                        Ok(res) => {
+                            if let Some(doc) = res.documents.first() {
+                                let id = doc.get("_id").and_then(|id| id.as_str()).unwrap_or("");
+                                let patch = json_value!({ k.clone(): v });
+                                match sys_mgr.update_document("users", id, patch).await {
+                                    Ok(_) => user_success!(
+                                        "CONFIG_UPDATED",
+                                        json_value!({"key": k, "value": v})
+                                    ),
+                                    Err(e) => raise_error!(
+                                        "ERR_CONFIG_PERSIST_FAIL",
+                                        error = e.to_string()
+                                    ),
+                                }
+                            } else {
                                 user_error!(
-                                    "CONFIG_UPDATE_FAILED",
-                                    json_value!({"error": e.to_string()})
+                                    "USER_NOT_FOUND",
+                                    json_value!({"user": ctx.active_user})
                                 );
                             }
                         }
-                    } else {
-                        user_error!(
-                            "USER_NOT_FOUND",
-                            json_value!({
-                                "userhandle": ctx.active_user,
-                                "hint": "Impossible de modifier la configuration d'un utilisateur non persistant."
-                            })
-                        );
+                        Err(e) => raise_error!("ERR_DB_QUERY_FAIL", error = e.to_string()),
                     }
                 }
-                _ => {
-                    user_warn!(
-                        "CLI_USAGE",
-                        json_value!({"hint": "Action inconnue. Usage: utils config [show|set]"})
-                    );
-                }
+                _ => user_warn!("CLI_USAGE", json_value!({"hint": "Actions: show | set"})),
             }
         }
 
-        // 🎯 CHANGER DE DOMAINE
         UtilsCommands::UseDomain { domain } => match ctx.session_mgr.switch_domain(&domain).await {
-            Ok(new_ctx) => {
-                user_success!("DOMAIN_SWITCHED", json_value!(new_ctx));
-            }
-            Err(e) => {
-                user_error!("DOMAIN_ERROR", json_value!({"error": e.to_string()}));
-            }
+            Ok(new_ctx) => user_success!("DOMAIN_SWITCHED", json_value!(new_ctx)),
+            Err(e) => user_error!("DOMAIN_ERROR", json_value!({"error": e.to_string()})),
         },
 
-        // 🎯 CHANGER DE BASE DE DONNÉES
         UtilsCommands::UseDb { db } => match ctx.session_mgr.switch_db(&db).await {
-            Ok(new_ctx) => {
-                user_success!("DB_SWITCHED", json_value!(new_ctx));
-            }
-            Err(e) => {
-                user_error!("DB_ERROR", json_value!({"error": e.to_string()}));
-            }
+            Ok(new_ctx) => user_success!("DB_SWITCHED", json_value!(new_ctx)),
+            Err(e) => user_error!("DB_ERROR", json_value!({"error": e.to_string()})),
         },
     }
     Ok(())
 }
 
 // =========================================================================
-// TESTS UNITAIRES ET D'INTÉGRATION CLI
+// TESTS UNITAIRES ET D'INTÉGRATION CLI (Strictement respectés)
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::CliContext;
-    use raise::json_db::collections::manager::CollectionsManager;
-    use raise::utils::context::SessionManager; // 🎯 Requis pour l'injection
-
-    #[cfg(test)]
+    use raise::utils::context::SessionManager;
     use raise::utils::testing::mock::inject_mock_user;
-    #[cfg(test)]
-    use raise::utils::testing::DbSandbox; // 🎯 Import du helper magique
+    use raise::utils::testing::DbSandbox;
 
-    /// Teste le cycle de vie complet d'une session manuelle
     #[async_test]
     async fn test_session_full_lifecycle() {
         let sandbox = DbSandbox::new().await;
@@ -363,12 +283,10 @@ mod tests {
         assert!(session_mgr.get_current_session().await.is_none());
 
         let test_user = "Astra-CLI-Tester";
-
-        // 🎯 INJECTION DE L'UTILISATEUR AVANT LE LOGIN
         let db_mgr = CollectionsManager::new(
             &sandbox.storage,
-            &AppConfig::get().system_domain,
-            &AppConfig::get().system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         inject_mock_user(&db_mgr, test_user).await;
 
@@ -383,21 +301,17 @@ mod tests {
         let s = session_mgr
             .get_current_session()
             .await
-            .expect("La session devrait exister");
-        assert_eq!(s.user_handle, test_user); // 🎯 On vérifie le nom de l'utilisateur
+            .expect("Session fail");
+        assert_eq!(s.user_handle, test_user);
 
         // 3. Logout
         let logout_args = UtilsArgs {
             command: UtilsCommands::Logout,
         };
         handle(logout_args, ctx.clone()).await.unwrap();
-        assert!(
-            session_mgr.get_current_session().await.is_none(),
-            "La session devrait être supprimée après logout"
-        );
+        assert!(session_mgr.get_current_session().await.is_none());
     }
 
-    /// Teste la robustesse de la commande Logout quand aucune session n'est active
     #[async_test]
     async fn test_logout_without_session() {
         let sandbox = DbSandbox::new().await;
@@ -410,11 +324,9 @@ mod tests {
         let args = UtilsArgs {
             command: UtilsCommands::Logout,
         };
-        // Ne doit pas retourner d'erreur (doit être idempotent)
         assert!(handle(args, ctx).await.is_ok());
     }
 
-    /// Teste le changement d'utilisateur (Login sur une session existante)
     #[async_test]
     async fn test_relogin_switches_user() {
         let sandbox = DbSandbox::new().await;
@@ -426,16 +338,14 @@ mod tests {
         let user_a = "Agent-A";
         let user_b = "Agent-B";
 
-        // 🎯 INJECTION DES DEUX UTILISATEURS
         let db_mgr = CollectionsManager::new(
             &sandbox.storage,
-            &AppConfig::get().system_domain,
-            &AppConfig::get().system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         inject_mock_user(&db_mgr, user_a).await;
         inject_mock_user(&db_mgr, user_b).await;
 
-        // Login User A
         handle(
             UtilsArgs {
                 command: UtilsCommands::Login {
@@ -446,8 +356,6 @@ mod tests {
         )
         .await
         .unwrap();
-
-        // Login User B (Doit écraser la session en mémoire via start_session)
         handle(
             UtilsArgs {
                 command: UtilsCommands::Login {
@@ -460,10 +368,9 @@ mod tests {
         .unwrap();
 
         let current = session_mgr.get_current_session().await.unwrap();
-        assert_eq!(current.user_handle, user_b); // 🎯 On vérifie que B a pris le dessus
+        assert_eq!(current.user_handle, user_b);
     }
 
-    /// Teste la commande Info pour s'assurer qu'elle s'exécute sans paniquer
     #[async_test]
     async fn test_info_command_execution() {
         let sandbox = DbSandbox::new().await;
@@ -474,10 +381,18 @@ mod tests {
             SessionManager::new(storage.clone()),
             storage,
         );
-
         let args = UtilsArgs {
             command: UtilsCommands::Info,
         };
         assert!(handle(args, ctx).await.is_ok());
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience de la partition système
+    #[async_test]
+    async fn test_utils_mount_point_integrity() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        assert!(!sandbox.config.mount_points.system.domain.is_empty());
+        assert!(!sandbox.config.mount_points.system.db.is_empty());
+        Ok(())
     }
 }

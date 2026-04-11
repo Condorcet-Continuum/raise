@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/ai/voice/stt.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
@@ -17,9 +17,13 @@ pub struct WhisperEngine {
 }
 
 impl WhisperEngine {
+    /// Initialise le moteur de reconnaissance vocale Whisper en respectant les points de montage.
     pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
-        // 1. Récupération de la configuration globale dynamique
-        let settings = AppConfig::get_component_settings(manager, "ai_voice").await?;
+        // 1. Récupération de la configuration globale via le manager
+        let settings = match AppConfig::get_component_settings(manager, "ai_voice").await {
+            Ok(s) => s,
+            Err(e) => raise_error!("ERR_AI_VOICE_CONFIG_LOAD", error = e.to_string()),
+        };
 
         let model_filename = settings
             .get("rust_model_file")
@@ -38,22 +42,25 @@ impl WhisperEngine {
             .and_then(|v| v.as_str())
             .unwrap_or("mel_filters.safetensors");
 
-        // 2. Construction des chemins LOCAUX absolus (100% Hors-ligne)
-        let Some(home) = dirs::home_dir() else {
-            raise_error!(
-                "ERR_OS_HOME_NOT_FOUND",
-                error = "Impossible de localiser le répertoire personnel de l'utilisateur (HOME).",
-                context = json_value!({ "method": "dirs::home_dir" })
-            );
+        // 2. Résolution dynamique via les Mount Points (Portabilité MBSE)
+        let app_config = AppConfig::get();
+        let base_path = match app_config.get_path("PATH_RAISE_DOMAIN") {
+            Some(p) => p
+                .join(&app_config.mount_points.system.domain)
+                .join(&app_config.mount_points.system.db)
+                .join("ai-assets/voice/whisper"),
+            None => raise_error!(
+                "ERR_CONFIG_DOMAIN_PATH_MISSING",
+                error = "Le chemin racine 'PATH_RAISE_DOMAIN' est absent de la configuration."
+            ),
         };
 
-        let base_path = home.join("raise_domain/_system/ai-assets/voice/whisper");
         let model_path = base_path.join(model_filename);
         let config_path = base_path.join(config_filename);
         let tokenizer_path = base_path.join(tokenizer_filename);
         let mel_path = base_path.join(mel_filename);
 
-        // 3. Vérifications de sécurité strictes
+        // 3. Vérification de résilience physique via Match
         if !model_path.exists()
             || !config_path.exists()
             || !tokenizer_path.exists()
@@ -61,50 +68,34 @@ impl WhisperEngine {
         {
             raise_error!(
                 "ERR_AI_WHISPER_ASSETS_MISSING",
-                error = "Fichiers de modèle Whisper manquants en local.",
-                context = json_value!({
-                    "base_path": base_path.to_string_lossy(),
-                    "missing": {
-                        "model": !model_path.exists(),
-                        "config": !config_path.exists(),
-                        "tokenizer": !tokenizer_path.exists(),
-                        "mel_filters": !mel_path.exists()
-                    }
-                })
+                error = "Fichiers Whisper introuvables dans le point de montage système.",
+                context = json_value!({ "resolved_path": base_path.to_string_lossy() })
             );
         }
 
         let device = AppConfig::device().clone();
         user_info!(
-            "🎤 [Candle STT] Moteur Whisper chargé sur : {:?}",
-            json_value!(format!("{:?}", device))
+            "MSG_VOICE_STT_LOAD_START",
+            json_value!({ "device": format!("{:?}", device), "model": model_filename })
         );
 
         // 4. Chargement Config & Tokenizer
         let config_str = match fs::read_to_string_sync(&config_path) {
             Ok(c) => c,
-            Err(e) => raise_error!(
-                "ERR_WHISPER_CONFIG_READ",
-                error = e,
-                context = json_value!({"path": config_path.to_string_lossy()})
-            ),
+            Err(e) => raise_error!("ERR_WHISPER_CONFIG_READ", error = e.to_string()),
         };
 
-        let config: Config = match json::deserialize_from_str(&config_str) {
+        let whisper_config: Config = match json::deserialize_from_str(&config_str) {
             Ok(c) => c,
-            Err(e) => raise_error!("ERR_WHISPER_CONFIG_PARSE", error = e),
+            Err(e) => raise_error!("ERR_WHISPER_CONFIG_PARSE", error = e.to_string()),
         };
 
         let tokenizer = match Tokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,
-            Err(e) => raise_error!(
-                "ERR_WHISPER_TOKENIZER_LOAD",
-                error = e,
-                context = json_value!({"path": tokenizer_path.to_string_lossy()})
-            ),
+            Err(e) => raise_error!("ERR_WHISPER_TOKENIZER_LOAD", error = e.to_string()),
         };
 
-        // 5. Chargement des Poids GGUF/Safetensors
+        // 5. Chargement des Poids via Memory Mapping (Zéro Dette performance)
         let vb = unsafe {
             match VarBuilder::from_mmaped_safetensors(
                 &[&model_path],
@@ -112,32 +103,24 @@ impl WhisperEngine {
                 &device,
             ) {
                 Ok(v) => v,
-                Err(e) => raise_error!(
-                    "ERR_WHISPER_WEIGHTS_LOAD",
-                    error = e,
-                    context = json_value!({"path": model_path.to_string_lossy()})
-                ),
+                Err(e) => raise_error!("ERR_WHISPER_WEIGHTS_LOAD", error = e.to_string()),
             }
         };
 
-        let model = match whisper_model::model::Whisper::load(&vb, config.clone()) {
+        let model = match whisper_model::model::Whisper::load(&vb, whisper_config.clone()) {
             Ok(m) => m,
-            Err(e) => raise_error!("ERR_WHISPER_MODEL_INIT", error = e),
+            Err(e) => raise_error!("ERR_WHISPER_MODEL_INIT", error = e.to_string()),
         };
 
-        // 6. Chargement des filtres Mel (spécifique à l'audio)
+        // 6. Chargement des filtres Mel
         let mel_bytes = match fs::read_sync(&mel_path) {
             Ok(b) => b,
-            Err(e) => raise_error!(
-                "ERR_WHISPER_MEL_READ",
-                error = e,
-                context = json_value!({"path": mel_path.to_string_lossy()})
-            ),
+            Err(e) => raise_error!("ERR_WHISPER_MEL_READ", error = e.to_string()),
         };
 
         let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
         unsafe {
-            memory_copy_fast(
+            std::ptr::copy_nonoverlapping(
                 mel_bytes.as_ptr() as *const f32,
                 mel_filters.as_mut_ptr(),
                 mel_filters.len(),
@@ -149,16 +132,17 @@ impl WhisperEngine {
             tokenizer,
             device,
             mel_filters,
-            config,
+            config: whisper_config,
         })
     }
 
+    /// Transcrit un signal audio PCM vers du texte normalisé Arcadia.
     pub fn transcribe(&mut self, audio_pcm: &[f32]) -> RaiseResult<String> {
         if audio_pcm.is_empty() {
             return Ok(String::new());
         }
 
-        // ÉTAPE 1 : Mel Spectrogram
+        // ÉTAPE 1 : Mel Spectrogram avec protection
         let mel = audio::pcm_to_mel(&self.config, audio_pcm, &self.mel_filters);
         let mel_len = mel.len();
 
@@ -172,16 +156,16 @@ impl WhisperEngine {
             &self.device,
         ) {
             Ok(t) => t,
-            Err(e) => raise_error!("ERR_WHISPER_MEL_TENSOR", error = e),
+            Err(e) => raise_error!("ERR_WHISPER_MEL_TENSOR", error = e.to_string()),
         };
 
-        // ÉTAPE 2 : Passe Avant (Encodeur)
+        // ÉTAPE 2 : Forward Pass Encodeur
         let audio_features = match self.model.encoder.forward(&mel_tensor, false) {
             Ok(f) => f,
-            Err(e) => raise_error!("ERR_WHISPER_ENCODER_FORWARD", error = e),
+            Err(e) => raise_error!("ERR_WHISPER_ENCODER_FORWARD", error = e.to_string()),
         };
 
-        // ÉTAPE 3 : Préparation du Décodeur
+        // ÉTAPE 3 : Préparation du Décodeur (Greedy Decoding)
         let sot_token = self
             .tokenizer
             .token_to_id("<|startoftranscript|>")
@@ -200,16 +184,16 @@ impl WhisperEngine {
         let mut tokens = vec![sot_token, lang_token, trans_token, notimestamps_token];
         let mut generated_tokens = Vec::new();
 
-        // ÉTAPE 4 : Boucle de Génération (Greedy Decoding)
-        for i in 0..100 {
+        // ÉTAPE 4 : Boucle de Génération résiliente
+        for i in 0..150 {
             let tokens_tensor = match Tensor::new(tokens.as_slice(), &self.device) {
                 Ok(t) => match t.unsqueeze(0) {
-                    Ok(ts) => ts,
-                    Err(e) => raise_error!("ERR_WHISPER_UNSQUEEZE_TOKENS", error = e),
+                    Ok(u) => u,
+                    Err(e) => raise_error!("ERR_WHISPER_UNSQUEEZE", error = e.to_string()),
                 },
                 Err(e) => raise_error!(
                     "ERR_WHISPER_TENSOR_TOKENS",
-                    error = e,
+                    error = e.to_string(),
                     context = json_value!({"iter": i})
                 ),
             };
@@ -220,34 +204,18 @@ impl WhisperEngine {
                 .forward(&tokens_tensor, &audio_features, false)
             {
                 Ok(l) => l,
-                Err(e) => raise_error!(
-                    "ERR_WHISPER_DECODER_FORWARD",
-                    error = e,
-                    context = json_value!({"iter": i})
-                ),
+                Err(e) => raise_error!("ERR_WHISPER_DECODER_FORWARD", error = e.to_string()),
             };
 
-            let logits = match logits.squeeze(0) {
-                Ok(l) => l,
-                Err(e) => raise_error!("ERR_WHISPER_LOGITS_SQUEEZE", error = e),
-            };
-
-            let dim_0 = match logits.dim(0) {
-                Ok(d) => d,
-                Err(e) => raise_error!("ERR_WHISPER_LOGITS_DIM", error = e),
-            };
-
-            let logits = match logits.get(dim_0 - 1) {
-                Ok(l) => l,
-                Err(e) => raise_error!("ERR_WHISPER_LOGITS_GET", error = e),
-            };
-
-            let next_token = match logits.argmax(0) {
-                Ok(t) => match t.to_scalar::<u32>() {
-                    Ok(scalar) => scalar,
-                    Err(e) => raise_error!("ERR_WHISPER_TOKEN_SCALAR", error = e),
-                },
-                Err(e) => raise_error!("ERR_WHISPER_ARGMAX", error = e),
+            // Extraction sécurisée du prochain token
+            let next_token = match logits
+                .squeeze(0)
+                .and_then(|l| l.get(l.dim(0).unwrap_or(1) - 1))
+                .and_then(|l| l.argmax(0))
+                .and_then(|l| l.to_scalar::<u32>())
+            {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_WHISPER_SAMPLING_FAIL", error = e.to_string()),
             };
 
             if next_token == eot_token {
@@ -258,111 +226,108 @@ impl WhisperEngine {
             generated_tokens.push(next_token);
         }
 
-        // ÉTAPE 5 : Décodage et Nettoyage
-        let raw_text = match self.tokenizer.decode(&generated_tokens, true) {
-            Ok(t) => t,
-            Err(e) => raise_error!(
-                "ERR_WHISPER_TOKEN_DECODE",
-                error = e,
-                context = json_value!({"token_count": generated_tokens.len()})
-            ),
-        };
-
-        // Application de ta fonction de normalisation métier
-        let clean_text = crate::ai::nlp::preprocessing::normalize(&raw_text);
-
-        Ok(clean_text)
+        // ÉTAPE 5 : Décodage et Normalisation métier
+        match self.tokenizer.decode(&generated_tokens, true) {
+            Ok(t) => Ok(crate::ai::nlp::preprocessing::normalize(&t)),
+            Err(e) => raise_error!("ERR_WHISPER_DECODE_FAIL", error = e.to_string()),
+        }
     }
 }
 
 // =========================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES (Validation Mount Points & Résilience)
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
 
+    /// Test existant : Détection des assets manquants via Mount Points
     #[async_test]
-    #[serial_test::serial] // Protection GPU partagé
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_whisper_engine_initialization_missing_assets() {
+    async fn test_whisper_engine_initialization_missing_assets() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
 
-        // On injecte des chemins qui n'existent pas pour vérifier la macro raise_error!
         inject_mock_component(
             &manager,
             "voice",
             json_value!({
-                "rust_model_file": "inexistant.safetensors",
-                "rust_config_file": "config_inexistant.json",
-                "rust_tokenizer_file": "tokenizer_inexistant.json",
-                "rust_mel_filters": "mel_inexistant.safetensors"
+                "rust_model_file": "inexistant.safetensors"
             }),
         )
         .await;
 
         let result = WhisperEngine::new(&manager).await;
 
-        // CORRECTION : Extraction de l'erreur via un match (pas de unwrap_err)
-        let err_str = match result {
-            Err(e) => e.to_string(),
-            Ok(_) => panic!("L'initialisation aurait dû échouer car les fichiers n'existent pas."),
-        };
-
-        // On vérifie que c'est bien notre erreur métier qui a été déclenchée
-        assert!(
-            err_str.contains("ERR_AI_WHISPER_ASSETS_MISSING")
-                || err_str.contains("ERR_OS_HOME_NOT_FOUND"),
-            "L'erreur retournée ne correspond pas au comportement attendu: {}",
-            err_str
-        );
+        match result {
+            Err(AppError::Structured(err)) => {
+                assert!(
+                    err.code == "ERR_AI_WHISPER_ASSETS_MISSING"
+                        || err.code == "ERR_CONFIG_DOMAIN_PATH_MISSING"
+                );
+                Ok(())
+            }
+            _ => panic!("L'initialisation aurait dû lever une erreur structurée RAISE"),
+        }
     }
 
+    /// Test existant : Robustesse sur audio vide
     #[async_test]
-    #[serial_test::serial]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_whisper_engine_empty_audio_handling() {
+    async fn test_whisper_empty_audio_handling() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
 
-        // NOTE: Pour que ce test passe sur ta machine, il faut que les vrais fichiers
-        // soient présents dans ~/raise_domain/_system/ai-assets/voice/whisper/
-        inject_mock_component(
-            &manager,
-            "voice",
-            json_value!({
-                "rust_model_file": "model.safetensors",
-                "rust_config_file": "config.json",
-                "rust_tokenizer_file": "tokenizer.json",
-                "rust_mel_filters": "mel_filters.safetensors"
-            }),
-        )
-        .await;
-
-        // Si l'engine charge correctement, on teste la robustesse de `transcribe`
+        // Si l'engine charge correctement (en local), on vérifie le vec vide
         if let Ok(mut engine) = WhisperEngine::new(&manager).await {
-            let empty_audio: Vec<f32> = vec![];
-            let res = engine
-                .transcribe(&empty_audio)
-                .expect("Transcribe a échoué sur un vec vide");
-
-            assert_eq!(
-                res, "",
-                "Un signal audio vide doit retourner une chaîne vide"
-            );
-        } else {
-            println!("⚠️ Test ignoré: Assets Whisper locaux non trouvés dans le home dir.");
+            let res = engine.transcribe(&[])?;
+            assert_eq!(res, "");
         }
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience face à une configuration de Mount Point invalide
+    #[async_test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_whisper_resilience_bad_mount_point() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        // On crée un manager pointant vers un domaine non initialisé
+        let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
+
+        let result = WhisperEngine::new(&manager).await;
+
+        match result {
+            Err(AppError::Structured(err)) => {
+                // Doit échouer car get_component_settings ne trouvera rien dans la partition fantôme
+                assert_eq!(err.code, "ERR_AI_VOICE_CONFIG_LOAD");
+                Ok(())
+            }
+            _ => panic!("Le moteur aurait dû lever ERR_AI_VOICE_CONFIG_LOAD"),
+        }
+    }
+
+    /// 🎯 NOUVEAU TEST : Inférence résiliente sur le périphérique configuré
+    #[async_test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_whisper_device_fallback_logic() -> RaiseResult<()> {
+        let device = AppConfig::device();
+        // Vérification que la façade SSOT retourne un device valide pour Candle
+        assert!(device.is_cpu() || device.is_cuda() || device.is_metal());
+        Ok(())
     }
 }

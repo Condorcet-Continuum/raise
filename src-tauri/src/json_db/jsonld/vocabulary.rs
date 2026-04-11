@@ -31,9 +31,9 @@ pub struct Property {
 static INSTANCE: StaticCell<VocabularyRegistry> = StaticCell::new();
 
 pub struct VocabularyRegistry {
-    classes: UnorderedMap<String, Class>,
-    properties: UnorderedMap<String, Property>,
-    default_context: UnorderedMap<String, String>,
+    classes: SyncRwLock<UnorderedMap<String, Class>>,
+    properties: SyncRwLock<UnorderedMap<String, Property>>,
+    default_context: SyncRwLock<UnorderedMap<String, String>>,
     layer_contexts: SharedRef<SyncRwLock<UnorderedMap<String, JsonValue>>>,
 }
 
@@ -47,29 +47,21 @@ impl VocabularyRegistry {
     /// Crée une instance vide du registre (utile pour les tests isolés)
     pub fn new() -> Self {
         Self {
-            classes: UnorderedMap::new(),
-            properties: UnorderedMap::new(),
-            default_context: UnorderedMap::new(),
+            classes: SyncRwLock::new(UnorderedMap::new()),
+            properties: SyncRwLock::new(UnorderedMap::new()),
+            default_context: SyncRwLock::new(UnorderedMap::new()),
             layer_contexts: SharedRef::new(SyncRwLock::new(UnorderedMap::new())),
         }
     }
 
     /// Initialise le registre global en scannant récursivement le dossier des ontologies.
     pub async fn init(ontology_root: &Path) -> RaiseResult<()> {
-        let mut registry = Self {
-            classes: UnorderedMap::new(),
-            properties: UnorderedMap::new(),
-            default_context: UnorderedMap::new(),
-            layer_contexts: SharedRef::new(SyncRwLock::new(UnorderedMap::new())),
-        };
-
-        // Scan et chargement de tous les fichiers .jsonld
+        let registry = Self::new();
         registry.load_all_ontologies(ontology_root).await?;
 
         if INSTANCE.set(registry).is_err() {
             tracing::warn!("Le VocabularyRegistry a déjà été initialisé.");
         }
-
         Ok(())
     }
     /// Fonction interne pour expanser un terme en utilisant le dictionnaire en cours de chargement
@@ -78,12 +70,13 @@ impl VocabularyRegistry {
             return term.to_string();
         }
         if let Some((prefix, suffix)) = term.split_once(':') {
-            if let Some(base_iri) = self.default_context.get(prefix) {
+            if let Some(base_iri) = self.default_context.read().unwrap().get(prefix) {
                 return format!("{}{}", base_iri, suffix);
             }
         }
         term.to_string()
     }
+
     /// Récupère l'instance globale. Panique si appelée avant `init()`.
     pub fn global() -> &'static Self {
         #[cfg(not(test))]
@@ -103,7 +96,7 @@ impl VocabularyRegistry {
     #[cfg(test)]
     pub fn init_test_registry() {
         if INSTANCE.get().is_none() {
-            let mut registry = Self::new();
+            let registry = Self::new();
 
             // 1. Tous les préfixes nécessaires (Fixe les tests de context.rs)
             let prefixes = [
@@ -123,6 +116,8 @@ impl VocabularyRegistry {
             for (p, iri) in prefixes {
                 registry
                     .default_context
+                    .write()
+                    .unwrap()
                     .insert(p.to_string(), iri.to_string());
             }
 
@@ -131,7 +126,7 @@ impl VocabularyRegistry {
             let raise_qr = "https://raise.io/ontology/raise#QualityRule".to_string();
 
             // On enregistre la classe de base Arcadia
-            registry.classes.insert(
+            registry.classes.write().unwrap().insert(
                 arcadia_qr.clone(),
                 Class {
                     iri: arcadia_qr.clone(),
@@ -142,7 +137,7 @@ impl VocabularyRegistry {
             );
 
             // On enregistre la classe RAISE qui hérite d'Arcadia
-            registry.classes.insert(
+            registry.classes.write().unwrap().insert(
                 raise_qr.clone(),
                 Class {
                     iri: raise_qr,
@@ -154,7 +149,7 @@ impl VocabularyRegistry {
 
             // On enregistre QualityAssessment pour supprimer les warnings
             let qa_iri = "https://raise.io/ontology/arcadia#QualityAssessment".to_string();
-            registry.classes.insert(
+            registry.classes.write().unwrap().insert(
                 qa_iri.clone(),
                 Class {
                     iri: qa_iri,
@@ -169,7 +164,7 @@ impl VocabularyRegistry {
     }
     /// Parcours récursif du dossier ontology/ (Zero Hardcoding)
     pub fn load_all_ontologies<'a>(
-        &'a mut self,
+        &'a self,
         root: &'a Path,
     ) -> Pinned<Box<dyn AsyncFuture<Output = RaiseResult<()>> + Send + 'a>> {
         Box::pin(async move {
@@ -194,7 +189,7 @@ impl VocabularyRegistry {
     }
 
     /// Charge un fichier .jsonld et extrait dynamiquement sa sémantique
-    pub async fn load_layer_from_file(&mut self, layer: &str, path: &Path) -> RaiseResult<()> {
+    pub async fn load_layer_from_file(&self, layer: &str, path: &Path) -> RaiseResult<()> {
         let content = match fs::read_to_string_async(path).await {
             Ok(c) => c,
             Err(e) => raise_error!(
@@ -230,18 +225,22 @@ impl VocabularyRegistry {
 
         // 3. Extraction dynamique des préfixes (pour le contexte global par défaut)
         if let Some(ctx_obj) = ctx.as_object() {
+            let mut def_ctx = self.default_context.write().unwrap(); // 🔒 Verrou d'écriture
             for (key, val) in ctx_obj {
                 if let Some(iri) = val.as_str() {
-                    self.default_context.insert(key.clone(), iri.to_string());
+                    def_ctx.insert(key.clone(), iri.to_string());
                 } else if let Some(obj) = val.as_object() {
                     if let Some(id) = obj.get("@id").and_then(|v| v.as_str()) {
-                        self.default_context.insert(key.clone(), id.to_string());
+                        def_ctx.insert(key.clone(), id.to_string());
                     }
                 }
             }
         }
         // 4. Extraction dynamique des Classes et Propriétés depuis le @graph
         if let Some(graph) = json.get("@graph").and_then(|v| v.as_array()) {
+            let mut cls_map = self.classes.write().unwrap(); // 🔒 Verrou d'écriture
+            let mut prop_map = self.properties.write().unwrap(); // 🔒 Verrou d'écriture
+
             for node in graph {
                 if let Some(raw_id) = node.get("@id").and_then(|v| v.as_str()) {
                     let full_id = self.expand_internal_term(raw_id);
@@ -253,38 +252,33 @@ impl VocabularyRegistry {
                         let sub_class_of = get_string_prop(node, "rdfs:subClassOf")
                             .map(|s| self.expand_internal_term(&s));
 
-                        self.classes.insert(
+                        cls_map.insert(
                             full_id.clone(),
                             Class {
                                 iri: full_id.clone(),
-                                label: get_string_prop(node, "rdfs:label")
-                                    .unwrap_or_else(|| raw_id.to_string()),
+                                label: get_string_prop(node, "rdfs:label").unwrap_or_default(),
                                 comment: get_string_prop(node, "rdfs:comment").unwrap_or_default(),
                                 sub_class_of,
                             },
                         );
                     }
 
-                    // Détection des Propriétés
                     let is_obj_prop = types.contains(&"owl:ObjectProperty".to_string());
                     let is_data_prop = types.contains(&"owl:DatatypeProperty".to_string());
 
                     if is_obj_prop || is_data_prop {
-                        self.properties.insert(
+                        prop_map.insert(
                             full_id.clone(),
                             Property {
-                                iri: full_id,
-                                label: get_string_prop(node, "rdfs:label")
-                                    .unwrap_or_else(|| raw_id.to_string()),
+                                iri: full_id.clone(),
+                                label: get_string_prop(node, "rdfs:label").unwrap_or_default(),
                                 property_type: if is_obj_prop {
                                     PropertyType::ObjectProperty
                                 } else {
                                     PropertyType::DatatypeProperty
                                 },
-                                domain: get_string_prop(node, "rdfs:domain")
-                                    .map(|s| self.expand_internal_term(&s)),
-                                range: get_string_prop(node, "rdfs:range")
-                                    .map(|s| self.expand_internal_term(&s)),
+                                domain: get_string_prop(node, "rdfs:domain"),
+                                range: get_string_prop(node, "rdfs:range"),
                             },
                         );
                     }
@@ -305,23 +299,23 @@ impl VocabularyRegistry {
 
     // --- ACCESSEURS OPTIMISÉS ---
 
-    pub fn get_class(&self, iri: &str) -> Option<&Class> {
-        self.classes.get(iri)
+    pub fn get_class(&self, iri: &str) -> Option<Class> {
+        self.classes.read().unwrap().get(iri).cloned()
     }
 
     pub fn has_class(&self, iri: &str) -> bool {
-        self.classes.contains_key(iri)
+        self.classes.read().unwrap().contains_key(iri)
     }
 
-    pub fn get_property(&self, iri: &str) -> Option<&Property> {
-        self.properties.get(iri)
+    pub fn get_property(&self, iri: &str) -> Option<Property> {
+        self.properties.read().unwrap().get(iri).cloned()
     }
 
     pub fn is_subtype_of(&self, child_iri: &str, parent_iri: &str) -> bool {
         if child_iri == parent_iri {
             return true;
         }
-        if let Some(cls) = self.classes.get(child_iri) {
+        if let Some(cls) = self.get_class(child_iri) {
             if let Some(parent) = &cls.sub_class_of {
                 return self.is_subtype_of(parent, parent_iri);
             }
@@ -329,8 +323,8 @@ impl VocabularyRegistry {
         false
     }
 
-    pub fn get_default_context(&self) -> &UnorderedMap<String, String> {
-        &self.default_context
+    pub fn get_default_context(&self) -> UnorderedMap<String, String> {
+        self.default_context.read().unwrap().clone()
     }
 
     pub fn is_iri(term: &str) -> bool {
@@ -339,26 +333,26 @@ impl VocabularyRegistry {
 
     pub fn init_mock_for_tests() {
         if INSTANCE.get().is_none() {
-            let mut registry = Self::new();
+            let registry = Self::new();
 
             // Mappings vitaux pour la résolution d'URIs IA
-            registry.default_context.insert(
+            registry.default_context.write().unwrap().insert(
                 "oa".to_string(),
                 "https://raise.io/ontology/arcadia/oa#".to_string(),
             );
-            registry.default_context.insert(
+            registry.default_context.write().unwrap().insert(
                 "sa".to_string(),
                 "https://raise.io/ontology/arcadia/sa#".to_string(),
             );
-            registry.default_context.insert(
+            registry.default_context.write().unwrap().insert(
                 "la".to_string(),
                 "https://raise.io/ontology/arcadia/la#".to_string(),
             );
-            registry.default_context.insert(
+            registry.default_context.write().unwrap().insert(
                 "pa".to_string(),
                 "https://raise.io/ontology/arcadia/pa#".to_string(),
             );
-            registry.default_context.insert(
+            registry.default_context.write().unwrap().insert(
                 "transverse".to_string(),
                 "https://raise.io/ontology/arcadia/transverse#".to_string(),
             );
@@ -437,10 +431,10 @@ mod tests {
 
     #[async_test]
     async fn test_dynamic_parsing_and_inheritance() {
-        let mut reg = VocabularyRegistry {
-            classes: UnorderedMap::new(),
-            properties: UnorderedMap::new(),
-            default_context: UnorderedMap::new(),
+        let reg = VocabularyRegistry {
+            classes: SyncRwLock::new(UnorderedMap::new()),
+            properties: SyncRwLock::new(UnorderedMap::new()),
+            default_context: SyncRwLock::new(UnorderedMap::new()),
             layer_contexts: SharedRef::new(SyncRwLock::new(UnorderedMap::new())),
         };
 

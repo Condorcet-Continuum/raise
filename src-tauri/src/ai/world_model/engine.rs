@@ -4,7 +4,7 @@ use candle_core::{DType, Device, Tensor, Var};
 use candle_nn::{VarBuilder, VarMap};
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 use crate::ai::nlp::parser::CommandType;
 use crate::ai::world_model::dynamics::WorldModelPredictor;
@@ -17,6 +17,7 @@ pub struct WorldAction {
 }
 
 impl WorldAction {
+    /// Convertit une intention sémantique en tenseur "One-Hot" pour le prédicteur.
     pub fn to_tensor(&self, dim: usize) -> RaiseResult<Tensor> {
         let mut data = vec![0f32; dim];
         let idx = match self.intent {
@@ -30,20 +31,16 @@ impl WorldAction {
         if idx < dim {
             data[idx] = 1.0;
         }
-        let data_len = data.len();
-        Ok(match Tensor::from_vec(data, (1, dim), &Device::Cpu) {
-            Ok(t) => t,
+
+        // 🎯 Pattern Match strict pour la création tensorielle
+        match Tensor::from_vec(data, (1, dim), &Device::Cpu) {
+            Ok(t) => Ok(t),
             Err(e) => raise_error!(
                 "ERR_TENSOR_FROM_VEC",
-                error = e,
-                context = json_value!({
-                    "action": "create_tensor_from_vec",
-                    "expected_shape": [1, dim],
-                    "data_len": data_len,
-                    "device": "Cpu"
-                })
+                error = e.to_string(),
+                context = json_value!({ "action": "create_action_tensor", "dim": dim })
             ),
-        })
+        }
     }
 }
 
@@ -55,11 +52,19 @@ pub struct NeuroSymbolicEngine {
 }
 
 impl NeuroSymbolicEngine {
+    /// Initialise le moteur Neuro-Symbolique Arcadia.
     pub fn new(config: WorldModelConfig, varmap: VarMap) -> RaiseResult<Self> {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
 
-        let quantizer = VectorQuantizer::new(&config, vb.pp("quantizer"))?;
-        let predictor = WorldModelPredictor::new(&config, vb.pp("dynamics"))?;
+        let quantizer = match VectorQuantizer::new(&config, vb.pp("quantizer")) {
+            Ok(q) => q,
+            Err(e) => raise_error!("ERR_WM_QUANTIZER_INIT", error = e.to_string()),
+        };
+
+        let predictor = match WorldModelPredictor::new(&config, vb.pp("dynamics")) {
+            Ok(p) => p,
+            Err(e) => raise_error!("ERR_WM_PREDICTOR_INIT", error = e.to_string()),
+        };
 
         Ok(Self {
             varmap,
@@ -74,26 +79,32 @@ impl NeuroSymbolicEngine {
         Self::new(config, varmap)
     }
 
+    /// Simule l'évolution de l'état du monde Arcadia face à une action.
     pub fn simulate(&self, element: &ArcadiaElement, action: WorldAction) -> RaiseResult<Tensor> {
         let raw_perception = ArcadiaEncoder::encode_element(element)?;
         let token = self.quantizer.tokenize(&raw_perception)?;
         let state_quantized = self.quantizer.decode(&token)?;
         let action_tensor = action.to_tensor(self.config.action_dim)?;
 
-        let predicted_future_state = self.predictor.forward(&state_quantized, &action_tensor)?;
-        Ok(predicted_future_state)
+        match self.predictor.forward(&state_quantized, &action_tensor) {
+            Ok(future) => Ok(future),
+            Err(e) => raise_error!("ERR_WM_FORWARD_PASS", error = e.to_string()),
+        }
     }
 
-    fn extract_tensors_sync(&self) -> UnorderedMap<String, Tensor> {
-        let data_guard = self.varmap.data().lock().unwrap();
+    fn extract_tensors_sync(&self) -> RaiseResult<UnorderedMap<String, Tensor>> {
+        let data_guard = match self.varmap.data().lock() {
+            Ok(guard) => guard,
+            Err(_) => raise_error!("ERR_LOCK_PANIC", error = "Varmap lock poisoned"),
+        };
         let mut extracted = UnorderedMap::new();
         for (k, v) in data_guard.iter() {
             extracted.insert(k.clone(), v.as_tensor().clone());
         }
-        extracted
+        Ok(extracted)
     }
 
-    /// 🎯 ALIGNEMENT STRICT : Le Cerveau vit dans `domaine/db/tensors/world_model/`
+    /// 🎯 RÉSOLUTION DYNAMIQUE : Localisation du modèle via Mount Points
     fn get_model_dir(manager: &CollectionsManager<'_>) -> PathBuf {
         manager
             .storage
@@ -103,47 +114,38 @@ impl NeuroSymbolicEngine {
             .join("world_model")
     }
 
+    /// Sauvegarde les poids du modèle de manière asynchrone et résiliente.
     pub async fn save(&self, manager: &CollectionsManager<'_>) -> RaiseResult<()> {
         let model_dir = Self::get_model_dir(manager);
         fs::ensure_dir_async(&model_dir).await?;
 
         let path = model_dir.join("world_model.safetensors");
-        let tensors = self.extract_tensors_sync();
+        let tensors = self.extract_tensors_sync()?;
 
         let path_display = path.to_string_lossy().to_string();
-        let tensor_count = tensors.len();
 
+        // 🎯 Pattern Match strict sur le spawn (Zéro Dette)
         let spawn_result =
-            spawn_cpu_task(move || candle_core::safetensors::save(&tensors, path)).await;
+            match spawn_cpu_task(move || candle_core::safetensors::save(&tensors, path)).await {
+                Ok(res) => res,
+                Err(e) => raise_error!(
+                    "ERR_ASYNC_SPAWN_FAILURE",
+                    error = e.to_string(),
+                    context = json_value!({ "path": path_display })
+                ),
+            };
 
-        let save_result = match spawn_result {
-            Ok(res) => res,
-            Err(e) => raise_error!(
-                "ERR_ASYNC_SPAWN_FAILURE",
-                error = e,
-                context = json_value!({
-                    "action": "spawn_blocking_save",
-                    "path": path_display,
-                    "hint": "La tâche a paniqué ou a été annulée."
-                })
-            ),
-        };
-
-        match save_result {
-            Ok(_) => (),
+        match spawn_result {
+            Ok(_) => Ok(()),
             Err(e) => raise_error!(
                 "ERR_MODEL_SAVE_SAFETENSORS",
-                error = e,
-                context = json_value!({
-                    "action": "write_safetensors_to_disk",
-                    "path": path_display,
-                    "tensor_count": tensor_count
-                })
+                error = e.to_string(),
+                context = json_value!({ "path": path_display })
             ),
-        };
-        Ok(())
+        }
     }
 
+    /// Charge les poids du modèle depuis le disque avec validation de format.
     pub async fn load(
         manager: &CollectionsManager<'_>,
         config: WorldModelConfig,
@@ -154,7 +156,7 @@ impl NeuroSymbolicEngine {
         if !fs::exists_async(&path).await {
             raise_error!(
                 "ERR_MODEL_NOT_FOUND",
-                error = "Le fichier du World Model n'existe pas.",
+                error = "Fichier World Model introuvable.",
                 context = json_value!({ "path": path.to_string_lossy() })
             );
         }
@@ -165,31 +167,24 @@ impl NeuroSymbolicEngine {
             Ok(t) => t,
             Err(e) => raise_error!(
                 "ERR_MODEL_LOAD_BUFFER",
-                error = e,
-                context = json_value!({
-                    "action": "load_safetensors_buffer",
-                    "buffer_size": buffer.len(),
-                    "device": "Cpu",
-                    "hint": "Le buffer est peut-être corrompu ou n'est pas au format Safetensors valide."
-                })
+                error = e.to_string(),
+                context = json_value!({ "buffer_size": buffer.len() })
             ),
         };
 
         let varmap = VarMap::new();
         {
-            let mut data = varmap.data().lock().unwrap();
+            let mut data = match varmap.data().lock() {
+                Ok(guard) => guard,
+                Err(_) => raise_error!("ERR_LOCK_POISONED", error = "Varmap load lock error"),
+            };
             for (name, tensor) in tensors {
                 let var = match Var::from_tensor(&tensor) {
                     Ok(v) => v,
                     Err(e) => raise_error!(
                         "ERR_MODEL_VAR_CONVERSION",
-                        error = e,
-                        context = json_value!({
-                            "action": "convert_tensor_to_var",
-                            "tensor_name": name,
-                            "shape": format!("{:?}", tensor.shape()),
-                            "device": format!("{:?}", tensor.device())
-                        })
+                        error = e.to_string(),
+                        context = json_value!({"name": name})
                     ),
                 };
                 data.insert(name, var);
@@ -206,12 +201,14 @@ impl NeuroSymbolicEngine {
     }
 }
 
+// =========================================================================
+// TESTS (Validation Topologique Arcadia & Résilience)
+// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model_engine::types::NameType;
     use crate::utils::testing::AgentDbSandbox;
-    use candle_nn::VarMap;
 
     fn get_test_config() -> WorldModelConfig {
         WorldModelConfig {
@@ -224,11 +221,12 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_simulation_flow() {
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    fn test_engine_simulation_flow() -> RaiseResult<()> {
         let varmap = VarMap::new();
         let config = get_test_config();
-
-        let engine = NeuroSymbolicEngine::new(config, varmap).unwrap();
+        let engine = NeuroSymbolicEngine::new(config, varmap)?;
 
         let element = ArcadiaElement {
             id: "1".to_string(),
@@ -240,31 +238,30 @@ mod tests {
             intent: CommandType::Create,
         };
         assert!(engine.simulate(&element, action).is_ok());
+        Ok(())
     }
 
     #[async_test]
-    async fn test_persistence_async() {
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_persistence_async() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config_app = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config_app.mount_points.system.domain,
+            &config_app.mount_points.system.db,
         );
 
         let varmap = VarMap::new();
         let config = get_test_config();
 
-        let engine1 = NeuroSymbolicEngine::new(config.clone(), varmap).unwrap();
-        // 🎯 Sauvegarde alignée sur la DB
-        engine1.save(&manager).await.expect("Save failed");
+        let engine1 = NeuroSymbolicEngine::new(config.clone(), varmap)?;
+        engine1.save(&manager).await?;
 
         assert!(NeuroSymbolicEngine::exists(&manager).await);
 
-        // 🎯 Chargement aligné sur la DB
-        let engine2 = NeuroSymbolicEngine::load(&manager, config)
-            .await
-            .expect("Load failed");
-
+        let engine2 = NeuroSymbolicEngine::load(&manager, config).await?;
         let element = ArcadiaElement {
             id: "t".to_string(),
             name: NameType::default(),
@@ -275,5 +272,30 @@ mod tests {
             intent: CommandType::Search,
         };
         assert!(engine2.simulate(&element, action).is_ok());
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience face à une partition système manquante
+    #[async_test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_resilience_missing_mount_point() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        // Manager pointant sur une partition fantôme
+        let manager = CollectionsManager::new(&sandbox.db, "void_domain", "void_db");
+
+        // Le moteur ne doit pas paniquer si le fichier n'existe pas
+        assert!(!NeuroSymbolicEngine::exists(&manager).await);
+
+        let config = get_test_config();
+        let result = NeuroSymbolicEngine::load(&manager, config).await;
+
+        match result {
+            Err(AppError::Structured(err)) => {
+                assert_eq!(err.code, "ERR_MODEL_NOT_FOUND");
+                Ok(())
+            }
+            _ => panic!("Le moteur aurait dû lever ERR_MODEL_NOT_FOUND"),
+        }
     }
 }

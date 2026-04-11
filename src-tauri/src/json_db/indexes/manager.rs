@@ -1,6 +1,7 @@
 // FICHIER : src-tauri/src/json_db/indexes/manager.rs
 
 use super::{btree, hash, text, IndexDefinition, IndexType};
+use crate::json_db::collections::collection;
 use crate::json_db::storage::StorageEngine;
 
 use crate::utils::prelude::*;
@@ -167,11 +168,13 @@ impl<'a> IndexManager<'a> {
 
         // ✅ CORRECTION MAJEURE : On utilise list_document_ids et le StorageEngine
         // Au lieu de lire le disque physiquement, on laisse le cache LRU faire son travail !
-        let ids = crate::json_db::collections::collection::list_document_ids(
+        let ids = collection::list_document_ids(
             &self.storage.config,
             &self.space,
             &self.db,
             collection,
+            None,
+            None,
         )
         .await?;
 

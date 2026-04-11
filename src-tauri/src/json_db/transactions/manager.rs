@@ -33,7 +33,7 @@ enum UndoAction {
 }
 
 pub struct TransactionManager<'a> {
-    storage: &'a StorageEngine, // ✅ MODIFICATION : Injection du StorageEngine
+    storage: &'a StorageEngine,
     space: String,
     db: String,
     lock_manager: LockManager,
@@ -50,10 +50,10 @@ impl<'a> TransactionManager<'a> {
     }
 
     /// API PUBLIQUE INTELLIGENTE (ASYNCHRONE)
+    /// API PUBLIQUE INTELLIGENTE (ASYNCHRONE)
     pub async fn execute_smart(&self, requests: Vec<TransactionRequest>) -> RaiseResult<()> {
         let mut prepared_ops = Vec::new();
 
-        // ✅ MODIFICATION : Utilisation de l'instance centralisée
         let col_mgr = CollectionsManager::new(self.storage, &self.space, &self.db);
         let query_engine = QueryEngine::new(&col_mgr);
 
@@ -67,21 +67,28 @@ impl<'a> TransactionManager<'a> {
                     id,
                     mut document,
                 } => {
-                    // 🎯 1. On résout les dépendances intra-transactionnelles
-                    self.resolve_intra_tx_refs(&mut document, &prepared_ops);
+                    // 🎯 FIX : Ajout de &query_engine et de .await?
+                    self.resolve_all_refs(&query_engine, &mut document, &prepared_ops)
+                        .await?;
 
-                    // 🎯 Si un ID est fourni dans la requête, on force son injection en _id
                     if let Some(explicit_id) = id {
                         if let Some(obj) = document.as_object_mut() {
                             obj.insert("_id".to_string(), JsonValue::String(explicit_id));
                         }
                     }
                     col_mgr.prepare_document(&collection, &mut document).await?;
-                    let final_id = document
-                        .get("_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap()
-                        .to_string();
+
+                    let final_id = match document.get("_id").and_then(|v| v.as_str()) {
+                        Some(id_str) => id_str.to_string(),
+                        None => {
+                            raise_error!(
+                                "ERR_TX_MISSING_ID",
+                                error = "Le document préparé ne contient pas d'identifiant '_id'.",
+                                context = json_value!({"collection": collection, "action": "prepare_insert_op"})
+                            );
+                        }
+                    };
+
                     prepared_ops.push(Operation::Insert {
                         collection,
                         id: final_id,
@@ -94,8 +101,9 @@ impl<'a> TransactionManager<'a> {
                     handle,
                     mut document,
                 } => {
-                    // 🎯 1. Résolution intra-transaction
-                    self.resolve_intra_tx_refs(&mut document, &prepared_ops);
+                    // 🎯 FIX
+                    self.resolve_all_refs(&query_engine, &mut document, &prepared_ops)
+                        .await?;
 
                     let final_id = self
                         .resolve_id(
@@ -110,6 +118,7 @@ impl<'a> TransactionManager<'a> {
                     prepared_ops.push(Operation::Update {
                         collection,
                         id: final_id,
+                        previous_document: None,
                         document,
                     });
                 }
@@ -120,46 +129,111 @@ impl<'a> TransactionManager<'a> {
                     handle,
                     mut document,
                 } => {
-                    self.resolve_intra_tx_refs(&mut document, &prepared_ops);
-                    // On tente de résoudre l'ID. Si ça échoue (ok()), on sait que c'est un Insert.
-                    let found_id = self
+                    // 1. Résolution sémantique (transformation des URI en UUIDs)
+                    self.resolve_all_refs(&query_engine, &mut document, &prepared_ops)
+                        .await?;
+
+                    // 2. Extraction de l'identité sémantique résolue
+                    let semantic_id = document
+                        .get("@id")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.starts_with("db://") && !s.starts_with("ref:"))
+                        .map(|s| s.to_string());
+
+                    // 🎯 VERROU D'INTÉGRITÉ 1 : Détection de conflit d'identité
+                    if let (Some(prov_id), Some(sem_id)) = (&id, &semantic_id) {
+                        if prov_id != sem_id {
+                            raise_error!(
+                                "ERR_DB_IDENTITY_CONFLICT",
+                                error = "Conflit d'identité : l'ID fourni ne correspond pas à l'URI @id résolue.",
+                                context = json_value!({ "provided": prov_id, "semantic": sem_id, "collection": collection })
+                            );
+                        }
+                    }
+
+                    let target_id_hint = semantic_id.or(id);
+
+                    // 3. Tentative de résolution de l'identité physique
+                    // On utilise match pour traiter l'erreur (Not Found) comme signal d'insertion
+                    let resolution = self
                         .resolve_id(
                             &query_engine,
                             &collection,
-                            id,
+                            target_id_hint.clone(),
                             handle,
                             Some(&document),
                             &prepared_ops,
                         )
-                        .await
-                        .ok();
+                        .await;
 
-                    if let Some(existing_id) = found_id {
-                        prepared_ops.push(Operation::Update {
-                            collection,
-                            id: existing_id,
-                            document,
-                        });
-                    } else {
-                        let mut doc = document;
-                        col_mgr.prepare_document(&collection, &mut doc).await?;
-                        let new_id = doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string();
-                        prepared_ops.push(Operation::Insert {
-                            collection,
-                            id: new_id,
-                            document: doc,
-                        });
+                    match resolution {
+                        Ok(existing_id) => {
+                            // L'entité existe -> UPDATE
+                            prepared_ops.push(Operation::Update {
+                                collection,
+                                id: existing_id,
+                                previous_document: None,
+                                document,
+                            });
+                        }
+                        Err(_) => {
+                            // L'entité n'existe pas -> INSERT
+                            // 🎯 VERROU D'INTÉGRITÉ 2 : Injection de l'ID cible avant la préparation
+                            // pour empêcher le x_compute (validator) de générer un ID divergent.
+                            if let Some(tid) = target_id_hint {
+                                if let Some(obj) = document.as_object_mut() {
+                                    obj.insert("_id".to_string(), json_value!(tid));
+                                }
+                            }
+
+                            let mut doc = document;
+                            col_mgr.prepare_document(&collection, &mut doc).await?;
+
+                            let final_id = match doc.get("_id").and_then(|v| v.as_str()) {
+                                Some(id_str) => id_str.to_string(),
+                                None => {
+                                    raise_error!(
+                                        "ERR_TX_MISSING_ID",
+                                        error = "Le document préparé pour insertion est orphelin (pas de '_id').",
+                                        context = json_value!({"collection": collection})
+                                    );
+                                }
+                            };
+
+                            prepared_ops.push(Operation::Insert {
+                                collection,
+                                id: final_id,
+                                document: doc,
+                            });
+                        }
                     }
                 }
                 TransactionRequest::Delete { collection, id } => {
-                    prepared_ops.push(Operation::Delete { collection, id });
+                    prepared_ops.push(Operation::Delete {
+                        collection,
+                        id,
+                        previous_document: None,
+                    });
                 }
                 TransactionRequest::InsertFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
-                    // 🎯 Résolution intra-transaction pour les fichiers
-                    self.resolve_intra_tx_refs(&mut doc, &prepared_ops);
+
+                    self.resolve_all_refs(&query_engine, &mut doc, &prepared_ops)
+                        .await?;
+
                     col_mgr.prepare_document(&collection, &mut doc).await?;
-                    let final_id = doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string();
+
+                    let final_id = match doc.get("_id").and_then(|v| v.as_str()) {
+                        Some(id_str) => id_str.to_string(),
+                        None => {
+                            raise_error!(
+                                "ERR_TX_MISSING_ID",
+                                error = "Le document source ne contient pas d'identifiant '_id'.",
+                                context = json_value!({"collection": collection, "action": "prepare_insert_from_op"})
+                            );
+                        }
+                    };
+
                     prepared_ops.push(Operation::Insert {
                         collection,
                         id: final_id,
@@ -168,8 +242,11 @@ impl<'a> TransactionManager<'a> {
                 }
                 TransactionRequest::UpdateFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
-                    // 🎯  Résolution intra-transaction
-                    self.resolve_intra_tx_refs(&mut doc, &prepared_ops);
+
+                    // 🎯 FIX
+                    self.resolve_all_refs(&query_engine, &mut doc, &prepared_ops)
+                        .await?;
+
                     let handle = doc
                         .get("handle")
                         .and_then(|v| v.as_str())
@@ -193,49 +270,68 @@ impl<'a> TransactionManager<'a> {
                     prepared_ops.push(Operation::Update {
                         collection,
                         id: final_id,
+                        previous_document: None,
                         document: doc,
                     });
                 }
                 TransactionRequest::UpsertFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
-                    // 🎯 Résolution intra-transaction
-                    self.resolve_intra_tx_refs(&mut doc, &prepared_ops);
+                    self.resolve_all_refs(&query_engine, &mut doc, &prepared_ops)
+                        .await?;
 
                     let handle = doc
                         .get("handle")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    let id_in_doc = doc
-                        .get("_id")
+
+                    let semantic_id = doc
+                        .get("@id")
                         .and_then(|v| v.as_str())
+                        .filter(|s| !s.starts_with("db://") && !s.starts_with("ref:"))
                         .map(|s| s.to_string());
 
-                    let found_id = self
+                    let resolution = self
                         .resolve_id(
                             &query_engine,
                             &collection,
-                            id_in_doc,
+                            semantic_id.clone(),
                             handle,
                             Some(&doc),
                             &prepared_ops,
                         )
-                        .await
-                        .ok();
+                        .await;
 
-                    if let Some(existing_id) = found_id {
-                        prepared_ops.push(Operation::Update {
-                            collection,
-                            id: existing_id,
-                            document: doc,
-                        });
-                    } else {
-                        col_mgr.prepare_document(&collection, &mut doc).await?;
-                        let new_id = doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string();
-                        prepared_ops.push(Operation::Insert {
-                            collection,
-                            id: new_id,
-                            document: doc,
-                        });
+                    match resolution {
+                        Ok(existing_id) => {
+                            prepared_ops.push(Operation::Update {
+                                collection,
+                                id: existing_id,
+                                previous_document: None,
+                                document: doc,
+                            });
+                        }
+                        Err(_) => {
+                            // Injection de l'identité sémantique comme ID technique cible
+                            if let Some(tid) = semantic_id {
+                                if let Some(obj) = doc.as_object_mut() {
+                                    obj.insert("_id".to_string(), json_value!(tid));
+                                }
+                            }
+
+                            col_mgr.prepare_document(&collection, &mut doc).await?;
+                            let new_id = match doc.get("_id").and_then(|v| v.as_str()) {
+                                Some(id_str) => id_str.to_string(),
+                                None => raise_error!(
+                                    "ERR_TX_MISSING_ID",
+                                    context = json_value!({"path": path.clone()})
+                                ),
+                            };
+                            prepared_ops.push(Operation::Insert {
+                                collection,
+                                id: new_id,
+                                document: doc,
+                            });
+                        }
                     }
                 }
             }
@@ -288,11 +384,40 @@ impl<'a> TransactionManager<'a> {
         document: Option<&JsonValue>,
         pending_ops: &[Operation],
     ) -> RaiseResult<String> {
-        if let Some(i) = id {
-            return Ok(i);
-        }
+        // 1. Extraction des identités candidates
+        let target_handle = handle.or_else(|| {
+            document.and_then(|d| {
+                d.get("handle")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+        });
 
-        // 🎯 1. CHERCHER DANS LE CACHE (Les opérations déjà préparées dans ce Batch)
+        let target_id = id.or_else(|| {
+            document.and_then(|d| {
+                d.get("_id")
+                    .or_else(|| d.get("@id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+        });
+
+        let target_name = document.and_then(|d| {
+            d.get("name").and_then(|v| {
+                if v.is_string() {
+                    v.as_str().map(|s| s.to_string())
+                } else {
+                    v.get("fr")
+                        .or(v.get("en"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                }
+            })
+        });
+
+        // 🎯 NOTE : On retire le bloc "Early Return" qui était ici à la ligne 364.
+
+        // 2. Recherche dans la RAM (Opérations en attente dans la transaction)
         for op in pending_ops.iter().rev() {
             if let Operation::Insert {
                 collection: c,
@@ -303,83 +428,132 @@ impl<'a> TransactionManager<'a> {
                 collection: c,
                 id: op_id,
                 document: d,
+                ..
             } = op
             {
                 if c == collection {
-                    // Recherche par Handle
-                    if let Some(h) = &handle {
-                        if d.get("handle").and_then(|v| v.as_str()) == Some(h.as_str()) {
+                    if let Some(ref h) = target_handle {
+                        if d.get("handle").and_then(|v| v.as_str()) == Some(h) {
                             return Ok(op_id.clone());
                         }
                     }
-                    // Recherche par Name
-                    if let Some(doc) = document {
-                        if let Some(n) = doc.get("name").and_then(|v| v.as_str()) {
-                            if d.get("name").and_then(|v| v.as_str()) == Some(n) {
-                                return Ok(op_id.clone());
+                    if let Some(ref n) = target_name {
+                        let d_name = d.get("name").and_then(|v| {
+                            if v.is_string() {
+                                v.as_str().map(|s| s.to_string())
+                            } else {
+                                v.get("fr")
+                                    .or(v.get("en"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
                             }
+                        });
+                        if d_name == Some(n.clone()) {
+                            return Ok(op_id.clone());
                         }
                     }
                 }
             }
         }
 
-        // 🎯 2. CHERCHER DANS LA BASE DE DONNÉES
-        if let Some(h) = handle {
-            let q = Query {
+        // 3. Recherche sur le DISQUE (Vérification physique systématique 🎯)
+
+        // A. Par ID technique (UUID résolu ou fourni)
+        if let Some(ref i) = target_id {
+            if !i.starts_with("db://")
+                && !i.starts_with("ref:")
+                && self
+                    .storage
+                    .read_document(&self.space, &self.db, collection, i)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+            {
+                return Ok(i.clone());
+            }
+        }
+
+        // B. Par Handle (via Index + Vérification physique)
+        if let Some(ref h) = target_handle {
+            let query = Query {
                 collection: collection.to_string(),
                 filter: Some(QueryFilter {
                     operator: FilterOperator::And,
-                    conditions: vec![Condition {
-                        field: "handle".to_string(),
-                        operator: ComparisonOperator::Eq,
-                        value: JsonValue::String(h),
-                    }],
+                    conditions: vec![Condition::eq("handle", json_value!(h))],
                 }),
                 sort: None,
                 limit: Some(1),
                 offset: None,
                 projection: None,
             };
-            let res = qe.execute_query(q).await?;
-            if let Some(doc) = res.documents.first() {
-                return Ok(doc.get("_id").and_then(|v| v.as_str()).unwrap().to_string());
-            }
-        }
-        if let Some(doc) = document {
-            if let Some(name_val) = doc.get("name") {
-                let q = Query {
-                    collection: collection.to_string(),
-                    filter: Some(QueryFilter {
-                        operator: FilterOperator::And,
-                        conditions: vec![Condition::eq("name", name_val.clone())],
-                    }),
-                    sort: None,
-                    limit: Some(1),
-                    offset: None,
-                    projection: None,
-                };
-                let res = qe.execute_query(q).await?;
+
+            if let Ok(res) = qe.execute_query(query).await {
                 if let Some(found_doc) = res.documents.first() {
-                    return Ok(found_doc
-                        .get("_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap()
-                        .to_string());
+                    if let Some(id_str) = found_doc.get("_id").and_then(|v| v.as_str()) {
+                        let id_to_check = id_str.to_string();
+                        if self
+                            .storage
+                            .read_document(&self.space, &self.db, collection, &id_to_check)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some()
+                        {
+                            return Ok(id_to_check);
+                        } else {
+                            raise_error!(
+                                "ERR_DB_GHOST_ENTITY",
+                                error = id_to_check, // On passe l'ID fantôme ici
+                                context = json_value!({ "collection": collection, "handle": h })
+                            );
+                        }
+                    }
                 }
             }
         }
+
+        // C. Par Name (via Index + Vérification physique)
+        if let Some(ref n) = target_name {
+            let query = Query {
+                collection: collection.to_string(),
+                filter: Some(QueryFilter {
+                    operator: FilterOperator::And,
+                    conditions: vec![Condition::eq("name", json_value!(n))],
+                }),
+                sort: None,
+                limit: Some(1),
+                offset: None,
+                projection: None,
+            };
+            if let Ok(res) = qe.execute_query(query).await {
+                if let Some(found_doc) = res.documents.first() {
+                    if let Some(id_str) = found_doc.get("_id").and_then(|v| v.as_str()) {
+                        if self
+                            .storage
+                            .read_document(&self.space, &self.db, collection, id_str)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some()
+                        {
+                            return Ok(id_str.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         raise_error!(
             "ERR_DB_IDENTITY_NOT_FOUND",
             error = format!(
-                "Aucune entité trouvée pour l'identité fournie dans '{}'",
+                "Aucune entité physique trouvée pour '{}' dans '{}'",
+                target_handle
+                    .as_deref()
+                    .or(target_name.as_deref())
+                    .unwrap_or("unknown"),
                 collection
-            ),
-            context = json_value!({
-                "collection": collection,
-                "action": "resolve_entity_identity",
-                "hint": "L'identifiant ou le handle spécifié n'existe pas dans cette collection."
-            })
+            )
         );
     }
 
@@ -397,7 +571,6 @@ impl<'a> TransactionManager<'a> {
         let mut tx = Transaction::new();
         op_block(&mut tx)?;
 
-        // 1. VERROUILLAGE
         let collections_to_lock: UniqueSet<String> = tx
             .operations
             .iter()
@@ -425,7 +598,36 @@ impl<'a> TransactionManager<'a> {
             _guards.push(lock.write().await);
         }
 
-        // 2. EXÉCUTION ATOMIQUE
+        // Personne ne peut modifier ces fichiers pendant qu'on les lit.
+        for op in &mut tx.operations {
+            match op {
+                Operation::Update {
+                    collection,
+                    id,
+                    ref mut previous_document,
+                    ..
+                } => {
+                    *previous_document = self
+                        .storage
+                        .read_document(&self.space, &self.db, collection, id)
+                        .await
+                        .unwrap_or(None);
+                }
+                Operation::Delete {
+                    collection,
+                    id,
+                    ref mut previous_document,
+                } => {
+                    *previous_document = self
+                        .storage
+                        .read_document(&self.space, &self.db, collection, id)
+                        .await
+                        .unwrap_or(None);
+                }
+                _ => {}
+            }
+        }
+
         self.write_wal(&tx).await?;
 
         match self.apply_transaction(&tx).await {
@@ -453,7 +655,6 @@ impl<'a> TransactionManager<'a> {
     }
 
     async fn apply_transaction(&self, tx: &Transaction) -> RaiseResult<()> {
-        // ✅ MODIFICATION : On utilise self.storage au lieu d'en récréer un !
         let mut idx = IndexManager::new(self.storage, &self.space, &self.db);
 
         let sys_path = self
@@ -479,6 +680,7 @@ impl<'a> TransactionManager<'a> {
                     document,
                 } => {
                     let mut final_doc = document.clone();
+
                     if let Some(obj) = final_doc.as_object_mut() {
                         if !obj.contains_key("_id") {
                             obj.insert("_id".to_string(), JsonValue::String(id.clone()));
@@ -490,7 +692,6 @@ impl<'a> TransactionManager<'a> {
                         return Err(e);
                     }
 
-                    // ✅ MODIFICATION : Write-Through (Cache + Disque)
                     if let Err(e) = self
                         .storage
                         .write_document(&self.space, &self.db, collection, id, &final_doc)
@@ -521,8 +722,8 @@ impl<'a> TransactionManager<'a> {
                     collection,
                     id,
                     document,
+                    ..
                 } => {
-                    // ✅ MODIFICATION : Lecture via le Cache LRU
                     let existing_opt = match self
                         .storage
                         .read_document(&self.space, &self.db, collection, id)
@@ -564,7 +765,6 @@ impl<'a> TransactionManager<'a> {
                         return Err(e);
                     }
 
-                    // ✅ MODIFICATION : Mise à jour Cache + Disque
                     if let Err(e) = self
                         .storage
                         .write_document(&self.space, &self.db, collection, id, &final_doc)
@@ -601,8 +801,7 @@ impl<'a> TransactionManager<'a> {
                     });
                 }
 
-                Operation::Delete { collection, id } => {
-                    // ✅ MODIFICATION : Lecture via Cache
+                Operation::Delete { collection, id, .. } => {
                     let existing_opt = self
                         .storage
                         .read_document(&self.space, &self.db, collection, id)
@@ -611,7 +810,6 @@ impl<'a> TransactionManager<'a> {
                         .flatten();
 
                     if let Some(old_doc) = existing_opt {
-                        // ✅ MODIFICATION : Suppression Cache + Disque
                         if let Err(e) = self
                             .storage
                             .delete_document(&self.space, &self.db, collection, id)
@@ -663,7 +861,6 @@ impl<'a> TransactionManager<'a> {
                     id,
                     inserted_doc,
                 } => {
-                    // ✅ MODIFICATION : Suppression via le StorageEngine
                     self.storage
                         .delete_document(&self.space, &self.db, &collection, &id)
                         .await
@@ -723,7 +920,18 @@ impl<'a> TransactionManager<'a> {
             if let Some(obj) = doc.as_object_mut() {
                 obj.insert("$schema".to_string(), JsonValue::String(uri.clone()));
             }
-            let reg = SchemaRegistry::from_db(&self.storage.config, &self.space, &self.db).await?;
+            let mut target_space = self.space.clone();
+            let mut target_db = self.db.clone();
+
+            if let Some(without_scheme) = uri.strip_prefix("db://") {
+                let parts: Vec<&str> = without_scheme.splitn(3, '/').collect();
+                if parts.len() >= 2 {
+                    target_space = parts[0].to_string();
+                    target_db = parts[1].to_string();
+                }
+            }
+            let reg =
+                SchemaRegistry::from_db(&self.storage.config, &target_space, &target_db).await?;
             let validator = match SchemaValidator::compile_with_registry(&uri, &reg) {
                 Ok(v) => v,
                 Err(e) => {
@@ -766,10 +974,9 @@ impl<'a> TransactionManager<'a> {
             }
             if let Some(col_data) = cols.get_mut(collection) {
                 if col_data.get("items").is_none() {
-                    col_data
-                        .as_object_mut()
-                        .unwrap()
-                        .insert("items".to_string(), json_value!([]));
+                    if let Some(obj) = col_data.as_object_mut() {
+                        obj.insert("items".to_string(), json_value!([]));
+                    }
                 }
                 if let Some(items) = col_data.get_mut("items").and_then(|i| i.as_array_mut()) {
                     if is_delete {
@@ -805,29 +1012,60 @@ impl<'a> TransactionManager<'a> {
         self.commit_wal(tx).await
     }
 
-    fn resolve_intra_tx_refs(&self, doc: &mut JsonValue, pending_ops: &[Operation]) {
+    #[async_recursive]
+    async fn resolve_all_refs(
+        &self,
+        qe: &QueryEngine<'_>,
+        doc: &mut JsonValue,
+        pending_ops: &[Operation],
+    ) -> RaiseResult<()> {
         let mut new_val = None;
 
         match doc {
             JsonValue::Object(map) => {
                 for (_, v) in map.iter_mut() {
-                    self.resolve_intra_tx_refs(v, pending_ops);
+                    self.resolve_all_refs(qe, v, pending_ops).await?;
                 }
             }
             JsonValue::Array(arr) => {
                 for v in arr.iter_mut() {
-                    self.resolve_intra_tx_refs(v, pending_ops);
+                    self.resolve_all_refs(qe, v, pending_ops).await?;
                 }
             }
             JsonValue::String(s) => {
-                if s.starts_with("ref:") {
-                    let parts: Vec<&str> = s.split(':').collect();
-                    if parts.len() == 4 {
-                        let target_col = parts[1];
-                        let target_field = parts[2];
-                        let target_val = parts[3];
+                let mut parsed_target = None;
 
-                        // On fouille dans les documents de la transaction courante (du plus récent au plus ancien)
+                // 1. Syntaxe LOCALE (ref:...)
+                if s.starts_with("ref:") {
+                    // splitn(4) garantit que si la valeur contient des ':', ils ne sont pas coupés
+                    let parts: Vec<&str> = s.splitn(4, ':').collect();
+                    if parts.len() == 4 {
+                        parsed_target = Some((
+                            self.space.as_str(),
+                            self.db.as_str(),
+                            parts[1],             // collection
+                            parts[2],             // field
+                            parts[3].to_string(), // value
+                        ));
+                    }
+                }
+                // 2. Syntaxe CROSS-DB (db://...)
+                else if let Some(path) = s.strip_prefix("db://") {
+                    let parts: Vec<&str> = path.splitn(5, '/').collect();
+                    if parts.len() == 5 {
+                        parsed_target = Some((
+                            parts[0],             // domain
+                            parts[1],             // db
+                            parts[2],             // collection
+                            parts[3],             // field
+                            parts[4].to_string(), // value
+                        ));
+                    }
+                }
+
+                if let Some((t_domain, t_db, t_col, t_field, t_val)) = parsed_target {
+                    // 🔍 A. PHASE RAM (Intra-Transaction) - Uniquement si c'est la DB courante
+                    if t_domain == self.space && t_db == self.db {
                         for op in pending_ops.iter().rev() {
                             if let Operation::Insert {
                                 collection,
@@ -838,16 +1076,63 @@ impl<'a> TransactionManager<'a> {
                                 collection,
                                 id,
                                 document,
+                                ..
                             } = op
                             {
-                                if collection == target_col {
+                                if collection == t_col {
                                     if let Some(val) =
-                                        document.get(target_field).and_then(|v| v.as_str())
+                                        document.get(t_field).and_then(|v| v.as_str())
                                     {
-                                        if val == target_val {
+                                        if val == t_val {
                                             new_val = Some(id.clone());
                                             break;
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 💾 B. PHASE DISQUE (Extra-Transaction Locale OU Cross-DB)
+                    if new_val.is_none() {
+                        let q = Query {
+                            collection: t_col.to_string(),
+                            filter: Some(QueryFilter {
+                                operator: FilterOperator::And,
+                                conditions: vec![Condition {
+                                    field: t_field.to_string(),
+                                    operator: ComparisonOperator::Eq,
+                                    value: JsonValue::String(t_val),
+                                }],
+                            }),
+                            sort: None,
+                            limit: Some(1),
+                            offset: None,
+                            projection: None,
+                        };
+
+                        if t_domain == self.space && t_db == self.db {
+                            // Cible Locale : On réutilise le moteur de la transaction en cours
+                            if let Ok(res) = qe.execute_query(q).await {
+                                if let Some(found_doc) = res.documents.first() {
+                                    if let Some(db_id) =
+                                        found_doc.get("_id").and_then(|v| v.as_str())
+                                    {
+                                        new_val = Some(db_id.to_string());
+                                    }
+                                }
+                            }
+                        } else {
+                            // Cible Distante (Cross-DB) : On instancie un moteur éphémère !
+                            let ext_col_mgr = CollectionsManager::new(self.storage, t_domain, t_db);
+                            let ext_qe = QueryEngine::new(&ext_col_mgr);
+
+                            if let Ok(res) = ext_qe.execute_query(q).await {
+                                if let Some(found_doc) = res.documents.first() {
+                                    if let Some(db_id) =
+                                        found_doc.get("_id").and_then(|v| v.as_str())
+                                    {
+                                        new_val = Some(db_id.to_string());
                                     }
                                 }
                             }
@@ -858,10 +1143,11 @@ impl<'a> TransactionManager<'a> {
             _ => {}
         }
 
-        // Mutation In-Place si on a trouvé l'ID dans la transaction courante !
         if let Some(id) = new_val {
             *doc = JsonValue::String(id);
         }
+
+        Ok(())
     }
 }
 
@@ -885,32 +1171,34 @@ mod tests {
     use super::*;
     use crate::utils::testing::DbSandbox;
 
-    async fn create_dataset_file(root: &Path, rel_path: &str, content: JsonValue) {
+    async fn create_dataset_file(
+        root: &Path,
+        rel_path: &str,
+        content: JsonValue,
+    ) -> RaiseResult<()> {
         let full_path = root.join(rel_path);
         if let Some(parent) = full_path.parent() {
-            fs::ensure_dir_async(parent).await.unwrap();
+            fs::ensure_dir_async(parent).await?;
         }
-        fs::write_json_atomic_async(&full_path, &content)
-            .await
-            .unwrap();
+        fs::write_json_atomic_async(&full_path, &content).await?;
+        Ok(())
     }
 
     #[async_test]
-    async fn test_transaction_commit_success() {
+    async fn test_transaction_commit_success() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
-        let space = &sandbox.config.system_domain;
-        let db = &sandbox.config.system_db;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        DbSandbox::mock_db(&col_mgr).await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await?;
         col_mgr
             .create_collection(
                 "users",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
         let tm = TransactionManager::new(storage, space, db);
         let res = tm
@@ -927,24 +1215,24 @@ mod tests {
             .db_collection_path(space, db, "users")
             .join("user1.json");
         assert!(fs::exists_async(&doc_path).await);
+        Ok(())
     }
 
     #[async_test]
-    async fn test_transaction_rollback_on_error() {
+    async fn test_transaction_rollback_on_error() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
-        let space = &sandbox.config.system_domain;
-        let db = &sandbox.config.system_db;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        DbSandbox::mock_db(&col_mgr).await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await?;
         col_mgr
             .create_collection(
                 "users",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
         let tm = TransactionManager::new(storage, space, db);
         let res = tm
@@ -967,27 +1255,27 @@ mod tests {
             .db_collection_path(space, db, "users")
             .join("user2.json");
         assert!(
-            !doc_path.exists(),
+            !fs::exists_async(&doc_path).await,
             "Le rollback a échoué, le fichier a été écrit !"
         );
+        Ok(())
     }
 
     #[async_test]
-    async fn test_smart_insert_injects_metadata() {
+    async fn test_smart_insert_injects_metadata() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
-        let space = &sandbox.config.system_domain;
-        let db = &sandbox.config.system_db;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        DbSandbox::mock_db(&col_mgr).await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await?;
         col_mgr
             .create_collection(
                 "users",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
         let tm = TransactionManager::new(storage, space, db);
         let req = vec![TransactionRequest::Insert {
@@ -995,35 +1283,34 @@ mod tests {
             id: None,
             document: json_value!({ "name": "Test User" }),
         }];
-        tm.execute_smart(req).await.expect("Transaction failed");
+        tm.execute_smart(req).await?;
 
         let res = QueryEngine::new(&col_mgr)
             .execute_query(Query::new("users"))
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(res.documents.len(), 1);
         assert!(res.documents[0].get("_id").is_some());
+        Ok(())
     }
 
     #[async_test]
-    async fn test_atomicity_failure_rollback_smart() {
+    async fn test_atomicity_failure_rollback_smart() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
-        let space = &sandbox.config.system_domain;
-        let db = &sandbox.config.system_db;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        DbSandbox::mock_db(&col_mgr).await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await?;
         col_mgr
             .create_collection(
                 "items",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
         let mut idx_mgr = IndexManager::new(storage, space, db);
-        idx_mgr.create_index("items", "val", "hash").await.unwrap();
+        idx_mgr.create_index("items", "val", "hash").await?;
 
         let tm = TransactionManager::new(storage, space, db);
 
@@ -1049,97 +1336,97 @@ mod tests {
             .db_collection_path(space, db, "items")
             .join("item1.json");
         assert!(
-            !doc_path.exists(),
+            !fs::exists_async(&doc_path).await,
             "Rollback Fichier échoué : item1 ne devrait pas être là"
         );
 
-        let search_res = idx_mgr
-            .search("items", "val", &json_value!("A"))
-            .await
-            .unwrap();
+        let search_res = idx_mgr.search("items", "val", &json_value!("A")).await?;
         assert!(
             search_res.is_empty(),
             "Rollback Index échoué : L'index contient encore la donnée !"
         );
+        Ok(())
     }
 
     #[async_test]
-    async fn test_upsert_workflow() {
+    async fn test_upsert_workflow() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
-        let space = &sandbox.config.system_domain;
-        let db = &sandbox.config.system_db;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        DbSandbox::mock_db(&col_mgr).await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await?;
         col_mgr
             .create_collection(
                 "actors",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
         let tm = TransactionManager::new(storage, space, db);
 
-        let dataset_dir = sandbox
-            .config
-            .get_path("PATH_RAISE_DOMAIN")
-            .unwrap()
-            .join("dataset");
-        fs::ensure_dir_async(&dataset_dir).await.unwrap();
+        let dataset_dir = match sandbox.config.get_path("PATH_RAISE_DOMAIN") {
+            Some(p) => p.join("dataset"),
+            None => {
+                raise_error!(
+                    "ERR_TEST_FAILURE",
+                    error = "PATH_RAISE_DOMAIN non défini dans la Sandbox"
+                );
+            }
+        };
+        fs::ensure_dir_async(&dataset_dir).await?;
 
         create_dataset_file(
             &dataset_dir,
             "bob.json",
             json_value!({ "handle": "bob", "role": "worker" }),
         )
-        .await;
+        .await?;
 
         let req1 = vec![TransactionRequest::UpsertFrom {
             collection: "actors".to_string(),
             path: "$PATH_RAISE_DATASET/bob.json".to_string(),
         }];
-        tm.execute_smart(req1).await.unwrap();
+        tm.execute_smart(req1).await?;
 
         create_dataset_file(
             &dataset_dir,
             "bob.json",
             json_value!({ "handle": "bob", "role": "boss" }),
         )
-        .await;
+        .await?;
 
         let req2 = vec![TransactionRequest::UpsertFrom {
             collection: "actors".to_string(),
             path: "$PATH_RAISE_DATASET/bob.json".to_string(),
         }];
-        tm.execute_smart(req2).await.unwrap();
+        tm.execute_smart(req2).await?;
 
         let res = QueryEngine::new(&col_mgr)
             .execute_query(Query::new("actors"))
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(res.documents.len(), 1);
         assert_eq!(res.documents[0]["role"], "boss");
+        Ok(())
     }
 
     #[async_test]
-    async fn test_upsert_resolution_by_name() {
+    async fn test_upsert_resolution_by_name() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
-        let space = &sandbox.config.system_domain;
-        let db = &sandbox.config.system_db;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
 
         let col_mgr = CollectionsManager::new(storage, space, db);
-        DbSandbox::mock_db(&col_mgr).await.unwrap();
+        DbSandbox::mock_db(&col_mgr).await?;
         col_mgr
             .create_collection(
                 "users",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
         let tm = TransactionManager::new(storage, space, db);
 
@@ -1154,9 +1441,7 @@ mod tests {
             }),
         }];
 
-        tm.execute_smart(req1)
-            .await
-            .expect("L'insertion initiale a échoué");
+        tm.execute_smart(req1).await?;
 
         let req2 = vec![TransactionRequest::Update {
             collection: "users".to_string(),
@@ -1172,9 +1457,110 @@ mod tests {
         assert!(res.is_ok(), "Le moteur aurait dû résoudre l'identité");
 
         let engine = QueryEngine::new(&col_mgr);
-        let query_res = engine.execute_query(Query::new("users")).await.unwrap();
+        let query_res = engine.execute_query(Query::new("users")).await?;
 
         assert_eq!(query_res.documents.len(), 1);
         assert_eq!(query_res.documents[0]["email"], "new_alice@raise.local");
+        Ok(())
+    }
+
+    #[async_test]
+    async fn test_omni_reference_resolution() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        let storage = &sandbox.storage;
+
+        // 🌍 1. INITIALISATION CROSS-DB (Base Distante : _system/raise)
+        let ext_domain = "_system";
+        let ext_db = "raise";
+        let ext_col_mgr = CollectionsManager::new(storage, ext_domain, ext_db);
+        DbSandbox::mock_db(&ext_col_mgr).await?;
+        ext_col_mgr
+            .create_collection(
+                "permissions",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+
+        // On injecte la permission cible dans la base distante
+        let perm_doc =
+            json_value!({ "_id": "uuid-ext-perm-999", "handle": "perm_model_engine_update_sa" });
+        ext_col_mgr.insert_raw("permissions", &perm_doc).await?;
+
+        // 🏠 2. INITIALISATION LOCALE (Base Courante : _system/bootstrap)
+        let local_domain = "_system";
+        let local_db = "bootstrap";
+        let local_col_mgr = CollectionsManager::new(storage, local_domain, local_db);
+        DbSandbox::mock_db(&local_col_mgr).await?;
+        local_col_mgr
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+        local_col_mgr
+            .create_collection(
+                "dapps",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+        local_col_mgr
+            .create_collection(
+                "configs",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+
+        // On injecte l'utilisateur cible dans la base locale (Disque)
+        let user_doc = json_value!({ "_id": "uuid-db-user-123", "handle": "admin" });
+        local_col_mgr.insert_raw("users", &user_doc).await?;
+
+        // ⚡ 3. LA TRANSACTION HYBRIDE
+        let tm = TransactionManager::new(storage, local_domain, local_db);
+        let reqs = vec![
+            // A. Création dans la RAM Locale (Intra-Transaction)
+            TransactionRequest::Insert {
+                collection: "dapps".to_string(),
+                id: Some("uuid-ram-dapp-456".to_string()),
+                document: json_value!({ "handle": "raise_app" }),
+            },
+            // B. Document avec les 3 types de références !
+            TransactionRequest::Insert {
+                collection: "configs".to_string(),
+                id: Some("uuid-config-789".to_string()),
+                document: json_value!({
+                    // Doit résoudre sur le Disque Local
+                    "owner_id": "ref:users:handle:admin",
+
+                    // Doit résoudre dans la RAM de la Transaction
+                    "active_dapp_id": "ref:dapps:handle:raise_app",
+
+                    // 🎯 Doit résoudre en Cross-DB via la création d'un QueryEngine éphémère
+                    "perm_id": "db://_system/raise/permissions/handle/perm_model_engine_update_sa"
+                }),
+            },
+        ];
+
+        tm.execute_smart(reqs).await?;
+
+        // 🔍 4. LES ASSERTIONS
+        let config_doc = local_col_mgr
+            .get("configs", "uuid-config-789")
+            .await?
+            .expect("La config doit exister");
+
+        assert_eq!(
+            config_doc["owner_id"], "uuid-db-user-123",
+            "❌ Échec Ref Locale Disque"
+        );
+        assert_eq!(
+            config_doc["active_dapp_id"], "uuid-ram-dapp-456",
+            "❌ Échec Ref Locale RAM"
+        );
+        assert_eq!(
+            config_doc["perm_id"], "uuid-ext-perm-999",
+            "❌ Échec Ref CROSS-DB (db://...) !"
+        );
+
+        Ok(())
     }
 }

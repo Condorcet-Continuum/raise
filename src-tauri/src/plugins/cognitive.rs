@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/plugins/cognitive.rs
 
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 use super::runtime::PluginContext;
 use crate::json_db::collections::manager::CollectionsManager;
@@ -23,24 +23,20 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
             let mut execute_log = || -> RaiseResult<i32> {
                 let mem = match get_memory(&mut caller) {
                     Some(m) => m,
-                    None => raise_error!(
-                        "ERR_WASM_MEMORY",
-                        error = "Accès mémoire refusé",
-                        context = json_value!({"ptr": ptr})
-                    ),
+                    None => raise_error!("ERR_WASM_MEMORY", error = "Accès mémoire refusé"),
                 };
                 let msg = match read_string_from_wasm(&mut caller, &mem, ptr, len) {
                     Ok(m) => m,
-                    Err(e) => raise_error!(
-                        "ERR_WASM_STRING",
-                        error = format!("Chaîne corrompue: {}", e),
-                        context = json_value!({"ptr": ptr})
-                    ),
+                    Err(e) => raise_error!("ERR_WASM_STRING", error = e.to_string()),
                 };
-                println!("🤖 [PLUGIN LOG]: {}", msg);
+                user_info!("PLUGIN_LOG", json_value!({ "message": msg })); // 🎯 Traçabilité sémantique
                 Ok(0)
             };
-            execute_log().map_err(|e| wasmtime::Error::msg(e.to_string()))
+
+            match execute_log() {
+                Ok(res) => Ok(res),
+                Err(e) => Err(wasmtime::Error::msg(e.to_string())),
+            }
         },
     ) {
         raise_error!(
@@ -66,23 +62,18 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                 }
                 let mem = match get_memory(&mut caller) {
                     Some(m) => m,
-                    None => raise_error!(
-                        "ERR_WASM_MEMORY",
-                        error = "Accès mémoire refusé",
-                        context = json_value!({"ptr": ptr})
-                    ),
+                    None => raise_error!("ERR_WASM_MEMORY"),
                 };
                 let write_len = MinOf(data_len, max_len as usize);
                 match mem.write(&mut caller, ptr as usize, &data[0..write_len]) {
                     Ok(_) => Ok(write_len as i32),
-                    Err(write_err) => raise_error!(
-                        "ERR_WASM_WRITE",
-                        error = write_err.to_string(),
-                        context = json_value!({"ptr": ptr, "len": write_len})
-                    ),
+                    Err(err) => raise_error!("ERR_WASM_WRITE", error = err.to_string()),
                 }
             };
-            execute_fetch().map_err(|e| wasmtime::Error::msg(e.to_string()))
+            match execute_fetch() {
+                Ok(res) => Ok(res),
+                Err(e) => Err(wasmtime::Error::msg(e.to_string())),
+            }
         },
     ) {
         raise_error!(
@@ -99,16 +90,15 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
             let mut execute_signal = || -> RaiseResult<i32> {
                 let req = match read_json_request(&mut caller, ptr, len) {
                     Ok(v) => v,
-                    Err(err) => raise_error!(
-                        "ERR_WASM_SIGNAL",
-                        error = err.to_string(),
-                        context = json_value!({"ptr": ptr})
-                    ),
+                    Err(err) => raise_error!("ERR_WASM_SIGNAL", error = err.to_string()),
                 };
                 caller.data_mut().signals.push(req);
                 Ok(1)
             };
-            execute_signal().map_err(|e| wasmtime::Error::msg(e.to_string()))
+            match execute_signal() {
+                Ok(res) => Ok(res),
+                Err(e) => Err(wasmtime::Error::msg(e.to_string())),
+            }
         },
     ) {
         raise_error!(
@@ -119,7 +109,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
     }
 
     // ========================================================================
-    // 3. BASE DE DONNÉES (SÉCURISÉE PAR LE MANDAT)
+    // 3. BASE DE DONNÉES (RÉSOLUE PAR MOUNT POINTS)
     // ========================================================================
 
     if let Err(e) = linker.func_wrap(
@@ -133,21 +123,28 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                 };
                 let col = req["collection"].as_str().unwrap_or("").to_string();
                 let id = req["id"].as_str().unwrap_or("").to_string();
+
+                // 🎯 Résilience : Utilisation des partitions dynamiques du PluginContext
                 let (storage, space, db) = {
                     let ctx = caller.data();
                     (ctx.storage.clone(), ctx.space.clone(), ctx.db.clone())
                 };
+
                 let result = block_on(async move {
                     let mgr = CollectionsManager::new(&storage, &space, &db);
                     mgr.get_document(&col, &id).await
                 });
+
                 match result {
                     Ok(Some(doc)) => Ok(success_to_buffer(&mut caller, doc)),
                     Ok(None) => Ok(success_to_buffer(&mut caller, JsonValue::Null)),
                     Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_db_read().map_err(|e| wasmtime::Error::msg(e.to_string()))
+            match execute_db_read() {
+                Ok(res) => Ok(res),
+                Err(e) => Err(wasmtime::Error::msg(e.to_string())),
+            }
         },
     ) {
         raise_error!(
@@ -198,7 +195,10 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_db_write().map_err(|e| wasmtime::Error::msg(e.to_string()))
+            match execute_db_write() {
+                Ok(res) => Ok(res),
+                Err(e) => Err(wasmtime::Error::msg(e.to_string())),
+            }
         },
     ) {
         raise_error!(
@@ -235,13 +235,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                         let mut orch = orch_arc.lock().await;
                         orch.ask(&prompt).await
                     }),
-                    None => Err(crate::build_error!(
-                        "ERR_COGNITIVE_PLUGIN_AUTH",
-                        context = json_value!({
-                            "action": "validate_session",
-                            "hint": "L'orchestrateur IA est absent."
-                        })
-                    )),
+                    None => Err(crate::build_error!("ERR_COGNITIVE_PLUGIN_AI_OFFLINE")),
                 };
 
                 match response_result {
@@ -249,13 +243,13 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                         &mut caller,
                         json_value!({ "response": response }),
                     )),
-                    Err(err) => {
-                        eprintln!("[Plugin Error] {}", err);
-                        Ok(error_to_buffer(&mut caller, &format!("{}", err)))
-                    }
+                    Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_llm().map_err(|e| wasmtime::Error::msg(e.to_string()))
+            match execute_llm() {
+                Ok(res) => Ok(res),
+                Err(e) => Err(wasmtime::Error::msg(e.to_string())),
+            }
         },
     ) {
         raise_error!(
@@ -294,7 +288,10 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_model_query().map_err(|e| wasmtime::Error::msg(e.to_string()))
+            match execute_model_query() {
+                Ok(res) => Ok(res),
+                Err(e) => Err(wasmtime::Error::msg(e.to_string())),
+            }
         },
     ) {
         raise_error!(
@@ -326,17 +323,12 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                 let result: RaiseResult<Vec<Rule>> = block_on(async move {
                     let mgr = CollectionsManager::new(&storage, &space, &db);
                     let mut store = RuleStore::new(&mgr);
-
-                    // PLUS DE `?` ICI NON PLUS !
                     match store.sync_from_db().await {
-                        Ok(_) => {}
-                        Err(sync_err) => raise_error!(
-                            "ERR_RULE_SYNC_FAILED",
-                            error = sync_err.to_string(),
-                            context = json_value!({"target": target_filter})
-                        ),
-                    };
-
+                        Ok(_) => (),
+                        Err(sync_err) => {
+                            raise_error!("ERR_RULE_SYNC_FAILED", error = sync_err.to_string())
+                        }
+                    }
                     let rules = if target_filter.is_empty() {
                         store.get_all_rules()
                     } else {
@@ -349,7 +341,10 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                     Err(err) => Ok(error_to_buffer(&mut caller, &err.to_string())),
                 }
             };
-            execute_rule_validate().map_err(|e| wasmtime::Error::msg(e.to_string()))
+            match execute_rule_validate() {
+                Ok(res) => Ok(res),
+                Err(e) => Err(wasmtime::Error::msg(e.to_string())),
+            }
         },
     ) {
         raise_error!(
@@ -362,7 +357,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
     Ok(())
 }
 
-// --- HELPERS ---
+// --- HELPERS (STRICTS) ---
 
 fn get_memory(caller: &mut Caller<'_, PluginContext>) -> Option<wasmtime::Memory> {
     match caller.get_export("memory") {
@@ -379,31 +374,11 @@ fn read_string_from_wasm(
 ) -> RaiseResult<String> {
     let data = match memory.data(&caller).get(ptr as usize..(ptr + len) as usize) {
         Some(bytes) => bytes,
-        None => {
-            raise_error!(
-                "ERR_WASM_MEMORY_OUT_OF_BOUNDS",
-                error = "Accès mémoire hors limites dans le module Wasm.",
-                context = json_value!({
-                    "ptr": ptr,
-                    "len": len
-                })
-            )
-        }
+        None => raise_error!("ERR_WASM_MEMORY_OUT_OF_BOUNDS"),
     };
-
     match String::from_utf8(data.to_vec()) {
         Ok(s) => Ok(s),
-        Err(e) => {
-            raise_error!(
-                "ERR_WASM_UTF8_DECODE_FAILED",
-                error = e.to_string(),
-                context = json_value!({
-                    "ptr": ptr,
-                    "len": len,
-                    "hint": "Données corrompues envoyées par le plugin."
-                })
-            )
-        }
+        Err(e) => raise_error!("ERR_WASM_UTF8_DECODE_FAILED", error = e.to_string()),
     }
 }
 
@@ -414,31 +389,12 @@ fn read_json_request(
 ) -> RaiseResult<JsonValue> {
     let mem = match get_memory(caller) {
         Some(m) => m,
-        None => raise_error!(
-            "ERR_WASM_NO_MEMORY",
-            error = "Aucune mémoire exportée par le module Wasm.",
-            context = json_value!({"ptr": ptr, "len": len})
-        ),
+        None => raise_error!("ERR_WASM_NO_MEMORY"),
     };
-
-    // Plus de `?` ici !
-    let json_str = match read_string_from_wasm(caller, &mem, ptr, len) {
-        Ok(s) => s,
-        Err(e) => raise_error!(
-            "ERR_WASM_JSON_READ",
-            error = e.to_string(),
-            context = json_value!({"ptr": ptr})
-        ),
-    };
-
-    // Plus de `?` ici non plus !
+    let json_str = read_string_from_wasm(caller, &mem, ptr, len)?;
     match json::deserialize_from_str(&json_str) {
         Ok(v) => Ok(v),
-        Err(e) => raise_error!(
-            "ERR_JSON_PARSE_FAILED",
-            error = e.to_string(),
-            context = json_value!({"action": "read_json_request"})
-        ),
+        Err(e) => raise_error!("ERR_JSON_PARSE_FAILED", error = e.to_string()),
     }
 }
 
@@ -456,12 +412,15 @@ fn error_to_buffer(caller: &mut Caller<'_, PluginContext>, msg: &str) -> i32 {
     len
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES (CONFORMITÉ STRICTE)
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
+    use crate::utils::testing::AgentDbSandbox;
     use tempfile::tempdir;
     use wasmtime::Engine;
 
@@ -485,5 +444,17 @@ mod tests {
 
         let result = register_host_functions(&mut linker);
         assert!(result.is_ok());
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience de la résolution des partitions
+    #[async_test]
+    async fn test_cognitive_mount_point_integrity() {
+        let _sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+        // Vérifie que les points de montage système sont accessibles
+        assert!(
+            !config.mount_points.system.domain.is_empty(),
+            "Partition système non résolue"
+        );
     }
 }

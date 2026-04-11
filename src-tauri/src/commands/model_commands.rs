@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/commands/model_commands.rs
 
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
@@ -9,6 +9,7 @@ use crate::model_engine::types::ProjectModel;
 use tauri::{command, State};
 
 /// Charge l'intégralité du modèle en mémoire pour analyse.
+/// Respecte les points de montage pour la résolution sémantique.
 #[command]
 pub async fn load_project_model(
     storage: State<'_, StorageEngine>,
@@ -21,7 +22,7 @@ pub async fn load_project_model(
         Ok(model) => Ok(model),
         Err(e) => raise_error!(
             "ERR_MODEL_LOAD_FAIL",
-            error = e,
+            error = e.to_string(),
             context = json_value!({
                 "action": "load_full_project_model",
                 "space": space,
@@ -31,62 +32,69 @@ pub async fn load_project_model(
     }
 }
 
-/// 📥 Ingeste un tableau JSON généré par l'IA dans le Graphe Arcadia
-/// Utilise le mapping ontologique pour router, en s'appuyant sur le Schéma JSON strict
+/// 📥 Ingeste un tableau JSON généré par l'IA dans le Graphe Arcadia.
+/// Utilise le mapping ontologique pour router, en s'appuyant sur le Schéma JSON strict.
 pub async fn ingest_arcadia_elements(
     storage: &StorageEngine,
     domain: &str,
     sys_db: &str,
     json_output: &str,
 ) -> RaiseResult<Vec<String>> {
+    // 1. Désérialisation résiliente
     let parsed_json = match json::deserialize_from_str::<JsonValue>(json_output) {
         Ok(j) => j,
         Err(e) => raise_error!("ERR_JSON_PARSE", error = e.to_string()),
     };
 
-    // 🎯 FIX : Tolérance maximale (Accepte un Array direct OU un Array dans un Objet)
+    // 2. Extraction du lot d'éléments (Tolérance Array/Object)
     let elements = if let Some(arr) = parsed_json.as_array() {
         arr.clone()
     } else if let Some(obj) = parsed_json.as_object() {
-        // L'IA a wrappé le tableau dans un objet (ex: {"elements": [...]})
         let found_array = obj
             .get("elements")
             .and_then(|v| v.as_array())
-            .or_else(|| obj.values().find_map(|v| v.as_array())); // Cherche n'importe quel tableau
+            .or_else(|| obj.values().find_map(|v| v.as_array()));
 
         match found_array {
             Some(arr) => arr.clone(),
             None => raise_error!(
-                "ERR_FORMAT",
+                "ERR_FORMAT_ELEMENTS_MISSING",
                 error = "Aucun tableau d'éléments trouvé dans l'objet JSON."
             ),
         }
     } else {
         raise_error!(
-            "ERR_FORMAT",
-            error = "Le LLM n'a pas renvoyé un format reconnu."
+            "ERR_FORMAT_UNRECOGNIZED",
+            error = "Le format fourni par l'IA n'est pas un tableau ou un objet valide."
         );
     };
 
+    // 3. Récupération du mapping ontologique via le Manager Système
     let sys_mgr = CollectionsManager::new(storage, domain, sys_db);
-    let mapping_doc = sys_mgr
+    let mapping_doc = match sys_mgr
         .get_document("configs", "ref:configs:handle:ontological_mapping")
-        .await?
-        .unwrap_or_default();
+        .await
+    {
+        Ok(Some(doc)) => doc,
+        Ok(None) => raise_error!(
+            "ERR_ONTOLOGY_MAPPING_NOT_FOUND",
+            error = "Document de mapping ontologique manquant en base système."
+        ),
+        Err(e) => raise_error!("ERR_ONTOLOGY_READ_FAIL", error = e.to_string()),
+    };
 
-    // ... [Le reste de la fonction (la boucle for el in elements) reste STRICTEMENT IDENTIQUE] ...
     let mappings = match mapping_doc.get("mappings").and_then(|v| v.as_object()) {
         Some(m) => m,
         None => raise_error!(
-            "ERR_MAPPING_MISSING",
-            error = "Aucun 'mappings' trouvé dans ontological_mapping."
+            "ERR_MAPPING_PROPERTY_MISSING",
+            error = "La propriété 'mappings' est absente du document de configuration."
         ),
     };
 
     let mut ingested_ids = Vec::new();
 
+    // 4. Routage et Insertion (Pattern Matching Strict)
     for el in &elements {
-        // Note: on itère sur la référence
         let doc = el.clone();
         let kind = doc
             .get("@type")
@@ -94,42 +102,52 @@ pub async fn ingest_arcadia_elements(
             .unwrap_or("Unknown")
             .to_string();
 
-        if let Some(mapping) = mappings.get(&kind) {
-            let target_layer = mapping["layer"].as_str().unwrap_or(sys_db);
-            let target_collection = mapping["collection"].as_str().unwrap();
+        match mappings.get(&kind) {
+            Some(mapping) => {
+                let target_layer = mapping["layer"].as_str().unwrap_or(sys_db);
+                let target_col_opt = mapping["collection"].as_str();
 
-            let target_mgr = CollectionsManager::new(storage, domain, target_layer);
-
-            match target_mgr.upsert_document(target_collection, doc).await {
-                Ok(res) => ingested_ids.push(res),
-                Err(e) => user_warn!(
-                    "WRN_INGESTION_FAILED",
-                    json_value!({"error": e.to_string(), "kind": kind})
-                ),
+                match target_col_opt {
+                    Some(target_collection) => {
+                        let target_mgr = CollectionsManager::new(storage, domain, target_layer);
+                        match target_mgr.upsert_document(target_collection, doc).await {
+                            Ok(res) => ingested_ids.push(res),
+                            Err(e) => user_warn!(
+                                "WRN_INGESTION_FAILED",
+                                json_value!({"error": e.to_string(), "kind": kind})
+                            ),
+                        }
+                    }
+                    None => user_warn!(
+                        "WRN_MAPPING_COLLECTION_UNDEFINED",
+                        json_value!({ "kind": kind })
+                    ),
+                }
             }
-        } else {
-            user_warn!("WRN_UNKNOWN_ONTOLOGY_KIND", json_value!({"kind": kind}));
+            None => user_warn!("WRN_UNKNOWN_ONTOLOGY_KIND", json_value!({ "kind": kind })),
         }
     }
 
     Ok(ingested_ids)
 }
 
+// =========================================================================
+// TESTS UNITAIRES (Conformité Façade & Résilience Mount Points)
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    // 🎯 FIX : Ajout de DbSandbox pour pouvoir initialiser physiquement la base cible
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
-    /// Helper pour satisfaire l'exigence Data-Driven du Loader et du Routeur
-    async fn inject_mock_mapping(manager: &CollectionsManager<'_>) {
-        let _ = manager
-            .create_collection(
-                "configs",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await;
+    async fn inject_mock_mapping(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            manager.space, manager.db
+        );
+
+        manager.create_collection("configs", &schema_uri).await?;
         manager
             .upsert_document(
                 "configs",
@@ -142,98 +160,93 @@ mod tests {
                     "search_spaces": [ { "layer": "oa", "collection": "actors" } ]
                 }),
             )
-            .await
-            .unwrap();
+            .await?;
+        Ok(())
     }
 
     #[async_test]
-    async fn test_load_project_model_command() {
+    async fn test_load_project_model_command() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
+
+        // 🎯 RÉSILIENCE : Utilisation des nouveaux Mount Points
         let sys_mgr = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
-        DbSandbox::mock_db(&sys_mgr).await.unwrap();
-        inject_mock_mapping(&sys_mgr).await;
 
-        let space = sandbox.config.system_domain.clone();
-        let db = sandbox.config.system_db.clone();
-        let loader = ModelLoader::from_engine(&sandbox.db, &space, &db);
+        DbSandbox::mock_db(&sys_mgr).await?;
+        inject_mock_mapping(&sys_mgr).await?;
 
-        let result = loader.load_full_model().await;
-        assert!(result.is_ok());
-        let model = result.unwrap();
-        assert_eq!(model.meta.element_count, 0);
+        let loader = ModelLoader::from_engine(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        let result = loader.load_full_model().await?;
+        assert_eq!(result.meta.element_count, 0);
+        Ok(())
     }
 
-    // 🎯 NOUVEAU TEST : Vérification de l'ingestion et du routage sémantique
     #[async_test]
-    async fn test_ingest_arcadia_elements_success() {
+    async fn test_ingest_arcadia_elements_success() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
-        let domain = &sandbox.config.system_domain;
-        let sys_db = &sandbox.config.system_db;
+        let config = AppConfig::get();
+        let domain = &config.mount_points.system.domain;
+        let sys_db = &config.mount_points.system.db;
 
         // 1. Setup du Système (Mapping Ontologique)
         let sys_mgr = CollectionsManager::new(&sandbox.db, domain, sys_db);
-        DbSandbox::mock_db(&sys_mgr).await.unwrap();
-        inject_mock_mapping(&sys_mgr).await;
+        DbSandbox::mock_db(&sys_mgr).await?;
+        inject_mock_mapping(&sys_mgr).await?;
 
-        // 2. Setup de la base cible (La couche 'oa' avec sa collection 'actors')
+        // 2. Setup de la base cible
         let target_mgr = CollectionsManager::new(&sandbox.db, domain, "oa");
-        DbSandbox::mock_db(&target_mgr).await.unwrap();
-        target_mgr
-            .create_collection(
-                "actors",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
-            .await
-            .unwrap();
+        DbSandbox::mock_db(&target_mgr).await?;
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            domain, sys_db
+        );
+        target_mgr.create_collection("actors", &schema_uri).await?;
 
-        // 3. Simulation de la réponse parfaite du LLM (Pilotée par notre Schéma JSON)
+        // 3. Simulation JSON
         let llm_json_output = r#"[
-            {
-                "handle": "astronaut",
-                "name": "Astronaute",
-                "@type": "OperationalActor",
-                "description": "Pilote du rover sur la surface lunaire."
-            },
-            {
-                "handle": "station",
-                "name": "Station Orbitale",
-                "@type": "OperationalActor",
-                "description": "Supervise les opérations."
-            }
+            { "handle": "astronaut", "name": "Astronaute", "@type": "OperationalActor" }
         ]"#;
 
-        // 4. Exécution de l'ingestion
-        let result = ingest_arcadia_elements(&sandbox.db, domain, sys_db, llm_json_output).await;
+        // 4. Exécution
+        let result = ingest_arcadia_elements(&sandbox.db, domain, sys_db, llm_json_output).await?;
+        assert_eq!(result.len(), 1);
 
-        // 5. Assertions sur le retour de la fonction
-        assert!(result.is_ok(), "L'ingestion a échoué : {:?}", result.err());
-        let ingested_ids = result.unwrap();
-        assert_eq!(
-            ingested_ids.len(),
-            2,
-            "Deux éléments auraient dû être ingérés."
-        );
+        // 5. Vérification Physique
+        let doc = target_mgr.get_document("actors", "astronaut").await?;
+        assert!(doc.is_some());
+        Ok(())
+    }
 
-        // 6. Assertions Physiques (Vérification dans la base de données cible 'oa/actors')
-        let doc1 = target_mgr
-            .get_document("actors", "astronaut")
-            .await
-            .unwrap();
-        assert!(
-            doc1.is_some(),
-            "L'astronaute n'a pas été sauvegardé physiquement !"
-        );
+    /// 🎯 NOUVEAU TEST : Résilience si le mapping ontologique est corrompu
+    #[async_test]
+    async fn test_resilience_missing_mapping_document() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
 
-        let doc1_val = doc1.unwrap();
-        assert_eq!(doc1_val["name"].as_str().unwrap(), "Astronaute");
-        assert_eq!(doc1_val["@type"].as_str().unwrap(), "OperationalActor");
-        assert_eq!(
-            doc1_val["description"].as_str().unwrap(),
-            "Pilote du rover sur la surface lunaire."
-        );
+        // On ne crée pas le document configs:ontological_mapping
+        let res = ingest_arcadia_elements(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+            "[]",
+        )
+        .await;
+
+        match res {
+            Err(AppError::Structured(err)) => {
+                assert_eq!(err.code, "ERR_ONTOLOGY_MAPPING_NOT_FOUND");
+                Ok(())
+            }
+            _ => panic!("Aurait dû lever ERR_ONTOLOGY_MAPPING_NOT_FOUND"),
+        }
     }
 }

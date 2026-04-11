@@ -11,33 +11,30 @@ use raise::genetics::GeneticEngine;
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::model_engine::loader::ModelLoader;
 use raise::utils::prelude::*;
-use raise::utils::testing::DbSandbox;
 
 #[async_test]
 #[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_genetics_integration_with_json_db() {
     let env = setup_test_env(LlmMode::Disabled).await;
-    let manager = CollectionsManager::new(&env.sandbox.storage, "testing", "arcadia");
-    DbSandbox::mock_db(&manager).await.unwrap();
 
-    let _ = manager
-        .create_collection("la", "db://_system/schemas/v1/db/generic.schema.json")
-        .await;
+    // 🎯 FIX : On utilise la vraie partition métier (MBSE) initialisée par la sandbox
+    let la_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "la");
 
-    // Insertion de données avec les bonnes propriétés pour le bridge
-    manager.insert_raw("la", &json_value!({
+    // Insertion dans les bonnes collections (au lieu d'une collection générique 'la')
+    la_mgr.insert_raw("functions", &json_value!({
         "_id": "f1", "name": "Control", "type": "LogicalFunction", "properties": { "complexity": 50.0 }
     })).await.unwrap();
 
-    manager.insert_raw("la", &json_value!({
+    la_mgr.insert_raw("components", &json_value!({
         "_id": "c1", "name": "CPU", "type": "LogicalComponent", "properties": { "capacity": 100.0 }
     })).await.unwrap();
 
-    let loader = ModelLoader::new_with_manager(manager);
+    // 🎯 FIX : Le ModelLoader a besoin du manager système pour lire la table 'configs' !
+    let sys_mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let loader = ModelLoader::new_with_manager(sys_mgr);
     let model = loader.load_full_model().await.expect("Erreur chargement");
 
-    // 🎯 FIX : On utilise get_collection pour extraire les IDs
     let function_ids: Vec<String> = model
         .get_collection("la", "functions")
         .iter()

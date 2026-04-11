@@ -112,23 +112,19 @@ pub async fn list_document_ids(
     space: &str,
     db: &str,
     collection: &str,
+    limit: Option<usize>,  // 🎯 NOUVEAU
+    offset: Option<usize>, // 🎯 NOUVEAU
 ) -> RaiseResult<Vec<String>> {
     let root = collection_root(cfg, space, db, collection);
     let mut out = Vec::new();
     if !fs::exists_async(&root).await {
         return Ok(out);
     }
+
     let mut entries = fs::read_dir_async(&root).await?;
     while let Some(e) = match entries.next_entry().await {
         Ok(entry) => entry,
-        Err(err) => raise_error!(
-            "ERR_FS_READ_DIR_ENTRY",
-            error = err,
-            context = json_value!({
-                "root_path": root,
-                "action": "scan_directory_for_json"
-            })
-        ),
+        Err(err) => raise_error!("ERR_FS_READ_DIR_ENTRY", error = err),
     } {
         let p = e.path();
         if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
@@ -139,8 +135,17 @@ pub async fn list_document_ids(
             }
         }
     }
+
+    // On trie d'abord pour garantir un ordre déterministe
     out.sort();
-    Ok(out)
+
+    // 🎯 FIX : Application de la pagination sur les IDs (très léger en RAM)
+    let skip_val = offset.unwrap_or(0);
+    let take_val = limit.unwrap_or(out.len());
+
+    let paginated_ids = out.into_iter().skip(skip_val).take(take_val).collect();
+
+    Ok(paginated_ids)
 }
 
 pub async fn list_documents(
@@ -148,13 +153,15 @@ pub async fn list_documents(
     space: &str,
     db: &str,
     collection: &str,
+    limit: Option<usize>,
+    offset: Option<usize>,
 ) -> RaiseResult<Vec<JsonValue>> {
-    let ids = list_document_ids(&storage.config, space, db, collection).await?;
+    // On récupère uniquement la sous-liste des IDs demandés
+    let ids = list_document_ids(&storage.config, space, db, collection, limit, offset).await?;
     let mut docs = Vec::with_capacity(ids.len());
 
     for id in ids {
-        // ✅ C'est ici la magie ! En appelant read_document, on bénéficie du StorageEngine.
-        // Si 1000 documents sont listés, les lectures successives se feront en RAM (via le cache LRU)
+        // La boucle ne tournera que `limit` fois maximum ! La RAM est sauvée.
         if let Ok(doc) = read_document(storage, space, db, collection, &id).await {
             docs.push(doc);
         }
@@ -223,12 +230,16 @@ mod tests {
         assert_eq!(read["data"], "test");
 
         // List
-        let ids = list_document_ids(&storage.config, s, d, c).await.unwrap();
+        let ids = list_document_ids(&storage.config, s, d, c, None, None)
+            .await
+            .unwrap();
         assert_eq!(ids, vec!["1"]);
 
         // Delete
         delete_document(&storage, s, d, c, "1").await.unwrap();
-        let ids_after = list_document_ids(&storage.config, s, d, c).await.unwrap();
+        let ids_after = list_document_ids(&storage.config, s, d, c, None, None)
+            .await
+            .unwrap();
         assert!(ids_after.is_empty());
     }
 }

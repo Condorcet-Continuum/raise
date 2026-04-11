@@ -25,9 +25,11 @@ impl<'a> Migrator<'a> {
             .list_collections()
             .await? // Migration async
             .contains(&"_migrations".to_string());
+
         if !exists {
             #[cfg(debug_assertions)]
             println!("⚙️ Création de la table de suivi des migrations...");
+
             self.manager
                 .create_collection(
                     "_migrations",
@@ -56,10 +58,21 @@ impl<'a> Migrator<'a> {
         // 2. Trier les migrations déclarées par version
         let mut sorted_migrations = declared_migrations;
         sorted_migrations.sort_by(|a, b| {
-            let ver_a = MigrationVersion::parse(&a.version)
-                .unwrap_or(MigrationVersion::parse("0.0.0").unwrap());
-            let ver_b = MigrationVersion::parse(&b.version)
-                .unwrap_or(MigrationVersion::parse("0.0.0").unwrap());
+            // 🎯 FIX : Utilisation stricte de Ok / Err pour un Result
+            let ver_a = match MigrationVersion::parse(&a.version) {
+                Ok(v) => v,
+                Err(_) => match MigrationVersion::parse("0.0.0") {
+                    Ok(v) => v,
+                    Err(_) => unreachable!("Parse '0.0.0' ne peut pas échouer"),
+                },
+            };
+            let ver_b = match MigrationVersion::parse(&b.version) {
+                Ok(v) => v,
+                Err(_) => match MigrationVersion::parse("0.0.0") {
+                    Ok(v) => v,
+                    Err(_) => unreachable!("Parse '0.0.0' ne peut pas échouer"),
+                },
+            };
             ver_a.cmp(&ver_b)
         });
 
@@ -85,9 +98,12 @@ impl<'a> Migrator<'a> {
 
         // Enregistrement du succès
         let record = json_value!({
-            "_id": migration.id,
-            "version": migration.version,
-            "description": migration.description,
+            "$schema": "db://_system/_system/schemas/v2/system/db/migration.schema.json",
+            "_id": migration.id.clone(),
+            "handle": format!("migration_{}", migration.version).replace('.', "_"),
+            "name": { "fr": migration.description.clone(), "en": migration.description.clone() },
+            "version": migration.version.clone(),
+            "description": migration.description.clone(),
             "applied_at": UtcClock::now().to_rfc3339()
         });
 
@@ -99,13 +115,21 @@ impl<'a> Migrator<'a> {
     async fn execute_step(&self, step: &MigrationStep) -> RaiseResult<()> {
         match step {
             MigrationStep::CreateCollection { name, schema } => {
-                let schema_str = schema.as_str().unwrap_or_else(|| {
-                    panic!(
-                        "🚨 MIGRATION ÉCHOUÉE : Le schéma est obligatoire pour la collection '{}'. \
-                        Remplacez `JsonValue::Null` par `JsonValue::String(\"db://_system/...\")` dans vos migrations !", 
-                        name
-                    );
-                });
+                let schema_str = match schema.as_str() {
+                    Some(s) => s,
+                    // 🎯 FIX : Retrait du `return` devant `raise_error!`
+                    None => raise_error!(
+                        "ERR_MIGRATION_SCHEMA_MISSING",
+                        error = format!(
+                            "Le schéma est obligatoire pour créer la collection '{}'.",
+                            name
+                        ),
+                        context = json_value!({
+                            "collection": name,
+                            "hint": "Remplacez `JsonValue::Null` par `JsonValue::String(\"db://_system/...\")` dans vos scripts de migrations."
+                        })
+                    ),
+                };
                 self.manager.create_collection(name, schema_str).await?;
                 println!("   -> Collection créée : {}", name);
             }
@@ -133,7 +157,11 @@ impl<'a> Migrator<'a> {
                 self.transform_all_documents(collection, |doc| {
                     if let Some(obj) = doc.as_object_mut() {
                         if !obj.contains_key(field) {
-                            obj.insert(field.clone(), default.clone().unwrap_or(JsonValue::Null));
+                            let default_val = match default {
+                                Some(d) => d.clone(),
+                                None => JsonValue::Null,
+                            };
+                            obj.insert(field.clone(), default_val);
                             return true;
                         }
                     }
@@ -189,12 +217,8 @@ impl<'a> Migrator<'a> {
         let docs = self.manager.list_all(collection).await?;
 
         for mut doc in docs {
-            // L'ID est déjà dans le doc, pas besoin de l'extraire pour l'update
-            // le transformer modifie le doc "en place"
-
             if transformer(&mut doc) {
-                // CORRECTION ICI : Utilisation de insert_with_schema pour ÉCRASER le document
-                // (update_document ferait un merge, ce qui empêcherait les suppressions de champs)
+                // Utilisation de insert_with_schema pour ÉCRASER le document physiquement
                 self.manager.insert_with_schema(collection, doc).await?;
             }
         }
@@ -213,16 +237,16 @@ mod tests {
     use crate::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_migration_lifecycle() {
+    async fn test_migration_lifecycle() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
 
         let migrator = Migrator::new(
             &sandbox.storage,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
 
-        DbSandbox::mock_db(&migrator.manager).await.unwrap();
+        DbSandbox::mock_db(&migrator.manager).await?;
 
         let m1 = Migration {
             id: "m1".to_string(),
@@ -236,24 +260,16 @@ mod tests {
             applied_at: None,
         };
 
-        migrator
-            .run_migrations(vec![m1.clone()])
-            .await
-            .expect("Migration 1 failed");
+        migrator.run_migrations(vec![m1.clone()]).await?;
 
-        let cols = migrator.manager.list_collections().await.unwrap();
+        let cols = migrator.manager.list_collections().await?;
         assert!(cols.contains(&"users".to_string()));
 
         let mig_docs = migrator.manager.list_all("_migrations").await;
         assert!(mig_docs.is_ok());
 
-        // ✅ CORRECTION : Utilisation de _id
         let user_doc = json_value!({ "_id": "user_1", "name": "Alice" });
-        migrator
-            .manager
-            .insert_raw("users", &user_doc)
-            .await
-            .expect("Insert failed");
+        migrator.manager.insert_raw("users", &user_doc).await?;
 
         let m2 = Migration {
             id: "m2".to_string(),
@@ -268,36 +284,34 @@ mod tests {
             applied_at: None,
         };
 
-        migrator
-            .run_migrations(vec![m1, m2])
-            .await
-            .expect("Migration 2 failed");
+        migrator.run_migrations(vec![m1, m2]).await?;
 
-        let updated_doc = migrator
-            .manager
-            .get("users", "user_1")
-            .await
-            .unwrap()
-            .unwrap();
+        let updated_doc_opt = migrator.manager.get("users", "user_1").await?;
+        let updated_doc = match updated_doc_opt {
+            Some(d) => d,
+            None => panic!("Document utilisateur introuvable après migration"),
+        };
 
         assert_eq!(updated_doc["active"], true);
         assert_eq!(updated_doc["name"], "Alice");
 
-        let history = migrator.manager.list_all("_migrations").await.unwrap();
+        let history = migrator.manager.list_all("_migrations").await?;
         assert_eq!(history.len(), 2);
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_rename_field() {
+    async fn test_rename_field() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
 
         let migrator = Migrator::new(
             &sandbox.storage,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
 
-        DbSandbox::mock_db(&migrator.manager).await.unwrap();
+        DbSandbox::mock_db(&migrator.manager).await?;
 
         migrator
             .manager
@@ -305,15 +319,12 @@ mod tests {
                 "products",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
-        // ✅ CORRECTION : Utilisation de _id
         migrator
             .manager
             .insert_raw("products", &json_value!({"_id": "p1", "cost": 100}))
-            .await
-            .unwrap();
+            .await?;
 
         let m_rename = Migration {
             id: "rename_01".to_string(),
@@ -328,16 +339,17 @@ mod tests {
             applied_at: None,
         };
 
-        migrator.run_migrations(vec![m_rename]).await.unwrap();
+        migrator.run_migrations(vec![m_rename]).await?;
 
-        let doc = migrator
-            .manager
-            .get("products", "p1")
-            .await
-            .unwrap()
-            .unwrap();
+        let doc_opt = migrator.manager.get("products", "p1").await?;
+        let doc = match doc_opt {
+            Some(d) => d,
+            None => panic!("Produit introuvable après renommage"),
+        };
 
         assert!(doc.get("cost").is_none());
         assert_eq!(doc["price"], 100);
+
+        Ok(())
     }
 }

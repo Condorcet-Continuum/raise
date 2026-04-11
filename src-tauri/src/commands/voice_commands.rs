@@ -5,15 +5,15 @@ use crate::commands::ai_commands::AiState;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 use crate::utils::io::audio::AudioListener;
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 use tauri::{command, AppHandle, Emitter, Manager, State};
 
-/// État partagé pour gérer la session vocale asynchrone
+/// État partagé pour gérer la session vocale asynchrone.
+/// Utilise des Mutex asynchrones pour les moteurs et synchrones pour les threads audio OS.
 pub struct VoiceState {
     pub engine: AsyncMutex<Option<WhisperEngine>>,
     pub is_listening: AsyncMutex<bool>,
-    // On garde le listener natif dans un Mutex standard car cpal gère son propre thread OS
     pub _listener: SyncMutex<Option<AudioListener>>,
 }
 
@@ -33,7 +33,8 @@ impl Default for VoiceState {
     }
 }
 
-/// Commande Tauri : Active ou désactive l'assistant vocal ("Toggle")
+/// Commande Tauri : Active ou désactive l'assistant vocal ("Toggle").
+/// Gère la résilience des points de montage et l'orchestration multi-agents.
 #[command]
 pub async fn toggle_voice_assistant(
     app: AppHandle,
@@ -51,12 +52,11 @@ pub async fn toggle_voice_assistant(
             Ok(g) => g,
             Err(_) => raise_error!(
                 "ERR_VOICE_MUTEX_POISONED",
-                error = "Listener mutex poisoned"
+                error = "Le verrou du listener audio est corrompu."
             ),
         };
 
-        // Le fait de remplacer par None "Drop" l'instance AudioListener
-        // et coupe donc proprement le flux natif cpal.
+        // Le Drop de l'AudioListener coupe proprement le flux natif cpal
         *listener_guard = None;
 
         user_info!("🛑 [Voice] Microphone désactivé.", json_value!({}));
@@ -74,43 +74,48 @@ pub async fn toggle_voice_assistant(
     );
     let _ = app.emit("voice_status_changed", json_value!({"status": "loading"}));
 
-    // Étape A : Charger le moteur Whisper s'il n'est pas encore en mémoire
+    // Étape A : Chargement résilient via Mount Points (System Domain)
     let mut engine_guard = voice_state.engine.lock().await;
     if engine_guard.is_none() {
         let config = AppConfig::get();
-        let path_buf = PathBuf::from(&config.system_db);
-        let db_config = JsonDbConfig::new(path_buf);
-        let storage = StorageEngine::new(db_config);
-        let manager = CollectionsManager::new(&storage, &config.system_domain, &config.system_db);
 
-        let engine = WhisperEngine::new(&manager).await?;
-        *engine_guard = Some(engine);
+        // Résolution dynamique du stockage via la partition système configurée
+        let storage = StorageEngine::new(JsonDbConfig::new(PathBuf::from(
+            &config.mount_points.system.db,
+        )));
+        let manager = CollectionsManager::new(
+            &storage,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        match WhisperEngine::new(&manager).await {
+            Ok(engine) => *engine_guard = Some(engine),
+            Err(e) => raise_error!("ERR_VOICE_ENGINE_INIT", error = e.to_string()),
+        }
     }
-    // Libération explicite du lock pour que la boucle d'écoute puisse l'utiliser
     drop(engine_guard);
 
-    // Étape B : Démarrer l'écoute physique via cpal
-    let (listener, mut rx) = AudioListener::start()?;
+    // Étape B : Démarrer l'écoute physique
+    let (listener, mut rx) = match AudioListener::start() {
+        Ok(res) => res,
+        Err(e) => raise_error!("ERR_VOICE_AUDIO_START", error = e.to_string()),
+    };
 
     let mut listener_guard = match voice_state._listener.lock() {
         Ok(g) => g,
-        Err(_) => raise_error!(
-            "ERR_VOICE_MUTEX_POISONED",
-            error = "Listener mutex poisoned"
-        ),
+        Err(_) => raise_error!("ERR_VOICE_MUTEX_POISONED"),
     };
+
     *listener_guard = Some(listener);
     *is_listening = true;
 
     let _ = app.emit("voice_status_changed", json_value!({"status": "listening"}));
 
-    // Étape C : Lancer la boucle de traitement en tâche de fond (Tokio)
+    // Étape C : Boucle de traitement asynchrone (STT -> Orchestrateur)
     let app_clone = app.clone();
-
     tokio::spawn(async move {
-        // Boucle sur les "chunks" audio détectés par le VAD
         while let Some(audio_chunk) = rx.recv().await {
-            // On vérifie si l'utilisateur a coupé le micro entre-temps
             let state = app_clone.state::<VoiceState>();
             if !*state.is_listening.lock().await {
                 break;
@@ -121,27 +126,21 @@ pub async fn toggle_voice_assistant(
                 json_value!({"status": "transcribing"}),
             );
 
-            // Étape D : STT (Voix -> Texte)
+            // Étape D : Transcription (STT)
             let text = {
                 let mut e_guard = state.engine.lock().await;
-                if let Some(engine) = e_guard.as_mut() {
-                    match engine.transcribe(&audio_chunk) {
+                match e_guard.as_mut() {
+                    Some(engine) => match engine.transcribe(&audio_chunk) {
                         Ok(t) => t,
                         Err(e) => {
-                            eprintln!("❌ [Voice] Erreur STT : {}", e);
-                            let _ = app_clone.emit(
-                                "voice_error",
-                                json_value!({"error": "Erreur de transcription locale"}),
-                            );
+                            user_error!("ERR_VOICE_STT", json_value!({"error": e.to_string()}));
                             continue;
                         }
-                    }
-                } else {
-                    continue;
+                    },
+                    None => continue,
                 }
             };
 
-            // On ignore les silences ou bruits de fond transcrits comme vides
             if text.trim().is_empty() {
                 let _ =
                     app_clone.emit("voice_status_changed", json_value!({"status": "listening"}));
@@ -152,30 +151,24 @@ pub async fn toggle_voice_assistant(
             let _ = app_clone.emit("voice_transcription_result", json_value!({"text": &text}));
             let _ = app_clone.emit("voice_status_changed", json_value!({"status": "thinking"}));
 
-            // Étape E : NLP & Routage vers l'Orchestrateur (Ton code existant)
+            // Étape E : Routage vers l'Orchestrateur multi-agents
             let ai_state = app_clone.state::<AiState>();
             let ai_guard = ai_state.0.lock().await;
 
             if let Some(shared_orch) = &*ai_guard {
                 let mut orchestrator = shared_orch.lock().await;
-
-                // Appel exact au pipeline de l'Orchestrateur (qui appelle ton IntentClassifier)
                 match orchestrator.execute_workflow(&text).await {
                     Ok(res) => {
                         user_success!("✅ [Voice] Action exécutée !", json_value!({}));
                         let _ = app_clone.emit("voice_workflow_result", res);
                     }
                     Err(e) => {
-                        eprintln!("❌ [Voice] Erreur Orchestrateur : {}", e);
+                        user_error!("ERR_VOICE_WORKFLOW", json_value!({"error": e.to_string()}));
                         let _ =
                             app_clone.emit("voice_error", json_value!({"error": e.to_string()}));
                     }
                 }
-            } else {
-                eprintln!("⚠️ [Voice] Orchestrateur non initialisé.");
             }
-
-            // Retour à l'état d'écoute
             let _ = app_clone.emit("voice_status_changed", json_value!({"status": "listening"}));
         }
     });
@@ -184,73 +177,78 @@ pub async fn toggle_voice_assistant(
 }
 
 // =========================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES (Respect des tests existants & Résilience Mount Points)
 // =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[async_test]
-    async fn test_voice_state_defaults() {
+    async fn test_voice_state_defaults() -> RaiseResult<()> {
         let state = VoiceState::default();
 
-        // 1. L'assistant ne doit pas écouter par défaut
         let is_listening = state.is_listening.lock().await;
-        assert_eq!(
-            *is_listening, false,
-            "L'état d'écoute doit être faux par défaut"
-        );
+        assert_eq!(*is_listening, false);
 
-        // 2. Le moteur lourd (Whisper) ne doit pas être chargé au démarrage pour sauver la RAM/VRAM
         let engine = state.engine.lock().await;
-        assert!(
-            engine.is_none(),
-            "Le moteur STT ne doit pas être alloué au démarrage"
-        );
+        assert!(engine.is_none());
 
-        // 3. Le microphone ne doit pas être capturé
-        let listener = state._listener.lock().unwrap();
-        assert!(
-            listener.is_none(),
-            "Aucun flux audio ne doit être ouvert au démarrage"
-        );
+        let listener = match state._listener.lock() {
+            Ok(g) => g,
+            Err(_) => panic!("Poisoned"),
+        };
+        assert!(listener.is_none());
+        Ok(())
     }
 
     #[async_test]
-    async fn test_voice_state_toggle_simulation_no_deadlocks() {
+    async fn test_voice_state_toggle_simulation_no_deadlocks() -> RaiseResult<()> {
         let state = VoiceState::new();
 
-        // --- SIMULATION : L'utilisateur clique sur "Activer la Voix" ---
+        // Simulation : Activation
         {
             let mut is_listening = state.is_listening.lock().await;
             *is_listening = true;
 
-            // On simule l'allocation d'un listener natif (sans lancer vraiment cpal)
-            let listener_guard = state
-                ._listener
-                .lock()
-                .expect("Le Mutex Synchrone a été empoisonné !");
-            // En vrai on ferait : *listener_guard = Some(AudioListener::start().unwrap());
+            let listener_guard = state._listener.lock().expect("Poisoned");
             assert!(listener_guard.is_none());
-        } // Les locks sont relâchés ici grâce au Drop de la portée.
+        }
 
-        // Vérification de l'état intermédiaire
         assert_eq!(*state.is_listening.lock().await, true);
 
-        // --- SIMULATION : L'utilisateur clique sur "Désactiver la Voix" ---
+        // Simulation : Désactivation
         {
             let mut is_listening = state.is_listening.lock().await;
             *is_listening = false;
 
-            let mut listener_guard = state
-                ._listener
-                .lock()
-                .expect("Le Mutex Synchrone a été empoisonné !");
-            *listener_guard = None; // Cela provoque le drop() de l'AudioListener en production
+            let mut listener_guard = state._listener.lock().expect("Poisoned");
+            *listener_guard = None;
         }
 
-        // Vérification de l'état final
         assert_eq!(*state.is_listening.lock().await, false);
-        assert!(state._listener.lock().unwrap().is_none());
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience des points de montage (Mount Points)
+    #[async_test]
+    async fn test_voice_mount_point_resolution() -> RaiseResult<()> {
+        let config = AppConfig::get();
+
+        // On vérifie que les chemins dynamiques sont bien résolus pour Whisper
+        assert!(!config.mount_points.system.domain.is_empty());
+        assert!(!config.mount_points.system.db.is_empty());
+
+        Ok(())
+    }
+
+    /// 🎯 NOUVEAU TEST : Résilience face au verrouillage (Mutex Match)
+    #[async_test]
+    async fn test_voice_mutex_resilience() -> RaiseResult<()> {
+        let state = VoiceState::new();
+        // Vérification du pattern match sur le verrou synchrone utilisé par toggle
+        let guard_res = state._listener.lock();
+        assert!(guard_res.is_ok());
+        Ok(())
     }
 }

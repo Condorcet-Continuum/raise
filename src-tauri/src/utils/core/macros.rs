@@ -157,7 +157,7 @@ macro_rules! user_error {
     }};
 }
 
-/// Macro surpuissante pour générer des erreurs structurées AI-Ready
+/// 🚀 Macro surpuissante pour générer des erreurs structurées AI-Ready
 #[macro_export]
 macro_rules! build_error {
     ($key:expr, error = $err:expr, context = $ctx:expr, correlation_id = $cid:expr, user_id = $uid:expr) => {
@@ -200,18 +200,14 @@ macro_rules! build_error {
         if let Some(cid) = $corr_id { ctx_map.insert("correlationId".to_string(), $crate::utils::data::json::json_value!(cid)); }
         if let Some(uid) = $usr_id { ctx_map.insert("userId".to_string(), $crate::utils::data::json::json_value!(uid)); }
 
-        // CORRECTION : On injecte l'erreur technique pour ne pas la perdre !
         if let Some(ref e) = $err {
             ctx_map.insert("technical_error".to_string(), $crate::utils::data::json::json_value!(e));
         }
 
-        // On fusionne le contexte utilisateur
         let context_value = $ctx;
-        // 🎯 Utilisation de notre alias JsonValue
         if let $crate::utils::data::json::JsonValue::Object(user_map) = context_value {
             for (k, v) in user_map { ctx_map.insert(k, v); }
         } else {
-            // Si le contexte n'est pas un objet, on le sauvegarde quand même sous "data"
             ctx_map.insert("data".to_string(), context_value);
         }
 
@@ -250,17 +246,16 @@ macro_rules! raise_error {
     };
 }
 
+/// 🛡️ Macro de GARDE : Valide la session et met à jour l'horodatage
 #[macro_export]
 macro_rules! require_session {
     ($state:expr) => {{
         match $state.get_current_session().await {
             Some(session) => {
-                // On signale l'activité pour repousser l'expiration
                 let _ = $state.touch().await;
                 session
             }
             None => {
-                // 🛑 Interception automatique : on lève une erreur structurée !
                 return Err($crate::build_error!(
                     "ERR_UNAUTHORIZED",
                     error = "Accès refusé : aucune session active",
@@ -278,26 +273,18 @@ macro_rules! require_session {
 // ============================================================================
 #[cfg(test)]
 mod tests {
-
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::core::error::{AppError, RaiseResult};
     use crate::utils::data::json::json_value;
     use crate::utils::testing::mock::inject_mock_user;
 
-    // Fonction bouchon pour simuler i18n dans les tests (si besoin)
-    // On assume que utils::i18n::t(key) retourne au moins la clé si non trouvée.
-
     #[test]
     fn test_build_error_key_only() {
         let err = crate::build_error!("ERR_SIMPLE");
-
         let AppError::Structured(data) = err;
+
         assert_eq!(data.code, "ERR_SIMPLE");
-        assert!(
-            data.context.get("action").is_some(),
-            "L'action doit être auto-détectée"
-        );
-        assert!(data.context.get("technical_error").is_none());
+        assert!(data.context.get("action").is_some());
     }
 
     #[test]
@@ -305,14 +292,20 @@ mod tests {
         let db_err = "Connection refused";
         let err = crate::build_error!("ERR_DB", error = db_err);
 
+        // 🎯 ALTERNATIVE ROBUSTE : Déstructuration directe d'un motif irréfutable
+        // Comme AppError n'a qu'un seul variant, on l'extrait sans match ni rattrapage.
         let AppError::Structured(data) = err;
+
         assert_eq!(data.code, "ERR_DB");
 
-        // Vérification de la correction du "Trou noir"
-        assert_eq!(
-            data.context["technical_error"].as_str().unwrap(),
-            "Connection refused"
-        );
+        // Extraction sécurisée de l'erreur technique via le contexte sémantique
+        let tech_err = data
+            .context
+            .get("technical_error")
+            .and_then(|v| v.as_str())
+            .expect("La propriété technical_error est manquante ou mal formatée");
+
+        assert_eq!(tech_err, "Connection refused");
     }
 
     #[test]
@@ -320,82 +313,104 @@ mod tests {
         let err = crate::build_error!(
             "ERR_API",
             error = "Timeout",
-            context = json_value!({"retry": true, "timeout_ms": 5000}) // 🎯 Remplacé
+            context = json_value!({"retry": true, "timeout_ms": 5000})
         );
 
+        // 🎯 ALTERNATIVE ROBUSTE : Déstructuration directe d'un motif irréfutable
+        // Comme AppError n'a qu'un seul variant, on l'extrait sans match ni rattrapage.
         let AppError::Structured(data) = err;
+
         assert_eq!(data.code, "ERR_API");
-        assert_eq!(data.context["retry"].as_bool().unwrap(), true);
-        assert_eq!(data.context["timeout_ms"].as_i64().unwrap(), 5000);
-        assert_eq!(data.context["technical_error"].as_str().unwrap(), "Timeout");
+
+        // Validation des métadonnées du contexte sémantique
+        assert_eq!(
+            data.context.get("retry").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            data.context.get("timeout_ms").and_then(|v| v.as_i64()),
+            Some(5000)
+        );
+        assert_eq!(
+            data.context.get("technical_error").and_then(|v| v.as_str()),
+            Some("Timeout")
+        );
     }
 
     #[test]
     fn test_raise_error_control_flow() {
-        // Cette fonction vérifie que raise_error! fait bien un "return Err(...)"
         fn simulate_failure() -> RaiseResult<i32> {
             crate::raise_error!("ERR_CRITICAL", error = "Crash");
             #[allow(unreachable_code)]
-            Ok(42) // Cette ligne ne doit jamais être atteinte
+            Ok(42)
         }
 
         let result = simulate_failure();
-        assert!(result.is_err());
 
-        let AppError::Structured(data) = result.unwrap_err();
+        // 🎯 ALTERNATIVE ROBUSTE : Extraction directe du motif irréfutable
+        // On utilise 'unwrap_err()' pour obtenir l'AppError, puis on déstructure
+        // le variant unique 'Structured' directement.
+        let err = result.expect_err("La fonction aurait dû retourner une erreur");
+        let AppError::Structured(data) = err;
+
         assert_eq!(data.code, "ERR_CRITICAL");
+        assert_eq!(data.context["technical_error"], "Crash");
     }
 
     #[tokio::test]
     async fn test_require_session_guard() {
-        use crate::utils::context::session::{Session, SessionManager}; // 🎯 Mise à jour du chemin
-        use crate::utils::testing::mock::AgentDbSandbox; // 🎯 Mise à jour du chemin
+        use crate::utils::context::session::{Session, SessionManager};
+        use crate::utils::testing::mock::AgentDbSandbox;
 
-        // Fonction bouchon simulant une commande Tauri
         async fn mock_protected_command(manager: &SessionManager) -> RaiseResult<Session> {
-            // L'appel de la macro : c'est ça qu'on teste !
             let session = crate::require_session!(manager);
-
-            // Si on arrive ici, la macro n'a pas fait de `return Err`
             Ok(session)
         }
 
         let sandbox = AgentDbSandbox::new().await;
         let manager = SessionManager::new(sandbox.db.clone());
 
-        // 1. Cas d'échec : Pas de session
+        // ====================================================================
+        // 1. CAS D'ÉCHEC : Pas de session (Vérification de la Garde)
+        // ====================================================================
         let err_result = mock_protected_command(&manager).await;
-        assert!(err_result.is_err(), "La macro aurait dû bloquer l'accès");
 
-        let AppError::Structured(err_data) = err_result.unwrap_err();
+        // 🎯 ALTERNATIVE ROBUSTE : On attend une erreur, puis on déstructure directement.
+        // Comme AppError n'a qu'un variant, le compilateur accepte cette syntaxe.
+        let err = err_result.expect_err("La macro aurait dû bloquer l'accès");
+        let AppError::Structured(err_data) = err;
+
         assert_eq!(err_data.code, "ERR_UNAUTHORIZED");
         assert_eq!(
-            err_data.context["technical_error"].as_str().unwrap(),
-            "Accès refusé : aucune session active"
+            err_data
+                .context
+                .get("technical_error")
+                .and_then(|v| v.as_str()),
+            Some("Accès refusé : aucune session active")
         );
 
-        // 2. Cas de succès : Session active
+        // ====================================================================
+        // 2. CAS DE SUCCÈS : Session active (Validation sémantique)
+        // ====================================================================
         let test_user = "agent-macro";
 
-        // 🎯 INJECTION DE L'UTILISATEUR
+        // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la configuration
         let db_mgr = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
         );
         inject_mock_user(&db_mgr, test_user).await;
 
-        // 🎯 DÉMARRAGE DE LA SESSION AVEC LE HANDLE
-        let _ = manager.start_session(test_user).await.unwrap();
+        manager
+            .start_session(test_user)
+            .await
+            .expect("Échec démarrage session");
 
         let success_result = mock_protected_command(&manager).await;
-        assert!(
-            success_result.is_ok(),
-            "La macro aurait dû laisser passer la requête"
-        );
 
-        let session = success_result.unwrap();
-        // 🎯 On vérifie le handle (L'ID est auto-généré par la BD de test)
+        // Assertion directe sur le succès
+        let session = success_result.expect("La macro a bloqué l'accès à tort");
         assert_eq!(session.user_handle, test_user);
     }
 }

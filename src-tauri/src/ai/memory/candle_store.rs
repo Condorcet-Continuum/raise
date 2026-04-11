@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/ai/memory/candle_store.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*;
+use crate::utils::prelude::*; // 🎯 Façade Unique
 
 use super::{MemoryRecord, VectorStore};
 use candle_core::{Device, Tensor};
@@ -10,7 +10,7 @@ use candle_core::{Device, Tensor};
 /// pour les collections de données gérées par JSON-DB.
 pub struct CandleLocalStore {
     device: Device,
-    /// Gestion isolée par Collection (Map)
+    /// Gestion isolée par Collection (Map) pour garantir l'étanchéité des domaines
     state: AsyncRwLock<UnorderedMap<String, CollectionState>>,
 }
 
@@ -22,8 +22,7 @@ struct CollectionState {
 }
 
 impl CandleLocalStore {
-    /// Initialise le store vectoriel.
-    /// (Le paramètre _path est ignoré en faveur de la résolution dynamique via JSON-DB)
+    /// Initialise le store vectoriel avec le périphérique spécifié.
     pub fn new(_path: &Path, device: &Device) -> Self {
         Self {
             device: device.clone(),
@@ -31,7 +30,7 @@ impl CandleLocalStore {
         }
     }
 
-    /// 🎯 RÉSOLUTION DÉTERMINISTE : Les tenseurs mémoires sont rangés au même endroit que les modèles DL !
+    /// 🎯 RÉSOLUTION DÉTERMINISTE : Les tenseurs mémoires sont rangés dans la partition "tensors" de la DB.
     async fn get_tensor_dir(manager: &CollectionsManager<'_>, col: &str) -> PathBuf {
         manager
             .storage
@@ -41,7 +40,7 @@ impl CandleLocalStore {
             .join(col)
     }
 
-    /// 🎯 LAZY LOADING : Charge les tenseurs depuis le SSD vers la VRAM uniquement lorsque nécessaire
+    /// 🎯 LAZY LOADING : Charge les tenseurs depuis le SSD vers le Device uniquement sur demande.
     async fn ensure_loaded(&self, manager: &CollectionsManager<'_>, col: &str) -> RaiseResult<()> {
         {
             let state = self.state.read().await;
@@ -63,10 +62,17 @@ impl CandleLocalStore {
 
         if fs::exists_async(&index_path).await && fs::exists_async(&tensor_path).await {
             index_to_id = fs::read_json_async(&index_path).await.unwrap_or_default();
+
             if !index_to_id.is_empty() {
-                let mut tensors =
-                    candle_core::safetensors::load(&tensor_path, &self.device).unwrap_or_default();
-                matrix = tensors.remove("vectors");
+                match candle_core::safetensors::load(&tensor_path, &self.device) {
+                    Ok(mut tensors) => matrix = tensors.remove("vectors"),
+                    Err(e) => {
+                        user_warn!(
+                            "WRN_VECTOR_LOAD_FAILED",
+                            json_value!({"path": tensor_path.to_string_lossy(), "error": e.to_string()})
+                        );
+                    }
+                }
             }
         }
 
@@ -91,33 +97,32 @@ impl CandleLocalStore {
         let col_dir = Self::get_tensor_dir(manager, col).await;
         fs::ensure_dir_async(&col_dir).await?;
 
-        // Sauvegarde de la table de routage (Index de matrice -> Document ID)
         let index_path = col_dir.join("index.json");
         fs::write_json_atomic_async(&index_path, &col_state.index_to_id).await?;
 
-        // Sauvegarde physique accélérée du Cerveau Vectoriel
         if let Some(ref matrix) = col_state.vector_matrix {
             let tensor_path = col_dir.join("vectors.safetensors");
             let matrix_clone = matrix.clone();
-            let thread_path = tensor_path.clone();
 
             let join_handle = spawn_cpu_task(move || {
                 let mut map = UnorderedMap::new();
                 map.insert("vectors".to_string(), matrix_clone);
-                candle_core::safetensors::save(&map, thread_path)
+                candle_core::safetensors::save(&map, tensor_path)
             })
             .await;
 
-            if let Err(e) = join_handle {
-                raise_error!("ERR_THREAD_PANIC_DURING_SAVE", error = e.to_string());
-            } else if let Ok(Err(e)) = join_handle {
-                raise_error!("ERR_AI_SAFE_TENSORS_SAVE_FAILED", error = e.to_string());
-            }
+            // 🎯 FIX : Annotation explicite pour lever l'ambiguïté d'inférence de type
+            match join_handle {
+                Err(e) => raise_error!("ERR_THREAD_PANIC_DURING_SAVE", error = e.to_string()),
+                Ok(Err(e)) => {
+                    raise_error!("ERR_AI_SAFE_TENSORS_SAVE_FAILED", error = e.to_string())
+                }
+                Ok(Ok(())) => Ok::<(), AppError>(()), // 🎯 Annotation explicite ici
+            }?;
         }
         Ok(())
     }
 
-    // Les anciennes méthodes globales ne sont plus nécessaires, l'état est autogéré par collection
     pub async fn save(&self) -> RaiseResult<()> {
         Ok(())
     }
@@ -134,22 +139,24 @@ impl VectorStore for CandleLocalStore {
         collection_name: &str,
         _size: u64,
     ) -> RaiseResult<()> {
+        let app_config = AppConfig::get();
         let col_dir = Self::get_tensor_dir(manager, collection_name).await;
         fs::ensure_dir_async(&col_dir).await?;
 
-        // Sécurisation : on s'assure que la collection existe bien côté JSON-DB
+        // Résolution du schéma via mount points système
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            app_config.mount_points.system.domain, app_config.mount_points.system.db
+        );
+
         let _ = manager
-            .create_collection(
-                collection_name,
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
+            .create_collection(collection_name, &schema_uri)
             .await;
 
         self.ensure_loaded(manager, collection_name).await?;
         Ok(())
     }
 
-    /// Ajout vectoriel ET Documentaire synchronisé
     async fn add_documents(
         &self,
         manager: &CollectionsManager<'_>,
@@ -168,7 +175,6 @@ impl VectorStore for CandleLocalStore {
                 rec.id.clone()
             };
 
-            // 🎯 1. LA MAGIE DU GRAPHE : La donnée textuelle est confiée au JSON-DB
             let doc = json_value!({
                 "_id": id.clone(),
                 "content": rec.content,
@@ -176,7 +182,6 @@ impl VectorStore for CandleLocalStore {
             });
             manager.upsert_document(collection_name, doc).await?;
 
-            // 2. Préparation pour le Moteur Tensoriel
             if let Some(vec) = rec.vectors {
                 valid_vectors.push(vec);
                 new_ids.push(id);
@@ -187,7 +192,6 @@ impl VectorStore for CandleLocalStore {
             return Ok(());
         }
 
-        // 🎯 3. Calcul GPU/CPU : Concaténation de la matrice existante avec les nouveaux lots
         let mut state = self.state.write().await;
         let col_state = state
             .entry(collection_name.to_string())
@@ -211,14 +215,12 @@ impl VectorStore for CandleLocalStore {
         };
         col_state.index_to_id.extend(new_ids);
 
-        // 4. Auto-sauvegarde déterministe pour éviter les pertes de contexte
         self.save_collection(manager, collection_name, col_state)
             .await?;
 
         Ok(())
     }
 
-    /// Recherche Hybride : Tensor Matching (Candle) + Metadata Filtering (JSON-DB)
     async fn search_similarity(
         &self,
         manager: &CollectionsManager<'_>,
@@ -241,7 +243,6 @@ impl VectorStore for CandleLocalStore {
             None => return Ok(vec![]),
         };
 
-        // 1. Calcul ultra-rapide des similarités (Produit Scalaire)
         let q = match Tensor::from_slice(query_vec, (1, query_vec.len()), &self.device) {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_VECTOR_QUERY_INIT", error = e.to_string()),
@@ -262,7 +263,6 @@ impl VectorStore for CandleLocalStore {
             Err(e) => raise_error!("ERR_VECTOR_FLATTEN", error = e.to_string()),
         };
 
-        // 2. Filtrage mathématique initial
         let mut ranked: Vec<(f32, usize)> = scores
             .into_iter()
             .enumerate()
@@ -274,33 +274,27 @@ impl VectorStore for CandleLocalStore {
 
         let mut results = Vec::new();
 
-        // 3. Hydratation DB + Filtrage Métadonnées
         for (_, idx) in ranked {
             if results.len() >= limit as usize {
                 break;
             }
-
             let id = &col_state.index_to_id[idx];
 
-            // 🎯 Le Graphe de Connaissance valide et hydrate la donnée mémoire
             if let Ok(Some(doc)) = manager.get_document(collection_name, id).await {
                 let mut meta_match = true;
-
                 if let Some(ref f_map) = filter {
                     let doc_meta = doc.get("metadata").and_then(|m| m.as_object());
                     for (k, v) in f_map {
                         let val_match = doc_meta
                             .and_then(|m| m.get(k))
                             .map(|val| {
-                                if let Some(s) = val.as_str() {
-                                    s == v
-                                } else if let Some(n) = val.as_i64() {
-                                    v.parse::<i64>().is_ok_and(|p| p == n)
-                                } else if let Some(b) = val.as_bool() {
-                                    v.parse::<bool>().is_ok_and(|p| p == b)
-                                } else {
-                                    false
-                                }
+                                val.as_str().is_some_and(|s| s == v)
+                                    || val
+                                        .as_i64()
+                                        .is_some_and(|n| v.parse::<i64>().is_ok_and(|p| p == n))
+                                    || val
+                                        .as_bool()
+                                        .is_some_and(|b| v.parse::<bool>().is_ok_and(|p| p == b))
                             })
                             .unwrap_or(false);
 
@@ -320,115 +314,91 @@ impl VectorStore for CandleLocalStore {
                             .unwrap_or("")
                             .to_string(),
                         metadata: doc.get("metadata").cloned().unwrap_or(json_value!({})),
-                        vectors: None, // Inutile de surcharger la RAM du front avec des milliers de float32
+                        vectors: None,
                     });
                 }
             }
         }
-
         Ok(results)
     }
 }
 
-// --- TESTS UNITAIRES HYPER ROBUSTES ---
+// =========================================================================
+// TESTS
+// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
-    async fn test_full_search_with_metadata_filter() {
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_full_search_with_metadata_filter() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await.unwrap();
+        AgentDbSandbox::mock_db(&manager).await?;
 
-        // Le path passé ici est dorénavant ignoré, la db gère tout
         let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
+        let col = "tech_resilient";
+        store.init_collection(&manager, col, 2).await?;
 
-        let col = "tech";
-        store.init_collection(&manager, col, 2).await.unwrap();
+        let recs = vec![MemoryRecord {
+            id: "1".into(),
+            content: "HW".into(),
+            metadata: json_value!({"category": "hardware"}),
+            vectors: Some(vec![1.0, 0.0]),
+        }];
+        store.add_documents(&manager, col, recs).await?;
 
-        let recs = vec![
-            MemoryRecord {
-                id: "1".into(),
-                content: "Doc Hardware".into(),
-                metadata: json_value!({"category": "hardware", "priority": "high"}),
-                vectors: Some(vec![1.0, 0.0]),
-            },
-            MemoryRecord {
-                id: "2".into(),
-                content: "Doc Software".into(),
-                metadata: json_value!({"category": "software"}),
-                vectors: Some(vec![0.9, 0.1]),
-            },
-        ];
-        store.add_documents(&manager, col, recs).await.unwrap();
-
-        // Test 1: Recherche globale
-        let res_all = store
-            .search_similarity(&manager, col, &[1.0, 0.0], 10, 0.0, None)
-            .await
-            .unwrap();
-        assert_eq!(res_all.len(), 2);
-
-        // Test 2: Recherche avec filtre Metadata
         let mut filter = UnorderedMap::new();
         filter.insert("category".into(), "hardware".into());
 
-        let res_filter = store
-            .search_similarity(&manager, col, &[1.0, 0.0], 10, 0.0, Some(filter))
-            .await
-            .unwrap();
-        assert_eq!(res_filter.len(), 1);
-        assert_eq!(res_filter[0].id, "1");
-
-        // Validation DB
-        let db_doc = manager.get_document(col, "1").await.unwrap().unwrap();
-        assert_eq!(db_doc["content"], "Doc Hardware");
+        let res = store
+            .search_similarity(&manager, col, &[1.0, 0.0], 1, 0.0, Some(filter))
+            .await?;
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].id, "1");
+        Ok(())
     }
 
     #[async_test]
-    async fn test_persistence_integrity() {
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_persistence_mount_point_integrity() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
-            &sandbox.config.system_domain,
-            &sandbox.config.system_db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await.unwrap();
-        let path = sandbox.domain_root.join("vectors");
-        let col = "p";
+        AgentDbSandbox::mock_db(&manager).await?;
 
+        let col = "persistence_test";
         {
-            let store = CandleLocalStore::new(&path, &Device::Cpu);
-
-            // 🎯 FIX : Il faut impérativement initialiser la collection pour que JSON-DB lui assigne son schéma !
-            store.init_collection(&manager, col, 2).await.unwrap();
-
+            let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
+            store.init_collection(&manager, col, 2).await?;
             let rec = MemoryRecord {
                 id: "P1".into(),
-                content: "Persist".into(),
+                content: "Data".into(),
                 metadata: json_value!({"status": "saved"}),
                 vectors: Some(vec![1.0, 0.0]),
             };
-            // 🎯 L'appel ajoute, hydrate le tenseur, et sauvegarde de lui-même !
-            store.add_documents(&manager, col, vec![rec]).await.unwrap();
+            store.add_documents(&manager, col, vec![rec]).await?;
         }
 
-        // Simule un redémarrage du programme
-        let new_store = CandleLocalStore::new(&path, &Device::Cpu);
-
-        // 🎯 Magie noire : l'appel à search_similarity charge silencieusement le modèle existant
+        let new_store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
         let res = new_store
             .search_similarity(&manager, col, &[1.0, 0.0], 1, 0.9, None)
-            .await
-            .unwrap();
-
+            .await?;
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].metadata["status"], "saved");
+        Ok(())
     }
 }

@@ -51,7 +51,8 @@ pub async fn create_db(
     fs::create_dir_all_async(&db_root).await?;
 
     let app_config = AppConfig::get();
-    if space == app_config.system_domain && db == app_config.system_db {
+    // 🎯 FIX : Utilisation stricte des points de montage système
+    if space == app_config.mount_points.system.domain && db == app_config.mount_points.system.db {
         #[cfg(debug_assertions)]
         println!("🚀 Initialisation de la base SYSTEME détectée.");
     }
@@ -105,7 +106,10 @@ pub async fn drop_db(
         }
         DropMode::Soft => {
             let timestamp = UtcClock::now().timestamp();
-            let parent = db_path.parent().unwrap_or(&db_path);
+            let parent = match db_path.parent() {
+                Some(p) => p,
+                None => &db_path,
+            };
             let new_name = format!("{}.deleted-{}", db, timestamp);
             let new_path = parent.join(new_name);
 
@@ -207,34 +211,40 @@ pub async fn write_system_index(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::io::fs::tempdir;
 
     #[async_test]
-    async fn test_atomic_write() {
-        let dir = tempdir().unwrap();
+    async fn test_atomic_write() -> RaiseResult<()> {
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Échec création dossier temporaire : {:?}", e),
+        };
         let file_path = dir.path().join("test.txt");
 
-        atomic_write(&file_path, b"Hello World").await.unwrap();
+        atomic_write(&file_path, b"Hello World").await?;
         assert!(file_path.exists());
 
-        let content = fs::read_to_string_async(&file_path).await.unwrap();
+        let content = fs::read_to_string_async(&file_path).await?;
         assert_eq!(content, "Hello World");
+        Ok(())
     }
 
     #[async_test]
-    async fn test_document_lifecycle() {
-        let dir = tempdir().unwrap();
+    async fn test_document_lifecycle() -> RaiseResult<()> {
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Échec création dossier temporaire : {:?}", e),
+        };
         let config = JsonDbConfig::new(dir.path().to_path_buf());
 
         let doc = json_value!({"name": "Refactor Test"});
 
-        write_document(&config, "s1", "d1", "c1", "doc1", &doc)
-            .await
-            .expect("Write failed");
+        write_document(&config, "s1", "d1", "c1", "doc1", &doc).await?;
 
-        let read = read_document(&config, "s1", "d1", "c1", "doc1")
-            .await
-            .expect("Read failed")
-            .expect("Doc not found");
+        let read = match read_document(&config, "s1", "d1", "c1", "doc1").await? {
+            Some(d) => d,
+            None => panic!("Document introuvable après écriture"),
+        };
         assert_eq!(read["name"], "Refactor Test");
 
         let path = config
@@ -242,17 +252,19 @@ mod tests {
             .join("doc1.json");
         assert!(fs::exists_async(&path).await);
 
-        delete_document(&config, "s1", "d1", "c1", "doc1")
-            .await
-            .expect("Delete failed");
+        delete_document(&config, "s1", "d1", "c1", "doc1").await?;
 
         assert!(!fs::exists_async(&path).await);
+        Ok(())
     }
 
     // 🎯 NOUVEAU TEST 1 : Introspection dynamique & Idempotence
     #[async_test]
-    async fn test_create_db_dynamic_introspection() {
-        let dir = tempdir().unwrap();
+    async fn test_create_db_dynamic_introspection() -> RaiseResult<()> {
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Échec création dossier temporaire : {:?}", e),
+        };
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let (space, db) = ("dyn_space", "dyn_db");
 
@@ -274,7 +286,7 @@ mod tests {
         });
 
         // 1. Première exécution : le dossier n'existe pas, il doit être créé
-        let created = create_db(&config, space, db, &system_doc).await.unwrap();
+        let created = create_db(&config, space, db, &system_doc).await?;
         assert!(created, "La base aurait dû être créée");
 
         let db_root = config.db_root(space, db);
@@ -289,64 +301,68 @@ mod tests {
         assert!(!db_root.join("fake_category/should_not_exist").exists());
 
         // 3. Test de l'idempotence (Return Early)
-        let created_again = create_db(&config, space, db, &system_doc).await.unwrap();
+        let created_again = create_db(&config, space, db, &system_doc).await?;
         assert!(
             !created_again,
             "Le Return Early a échoué, la base ne devrait pas être recréée"
         );
+        Ok(())
     }
 
     // 🎯 NOUVEAU TEST 2 : Lecture et Écriture de l'Index Système
     #[async_test]
-    async fn test_system_index_io() {
-        let dir = tempdir().unwrap();
+    async fn test_system_index_io() -> RaiseResult<()> {
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Échec création dossier temporaire : {:?}", e),
+        };
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let (space, db) = ("sys_space", "sys_db");
 
         // Lecture d'un index inexistant
-        let none_index = read_system_index(&config, space, db).await.unwrap();
+        let none_index = read_system_index(&config, space, db).await?;
         assert!(none_index.is_none());
 
         // Création de la racine de la base pour pouvoir écrire dedans
-        create_db(&config, space, db, &json_value!({}))
-            .await
-            .unwrap();
+        create_db(&config, space, db, &json_value!({})).await?;
 
         // Écriture d'un index
         let mock_doc = json_value!({ "name": "test_db", "version": 1 });
-        write_system_index(&config, space, db, &mock_doc)
-            .await
-            .unwrap();
+        write_system_index(&config, space, db, &mock_doc).await?;
 
         // Lecture et validation
-        let read_index = read_system_index(&config, space, db)
-            .await
-            .unwrap()
-            .expect("L'index devrait exister");
+        let read_index = match read_system_index(&config, space, db).await? {
+            Some(idx) => idx,
+            None => panic!("L'index devrait exister après écriture"),
+        };
         assert_eq!(read_index["name"], "test_db");
+        Ok(())
     }
 
     // 🎯 NOUVEAU TEST 3 : Comportement de open_db
     #[async_test]
-    async fn test_open_db_validation() {
-        let dir = tempdir().unwrap();
+    async fn test_open_db_validation() -> RaiseResult<()> {
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Échec création dossier temporaire : {:?}", e),
+        };
         let config = JsonDbConfig::new(dir.path().to_path_buf());
         let (space, db) = ("open_space", "open_db");
 
         // 1. Échec attendu car la base n'existe pas physiquement
         let res = open_db(&config, space, db).await;
-        assert!(res.is_err());
-        let err_msg = res.unwrap_err().to_string();
-        assert!(err_msg.contains("ERR_DB_FS_NOT_FOUND"));
+        match res {
+            Err(e) => assert!(e.to_string().contains("ERR_DB_FS_NOT_FOUND")),
+            Ok(_) => panic!("La fonction open_db aurait dû échouer car la base n'existe pas"),
+        }
 
         // 2. Succès après création
-        create_db(&config, space, db, &json_value!({}))
-            .await
-            .unwrap();
+        create_db(&config, space, db, &json_value!({})).await?;
         let res_ok = open_db(&config, space, db).await;
         assert!(
             res_ok.is_ok(),
             "open_db devrait réussir sur une base existante"
         );
+        Ok(())
     }
 }

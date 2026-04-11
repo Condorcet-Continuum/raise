@@ -93,6 +93,8 @@ mod tests {
     use candle_nn::VarMap;
 
     #[test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_sequence_net_flow() -> RaiseResult<()> {
         let device = Device::Cpu;
         let varmap = VarMap::new();

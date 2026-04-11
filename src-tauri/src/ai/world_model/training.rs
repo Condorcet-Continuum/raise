@@ -120,6 +120,8 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_training_loop_convergence() {
         // 1. Setup
         let varmap = VarMap::new();

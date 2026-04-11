@@ -193,7 +193,7 @@ pub async fn list_ids(
     db: &str,
     collection_name: &str,
 ) -> RaiseResult<Vec<String>> {
-    collection::list_document_ids(&storage.config, space, db, collection_name).await
+    collection::list_document_ids(&storage.config, space, db, collection_name, None, None).await
 }
 
 pub async fn list_all(
@@ -202,7 +202,7 @@ pub async fn list_all(
     db: &str,
     collection_name: &str,
 ) -> RaiseResult<Vec<JsonValue>> {
-    collection::list_documents(storage, space, db, collection_name).await
+    collection::list_documents(storage, space, db, collection_name, None, None).await
 }
 
 pub fn db_root_path(cfg: &JsonDbConfig, space: &str, db: &str) -> PathBuf {

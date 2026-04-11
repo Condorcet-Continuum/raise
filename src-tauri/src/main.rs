@@ -6,11 +6,9 @@
 )]
 
 use raise::utils::{context, prelude::*};
-
 use tauri::Manager;
 
 // --- IMPORTS RAISE ---
-
 use raise::blockchain::{ConnectionProfile, FabricClient};
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, dl_commands,
@@ -44,106 +42,154 @@ use raise::ai::orchestrator::AiOrchestrator;
 use raise::model_engine::loader::ModelLoader;
 
 use raise::commands::dl_commands::DlState;
-
 use raise::spatial_engine;
 
 #[allow(clippy::await_holding_lock)]
 fn main() {
+    // 1. INITIALISATION CONFIGURATION & LOGGING
     if let Err(e) = AppConfig::init() {
         eprintln!("❌ Erreur fatale de configuration : {}", e);
         terminate_process(1);
     }
-    println!("🚀 Démarrage de RAISE...");
+
     context::init_logging();
-    let _config = AppConfig::get();
+    user_info!("INF_RAISE_BOOT_START"); // Utilisation de la façade sémantique
 
     tauri::Builder::default()
         .manage(NativeLlmState(SyncMutex::new(None::<CandleLlmEngine>)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // 2. CONFIG DOMAINE & STOCKAGE
             let app_config = AppConfig::get();
-            let db_root = app_config
-                .get_path("PATH_RAISE_DOMAIN")
-                .expect("❌ ERREUR FATALE: PATH_RAISE_DOMAIN introuvable dans la configuration !");
+
+            // 2. RÉSOLUTION DES POINTS DE MONTAGE SYSTÈME
+            let db_root = match app_config.get_path("PATH_RAISE_DOMAIN") {
+                Some(path) => path,
+                None => {
+                    user_error!(
+                        "ERR_CONFIG_MISSING_PATH",
+                        json_value!({"path": "PATH_RAISE_DOMAIN"})
+                    );
+                    terminate_process(1);
+                }
+            };
+
             if !db_root.exists() {
-                fs::create_dir_all_sync(&db_root)?;
+                if let Err(e) = fs::create_dir_all_sync(&db_root) {
+                    user_error!(
+                        "ERR_FS_DOMAIN_CREATION",
+                        json_value!({"error": e.to_string()})
+                    );
+                }
             }
+
             let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
 
-            let default_space = &app_config.system_domain;
-            let default_db = &app_config.system_db;
+            // Utilisation des mount_points pour la partition système
+            let system_domain = &app_config.mount_points.system.domain;
+            let system_db = &app_config.mount_points.system.db;
 
-            // 🎯 3. INITIALISATION DYNAMIQUE DES ONTOLOGIES (Bootstrapping)
+
+// ---------------------------------------------------------
+            // 🛡️ MOTEUR DE RÉSILIENCE (WAL Crash Recovery)
+            // ---------------------------------------------------------
+            let wal_config = config.clone();
+            let wal_storage = storage.clone();
+            let wal_domain = system_domain.clone();
+            let wal_db = system_db.clone();
+
+            tauri::async_runtime::block_on(async move {
+                match raise::json_db::transactions::wal::recover_pending_transactions(
+                    &wal_config,
+                    &wal_domain,
+                    &wal_db,
+                    &wal_storage,
+                ).await {
+                    Ok(count) if count > 0 => {
+                        user_warn!(
+                            "WRN_DB_CRASH_RECOVERED", 
+                            json_value!({"recovered_transactions": count, "action": "rollback_applied"})
+                        );
+                    }
+                    Err(e) => {
+                        user_error!(
+                            "ERR_DB_RECOVERY_FAIL", 
+                            json_value!({"error": e.to_string()})
+                        );
+                    }
+                    _ => {} // Tout va bien, aucun crash détecté
+                }
+            });
+            // ---------------------------------------------------------
+
+            // 3. INITIALISATION SÉMANTIQUE (Bootstrapping)
             let ontology_root = db_root.join("_system/ontology");
             tauri::async_runtime::spawn(async move {
-                println!(
-                    "📂 [Ontology] Initialisation sémantique depuis {:?}",
-                    ontology_root
+                user_info!(
+                    "INF_ONTOLOGY_INIT",
+                    json_value!({"path": ontology_root.to_string_lossy()})
                 );
-                // 🎯 Appel au nouveau scanner récursif agnostique
-                if let Err(e) = VocabularyRegistry::init(&ontology_root).await {
-                    eprintln!("❌ [Ontology] Échec de l'initialisation sémantique : {}", e);
-                } else {
-                    println!("✅ [Ontology] Système sémantique opérationnel (Data-Driven).");
+                match VocabularyRegistry::init(&ontology_root).await {
+                    Ok(_) => user_success!("SUC_ONTOLOGY_READY"),
+                    Err(e) => user_error!(
+                        "ERR_ONTOLOGY_INIT_FAIL",
+                        json_value!({"error": e.to_string()})
+                    ),
                 }
             });
 
             // 4. GRAPH STORE
             let graph_path = db_root.join("graph_store");
             let storage_for_graph = storage.clone();
-            let domain_for_graph = app_config.system_domain.clone();
-            let db_for_graph = app_config.system_db.clone();
+            let domain_for_graph = system_domain.clone();
+            let db_for_graph = system_db.clone();
 
             let graph_store_result = tauri::async_runtime::block_on(async {
-                // 🎯 Instanciation du manager pour le GraphStore
                 let manager =
                     CollectionsManager::new(&storage_for_graph, &domain_for_graph, &db_for_graph);
                 GraphStore::new(graph_path, &manager).await
             });
 
-            if let Ok(store) = graph_store_result {
-                app.manage(store);
-                println!("✅ [GraphStore] Base Graphe principale chargée.");
-            } else {
-                eprintln!("❌ [GraphStore] Echec chargement base graphe.");
+            match graph_store_result {
+                Ok(store) => {
+                    app.manage(store);
+                    user_success!("SUC_GRAPH_STORE_READY");
+                }
+                Err(e) => user_error!(
+                    "ERR_GRAPH_STORE_FAIL",
+                    json_value!({"error": e.to_string()})
+                ),
             }
 
-            // 5. MIGRATIONS
+            // 5. MIGRATIONS & ÉTATS
             let _ = tauri::async_runtime::block_on(run_app_migrations(
                 &storage,
-                default_space,
-                default_db,
+                system_domain,
+                system_db,
             ));
 
             let plugin_mgr = SharedRef::new(PluginManager::new(&storage, None));
 
-            // 6. INJECTION DES ÉTATS
             app.manage(config);
-            let storage_engine = storage.clone();
-            app.manage(storage);
+            app.manage(storage.clone());
             app.manage(plugin_mgr.clone());
-
-            // Instanciation et injection du SessionManager
-            let shared_storage = SharedRef::new(storage_engine.clone());
-            let session_manager = context::SessionManager::new(shared_storage);
-            app.manage(session_manager);
+            app.manage(context::SessionManager::new(SharedRef::new(
+                storage.clone(),
+            )));
 
             let app_state = SharedRef::new(AppState {
                 model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
             });
             app.manage(app_state.clone());
-
             app.manage(AsyncMutex::new(WorkflowStore::default()));
             app.manage(AiState::new(None));
             app.manage(DlState::new());
 
+            // 6. BLOCKCHAIN & RÉSEAU ARCADIA
             let app_handle = app.handle();
             raise::blockchain::ensure_innernet_state(app_handle, "default");
 
-            // --- INITIALISATION FABRIC ---
             let default_fabric_profile = ConnectionProfile {
                 name: "pending".into(),
                 version: "1.0.0".into(),
@@ -158,91 +204,80 @@ fn main() {
             app.manage(SharedRef::new(AsyncMutex::new(FabricClient::from_config(
                 default_fabric_profile,
             ))));
-
-            // --- INITIALISATION RÉSEAU ARCADIA ---
             raise::blockchain::p2p::service::init_arcadia_network(app.handle().clone());
 
-            // --- BACKGROUND: IA NATIF ---
+            // 7. BACKGROUND: IA NATIF & ORCHESTRATEUR
             let native_handle = app.handle().clone();
-            let storage_for_ia = storage_engine.clone();
-            let domain_for_ia = app_config.system_domain.clone();
-            let db_for_ia = app_config.system_db.clone();
+            let storage_for_ia = storage.clone();
+            let domain_for_ia = system_domain.clone();
+            let db_for_ia = system_db.clone();
 
             tauri::async_runtime::spawn(async move {
-                // 🎯 Création du manager pour l'IA et appel asynchrone
                 let manager = CollectionsManager::new(&storage_for_ia, &domain_for_ia, &db_for_ia);
+
                 match CandleLlmEngine::new(&manager).await {
                     Ok(engine) => {
-                        let state = native_handle.state::<NativeLlmState>();
-                        *state.0.lock().unwrap() = Some(engine);
-                        println!("✅ [Background] Moteur IA Natif prêt !");
+                        // 🎯 FIX : On accède à l'état directement pour éviter les problèmes de durée de vie
+                        // On utilise un bloc ou une instruction directe pour que le temporaire soit drop proprement.
+                        if let Ok(mut guard) = native_handle.state::<NativeLlmState>().0.lock() {
+                            *guard = Some(engine);
+                            user_success!("SUC_LLM_NATIVE_READY");
+                        }
                     }
                     Err(e) => {
-                        eprintln!("❌ [Background] Echec chargement IA Natif : {}", e);
+                        user_error!("ERR_LLM_NATIVE_FAIL", json_value!({"error": e.to_string()}))
                     }
                 }
             });
 
-            // --- BACKGROUND: ORCHESTRATEUR IA ET MOTEUR DE WORKFLOW ---
-            let app_handle_clone = app.handle().clone();
-            let plugin_mgr_for_wf = plugin_mgr.clone();
+            let app_handle_wf = app.handle().clone();
+            let plugin_mgr_wf = plugin_mgr.clone();
 
             tauri::async_runtime::spawn(async move {
-                let global_cfg = AppConfig::get();
-                let storage_state = app_handle_clone.state::<StorageEngine>();
+                let cfg = AppConfig::get();
+                let storage_state = app_handle_wf.state::<StorageEngine>();
 
-                let _ = ModelLoader::from_engine(
-                    storage_state.inner(),
-                    &global_cfg.system_domain,
-                    &global_cfg.system_db,
-                );
-
-                let storage_state = app_handle_clone.state::<StorageEngine>();
+                // Loader utilisant la partition MBSE dédiée si configurée
                 let loader = ModelLoader::from_engine(storage_state.inner(), "mbse2", "_system");
 
-                if let Ok(model) = loader.load_full_model().await {
-                    let storage_arc = SharedRef::new(storage_state.inner().clone());
-                    let manager = CollectionsManager::new(
-                        &storage_arc,
-                        &global_cfg.system_domain,
-                        &global_cfg.system_db,
-                    );
-                    match AiOrchestrator::new(model, &manager, storage_arc.clone()).await {
-                        Ok(orchestrator) => {
-                            let shared_orch = SharedRef::new(AsyncMutex::new(orchestrator));
-                            let ai_state = app_handle_clone.state::<AiState>();
-                            *ai_state.0.lock().await = Some(shared_orch.clone());
+                match loader.load_full_model().await {
+                    Ok(model) => {
+                        let manager = CollectionsManager::new(
+                            storage_state.inner(),
+                            &cfg.mount_points.system.domain,
+                            &cfg.mount_points.system.db,
+                        );
+                        match AiOrchestrator::new(
+                            model,
+                            &manager,
+                            SharedRef::new(storage_state.inner().clone()),
+                        )
+                        .await
+                        {
+                            Ok(orchestrator) => {
+                                let shared_orch = SharedRef::new(AsyncMutex::new(orchestrator));
+                                let ai_state = app_handle_wf.state::<AiState>();
+                                *ai_state.0.lock().await = Some(shared_orch.clone());
 
-                            let executor =
-                                WorkflowExecutor::new(shared_orch.clone(), plugin_mgr_for_wf);
-
-                            let wf_state = app_handle_clone.state::<AsyncMutex<WorkflowStore>>();
-                            let mut wf_store = wf_state.lock().await;
-                            wf_store.scheduler = Some(WorkflowScheduler::new(executor));
-
-                            println!(
-                                "✅ [RAISE] Orchestrateur IA et Workflow Engine opérationnels."
-                            );
+                                let executor =
+                                    WorkflowExecutor::new(shared_orch.clone(), plugin_mgr_wf);
+                                let wf_state = app_handle_wf.state::<AsyncMutex<WorkflowStore>>();
+                                let mut wf_store = wf_state.lock().await;
+                                wf_store.scheduler = Some(WorkflowScheduler::new(executor));
+                                user_success!("SUC_WORKFLOW_ENGINE_READY");
+                            }
+                            Err(e) => user_error!(
+                                "ERR_ORCHESTRATOR_FAIL",
+                                json_value!({"error": e.to_string()})
+                            ),
                         }
-                        Err(e) => eprintln!("❌ Erreur Fatale Orchestrator: {}", e),
                     }
-                } else {
-                    eprintln!("⚠️ [IA] Impossible de charger le modèle symbolique initial.");
+                    Err(e) => {
+                        user_warn!("WRN_MODEL_LOAD_FAIL", json_value!({"error": e.to_string()}))
+                    }
                 }
             });
 
-            // --- BOUCLE P2P ---
-            let swarm_handle = app.handle().clone();
-            let _storage_for_p2p = storage_engine;
-            let _app_state_for_p2p = app_state;
-
-            tauri::async_runtime::spawn(async move {
-                let _swarm_state =
-                    swarm_handle.state::<AsyncMutex<
-                        libp2p::Swarm<raise::blockchain::p2p::behavior::ArcadiaBehavior>,
-                    >>();
-                // ... tout le reste de l'ancienne boucle ...
-            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -319,32 +354,25 @@ fn main() {
 
 async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> RaiseResult<()> {
     let migrator = Migrator::new(storage, space, db);
+    let schema_uri = "db://_system/_system/schemas/v1/db/generic.schema.json".to_string();
+
     let migrations = vec![
         Migration {
             id: "init_001_core_collections".to_string(),
             version: "1.0.0".to_string(),
-            description: "Init".to_string(),
+            description: "Init Core".to_string(),
             up: vec![
                 MigrationStep::CreateCollection {
                     name: "articles".to_string(),
-                    // 🎯 FIX : On remplace JsonValue::Null par le schéma générique
-                    schema: JsonValue::String(
-                        "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
-                    ),
+                    schema: JsonValue::String(schema_uri.clone()),
                 },
                 MigrationStep::CreateCollection {
                     name: "systems".to_string(),
-                    // 🎯 FIX
-                    schema: JsonValue::String(
-                        "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
-                    ),
+                    schema: JsonValue::String(schema_uri.clone()),
                 },
                 MigrationStep::CreateCollection {
                     name: "exchange_items".to_string(),
-                    // 🎯 FIX
-                    schema: JsonValue::String(
-                        "db://_system/_system/schemas/v1/db/generic.schema.json".to_string(),
-                    ),
+                    schema: JsonValue::String(schema_uri),
                 },
             ],
             down: vec![],
@@ -362,27 +390,26 @@ async fn run_app_migrations(storage: &StorageEngine, space: &str, db: &str) -> R
             applied_at: None,
         },
     ];
-    migrator.run_migrations(migrations).await?;
-    Ok(())
+
+    match migrator.run_migrations(migrations).await {
+        Ok(_) => Ok(()),
+        Err(e) => raise_error!("ERR_MIGRATION_FAIL", error = e.to_string()),
+    }
 }
 
 // ============================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES (Conformité & Résilience Mount Points)
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(test)]
-    use raise::utils::testing::DbSandbox;
+    use raise::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
     async fn test_load_ontologies_from_directory_success() {
         let dir = tempdir().unwrap();
         let path = dir.path();
-
-        // On simule une structure d'ontologie
         let raise_dir = path.join("raise");
         fs::create_dir_all_sync(&raise_dir).unwrap();
 
@@ -391,7 +418,6 @@ mod tests {
             .await
             .unwrap();
 
-        // 🎯 On teste l'initialisation globale
         let res = VocabularyRegistry::init(path).await;
         assert!(res.is_ok());
 
@@ -400,27 +426,31 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_migrations_list_integrity() {
-        // 1. 🎯 La Sandbox remplace tout le setup manuel en une seule ligne !
+    async fn test_migrations_list_integrity() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
 
-        let space = &sandbox.config.system_domain;
-        let db = &sandbox.config.system_db;
-
-        // 2. 🎯 LE CORRECTIF : On force l'initialisation de l'index système
-        // Le dossier existe (créé par la Sandbox), mais on doit générer _system.json !
         let manager = CollectionsManager::new(&sandbox.storage, space, db);
-        DbSandbox::mock_db(&manager)
-            .await
-            .expect("L'initialisation de l'index système a échoué");
+        DbSandbox::mock_db(&manager).await.expect("Init index fail");
 
-        // 3. Exécution des migrations sur le moteur encapsulé
-        let res = run_app_migrations(&sandbox.storage, space, db).await;
+        run_app_migrations(&sandbox.storage, space, db).await?;
+        Ok(())
+    }
 
+    /// 🎯 NOUVEAU TEST : Résilience du point de montage système
+    #[async_test]
+    async fn test_mount_point_resolution_resilience() -> RaiseResult<()> {
+        let _sandbox = AgentDbSandbox::new().await;
+        let config = AppConfig::get();
         assert!(
-            res.is_ok(),
-            "Le test de migration a échoué : {:?}",
-            res.err()
+            !config.mount_points.system.domain.is_empty(),
+            "La partition système (domain) doit être définie"
         );
+        assert!(
+            !config.mount_points.system.db.is_empty(),
+            "La base système (db) doit être définie"
+        );
+        Ok(())
     }
 }

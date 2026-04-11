@@ -2,47 +2,45 @@
 
 use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
-// 🎯 FIX : Remplacement de SoftwareAgent par DynamicAgent
 use raise::ai::agents::{dynamic_agent::DynamicAgent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::prelude::*;
+use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 use raise::utils::testing::DbSandbox;
 
 #[async_test]
-#[serial_test::serial] // Protection RTX 5060 en local
+#[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
-async fn test_software_agent_creates_component_end_to_end() {
+async fn test_software_agent_creates_component_end_to_end() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Enabled).await;
-
-    // --- CONTEXTE ---
     let test_data_root = env.sandbox.storage.config.data_root.clone();
 
-    // --- 🎯 1. SETUP SYSTEM (Injection du "Cerveau" en DB) ---
-    let sys_mgr = CollectionsManager::new(
-        &env.sandbox.storage,
-        &env.sandbox.config.system_domain,
-        &env.sandbox.config.system_db,
-    );
-    DbSandbox::mock_db(&sys_mgr).await.unwrap();
-    let _ = sys_mgr
-        .create_collection(
-            "prompts",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await;
-    let _ = sys_mgr
-        .create_collection(
-            "agents",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await;
+    // --- 🎯 1. SETUP SYSTEM (Injection via Mount Points) ---
+    // Utilisation dynamique de la configuration système SSOT pour la résilience
+    let system_domain = &env.sandbox.config.mount_points.system.domain;
+    let system_db = &env.sandbox.config.mount_points.system.db;
 
+    let sys_mgr = CollectionsManager::new(&env.sandbox.storage, system_domain, system_db);
+
+    // Initialisation résiliente de l'index système
+    match DbSandbox::mock_db(&sys_mgr).await {
+        Ok(_) => user_info!("INF_TEST_MOCK_DB_READY"),
+        Err(e) => raise_error!("ERR_TEST_SETUP_FAIL", error = e.to_string()),
+    }
+
+    let generic_schema = "db://_system/_system/schemas/v1/db/generic.schema.json";
+    let collections = vec!["prompts", "agents", "configs"];
+
+    for coll in collections {
+        let _ = sys_mgr.create_collection(coll, generic_schema).await;
+    }
+
+    // Injection du prompt "cerveau" logiciel
     sys_mgr.upsert_document("prompts", json_value!({
         "handle": "prompt_software",
         "role": "Ingénieur Logiciel",
         "identity": { "persona": "Tu es un Développeur Rust Expert. Tu conçois la Logical Architecture (LA) et génères du code." },
         "directives": ["Génère le composant ou le code en format JSON."]
-    })).await.unwrap();
+    })).await?;
 
     let agent_urn = "agent_software";
     sys_mgr.upsert_document("agents", json_value!({
@@ -51,83 +49,80 @@ async fn test_software_agent_creates_component_end_to_end() {
             "name": { "fr": "Software Engineer" },
             "neuro_profile": { "prompt_id": "ref:prompts:handle:prompt_software", "temperature": 0.1 }
         }
-    })).await.unwrap();
+    })).await?;
 
     // --- 🎯 2. SETUP SPÉCIFIQUE AU TEST (Couche LA) ---
     let la_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "la");
-    DbSandbox::mock_db(&la_mgr).await.unwrap();
-    la_mgr
-        .create_collection(
-            "components",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await
-        .unwrap();
+    let _ = DbSandbox::mock_db(&la_mgr).await;
 
+    la_mgr
+        .create_collection("components", generic_schema)
+        .await?;
+
+    // --- 🎯 3. CONTEXTE & EXÉCUTION IA ---
     let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_codegen");
+
     use candle_nn::VarMap;
-    let wm_config = raise::utils::data::config::WorldModelConfig::default();
     let world_engine = SharedRef::new(
-        raise::ai::world_model::NeuroSymbolicEngine::new(wm_config, VarMap::new()).unwrap(),
+        raise::ai::world_model::NeuroSymbolicEngine::new(
+            raise::utils::data::config::WorldModelConfig::default(),
+            VarMap::new(),
+        )
+        .expect("WM Engine fail"),
     );
+
+    let client = match env.client.clone() {
+        Some(c) => c,
+        None => raise_error!("ERR_LLM_CLIENT_DISABLED"),
+    };
 
     let _ctx = AgentContext::new(
         agent_urn,
         &session_id,
         SharedRef::new(env.sandbox.storage.clone()),
-        env.client
-            .clone()
-            .expect("LlmClient must be enabled for tests"),
+        client.clone(),
         world_engine,
         test_data_root.clone(),
         test_data_root.join("dataset"),
     )
     .await;
 
-    // 🎯 FIX : Instanciation dynamique
-    let _agent = DynamicAgent::new(agent_urn);
+    let classifier = IntentClassifier::new(client);
 
-    let classifier = IntentClassifier::new(
-        env.client
-            .clone()
-            .expect("LlmClient est requis pour l'IntentClassifier (utilisez LlmMode::Enabled)"),
+    // --- TEST 1 : CLASSIFICATION DE CRÉATION ---
+    let input_create = "Créer une fonction système nommée DémarrerMoteur.";
+    user_info!(
+        "INF_TEST_CLASSIFY_START",
+        json_value!({"input": input_create})
     );
 
-    // --- TEST 1 : CREATION ---
-    let input_create = "Créer une fonction système nommée DémarrerMoteur.";
-    println!("➤ Input 1: {}", input_create);
-
     let intent = classifier.classify(input_create).await;
-    println!("➤ Result 1: {:?}", intent);
 
     match intent {
         EngineeringIntent::CreateElement { name, .. } => {
-            let clean_name = name.replace("'", "").replace("\"", "");
+            let clean_name = name.replace(['\'', '\"'], "");
             assert!(
                 clean_name.to_lowercase().contains("demarrermoteur")
                     || clean_name.to_lowercase().contains("démarrermoteur"),
                 "Nom incorrect. Reçu: '{}'",
                 name
             );
-            println!("✅ SUCCÈS : Intention 1 classifiée !");
+            user_success!("SUC_INTENT_CREATE_VALIDATED");
         }
         EngineeringIntent::Unknown => {
-            println!("⚠️ [Tolérance LLM] Intention 1 : Le modèle a retourné 'Unknown'. Test validé par tolérance.");
+            user_warn!("WRN_LLM_TOLERANCE_UNKNOWN");
         }
         _ => {
-            println!(
-                "⚠️ [Tolérance LLM] Intention 1 : Classification inattendue : {:?}",
-                intent
+            user_warn!(
+                "WRN_LLM_INCORRECT_CLASSIFICATION",
+                json_value!({"intent": format!("{:?}", intent)})
             );
         }
     }
 
-    // --- TEST 2 : CODE GEN ---
+    // --- TEST 2 : CLASSIFICATION DE CODE GEN ---
     let input_code = "Génère le code Rust pour le composant Auth. IMPORTANT: Le JSON DOIT contenir le champ \"filename\": \"auth.rs\".";
-    println!("➤ Input 2: {}", input_code);
-
     let intent_code = classifier.classify(input_code).await;
-    println!("➤ Result 2: {:?}", intent_code);
 
     match intent_code {
         EngineeringIntent::GenerateCode {
@@ -136,18 +131,110 @@ async fn test_software_agent_creates_component_end_to_end() {
             assert!(language.to_lowercase().contains("rust"));
             assert!(
                 !filename.is_empty(),
-                "Filename vide ! L'IA a ignoré l'instruction."
+                "L'IA a ignoré l'instruction du filename"
             );
-            println!("✅ SUCCÈS : Intention 2 (Code Gen) classifiée !");
+            user_success!("SUC_INTENT_CODEGEN_VALIDATED");
         }
         EngineeringIntent::Unknown => {
-            println!("⚠️ [Tolérance LLM] Intention 2 : Le modèle a retourné 'Unknown'. Test validé par tolérance.");
+            user_warn!("WRN_LLM_TOLERANCE_UNKNOWN");
         }
         _ => {
-            println!(
-                "⚠️ [Tolérance LLM] Intention 2 : Classification inattendue : {:?}",
-                intent_code
+            user_warn!(
+                "WRN_LLM_INCORRECT_CLASSIFICATION",
+                json_value!({"intent": format!("{:?}", intent_code)})
             );
+        }
+    }
+
+    Ok(())
+}
+
+// =========================================================================
+// NOUVEAUX TESTS : RÉSILIENCE ET CONFIGURATION
+// =========================================================================
+
+#[cfg(test)]
+mod resilience_tests {
+    use super::*;
+    use raise::ai::agents::Agent;
+    use raise::ai::llm::client::LlmClient;
+    /// 🎯 Test la résilience face à la résolution des partitions via Mount Points
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_codegen_mount_point_integrity() -> RaiseResult<()> {
+        let env = setup_test_env(LlmMode::Disabled).await;
+        // Validation SSOT de la partition système injectée dans la sandbox
+        assert!(!env.sandbox.config.mount_points.system.domain.is_empty());
+        assert!(!env.sandbox.config.mount_points.system.db.is_empty());
+        Ok(())
+    }
+
+    /// 🎯 Test la réaction en cas de prompt manquant pour l'agent (Match...raise_error)
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_codegen_agent_missing_prompt_resilience() -> RaiseResult<()> {
+        let env = setup_test_env(LlmMode::Disabled).await;
+        let test_root = env.sandbox.storage.config.data_root.clone();
+
+        let sys_mgr = CollectionsManager::new(
+            &env.sandbox.storage,
+            &env.sandbox.config.mount_points.system.domain,
+            &env.sandbox.config.mount_points.system.db,
+        );
+
+        // 1. Injection d'un agent avec un prompt_id orphelin
+        sys_mgr
+            .upsert_document(
+                "agents",
+                json_value!({
+                    "handle": "agent_broken_codegen",
+                    "base": { "neuro_profile": { "prompt_id": "ghost_prompt" } }
+                }),
+            )
+            .await?;
+
+        // 2. Préparation du contexte d'exécution
+        use candle_nn::VarMap;
+        let world_engine = SharedRef::new(
+            raise::ai::world_model::NeuroSymbolicEngine::new(
+                raise::utils::data::config::WorldModelConfig::default(),
+                VarMap::new(),
+            )
+            .expect("WM Engine fail"),
+        );
+
+        let llm_client = match env.client.clone() {
+            Some(client) => client,
+            None => LlmClient::new(&sys_mgr).await.expect("LlmClient fail"),
+        };
+
+        let ctx = AgentContext::new(
+            "agent_broken_codegen",
+            "sess_resilience",
+            SharedRef::new(env.sandbox.storage.clone()),
+            llm_client,
+            world_engine,
+            test_root.clone(),
+            test_root.join("dataset"),
+        )
+        .await;
+
+        let agent = DynamicAgent::new("agent_broken_codegen");
+
+        // 🎯 FIX : Utilisation de la méthode 'process' au lieu de 'process_raw_request'
+        // On passe une intention Chat pour déclencher la phase de compilation du prompt.
+        let res = agent.process(&ctx, &EngineeringIntent::Chat).await;
+
+        match res {
+            Err(AppError::Structured(data)) => {
+                // Le moteur doit lever une erreur car 'ghost_prompt' n'existe pas en DB
+                // L'erreur provient du PromptEngine invoqué par DynamicAgent::process.
+                assert!(data.code.contains("ERR_PROMPT") || data.code.contains("ERR_DB"));
+                Ok(())
+            }
+            _ => panic!("Le moteur aurait dû diverger sur une erreur structurée RAISE"),
         }
     }
 }

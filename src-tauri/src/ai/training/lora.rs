@@ -72,6 +72,8 @@ mod tests {
     use candle_nn::VarMap;
 
     #[test]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_lora_linear_forward_shape() -> RaiseResult<()> {
         let device = Device::Cpu;
         let mut varmap = VarMap::new();

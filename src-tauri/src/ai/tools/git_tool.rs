@@ -139,7 +139,8 @@ mod tests {
     use crate::utils::testing::mock::AgentDbSandbox;
 
     #[async_test]
-    #[serial_test::serial]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_git_tool_execution_flow() {
         let sandbox = AgentDbSandbox::new().await;
         let root = &sandbox.domain_root;
@@ -151,7 +152,8 @@ mod tests {
     }
 
     #[async_test]
-    #[serial_test::serial]
+    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_git_publish_error_on_invalid_repo() {
         let sandbox = AgentDbSandbox::new().await;
         let invalid_path = sandbox.domain_root.join("not_a_repo");
