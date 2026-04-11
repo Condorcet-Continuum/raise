@@ -72,14 +72,14 @@ pub enum JsondbCommands {
             required = true,
             help = "URI du schéma d'index obligatoire (ex: db://_system/_system/schemas/v1/db/index-mbse.schema.json)"
         )]
-        schema: String, // Changé de Option<String> à String
+        schema: String,
 
         #[arg(
             long,
             required = true,
             help = "Rôle architectural et sémantique de la base (ex: system, raise, modeling, simulation...)"
         )]
-        db_role: String,  
+        db_role: String,
     },
     DropDb {
         #[arg(long, short = 'f')]
@@ -318,9 +318,12 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
             let created = manager.create_db_with_schema(&schema).await?;
 
             if created {
+                let sys_path = ctx
+                    .storage
+                    .config
+                    .db_root(&ctx.active_domain, &ctx.active_db)
+                    .join("_system.json");
 
-                let sys_path = ctx.storage.config.db_root(&ctx.active_domain, &ctx.active_db).join("_system.json");
-                
                 if fs::exists_async(&sys_path).await {
                     if let Ok(mut sys_json) = fs::read_json_async::<JsonValue>(&sys_path).await {
                         if let Some(obj) = sys_json.as_object_mut() {
@@ -330,7 +333,7 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
                         let _ = fs::write_json_atomic_async(&sys_path, &sys_json).await;
                     }
                 }
-                                
+
                 user_info!(
                     "JSONDB_INIT_SUCCESS",
                     json_value!({ "space": active_domain, "db": active_db })

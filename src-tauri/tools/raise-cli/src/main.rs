@@ -120,7 +120,7 @@ async fn main() -> RaiseResult<()> {
     // 2. INITIALISATION LOGGER ET LANGUE
     context::init_logging();
     let config = AppConfig::get();
-    if let Err(_) = context::init_i18n(&config.core.language).await {
+    if context::init_i18n(&config.core.language).await.is_err() {
         eprintln!("⚠️ [BOOTSTRAP MODE] Traductions inaccessibles. Démarrage en mode sans échec.");
     }
 
@@ -161,24 +161,27 @@ async fn main() -> RaiseResult<()> {
 
     let storage = SharedRef::new(StorageEngine::new(JsonDbConfig::new(db_root)));
 
-// ---------------------------------------------------------
+    // ---------------------------------------------------------
     // 🛡️ MOTEUR DE RÉSILIENCE (WAL Crash Recovery)
     // ---------------------------------------------------------
+    
     match raise::json_db::transactions::wal::recover_pending_transactions(
         &storage.config,
         &config.mount_points.system.domain,
         &config.mount_points.system.db,
         &storage,
-    ).await {
+    )
+    .await
+    {
         Ok(count) if count > 0 => {
             user_warn!(
-                "WRN_DB_CRASH_RECOVERED", 
+                "WRN_DB_CRASH_RECOVERED",
                 json_value!({"recovered_transactions": count, "action": "rollback_applied_via_cli"})
             );
         }
         Err(e) => {
             user_error!(
-                "ERR_DB_RECOVERY_FAIL", 
+                "ERR_DB_RECOVERY_FAIL",
                 json_value!({"error": e.to_string()})
             );
         }
