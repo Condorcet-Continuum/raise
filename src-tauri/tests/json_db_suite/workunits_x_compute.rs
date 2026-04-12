@@ -16,7 +16,12 @@ async fn workunit_compute_then_validate_minimal() {
         .expect("❌ Impossible de charger le registre des schémas");
 
     // Construction de l'URI SSOT
-    let root_uri = "db://_system/_system/schemas/v1/mock/actors.schema.json".to_string();
+    let sys_domain = &env.sandbox.config.mount_points.system.domain;
+    let sys_db = &env.sandbox.config.mount_points.system.db;
+    let root_uri = format!(
+        "db://{}/{}/schemas/v1/mock/actors.schema.json",
+        sys_domain, sys_db
+    );
     if reg.get_by_uri(&root_uri).is_none() {
         panic!(
             "❌ Schéma workunit introuvable dans le registre : {}",
@@ -62,7 +67,12 @@ async fn finance_compute_minimal() {
         .await
         .expect("❌ Échec init registre");
 
-    let root_uri = "db://_system/_system/schemas/v1/mock/finance.schema.json".to_string();
+    let sys_domain = &env.sandbox.config.mount_points.system.domain;
+    let sys_db = &env.sandbox.config.mount_points.system.db;
+    let root_uri = format!(
+        "db://{}/{}/schemas/v1/mock/finance.schema.json",
+        sys_domain, sys_db
+    );
 
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)
         .expect("❌ Échec compilation validateur finance");
@@ -84,19 +94,19 @@ async fn finance_compute_minimal() {
         "summary": {}, // Destiné à recevoir les x_rules
         "synthese_build": {}
     });
-    mgr.create_collection(
-        "finance_test_collection",
-        "db://_system/_system/schemas/v1/db/generic.schema.json",
-    )
-    .await
-    .unwrap();
 
-    mgr.create_collection(
-        "_system_rules",
-        "db://_system/_system/schemas/v1/db/generic.schema.json",
-    )
-    .await
-    .unwrap();
+    let generic_schema = format!(
+        "db://{}/{}/schemas/v1/db/generic.schema.json",
+        sys_domain, sys_db
+    );
+
+    mgr.create_collection("finance_test_collection", &generic_schema)
+        .await
+        .unwrap();
+    mgr.create_collection("_system_rules", &generic_schema)
+        .await
+        .unwrap();
+
     // 3. EXÉCUTION DU MOTEUR DE RÈGLES (Business Logic)
     // On applique les règles dynamiques définies dans le schéma
     manager::apply_business_rules(

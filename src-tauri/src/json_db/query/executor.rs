@@ -603,16 +603,18 @@ impl<'a> QueryEngine<'a> {
             return Ok(vec![target_collection.to_string()]);
         }
 
+        let mut resolved_paths = Vec::new();
+
+        // 🎯 RETOUR EN ARRIÈRE VITAL : On bypass le Manager pour éviter une boucle infinie avec l'ACL !
+        // Le moteur de requête DOIT lire l'index physiquement comme un "fantôme".
         let index_path = self
             .manager
             .storage
             .config
             .db_root(&self.manager.space, &self.manager.db)
             .join("_system.json");
-        let mut resolved_paths = Vec::new();
 
-        if let Ok(content) = fs::read_to_string_async(&index_path).await {
-            // 🎯 FIX : Utilisation de notre façade `crate::utils::data::json`
+        if let Ok(content) = crate::utils::io::fs::read_to_string_async(&index_path).await {
             if let Ok(index_json) =
                 crate::utils::data::json::deserialize_from_str::<JsonValue>(&content)
             {
@@ -621,7 +623,6 @@ impl<'a> QueryEngine<'a> {
                     .and_then(|v| v.as_object())
                 {
                     for (path, _) in collections {
-                        // On cherche si le chemin exact OU le dossier final correspond (ex: dapps/.../components)
                         if path == target_collection
                             || path.ends_with(&format!("/{}", target_collection))
                         {

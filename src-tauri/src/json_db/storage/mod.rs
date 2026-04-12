@@ -80,8 +80,8 @@ impl StorageEngine {
             id.to_string(),
         );
 
-        // ✅ Point de suspension `.await`
-        if let Some(doc) = self.cache.get(&cache_key).await {
+        // ✅ Le cache RAM est immédiat et synchrone
+        if let Some(doc) = self.cache.get(&cache_key) {
             return Ok(Some(doc));
         }
 
@@ -90,7 +90,7 @@ impl StorageEngine {
 
         // Hydratation du cache si le document existe
         if let Some(doc) = &doc_opt {
-            self.cache.put(cache_key, doc.clone()).await;
+            self.cache.put(cache_key, doc.clone());
         }
 
         Ok(doc_opt)
@@ -115,7 +115,7 @@ impl StorageEngine {
         );
 
         // Write-through en mémoire (.await)
-        self.cache.put(cache_key, doc.clone()).await;
+        self.cache.put(cache_key, doc.clone());
         Ok(())
     }
 
@@ -136,7 +136,7 @@ impl StorageEngine {
             id.to_string(),
         );
 
-        self.cache.remove(&cache_key).await;
+        self.cache.remove(&cache_key);
         Ok(())
     }
 }
@@ -166,13 +166,13 @@ mod tests {
             "1".to_string(),
         );
 
-        assert!(engine.cache.get(&key).await.is_some());
+        assert!(engine.cache.get(&key).is_some());
 
         let read = engine.read_document("s", "d", "c", "1").await.unwrap();
         assert_eq!(read, Some(doc));
 
         engine.delete_document("s", "d", "c", "1").await.unwrap();
-        assert!(engine.cache.get(&key).await.is_none());
+        assert!(engine.cache.get(&key).is_none());
     }
 
     #[async_test]

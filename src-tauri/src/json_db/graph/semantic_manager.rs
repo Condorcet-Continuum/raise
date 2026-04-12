@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/json_db/graph/semantic_manager.rs
 
-use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::collections::manager::{CollectionsManager, SystemIndexTx};
 use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use crate::utils::prelude::*;
 
@@ -29,6 +29,7 @@ impl<'a> SemanticManager<'a> {
     /// Enregistre le fichier, met à jour l'index système, et déclenche un Hot Reload.
     pub async fn create_ontology(
         &self,
+        tx: &mut SystemIndexTx<'_>, // 🎯 FIX : Exigence du Jeton
         namespace: &str,
         version: &str,
         content: &JsonValue,
@@ -45,28 +46,17 @@ impl<'a> SemanticManager<'a> {
         let file_path = ontology_dir.join(format!("{}.jsonld", namespace));
         fs::write_json_atomic_async(&file_path, content).await?;
 
-        // 2. Mise à jour du Manifeste (Index)
-        let index_path = db_root.join("_system.json");
-        if fs::exists_async(&index_path).await {
-            let mut index_doc: JsonValue = json::deserialize_from_str(
-                &fs::read_to_string_async(&index_path)
-                    .await
-                    .unwrap_or_default(),
-            )
-            .unwrap_or(json_value!({}));
+        // 2. Mise à jour du Manifeste (Index) - DIRECTEMENT DANS LE JETON
+        let new_entry = json_value!({
+            "uri": format!("db://{}/{}/ontology/{}.jsonld", self.db_manager.space, self.db_manager.db, namespace),
+            "version": version,
+            "imports": []
+        });
 
-            let new_entry = json_value!({
-                "uri": format!("db://{}/{}/ontology/{}.jsonld", self.db_manager.space, self.db_manager.db, namespace),
-                "version": version,
-                "imports": []
-            });
-
-            if !index_doc["ontologies"].is_object() {
-                index_doc["ontologies"] = json_value!({});
-            }
-            index_doc["ontologies"][namespace] = new_entry;
-            fs::write_json_atomic_async(&index_path, &index_doc).await?;
+        if !tx.document["ontologies"].is_object() {
+            tx.document["ontologies"] = json_value!({});
         }
+        tx.document["ontologies"][namespace] = new_entry;
 
         // 3. Hot Reload du Cerveau Sémantique Global
         let registry = VocabularyRegistry::global();
@@ -80,30 +70,24 @@ impl<'a> SemanticManager<'a> {
     }
 
     /// Supprime une ontologie du système (Opération DDL).
-    pub async fn drop_ontology(&self, namespace: &str) -> RaiseResult<()> {
+    pub async fn drop_ontology(
+        &self,
+        tx: &mut SystemIndexTx<'_>,
+        namespace: &str,
+    ) -> RaiseResult<()> {
         let db_root = self
             .db_manager
             .storage
             .config
             .db_root(&self.db_manager.space, &self.db_manager.db);
 
-        // 1. Suppression dans l'Index
-        let index_path = db_root.join("_system.json");
-        if fs::exists_async(&index_path).await {
-            let mut index_doc: JsonValue = json::deserialize_from_str(
-                &fs::read_to_string_async(&index_path)
-                    .await
-                    .unwrap_or_default(),
-            )
-            .unwrap_or(json_value!({}));
-
-            if let Some(ontologies) = index_doc
-                .get_mut("ontologies")
-                .and_then(|o| o.as_object_mut())
-            {
-                ontologies.remove(namespace);
-                fs::write_json_atomic_async(&index_path, &index_doc).await?;
-            }
+        // 1. Suppression dans l'Index - DIRECTEMENT DANS LE JETON
+        if let Some(ontologies) = tx
+            .document
+            .get_mut("ontologies")
+            .and_then(|o| o.as_object_mut())
+        {
+            ontologies.remove(namespace);
         }
 
         // 2. Suppression physique
@@ -188,7 +172,6 @@ mod tests {
 
         let semantic_mgr = SemanticManager::new(&db_mgr);
 
-        // 1. TEST : Création d'une ontologie métier
         let mock_ontology = json_value!({
             "@context": {
                 "@version": 1.1,
@@ -202,9 +185,17 @@ mod tests {
             ]
         });
 
-        semantic_mgr
-            .create_ontology("aerospace", "1.1", &mock_ontology)
-            .await?;
+        // 1. TEST : Création d'une ontologie métier (Avec Jeton)
+        {
+            let lock = db_mgr.storage.get_index_lock(&db_mgr.space, &db_mgr.db);
+            let guard = lock.lock().await;
+            let mut tx = db_mgr.begin_system_tx(&guard).await?;
+
+            semantic_mgr
+                .create_ontology(&mut tx, "aerospace", "1.1", &mock_ontology)
+                .await?;
+            tx.commit().await?;
+        }
 
         // Vérification de l'écriture physique
         let db_root = sandbox.storage.config.db_root(&db_mgr.space, &db_mgr.db);
@@ -221,8 +212,16 @@ mod tests {
             "L'ontologie n'a pas été chargée en RAM !"
         );
 
-        // 2. TEST : Suppression de l'ontologie
-        semantic_mgr.drop_ontology("aerospace").await?;
+        // 2. TEST : Suppression de l'ontologie (Avec un nouveau Jeton)
+        {
+            let lock = db_mgr.storage.get_index_lock(&db_mgr.space, &db_mgr.db);
+            let guard = lock.lock().await;
+            let mut tx = db_mgr.begin_system_tx(&guard).await?;
+
+            semantic_mgr.drop_ontology(&mut tx, "aerospace").await?;
+            tx.commit().await?;
+        }
+
         assert!(
             !fs::exists_async(&file_path).await,
             "Le fichier JSON-LD doit être supprimé"

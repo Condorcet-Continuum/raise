@@ -78,7 +78,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # --- MOTEUR IA & NLP ---
 text-splitter = "0.29.0"
-tiktoken-rs = "0.9.1"
+tiktoken-rs = "0.11.0"
 
 # --- STACK IA NATIVE (CANDLE) ---
 candle-core = "0.10.2"

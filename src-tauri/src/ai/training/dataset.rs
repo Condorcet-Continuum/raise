@@ -127,7 +127,7 @@ mod tests {
         let all_results = extract_domain_data(&manager, "all").await?;
         assert_eq!(
             all_results.len(),
-            2,
+            3,
             "Devrait trouver toutes les collections"
         );
 

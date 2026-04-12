@@ -329,7 +329,8 @@ pub async fn write_atomic_async(path: &Path, content: &[u8]) -> RaiseResult<()> 
     if let Some(parent) = path.parent() {
         ensure_dir_async(parent).await?;
     }
-    let tmp_path = path.with_extension("tmp");
+    let unique_id = crate::utils::prelude::UniqueId::new_v4().to_string();
+    let tmp_path = path.with_extension(format!("tmp.{}", unique_id));
     let mut file = match tokio::fs::File::create(&tmp_path).await {
         Ok(f) => f,
         Err(e) => raise_error!(
@@ -363,7 +364,8 @@ pub fn write_atomic_sync(path: &Path, content: &[u8]) -> RaiseResult<()> {
     if let Some(parent) = path.parent() {
         ensure_dir_sync(parent)?;
     }
-    let tmp_path = path.with_extension("tmp");
+    let unique_id = crate::utils::prelude::UniqueId::new_v4().to_string();
+    let tmp_path = path.with_extension(format!("tmp.{}", unique_id));
     let mut file = match std::fs::File::create(&tmp_path) {
         Ok(f) => f,
         Err(e) => raise_error!(

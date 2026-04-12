@@ -1,0 +1,709 @@
+// FICHIER : src-tauri/src/json_db/schema/ddl.rs
+
+use crate::json_db::collections::manager::{CollectionsManager, SystemIndexTx};
+use crate::json_db::schema::SchemaRegistry;
+use crate::json_db::storage::file_storage;
+use crate::utils::prelude::*;
+
+pub struct DdlHandler<'a> {
+    manager: &'a CollectionsManager<'a>,
+}
+
+impl<'a> DdlHandler<'a> {
+    pub fn new(manager: &'a CollectionsManager<'a>) -> Self {
+        Self { manager }
+    }
+
+    pub async fn init_db(&self) -> RaiseResult<bool> {
+        let app_config = AppConfig::get();
+        let sys_domain = &app_config.mount_points.system.domain;
+        let sys_db = &app_config.mount_points.system.db;
+
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v2/db/index.schema.json",
+            sys_domain, sys_db
+        );
+        self.init_db_with_schema(&schema_uri).await
+    }
+
+    pub async fn init_db_with_schema(&self, schema_uri: &str) -> RaiseResult<bool> {
+        let mgr = self.manager;
+
+        // 1. On prend le verrou global pour protéger le fichier _system.json
+        let lock = mgr.storage.get_index_lock(&mgr.space, &mgr.db);
+        let guard = lock.lock().await;
+
+        // 2. On génère le Jeton (qui contient la preuve du verrou)
+        let mut tx = mgr.begin_system_tx(&guard).await?;
+
+        let is_new = tx.document.get("handle").is_none();
+
+        // 3. On initialise l'acte de naissance dans le Jeton
+        if is_new {
+            tx.document["$schema"] = json_value!(schema_uri);
+            tx.document["handle"] = json_value!(format!("{}_{}", mgr.space, mgr.db));
+            tx.document["name"] = json_value!(format!("{}_{}", mgr.space, mgr.db));
+            tx.document["space"] = json_value!(mgr.space.clone());
+            tx.document["database"] = json_value!(mgr.db.clone());
+        }
+
+        // Validation (On valide l'état temporaire du jeton)
+        let reg =
+            SchemaRegistry::from_uri(&mgr.storage.config, schema_uri, &mgr.space, &mgr.db).await?;
+        let validator =
+            crate::json_db::schema::SchemaValidator::compile_with_registry(schema_uri, &reg)?;
+        validator.compute_then_validate(&mut tx.document)?;
+
+        // Création physique du dossier racine de la base
+        let created = crate::json_db::storage::file_storage::create_db(
+            &mgr.storage.config,
+            &mgr.space,
+            &mgr.db,
+            &tx.document,
+        )
+        .await?;
+
+        if is_new || created {
+            // 4. On appelle le Bootstrapper en lui PASSANT LE JETON
+            use crate::json_db::schema::bootstrapper::SchemaBootstrapper;
+            let bootstrapper = SchemaBootstrapper::new(mgr);
+
+            // NOTE : Cela va lever une erreur dans ton éditeur pour le moment car le Bootstrapper
+            // n'est pas encore mis à jour pour accepter `&mut tx`. C'est normal !
+            bootstrapper
+                .bootstrap_new_database(&mut tx, "v1.0.0")
+                .await?;
+        }
+
+        // 5. ON SAUVEGARDE ET ON LIBÈRE LE VERROU
+        tx.commit().await?;
+
+        Ok(created || is_new)
+    }
+
+    pub async fn create_db_with_schema(&self, schema_uri: &str) -> RaiseResult<bool> {
+        let created = self.init_db_with_schema(schema_uri).await?;
+
+        if created {
+            if let Ok(index_doc) = self.manager.load_index().await {
+                let idx_mgr = crate::json_db::indexes::IndexManager::new(
+                    self.manager.storage,
+                    &self.manager.space,
+                    &self.manager.db,
+                );
+                let _ = idx_mgr.apply_indexes_from_config(&index_doc).await;
+            }
+            self.register_in_system_governance().await?;
+        }
+        Ok(created)
+    }
+
+    pub async fn drop_db(&self) -> RaiseResult<bool> {
+        let mgr = self.manager;
+        let db_path = mgr.storage.config.db_root(&mgr.space, &mgr.db);
+        if !db_path.exists() {
+            return Ok(false);
+        }
+
+        file_storage::drop_db(
+            &mgr.storage.config,
+            &mgr.space,
+            &mgr.db,
+            file_storage::DropMode::Hard,
+        )
+        .await?;
+        Ok(true)
+    }
+
+    async fn register_in_system_governance(&self) -> RaiseResult<()> {
+        let app_config = AppConfig::get();
+        let raise_domain = &app_config.mount_points.raise.domain;
+        let raise_db = &app_config.mount_points.raise.db;
+
+        if &self.manager.space == raise_domain && &self.manager.db == raise_db {
+            return Ok(());
+        }
+
+        let sys_mgr = CollectionsManager::new(self.manager.storage, raise_domain, raise_db);
+
+        let domain_doc = json_value!({
+            "handle": self.manager.space.clone(),
+            "name": { "fr": self.manager.space.clone(), "en": self.manager.space.clone() },
+            "status": "active"
+        });
+        let _ = sys_mgr.upsert_document("domains", domain_doc).await;
+
+        Ok(())
+    }
+
+    pub async fn create_schema(
+        &self,
+        tx: &mut SystemIndexTx<'_>,
+        schema_name: &str,
+        schema: JsonValue,
+    ) -> RaiseResult<()> {
+        let uri = self.manager.build_schema_uri(schema_name).await;
+
+        // Détection de la rigueur
+        let db_role = tx
+            .document
+            .get("db_role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("exploration");
+        let is_strict_role = matches!(
+            db_role,
+            "system" | "raise" | "integration" | "production" | "operation"
+        );
+
+        let ordered_schema = self.prepare_ordered_schema(&uri, schema, is_strict_role);
+
+        // Écriture physique du fichier
+        let (version, rel_key) = self.extract_schema_paths(&uri);
+        let path = self
+            .manager
+            .storage
+            .config
+            .db_schemas_root(&self.manager.space, &self.manager.db)
+            .join(&version)
+            .join(&rel_key);
+
+        crate::utils::io::fs::ensure_dir_async(path.parent().unwrap()).await?;
+        crate::utils::io::fs::write_json_atomic_async(&path, &ordered_schema).await?;
+
+        // Inscription dans le Jeton
+        if tx.document.get("schemas").is_none() {
+            tx.document["schemas"] = json_value!({});
+        }
+        if tx.document["schemas"].get(&version).is_none() {
+            tx.document["schemas"][&version] = json_value!({});
+        }
+
+        if let Some(v_obj) = tx.document["schemas"][&version].as_object_mut() {
+            v_obj.insert(
+                rel_key.to_string(),
+                json_value!({ "file": format!("{}/{}", version, rel_key) }),
+            );
+        }
+
+        Ok(())
+    }
+
+    pub async fn drop_schema(&self, schema_name: &str) -> RaiseResult<()> {
+        let uri = self.manager.build_schema_uri(schema_name).await;
+        let (version, rel_key) = self.extract_schema_paths(&uri);
+
+        // 1. Suppression physique
+        let path = self
+            .manager
+            .storage
+            .config
+            .db_schemas_root(&self.manager.space, &self.manager.db)
+            .join(&version)
+            .join(&rel_key);
+        if path.exists() {
+            let _ = crate::utils::io::fs::remove_file_async(&path).await;
+        }
+
+        // 2. Mise à jour de l'Index (Ouverture du Jeton)
+        let lock = self
+            .manager
+            .storage
+            .get_index_lock(&self.manager.space, &self.manager.db);
+        let guard = lock.lock().await;
+        let mut tx = self.manager.begin_system_tx(&guard).await?;
+
+        if let Some(v_obj) = tx
+            .document
+            .get_mut("schemas")
+            .and_then(|s| s.get_mut(&version))
+            .and_then(|v| v.as_object_mut())
+        {
+            v_obj.remove(&rel_key);
+            tx.commit().await?; // On sauvegarde
+        }
+
+        Ok(())
+    }
+
+    pub async fn add_property(
+        &self,
+        schema_name: &str,
+        prop: &str,
+        def: JsonValue,
+    ) -> RaiseResult<()> {
+        let mut schema = self.load_file(schema_name).await?;
+        if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
+            props.insert(prop.to_string(), def);
+        } else {
+            schema["properties"] = json_value!({ prop: def });
+        }
+        self.save_ordered(schema_name, schema).await
+    }
+
+    pub async fn alter_property(
+        &self,
+        schema_name: &str,
+        prop_name: &str,
+        definition: JsonValue,
+    ) -> RaiseResult<()> {
+        let mut schema = self.load_file(schema_name).await?;
+
+        if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
+            props.insert(prop_name.to_string(), definition);
+            self.save_ordered(schema_name, schema).await
+        } else {
+            raise_error!(
+                "ERR_DDL_PROPERTY_NOT_FOUND",
+                error = format!("Propriété '{}' introuvable", prop_name)
+            )
+        }
+    }
+
+    pub async fn drop_property(&self, schema_name: &str, prop_name: &str) -> RaiseResult<()> {
+        let mut schema = self.load_file(schema_name).await?;
+
+        if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
+            props.remove(prop_name);
+            self.save_ordered(schema_name, schema).await
+        } else {
+            Ok(())
+        }
+    }
+
+    fn prepare_ordered_schema(&self, uri: &str, schema: JsonValue, strict: bool) -> JsonValue {
+        let mut ordered = json_value!({});
+        let obj = ordered.as_object_mut().unwrap();
+
+        obj.insert(
+            "$schema".into(),
+            json_value!("https://json-schema.org/draft/2020-12/schema"),
+        );
+        obj.insert("$id".into(), json_value!(uri));
+
+        if let Some(t) = schema.get("title") {
+            obj.insert("title".into(), t.clone());
+        }
+        obj.insert(
+            "type".into(),
+            schema.get("type").cloned().unwrap_or(json_value!("object")),
+        );
+
+        let unevaluated = if strict {
+            json_value!(false)
+        } else {
+            schema
+                .get("unevaluatedProperties")
+                .cloned()
+                .unwrap_or(json_value!(true))
+        };
+        obj.insert("unevaluatedProperties".into(), unevaluated);
+
+        if let Some(p) = schema.get("properties") {
+            obj.insert("properties".into(), p.clone());
+        }
+
+        if let Some(old) = schema.as_object() {
+            for (k, v) in old {
+                if ![
+                    "$schema",
+                    "$id",
+                    "title",
+                    "type",
+                    "properties",
+                    "unevaluatedProperties",
+                ]
+                .contains(&k.as_str())
+                {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        ordered
+    }
+
+    async fn load_file(&self, name: &str) -> RaiseResult<JsonValue> {
+        let uri = self.manager.build_schema_uri(name).await;
+        let (v, k) = self.extract_schema_paths(&uri);
+        let path = self
+            .manager
+            .storage
+            .config
+            .db_schemas_root(&self.manager.space, &self.manager.db)
+            .join(v)
+            .join(k);
+        crate::utils::io::fs::read_json_async(&path).await
+    }
+
+    async fn save_ordered(&self, name: &str, schema: JsonValue) -> RaiseResult<()> {
+        // On génère le Jeton car on s'apprête à appeler create_schema
+        let lock = self
+            .manager
+            .storage
+            .get_index_lock(&self.manager.space, &self.manager.db);
+        let guard = lock.lock().await;
+        let mut tx = self.manager.begin_system_tx(&guard).await?;
+
+        self.create_schema(&mut tx, name, schema).await?;
+
+        tx.commit().await
+    }
+
+    pub fn extract_schema_paths(&self, uri: &str) -> (String, String) {
+        let version = uri
+            .split("/schemas/")
+            .nth(1)
+            .and_then(|s| s.split('/').next())
+            .unwrap_or("v2")
+            .to_string();
+        let rel_key = uri
+            .split(&format!("/schemas/{}/", version))
+            .nth(1)
+            .unwrap_or(uri)
+            .to_string();
+        (version, rel_key)
+    }
+
+    /// Crée une collection physique et l'inscrit dans le jeton de transaction
+    pub async fn create_collection(
+        &self,
+        tx: &mut SystemIndexTx<'_>,
+        name: &str,
+        schema_uri: &str,
+    ) -> RaiseResult<()> {
+        let mgr = self.manager;
+
+        // 1. Logique physique (Dossiers et Méta-fichiers)
+        let final_schema_uri = self.build_schema_uri(schema_uri).await;
+        let col_path = mgr
+            .storage
+            .config
+            .db_collection_path(&mgr.space, &mgr.db, name);
+
+        if !col_path.exists() {
+            crate::utils::io::fs::ensure_dir_async(&col_path).await?;
+        }
+
+        let meta = json_value!({ "schema": final_schema_uri, "indexes": [] });
+        crate::utils::io::fs::write_json_atomic_async(&col_path.join("_meta.json"), &meta).await?;
+
+        // 2. Logique logique (Modification directe dans la RAM du Jeton)
+        if tx.document.get("collections").is_none() {
+            tx.document["collections"] = json_value!({});
+        }
+
+        if let Some(cols) = tx.document["collections"].as_object_mut() {
+            cols.insert(
+                name.to_string(),
+                json_value!({ "schema": final_schema_uri, "items": [] }),
+            );
+        }
+
+        // 🎯 Terminé ! Pas de lock, pas de save_system_index. Le Jeton s'en chargera à la fin.
+        Ok(())
+    }
+
+    pub async fn drop_collection(&self, name: &str) -> RaiseResult<()> {
+        crate::json_db::collections::collection::drop_collection(
+            &self.manager.storage.config,
+            &self.manager.space,
+            &self.manager.db,
+            name,
+        )
+        .await?;
+        self.remove_collection_from_system_index(name).await?;
+        Ok(())
+    }
+
+    pub async fn build_schema_uri(&self, schema_name: &str) -> String {
+        if schema_name.contains("/schemas/v1/") || schema_name.contains("/schemas/v2/") {
+            let parts: Vec<&str> = schema_name.split("/schemas/").collect();
+            if parts.len() == 2 {
+                let config = AppConfig::get();
+                return format!(
+                    "db://{}/{}/schemas/{}",
+                    config.mount_points.system.domain, config.mount_points.system.db, parts[1]
+                );
+            }
+        }
+        if schema_name.starts_with("db://") || schema_name.starts_with("http") {
+            return schema_name.to_string();
+        }
+        if schema_name.starts_with("v1/") || schema_name.starts_with("v2/") {
+            return format!(
+                "db://{}/{}/schemas/{}",
+                self.manager.space, self.manager.db, schema_name
+            );
+        }
+
+        let domain_version = self.get_domain_version().await;
+        let relative_path = schema_name
+            .trim_start_matches('/')
+            .trim_start_matches("schemas/");
+        format!(
+            "db://{}/{}/schemas/{}/{}",
+            self.manager.space, self.manager.db, domain_version, relative_path
+        )
+    }
+
+    pub async fn get_domain_version(&self) -> String {
+        match self.manager.load_index().await {
+            Ok(index) => {
+                if let Some(uri) = index.get("$schema").and_then(|v| v.as_str()) {
+                    if let Some(v) = uri
+                        .split("/schemas/")
+                        .nth(1)
+                        .and_then(|s| s.split('/').next())
+                    {
+                        return v.to_string();
+                    }
+                }
+                "v2".to_string()
+            }
+            Err(_) => "v2".to_string(),
+        }
+    }
+
+    pub async fn resolve_schema_from_index(&self, col_name: &str) -> RaiseResult<String> {
+        let sys_json = self.manager.load_index().await?;
+        let current_schema = sys_json
+            .get("$schema")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        if !current_schema.contains("/index") {
+            raise_error!(
+                "ERR_DB_INTEGRITY_COMPROMISED",
+                error = "L'index utilise un schéma non certifié."
+            );
+        }
+
+        let col_ptr = format!("/collections/{}/schema", col_name);
+        let rule_ptr = format!("/rules/{}/schema", col_name);
+
+        let raw_path = sys_json
+            .pointer(&col_ptr)
+            .or_else(|| sys_json.pointer(&rule_ptr))
+            .and_then(|v| v.as_str());
+
+        let Some(path) = raw_path else {
+            raise_error!(
+                "ERR_DB_COLLECTION_NOT_FOUND",
+                error = "Collection inconnue."
+            );
+        };
+
+        if path.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(self.build_schema_uri(path).await)
+    }
+
+    async fn remove_collection_from_system_index(&self, col_name: &str) -> RaiseResult<()> {
+        let lock = self
+            .manager
+            .storage
+            .get_index_lock(&self.manager.space, &self.manager.db);
+        let _guard = lock.lock().await;
+
+        let mut sys_doc = self.manager.load_index().await?;
+        if let Some(cols) = sys_doc
+            .get_mut("collections")
+            .and_then(|c| c.as_object_mut())
+        {
+            if cols.remove(col_name).is_some() {
+                self.manager.save_system_index(&mut sys_doc).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn import_schemas_from_storage(
+        &self,
+        source_space: &str,
+        source_db: &str,
+    ) -> RaiseResult<usize> {
+        use crate::json_db::schema::bootstrapper::SchemaBootstrapper;
+        let bootstrapper = SchemaBootstrapper::new(self.manager);
+        bootstrapper.run(source_space, source_db).await
+    }
+}
+
+// =========================================================================
+// TESTS UNITAIRES (DDL Handler)
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::io::fs;
+    use crate::utils::testing::mock::DbSandbox;
+
+    /// 🧪 TEST 1 : Création et Suppression d'un Schéma (Disque + Index)
+    #[async_test]
+    async fn test_ddl_create_and_drop_schema() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
+        );
+        let ddl = DdlHandler::new(&manager);
+
+        let schema_name = "test_entities/robot.schema.json";
+        let initial_schema = json_value!({
+            "type": "object",
+            "properties": { "serial_number": { "type": "string" } }
+        });
+
+        // 🎯 FIX : On limite la durée de vie du verrou avec un bloc `{}`
+        {
+            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let guard = lock.lock().await;
+            let mut tx = manager.begin_system_tx(&guard).await?;
+            ddl.create_schema(&mut tx, schema_name, initial_schema)
+                .await?;
+            tx.commit().await?;
+        } // 🛡️ Ici, guard est détruit et le verrou est rendu au système !
+
+        let version = ddl.get_domain_version().await;
+        let sys_doc = manager.load_index().await?;
+        let ptr = sys_doc["schemas"][&version].get("test_entities/robot.schema.json");
+        assert!(
+            ptr.is_some(),
+            "Le pointeur du schéma doit être dans l'index"
+        );
+
+        let uri = ddl.build_schema_uri(schema_name).await;
+        let (v, rel_key) = ddl.extract_schema_paths(&uri);
+        let path = manager
+            .storage
+            .config
+            .db_schemas_root(&manager.space, &manager.db)
+            .join(&v)
+            .join(&rel_key);
+        assert!(path.exists(), "Le fichier physique du schéma doit exister");
+
+        // 2. DROP (Maintenant c'est safe car l'ancien verrou est détruit)
+        ddl.drop_schema(schema_name).await?;
+
+        assert!(!path.exists(), "Le fichier physique doit être supprimé");
+        let sys_doc_after = manager.load_index().await?;
+        assert!(sys_doc_after["schemas"][&version]
+            .get("test_entities/robot.schema.json")
+            .is_none());
+
+        Ok(())
+    }
+
+    /// 🧪 TEST 2 : Manipulation fine des Propriétés
+    #[async_test]
+    async fn test_ddl_property_manipulation() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
+        );
+        let ddl = DdlHandler::new(&manager);
+        let schema_name = "test_props.schema.json";
+
+        // 🎯 FIX : Portée limitée pour la création
+        {
+            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let guard = lock.lock().await;
+            let mut tx = manager.begin_system_tx(&guard).await?;
+            ddl.create_schema(&mut tx, schema_name, json_value!({ "type": "object" }))
+                .await?;
+            tx.commit().await?;
+        }
+
+        let get_props = || async {
+            let uri = ddl.build_schema_uri(schema_name).await;
+            let (v, k) = ddl.extract_schema_paths(&uri);
+            let path = manager
+                .storage
+                .config
+                .db_schemas_root(&manager.space, &manager.db)
+                .join(v)
+                .join(k);
+            let schema: JsonValue = fs::read_json_async(&path).await.unwrap();
+            schema["properties"].clone()
+        };
+
+        // Les fonctions de modification génèrent leurs propres jetons en interne
+        ddl.add_property(schema_name, "age", json_value!({ "type": "integer" }))
+            .await?;
+        let props_after_add = get_props().await;
+        assert_eq!(props_after_add["age"]["type"], "integer");
+
+        ddl.alter_property(
+            schema_name,
+            "age",
+            json_value!({ "type": "number", "minimum": 0 }),
+        )
+        .await?;
+        let props_after_alter = get_props().await;
+        assert_eq!(props_after_alter["age"]["type"], "number");
+
+        ddl.drop_property(schema_name, "age").await?;
+        let props_after_drop = get_props().await;
+        assert!(props_after_drop.get("age").is_none());
+
+        Ok(())
+    }
+
+    /// 🧪 TEST 3 : Gestion du cycle de vie des Collections
+    #[async_test]
+    async fn test_ddl_collections_lifecycle() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
+        );
+        let ddl = DdlHandler::new(&manager);
+
+        let col_name = "test_robots";
+        let schema_name = "robot.schema.json";
+        let schema_uri = ddl.build_schema_uri(schema_name).await;
+
+        // 🎯 FIX : Création de la collection enfermée dans son scope
+        {
+            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let guard = lock.lock().await;
+            let mut tx = manager.begin_system_tx(&guard).await?;
+
+            ddl.create_schema(&mut tx, schema_name, json_value!({ "type": "object" }))
+                .await?;
+            ddl.create_collection(&mut tx, col_name, &schema_uri)
+                .await?;
+
+            tx.commit().await?;
+        } // Le garde meurt ici. On est libéré !
+
+        let col_path =
+            manager
+                .storage
+                .config
+                .db_collection_path(&manager.space, &manager.db, col_name);
+        assert!(
+            col_path.exists(),
+            "Le dossier de la collection doit exister"
+        );
+
+        let meta_path = col_path.join("_meta.json");
+        assert!(meta_path.exists(), "Le fichier _meta.json doit exister");
+
+        let sys_doc = manager.load_index().await?;
+        assert!(sys_doc["collections"].get(col_name).is_some());
+
+        // 2. DROP Collection (Maintenant ça ne bloquera plus)
+        ddl.drop_collection(col_name).await?;
+
+        assert!(!col_path.exists());
+        let sys_doc_after = manager.load_index().await?;
+        assert!(sys_doc_after["collections"].get(col_name).is_none());
+
+        Ok(())
+    }
+}

@@ -169,7 +169,7 @@ mod tests {
     use super::*;
     use crate::ai::llm::client::LlmClient;
     use crate::ai::world_model::NeuroSymbolicEngine;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
     use candle_nn::VarMap;
 
     async fn setup_test_ctx(sandbox: &AgentDbSandbox) -> AgentContext {
@@ -286,7 +286,7 @@ mod tests {
             &config.mount_points.modeling.db,
         );
 
-        AgentDbSandbox::mock_db(&ws_manager).await?;
+        DbSandbox::mock_db(&ws_manager).await?;
 
         let generic_uri = "db://_system/_system/schemas/v1/db/generic.schema.json";
 

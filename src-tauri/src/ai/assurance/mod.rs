@@ -90,7 +90,7 @@ mod tests {
     use super::*;
     use crate::ai::assurance::quality::MetricCategory;
     use crate::ai::assurance::xai::ExplanationScope;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
     async fn test_save_assurance_artifacts_with_json_db() -> RaiseResult<()> {
@@ -157,7 +157,7 @@ mod tests {
         );
 
         // 🎯 FIX : Initialiser la base de données Workspace avant d'y écrire !
-        AgentDbSandbox::mock_db(&ws_manager).await?;
+        DbSandbox::mock_db(&ws_manager).await?;
 
         let report = QualityReport::new("ws_model", "ws_data");
         let result = persistence::save_quality_report(&ws_manager, &report).await;

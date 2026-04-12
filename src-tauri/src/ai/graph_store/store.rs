@@ -213,7 +213,7 @@ pub fn extract_rich_semantic_content(data: &JsonValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[test]
     fn test_rich_semantic_extraction() {
@@ -245,7 +245,7 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
@@ -288,7 +288,7 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         let store = GraphStore::new(sandbox.domain_root.clone(), &manager).await?;
 

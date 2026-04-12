@@ -84,7 +84,7 @@ impl<'a> IndexManager<'a> {
         let mut meta = self.load_meta(&meta_path).await?;
         if let Some(pos) = meta.indexes.iter().position(|i| i.name == field) {
             let removed = meta.indexes.remove(pos);
-            fs::write_async(&meta_path, json::serialize_to_string_pretty(&meta)?).await?;
+            fs::write_json_atomic_async(&meta_path, &meta).await?;
 
             let index_filename = match removed.index_type {
                 IndexType::Hash => format!("{}.hash.idx", removed.name),
@@ -208,15 +208,6 @@ impl<'a> IndexManager<'a> {
             );
         };
         let indexes = self.load_indexes(collection).await?;
-
-        if !indexes.is_empty() {
-            let idx_dir = self
-                .storage
-                .config
-                .db_collection_path(&self.space, &self.db, collection)
-                .join("_indexes");
-            fs::create_dir_all_async(idx_dir).await?;
-        }
 
         for def in indexes {
             self.dispatch_update(collection, &def, doc_id, None, Some(new_doc))
@@ -364,7 +355,7 @@ pub async fn add_index_definition(
 
     if !meta.indexes.iter().any(|i| i.name == def.name) {
         meta.indexes.push(def);
-        fs::write_async(&meta_path, json::serialize_to_string_pretty(&meta)?).await?;
+        fs::write_json_atomic_async(&meta_path, &meta).await?;
     }
     Ok(())
 }

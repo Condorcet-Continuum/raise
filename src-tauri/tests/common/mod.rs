@@ -4,7 +4,7 @@ use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
 // 🎯 Utilisation de la façade testing pour l'isolation totale
 use raise::utils::prelude::*;
-use raise::utils::testing::{inject_collection_schema, inject_mock_component, DbSandbox}; // 🎯 Façade Unique RAISE
+use raise::utils::testing::{inject_mock_component, DbSandbox}; // 🎯 Façade Unique RAISE
 
 static INIT: InitGuard = InitGuard::new();
 
@@ -49,20 +49,23 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
     raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
     // 3. PRÉPARATION DES SCHÉMAS PHYSIQUES
-    inject_custom_test_schemas(&domain_path).await;
-
-    // 4. INITIALISATION DU MANAGER SYSTÈME
     let mgr = CollectionsManager::new(&sandbox.storage, &system_domain, &system_db);
 
     match DbSandbox::mock_db(&mgr).await {
         Ok(_) => user_success!("SUC_TEST_DB_READY"),
         Err(e) => panic!("❌ Échec initialisation index système : {}", e),
     }
-    inject_custom_test_schemas(&domain_path).await;
+    // 🎯 INJECTION PROPRE DANS LE REGISTRE DDL
+    inject_custom_test_schemas(&mgr).await;
+
     // =========================================================================
     // 🎯 INITIALISATION DES COLLECTIONS (Résilience & Isolation)
     // =========================================================================
-    let generic_schema = "db://_system/_system/schemas/v1/db/generic.schema.json";
+    let generic_schema_uri = format!(
+        "db://{}/{}/schemas/v1/db/generic.schema.json",
+        system_domain, system_db
+    );
+    let generic_schema = generic_schema_uri.as_str();
 
     // A. Collections Système
     let system_collections = vec!["session_agents", "prompts", "agents", "configs"];
@@ -161,8 +164,7 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
 }
 
 /// Injection des schémas JSON pour la validation des tests
-/// Injection des schémas JSON pour la validation des tests
-async fn inject_custom_test_schemas(domain_root: &Path) {
+async fn inject_custom_test_schemas(mgr: &CollectionsManager<'_>) {
     let schemas = vec![
         (
             "configuration_items",
@@ -213,7 +215,19 @@ async fn inject_custom_test_schemas(domain_root: &Path) {
     ];
 
     for (name, content) in schemas {
-        inject_collection_schema(domain_root, name, content).await;
+        let uri = format!(
+            "db://{}/{}/schemas/v1/mock/{}.schema.json",
+            mgr.space, mgr.db, name
+        );
+        let mut schema_val: raise::utils::data::json::JsonValue =
+            raise::utils::data::json::deserialize_from_str(content).unwrap();
+        if let Some(obj) = schema_val.as_object_mut() {
+            obj.insert(
+                "$id".to_string(),
+                raise::utils::data::json::JsonValue::String(uri.clone()),
+            );
+        }
+        let _ = mgr.create_schema_def(&uri, schema_val).await;
     }
 }
 

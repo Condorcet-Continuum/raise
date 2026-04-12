@@ -296,7 +296,25 @@ mod tests {
         assert_eq!(updated_doc["name"], "Alice");
 
         let history = migrator.manager.list_all("_migrations").await?;
-        assert_eq!(history.len(), 2);
+
+        // 🎯 FIX : On attend 3 migrations (1 Bootstrap + m1 + m2)
+        assert_eq!(
+            history.len(),
+            3,
+            "L'historique doit contenir le Bootstrap initial et les 2 migrations du test"
+        );
+
+        // Bonus de vérification : on s'assure que m1 et m2 sont bien là
+        let ids: Vec<String> = history
+            .into_iter()
+            .filter_map(|doc| {
+                doc.get("_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        assert!(ids.contains(&"m1".to_string()));
+        assert!(ids.contains(&"m2".to_string()));
 
         Ok(())
     }

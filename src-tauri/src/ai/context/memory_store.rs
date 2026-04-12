@@ -96,7 +96,7 @@ impl MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
     async fn test_memory_store_lifecycle() -> RaiseResult<()> {
@@ -111,7 +111,7 @@ mod tests {
         );
 
         // 🎯 FIX : Utiliser le mock de la sandbox (v1) au lieu de l'init de prod (v2)
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         // 🎯 Match strict sur la création du store
         let store = match MemoryStore::new(&manager).await {

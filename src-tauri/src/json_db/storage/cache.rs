@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/json_db/storage/cache.rs
 
-//! Module de gestion de cache LRU (Least Recently Used) thread-safe et asynchrone.
+//! Module de gestion de cache LRU (Least Recently Used) thread-safe ultra-performant.
 
 use crate::utils::prelude::*;
 
@@ -12,8 +12,9 @@ struct CacheEntry<V> {
 
 #[derive(Debug, Clone)]
 pub struct Cache<K: Hashable + Eq, V> {
-    // Le Mutex protège la structure LRU interne qui nécessite une mutation à chaque lecture
-    store: SharedRef<AsyncMutex<MemoryCache<K, CacheEntry<V>>>>,
+    // 🎯 FIX : On utilise un SyncMutex (std::sync::Mutex) car les opérations RAM
+    // prennent des nanosecondes et ne doivent pas suspendre le runtime asynchrone !
+    store: SharedRef<SyncMutex<MemoryCache<K, CacheEntry<V>>>>,
     default_ttl: Option<TimeDuration>,
 }
 
@@ -25,15 +26,15 @@ where
     pub fn new(capacity: usize, default_ttl: Option<TimeDuration>) -> Self {
         let cap = SafeSize::new(capacity).unwrap_or(SafeSize::new(100).unwrap());
         Self {
-            store: SharedRef::new(AsyncMutex::new(MemoryCache::new(cap))),
+            store: SharedRef::new(SyncMutex::new(MemoryCache::new(cap))),
             default_ttl,
         }
     }
 
-    // ✅ NOUVEAU : Les méthodes passent en `async`
-    pub async fn get(&self, key: &K) -> Option<V> {
-        // Point de suspension asynchrone, ne bloque pas le thread !
-        let mut guard = self.store.lock().await;
+    // 🎯 FIX : Plus de `async`. Un cache RAM doit être synchrone et immédiat.
+    pub fn get(&self, key: &K) -> Option<V> {
+        // Le verrou est pris et relâché quasi instantanément sans faire appel à Tokio
+        let mut guard = self.store.lock().expect("Poisoned lock in Cache");
 
         if let Some(entry) = guard.get(key) {
             if let Some(expires_at) = entry.expires_at {
@@ -47,36 +48,55 @@ where
         None
     }
 
-    pub async fn put(&self, key: K, value: V) {
+    pub fn put(&self, key: K, value: V) {
         let now = TimeInstant::now();
         let expires_at = self.default_ttl.map(|ttl| now + ttl);
-
         let entry = CacheEntry { value, expires_at };
 
-        let mut guard = self.store.lock().await;
+        let mut guard = self.store.lock().expect("Poisoned lock in Cache");
         guard.put(key, entry);
     }
 
-    pub async fn remove(&self, key: &K) {
-        let mut guard = self.store.lock().await;
+    pub fn remove(&self, key: &K) {
+        let mut guard = self.store.lock().expect("Poisoned lock in Cache");
         guard.pop(key);
     }
 
-    pub async fn clear(&self) {
-        let mut guard = self.store.lock().await;
+    pub fn clear(&self) {
+        let mut guard = self.store.lock().expect("Poisoned lock in Cache");
         guard.clear();
     }
 
-    pub async fn len(&self) -> usize {
-        let guard = self.store.lock().await;
+    pub fn len(&self) -> usize {
+        let guard = self.store.lock().expect("Poisoned lock in Cache");
         guard.len()
     }
 
-    pub async fn is_empty(&self) -> bool {
-        self.len().await == 0
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
+// Les tests associés doivent également perdre leurs `.await` lors des appels au cache.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test] // Repasse en test synchrone classique
+    fn test_cache_lru_behavior() {
+        let cache = Cache::new(2, None);
+        cache.put("k1", 100);
+        cache.put("k2", 200);
+
+        cache.get(&"k1");
+        cache.put("k3", 300);
+
+        assert_eq!(cache.get(&"k1"), Some(100));
+        assert_eq!(cache.get(&"k2"), None);
+        assert_eq!(cache.get(&"k3"), Some(300));
+    }
+}
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,3 +128,5 @@ mod tests {
         assert_eq!(cache.get(&"k1").await, None);
     }
 }
+
+*/

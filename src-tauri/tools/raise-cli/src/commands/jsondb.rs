@@ -188,6 +188,14 @@ pub enum JsondbCommands {
         #[arg(long)]
         path: PathBuf,
     },
+
+    ImportSchemas {
+        #[arg(long)]
+        source_domain: String,
+        #[arg(long)]
+        source_db: String,
+    },
+
     Transaction {
         #[arg(long)]
         file: PathBuf,
@@ -570,6 +578,18 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
                 json_value!({"collection": collection, "docs_imported": docs_count})
             );
         }
+
+        JsondbCommands::ImportSchemas {
+            source_domain,
+            source_db,
+        } => {
+            let count = col_mgr.import_schemas(&source_domain, &source_db).await?;
+            user_success!(
+                "JSONDB_SCHEMAS_IMPORTED",
+                json_value!({ "count": count, "space": source_domain, "db": source_db })
+            );
+        }
+
         JsondbCommands::Transaction { file } => {
             let json_val: JsonValue = fs::read_json_async(&file).await?;
 

@@ -129,7 +129,7 @@ impl GraphFeatures {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
 
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
@@ -144,7 +144,7 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         // Initialisation des collections MBSE
         let schema_uri = format!(

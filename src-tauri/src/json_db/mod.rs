@@ -191,15 +191,21 @@ mod tests {
         assert!(data_root.exists());
 
         // Test que l'injection centralisée a fonctionné
-        let sys_schemas_dir = env
+        let sys_index_path = env
             .cfg
-            .db_schemas_root(config::BOOTSTRAP_DOMAIN, config::BOOTSTRAP_DB)
-            .join("v1");
-        let has_index = sys_schemas_dir.join("db/index.schema.json").exists();
+            .db_root(config::BOOTSTRAP_DOMAIN, config::BOOTSTRAP_DB)
+            .join("_system.json");
+
+        let sys_doc: crate::utils::data::json::JsonValue =
+            crate::utils::io::fs::read_json_async(&sys_index_path)
+                .await
+                .unwrap();
+
+        let has_index = sys_doc["schemas"]["v1"]["db/index.schema.json"].is_object();
 
         assert!(
             has_index,
-            "L'index.schema.json maître doit être présent dans le dossier temporaire"
+            "L'index.schema.json maître doit être présent dans le DDL de l'index système"
         );
     }
 

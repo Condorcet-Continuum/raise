@@ -657,18 +657,11 @@ impl<'a> TransactionManager<'a> {
     async fn apply_transaction(&self, tx: &Transaction) -> RaiseResult<()> {
         let mut idx = IndexManager::new(self.storage, &self.space, &self.db);
 
-        let sys_path = self
-            .storage
-            .config
-            .db_root(&self.space, &self.db)
-            .join("_system.json");
-
-        let mut system_index = if sys_path.exists() {
-            let c = fs::read_to_string_async(&sys_path).await?;
-            json::deserialize_from_str::<JsonValue>(&c).unwrap_or(json_value!({"collections": {} }))
-        } else {
-            json_value!({"collections": {} })
-        };
+        // 🎯 L'INTÉGRATION DU JETON : On délègue l'ouverture au CollectionsManager
+        let col_mgr = CollectionsManager::new(self.storage, &self.space, &self.db);
+        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let guard = lock.lock().await;
+        let mut sys_tx = col_mgr.begin_system_tx(&guard).await?;
 
         let mut undo_stack: Vec<UndoAction> = Vec::new();
 
@@ -710,7 +703,7 @@ impl<'a> TransactionManager<'a> {
                         return Err(e);
                     }
 
-                    self.update_index_entry(&mut system_index, collection, id, false)?;
+                    self.update_index_entry(&mut sys_tx.document, collection, id, false)?;
                     undo_stack.push(UndoAction::Insert {
                         collection: collection.clone(),
                         id: id.clone(),
@@ -792,7 +785,7 @@ impl<'a> TransactionManager<'a> {
                         return Err(e);
                     }
 
-                    self.update_index_entry(&mut system_index, collection, id, false)?;
+                    self.update_index_entry(&mut sys_tx.document, collection, id, false)?;
                     undo_stack.push(UndoAction::Update {
                         collection: collection.clone(),
                         id: id.clone(),
@@ -828,7 +821,7 @@ impl<'a> TransactionManager<'a> {
                             return Err(e);
                         }
 
-                        self.update_index_entry(&mut system_index, collection, id, true)?;
+                        self.update_index_entry(&mut sys_tx.document, collection, id, true)?;
                         undo_stack.push(UndoAction::Delete {
                             collection: collection.clone(),
                             id: id.clone(),
@@ -839,7 +832,7 @@ impl<'a> TransactionManager<'a> {
             }
         }
 
-        fs::write_json_atomic_async(&sys_path, &system_index).await?;
+        sys_tx.commit().await?;
         Ok(())
     }
 

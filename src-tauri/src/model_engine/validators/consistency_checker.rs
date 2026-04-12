@@ -174,7 +174,7 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::NameType;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     async fn inject_mock_mapping(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
         let schema_uri = format!(
@@ -222,7 +222,7 @@ mod tests {
         inject_mock_mapping(&manager).await?;
 
         let oa_mgr = CollectionsManager::new(&sandbox.db, &config.mount_points.system.domain, "oa");
-        AgentDbSandbox::mock_db(&oa_mgr).await?;
+        DbSandbox::mock_db(&oa_mgr).await?;
 
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",

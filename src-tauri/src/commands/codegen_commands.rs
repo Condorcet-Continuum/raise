@@ -133,7 +133,7 @@ pub async fn weave_code_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     async fn inject_mock_mapping(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
         let generic_schema = format!(
@@ -170,7 +170,7 @@ mod tests {
         inject_mock_mapping(&sys_mgr).await?;
 
         let la_mgr = CollectionsManager::new(&sandbox.db, &config.mount_points.system.domain, "la");
-        AgentDbSandbox::mock_db(&la_mgr).await?;
+        DbSandbox::mock_db(&la_mgr).await?;
 
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",

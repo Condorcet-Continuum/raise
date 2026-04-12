@@ -9,3 +9,4 @@ pub mod validator;
 pub use validator::SchemaValidator;
 
 pub mod bootstrapper;
+pub mod ddl;

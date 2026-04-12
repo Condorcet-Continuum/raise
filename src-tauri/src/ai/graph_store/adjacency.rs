@@ -111,7 +111,7 @@ impl GraphAdjacency {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     /// Test existant : Validation des liens sémantiques Arcadia (LA -> SA)
     #[async_test]
@@ -127,7 +127,7 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
@@ -230,7 +230,7 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",

@@ -329,7 +329,7 @@ impl VectorStore for CandleLocalStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
@@ -342,7 +342,7 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
         let col = "tech_resilient";
@@ -378,7 +378,7 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         let col = "persistence_test";
         {

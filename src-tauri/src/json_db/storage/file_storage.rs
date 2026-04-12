@@ -179,10 +179,6 @@ pub async fn atomic_write_binary<P: AsRef<Path>>(path: P, content: &[u8]) -> Rai
     atomic_write(path, content).await
 }
 
-pub async fn save_database_index(path: &Path, data: &JsonValue) -> RaiseResult<()> {
-    fs::write_json_atomic_async(path, data).await
-}
-
 pub async fn read_system_index(
     config: &JsonDbConfig,
     space: &str,

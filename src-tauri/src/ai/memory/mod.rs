@@ -52,7 +52,7 @@ mod integration_tests {
     use crate::ai::memory::candle_store::CandleLocalStore;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::prelude::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
     use candle_core::Device;
 
     /// Test existant : Cycle de vie complet via Sandbox
@@ -69,7 +69,7 @@ mod integration_tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         let device = Device::Cpu;
         let store_dir = sandbox.domain_root.join("vector_store");
@@ -161,7 +161,7 @@ mod integration_tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        AgentDbSandbox::mock_db(&manager).await?;
+        DbSandbox::mock_db(&manager).await?;
 
         let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
 
