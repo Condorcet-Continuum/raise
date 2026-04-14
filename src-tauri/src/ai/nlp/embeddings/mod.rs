@@ -130,6 +130,8 @@ mod tests {
 
     /// Test existant : Initialisation par défaut
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_default_engine_init() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
@@ -150,6 +152,8 @@ mod tests {
 
     /// Test existant : Commutation manuelle entre backends
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_engine_switching() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
@@ -180,6 +184,8 @@ mod tests {
 
     /// On teste l'initialisation directe pour valider l'interception d'erreur
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_engine_resilience_bad_domain() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
 
@@ -199,6 +205,8 @@ mod tests {
 
     /// 🎯 NOUVEAU TEST : Protection contre les requêtes vides
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_engine_query_validation() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
