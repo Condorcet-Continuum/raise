@@ -526,6 +526,46 @@ impl<'a> DdlHandler<'a> {
         let bootstrapper = SchemaBootstrapper::new(self.manager);
         bootstrapper.run(source_space, source_db).await
     }
+
+    /// 🎯 Enregistre une ontologie fondamentale (DDL) dans l'index de la base de données.
+    /// Cela définit les connaissances "en dur" (Code Génétique) nécessaires au Cerveau Sémantique.
+    pub async fn register_ontology(
+        &self,
+        namespace: &str,
+        uri: &str,
+        version: &str,
+    ) -> RaiseResult<()> {
+        let mgr = self.manager;
+
+        // 1. On prend le verrou global pour protéger le fichier _system.json
+        let lock = mgr.storage.get_index_lock(&mgr.space, &mgr.db);
+        let guard = lock.lock().await;
+
+        // 2. On génère le Jeton de Transaction Système
+        let mut tx = mgr.begin_system_tx(&guard).await?;
+
+        // 3. On s'assure que le bloc "ontologies" existe bien
+        if tx.document.get("ontologies").is_none() {
+            tx.document["ontologies"] = json_value!({});
+        }
+
+        // 4. On injecte la définition stricte exigée par primitive-types.schema.json
+        if let Some(ontologies) = tx.document["ontologies"].as_object_mut() {
+            ontologies.insert(
+                namespace.to_string(),
+                json_value!({
+                    "uri": uri,
+                    "version": version,
+                    "imports": [] // Résolus dynamiquement par le graphe
+                }),
+            );
+        }
+
+        // 5. On commit la transaction (sauvegarde sur disque et libération du verrou)
+        tx.commit().await?;
+
+        Ok(())
+    }
 }
 
 // =========================================================================
@@ -703,6 +743,67 @@ mod tests {
         assert!(!col_path.exists());
         let sys_doc_after = manager.load_index().await?;
         assert!(sys_doc_after["collections"].get(col_name).is_none());
+
+        Ok(())
+    }
+
+    /// 🧪 TEST 4 : Enregistrement d'Ontologies dans l'ADN (DDL)
+    #[async_test]
+    async fn test_ddl_register_ontology() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
+        );
+        let ddl = DdlHandler::new(&manager);
+
+        // 1. Mutation génétique : On enregistre l'ontologie fondamentale Arcadia
+        ddl.register_ontology(
+            "arcadia",
+            "db://_system/bootstrap/schemas/v2/system/db/arcadia.jsonld",
+            "1.1.0",
+        )
+        .await?;
+
+        // 🔍 Vérification du séquençage
+        let mut sys_doc = manager.load_index().await?;
+        assert!(
+            sys_doc.get("ontologies").is_some(),
+            "Le bloc ontologies doit avoir été créé dans l'index"
+        );
+
+        let arcadia_entry = &sys_doc["ontologies"]["arcadia"];
+        assert_eq!(
+            arcadia_entry["uri"],
+            "db://_system/bootstrap/schemas/v2/system/db/arcadia.jsonld"
+        );
+        assert_eq!(arcadia_entry["version"], "1.1.0");
+        assert!(
+            arcadia_entry["imports"].as_array().unwrap().is_empty(),
+            "Le tableau d'imports doit être vide par défaut"
+        );
+
+        // 2. Test d'étanchéité : On enregistre une seconde ontologie (RAISE)
+        // Cela permet de vérifier qu'on n'écrase pas le bloc complet, mais qu'on l'enrichit.
+        ddl.register_ontology(
+            "raise",
+            "db://_system/bootstrap/schemas/v2/system/db/raise.jsonld",
+            "1.1.0",
+        )
+        .await?;
+
+        // 🔍 Vérification finale
+        sys_doc = manager.load_index().await?;
+        assert!(
+            sys_doc["ontologies"].get("arcadia").is_some(),
+            "L'ontologie Arcadia a été accidentellement écrasée !"
+        );
+        assert!(
+            sys_doc["ontologies"].get("raise").is_some(),
+            "L'ontologie RAISE n'a pas été ajoutée correctement."
+        );
+        assert_eq!(sys_doc["ontologies"]["raise"]["version"], "1.1.0");
 
         Ok(())
     }

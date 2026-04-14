@@ -49,6 +49,31 @@ pub enum AppError {
 }
 
 // =========================================================================
+// CONSTRUCTEURS OFFICIELS (La Façade)
+// =========================================================================
+
+impl AppError {
+    /// 🎯 Constructeur pour une erreur métier intentionnellement silencieuse.
+    /// Ne déclenche aucun log automatique (idéal pour les vérifications de routine type 'NotFound').
+    pub fn silent_not_found(
+        service: &str,
+        subdomain: &str,
+        component: &str,
+        message: &str,
+        context: JsonValue,
+    ) -> Self {
+        AppError::Structured(Box::new(StructuredData {
+            service: service.to_string(),
+            subdomain: subdomain.to_string(),
+            component: component.to_string(),
+            code: "ERR_NOT_FOUND_SILENT".to_string(),
+            message: message.to_string(),
+            context,
+        }))
+    }
+}
+
+// =========================================================================
 // 3. CONTRAT DE DONNÉES AVEC LE FRONTEND
 // =========================================================================
 

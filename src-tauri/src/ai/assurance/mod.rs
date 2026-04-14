@@ -23,7 +23,7 @@ pub mod persistence {
 
         // 🎯 FIX MOUNT POINTS : Résolution du schéma via la partition système configurée
         let schema_uri = format!(
-            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            "db://{}/{}/schemas/v2/assurance/quality_report.schema.json",
             app_config.mount_points.system.domain, app_config.mount_points.system.db
         );
 
@@ -60,7 +60,7 @@ pub mod persistence {
 
         // 🎯 FIX MOUNT POINTS : Alignement schéma maître
         let schema_uri = format!(
-            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            "db://{}/{}/schemas/v2/assurance/xai_frame.schema.json",
             app_config.mount_points.system.domain, app_config.mount_points.system.db
         );
 

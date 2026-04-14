@@ -102,14 +102,15 @@ async fn test_semantic_consistency_json_ld() {
     println!("\n🧠 [SEMANTIC] Vérification de la cohérence JSON-LD (Mode Simulé sans fichiers)...");
 
     for (schema_rel, short_type) in critical_mappings {
-        let doc = json_value!({
+        // 🎯 FIX : Déclaration de 'doc' en variable mutable pour l'expansion in-place
+        let mut doc = json_value!({
             "@type": short_type,
             "name": "Test Semantic"
         });
 
-        // 3. Expansion JSON-LD
-        let expanded = processor.expand(&doc);
-        let type_uri = processor.get_primary_type(&expanded);
+        // 3. Expansion JSON-LD (Mutation Zéro Allocation)
+        processor.expand_in_place(&mut doc);
+        let type_uri = processor.get_primary_type(&doc);
 
         match type_uri {
             Some(uri) => {

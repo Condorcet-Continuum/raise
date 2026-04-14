@@ -17,7 +17,7 @@ impl MemoryStore {
 
         // 🎯 FIX MOUNT POINTS : Utilisation du domaine système pour le schéma de session
         let schema_uri = format!(
-            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            "db://{}/{}/schemas/v2/agents/memory/chat_session.schema.json",
             app_config.mount_points.system.domain, app_config.mount_points.system.db
         );
 

@@ -7,6 +7,7 @@ mod commands;
 
 use raise::{
     json_db::{
+        collections::manager::CollectionsManager,
         jsonld::VocabularyRegistry,
         storage::{JsonDbConfig, StorageEngine},
     },
@@ -187,10 +188,26 @@ async fn main() -> RaiseResult<()> {
         }
         _ => {} // Tout va bien, aucun crash détecté
     }
+    // ---------------------------------------------------------
+    // 🧠 INITIALISATION SÉMANTIQUE (Bootstrapping In-Index)
+    // ---------------------------------------------------------
 
-    // Résolution du chemin d'ontologie via les points de montage système
-    let ontology_path = storage.config.data_root.join("_system/ontology");
-    bootstrap_semantic_engine(&ontology_path).await?;
+    let system_mgr = CollectionsManager::new(
+        &storage,
+        &config.mount_points.system.domain,
+        &config.mount_points.system.db,
+    );
+
+    match VocabularyRegistry::init_from_db(&system_mgr).await {
+        Ok(_) => user_success!("SEMANTIC_ENGINE_READY", json_value!({"mode": "in-index"})),
+        Err(e) => {
+            user_error!(
+                "ERR_SEMANTIC_BOOTSTRAP",
+                json_value!({"error": e.to_string()})
+            );
+            // On continue en mode dégradé (sans sémantique) pour permettre les réparations CLI
+        }
+    }
 
     let session_mgr = context::SessionManager::new(storage.clone());
 
@@ -375,28 +392,6 @@ async fn execute_command(cmd: Commands, ctx: CliContext) -> RaiseResult<()> {
         Commands::CodeGen(args) => commands::code_gen::handle(args, ctx).await,
         Commands::Validator(args) => commands::validator::handle(args, ctx).await,
         Commands::Utils(args) => commands::utils::handle(args, ctx).await,
-    }
-}
-
-/// Initialise le registre sémantique avec validation physique
-async fn bootstrap_semantic_engine(ontology_path: &Path) -> RaiseResult<()> {
-    if !ontology_path.exists() {
-        raise_error!(
-            "ERR_SEMANTIC_BOOTSTRAP",
-            error = "Dossier d'ontologie introuvable",
-            context = json_value!({"path": ontology_path.to_string_lossy()})
-        );
-    }
-
-    match VocabularyRegistry::init(ontology_path).await {
-        Ok(_) => {
-            user_info!(
-                "SEMANTIC_ENGINE_READY",
-                json_value!({ "path": ontology_path })
-            );
-            Ok(())
-        }
-        Err(e) => raise_error!("ERR_VOCABULARY_INIT_FAILED", error = e.to_string()),
     }
 }
 

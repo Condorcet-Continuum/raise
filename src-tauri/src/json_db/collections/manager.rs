@@ -63,7 +63,6 @@ impl<'a> CollectionsManager<'a> {
         &'a self,
         _proof_of_lock: &G,
     ) -> RaiseResult<SystemIndexTx<'a>> {
-        // On charge l'état actuel depuis le disque
         let document = self.load_index().await.unwrap_or_else(|_| {
             json_value!({
                 "collections": {},
@@ -73,7 +72,6 @@ impl<'a> CollectionsManager<'a> {
             })
         });
 
-        // Création et retour du Jeton
         Ok(SystemIndexTx {
             manager: self,
             document,
@@ -103,6 +101,7 @@ impl<'a> CollectionsManager<'a> {
             .import_schemas_from_storage(source_space, source_db)
             .await
     }
+
     pub async fn load_index(&self) -> RaiseResult<JsonValue> {
         let sys_path = self
             .storage
@@ -111,22 +110,24 @@ impl<'a> CollectionsManager<'a> {
             .join("_system.json");
 
         if !sys_path.exists() {
-            raise_error!(
-                "ERR_DB_SYSTEM_INDEX_NOT_FOUND",
-                error = "Opération refusée : l'index de la base de données est introuvable. La base doit être explicitement initialisée via init_db().",
-                context = json_value!({
-                    "path": sys_path.to_string_lossy().to_string(), 
-                    "db": self.db,
-                    "space": self.space
-                })
-            );
+            return Err(crate::utils::core::error::AppError::silent_not_found(
+                "json_db",
+                "collections",
+                "MANAGER",
+                "L'index _system.json n'existe pas.",
+                json_value!({
+                    "path": sys_path.to_string_lossy().to_string(),
+                    "space": self.space,
+                    "db": self.db
+                }),
+            ));
         }
 
         fs::read_json_async(&sys_path).await
     }
 
     // ============================================================================
-    // GESTION DES SCHÉMAS (DDL)
+    // GESTION DES SCHÉMAS ET ONTOLOGIES (DDL)
     // ============================================================================
 
     pub async fn get_domain_version(&self) -> String {
@@ -189,6 +190,17 @@ impl<'a> CollectionsManager<'a> {
         let mut uris = reg.list_uris();
         uris.sort();
         Ok(uris)
+    }
+
+    pub async fn register_ontology(
+        &self,
+        namespace: &str,
+        uri: &str,
+        version: &str,
+    ) -> RaiseResult<()> {
+        DdlHandler::new(self)
+            .register_ontology(namespace, uri, version)
+            .await
     }
 
     // ============================================================================
@@ -375,7 +387,13 @@ impl<'a> CollectionsManager<'a> {
 
     // --- GESTION DES COLLECTIONS ---
     pub async fn create_collection(&self, name: &str, uri: &str) -> RaiseResult<()> {
-        if !self.storage.config.db_root(&self.space, &self.db).exists() {
+        let sys_path = self
+            .storage
+            .config
+            .db_root(&self.space, &self.db)
+            .join("_system.json");
+
+        if !sys_path.exists() {
             raise_error!(
                 "ERR_DB_NOT_FOUND",
                 error = format!(
@@ -395,7 +413,7 @@ impl<'a> CollectionsManager<'a> {
         let mut tx = self.begin_system_tx(&guard).await?;
 
         // On passe le jeton à l'ouvrier
-        crate::json_db::schema::ddl::DdlHandler::new(self)
+        DdlHandler::new(self)
             .create_collection(&mut tx, name, uri)
             .await?;
 
@@ -429,13 +447,24 @@ impl<'a> CollectionsManager<'a> {
     }
 
     async fn remove_collection_from_system_index(&self, col_name: &str) -> RaiseResult<()> {
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
-        let _guard = lock.lock().await;
+        // 🎯 FIX FAIL-FAST : On s'assure physiquement que la base est initialisée avant une mutation
+        let sys_path = self
+            .storage
+            .config
+            .db_root(&self.space, &self.db)
+            .join("_system.json");
+        if !sys_path.exists() {
+            let _ = self.load_index().await?; // Déclenche l'erreur ERR_DB_SYSTEM_INDEX_NOT_FOUND
+        }
 
-        let mut system_doc = self.load_index().await?;
+        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let guard = lock.lock().await;
+
+        let mut tx = self.begin_system_tx(&guard).await?;
         let mut changed = false;
 
-        if let Some(cols) = system_doc
+        if let Some(cols) = tx
+            .document
             .get_mut("collections")
             .and_then(|c| c.as_object_mut())
         {
@@ -445,24 +474,34 @@ impl<'a> CollectionsManager<'a> {
         }
 
         if changed {
-            self.save_system_index(&mut system_doc).await?;
+            tx.commit().await?;
         }
 
         Ok(())
     }
 
     async fn add_item_to_index(&self, col_name: &str, id: &str) -> RaiseResult<()> {
+        // 🎯 FIX FAIL-FAST
+        let sys_path = self
+            .storage
+            .config
+            .db_root(&self.space, &self.db)
+            .join("_system.json");
+        if !sys_path.exists() {
+            let _ = self.load_index().await?;
+        }
+
         let lock = self.storage.get_index_lock(&self.space, &self.db);
-        let _guard = lock.lock().await;
+        let guard = lock.lock().await;
 
-        let mut system_doc = self.load_index().await?;
+        let mut tx = self.begin_system_tx(&guard).await?;
 
-        if system_doc.get("collections").is_none() {
-            system_doc["collections"] = json_value!({});
+        if tx.document.get("collections").is_none() {
+            tx.document["collections"] = json_value!({});
         }
         let filename = format!("{}.json", id);
 
-        if let Some(cols) = system_doc["collections"].as_object_mut() {
+        if let Some(cols) = tx.document["collections"].as_object_mut() {
             if !cols.contains_key(col_name) {
                 let schema_guess = self
                     .resolve_schema_from_index(col_name)
@@ -487,20 +526,32 @@ impl<'a> CollectionsManager<'a> {
                 }
             }
         }
-        self.save_system_index(&mut system_doc).await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
     async fn remove_item_from_index(&self, col_name: &str, id: &str) -> RaiseResult<()> {
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
-        let _guard = lock.lock().await;
+        // 🎯 FIX FAIL-FAST
+        let sys_path = self
+            .storage
+            .config
+            .db_root(&self.space, &self.db)
+            .join("_system.json");
+        if !sys_path.exists() {
+            let _ = self.load_index().await?;
+        }
 
-        let mut system_doc = self.load_index().await?;
+        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let guard = lock.lock().await;
+
+        let mut tx = self.begin_system_tx(&guard).await?;
 
         let filename = format!("{}.json", id);
         let mut changed = false;
 
-        if let Some(cols) = system_doc
+        if let Some(cols) = tx
+            .document
             .get_mut("collections")
             .and_then(|c| c.as_object_mut())
         {
@@ -518,7 +569,7 @@ impl<'a> CollectionsManager<'a> {
         }
 
         if changed {
-            self.save_system_index(&mut system_doc).await?;
+            tx.commit().await?;
         }
 
         Ok(())
@@ -702,14 +753,10 @@ impl<'a> CollectionsManager<'a> {
             }
             None => {
                 let doc = self.insert_with_schema(collection, data).await?;
-                // 🎯 FIX : Sécurisation totale du retour d'insertion
-                let new_id = match doc.get("_id").and_then(|v| v.as_str()) {
-                    Some(v) => v.to_string(),
-                    None => raise_error!(
-                        "ERR_DB_UPSERT_FAIL",
-                        error = "L'insertion a réussi mais n'a retourné aucun identifiant '_id'"
-                    ),
-                };
+                let new_id = doc
+                    .get("_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| build_error!("ERR_DB_UPSERT_FAIL", error = "ID non généré"))?;
                 Ok(format!("Created: {}", new_id))
             }
         }
@@ -900,6 +947,12 @@ impl<'a> CollectionsManager<'a> {
                         expanded_type, type_uri
                     );
                 }
+            } else {
+                // On ne panique pas, on informe ou on ignore si ce n'est pas critique
+                user_debug!(
+                    "WRN_SEMANTIC_TYPE_MISSING",
+                    json_value!({"action": "check_integrity"})
+                );
             }
         }
         Ok(())
@@ -1353,6 +1406,7 @@ mod tests {
 
     // 🎯 FIX : Passage en RaiseResult<()> pour utiliser ? et supprimer les .unwrap() et .expect()
     #[async_test]
+    #[serial_test::serial]
     async fn test_manager_init_db_completeness() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(&sandbox.storage, "system_test", "db_test");
@@ -1679,7 +1733,7 @@ mod tests {
     #[async_test]
     async fn test_manager_fail_fast_on_missing_index() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
-        let manager = CollectionsManager::new(&sandbox.storage, "space_fail", "db_fail");
+        let manager = CollectionsManager::new(&sandbox.storage, "ghost_domain", "ghost_db");
 
         DbSandbox::mock_db(&manager).await?;
         manager
@@ -1700,9 +1754,9 @@ mod tests {
         let res = manager.insert_raw("users", &doc).await;
 
         assert!(res.is_err());
-        match res {
-            Err(e) => assert!(e.to_string().contains("ERR_DB_SYSTEM_INDEX_NOT_FOUND")),
-            Ok(_) => panic!("Aurait dû échouer"),
+        if let Err(e) = res {
+            // 🎯 FIX : On met à jour le code d'erreur attendu vers notre nouvelle version silencieuse
+            assert!(e.to_string().contains("ERR_NOT_FOUND_SILENT"));
         }
 
         Ok(())

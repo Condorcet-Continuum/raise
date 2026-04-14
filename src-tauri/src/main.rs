@@ -123,17 +123,22 @@ fn main() {
             });
             // ---------------------------------------------------------
 
-            // 3. INITIALISATION SÉMANTIQUE (Bootstrapping)
-            let ontology_root = db_root.join("_system/ontology");
+            // ---------------------------------------------------------
+            // 3. INITIALISATION SÉMANTIQUE (Bootstrapping "In-Index")
+            // ---------------------------------------------------------
+            let storage_reg = storage.clone();
+            let domain_reg = system_domain.clone();
+            let db_reg = system_db.clone();
+
             tauri::async_runtime::spawn(async move {
-                user_info!(
-                    "INF_ONTOLOGY_INIT",
-                    json_value!({"path": ontology_root.to_string_lossy()})
-                );
-                match VocabularyRegistry::init(&ontology_root).await {
+                let db_manager = CollectionsManager::new(&storage_reg, &domain_reg, &db_reg);
+                user_info!("INF_ONTOLOGY_BOOTSTRAP");
+
+                // 🎯 FIX : Utilisation du bootstrapping basé sur la DB (In-Index)
+                match VocabularyRegistry::init_from_db(&db_manager).await {
                     Ok(_) => user_success!("SUC_ONTOLOGY_READY"),
                     Err(e) => user_error!(
-                        "ERR_ONTOLOGY_INIT_FAIL",
+                        "ERR_ONTOLOGY_BOOTSTRAP_FAIL", 
                         json_value!({"error": e.to_string()})
                     ),
                 }
@@ -407,22 +412,50 @@ mod tests {
     use raise::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
-    async fn test_load_ontologies_from_directory_success() {
-        let dir = tempdir().unwrap();
-        let path = dir.path();
-        let raise_dir = path.join("raise");
-        fs::create_dir_all_sync(&raise_dir).unwrap();
+    #[serial_test::serial]
+    async fn test_vocabulary_registry_db_init_robustness() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        let space = "test_space";
+        let db = "test_db";
+        let manager = CollectionsManager::new(&sandbox.storage, space, db);
+        DbSandbox::mock_db(&manager).await?;
 
-        let content = r#"{ "@context": { "test": "http://test#" }, "@graph": [] }"#;
-        fs::write_async(&raise_dir.join("core.jsonld"), content.as_bytes())
-            .await
-            .unwrap();
+        // 🎯 FIX STRICT SCHEMA : On crée explicitement la collection avant l'insertion brute
+        manager
+            .create_collection(
+                "_ontologies",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
 
-        let res = VocabularyRegistry::init(path).await;
-        assert!(res.is_ok());
+        // 1. Injection d'une ontologie mockée dans la collection système _ontologies
+        let ont_json = json_value!({
+            "_id": "ontology_core",
+            "@context": { "test": "http://test#" },
+            "@graph": []
+        });
+        manager.insert_raw("_ontologies", &ont_json).await?;
+
+        // 2. Référencement de l'ontologie dans l'index (_system.json)
+        let sys_path = sandbox
+            .storage
+            .config
+            .db_root(space, db)
+            .join("_system.json");
+        let mut sys_doc: JsonValue = fs::read_json_async(&sys_path).await?;
+        sys_doc["ontologies"]["core"] = json_value!({ "uri": "db://...", "version": "1.0" });
+        fs::write_json_atomic_async(&sys_path, &sys_doc).await?;
+
+        // 3. Action : Bootstrapping In-Index
+        VocabularyRegistry::init_from_db(&manager).await?;
 
         let registry = VocabularyRegistry::global();
-        assert!(registry.get_default_context().contains_key("test"));
+        assert!(
+            registry.get_default_context().contains_key("test"),
+            "L'ontologie n'a pas été chargée depuis la collection système."
+        );
+
+        Ok(())
     }
 
     #[async_test]

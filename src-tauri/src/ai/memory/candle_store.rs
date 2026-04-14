@@ -145,7 +145,7 @@ impl VectorStore for CandleLocalStore {
 
         // Résolution du schéma via mount points système
         let schema_uri = format!(
-            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            "db://{}/{}/schemas/v2/agents/memory/vector_store_record.schema.json",
             app_config.mount_points.system.domain, app_config.mount_points.system.db
         );
 

@@ -65,6 +65,15 @@ pub enum JsondbCommands {
         property: String,
     },
 
+    RegisterOntology {
+        #[arg(long, help = "Espace de nom (ex: arcadia, raise, oa)")]
+        namespace: String,
+        #[arg(long, help = "URI du fichier maître JSON-LD")]
+        uri: String,
+        #[arg(long, help = "Version sémantique exigée (ex: 1.1.0)")]
+        version: String,
+    },
+
     // --- DB & COLLECTIONS ---
     CreateDb {
         #[arg(
@@ -314,7 +323,24 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
                 json_value!({ "schema": name, "property": property, "status": "dropped" })
             );
         }
-
+        JsondbCommands::RegisterOntology {
+            namespace,
+            uri,
+            version,
+        } => {
+            col_mgr
+                .register_ontology(&namespace, &uri, &version)
+                .await?;
+            user_success!(
+                "JSONDB_ONTOLOGY_REGISTERED",
+                json_value!({
+                    "namespace": namespace,
+                    "uri": uri,
+                    "version": version,
+                    "status": "registered_in_dna"
+                })
+            );
+        }
         JsondbCommands::CreateDb { schema, db_role } => {
             user_info!(
                 "SYS_INFO",
@@ -802,6 +828,36 @@ mod tests {
                 assert_eq!(name, "db://test/schema");
             }
             _ => panic!("Parsing create-schema failed"),
+        }
+    }
+
+    #[test]
+    fn test_parse_register_ontology_command() {
+        let args = vec![
+            "test",
+            "register-ontology",
+            "--namespace",
+            "arcadia",
+            "--uri",
+            "db://_system/bootstrap/schemas/v2/system/db/arcadia.jsonld",
+            "--version",
+            "1.1.0",
+        ];
+        let cli = TestCli::parse_from(args);
+        match cli.args.command {
+            JsondbCommands::RegisterOntology {
+                namespace,
+                uri,
+                version,
+            } => {
+                assert_eq!(namespace, "arcadia");
+                assert_eq!(
+                    uri,
+                    "db://_system/bootstrap/schemas/v2/system/db/arcadia.jsonld"
+                );
+                assert_eq!(version, "1.1.0");
+            }
+            _ => panic!("Parsing register-ontology failed"),
         }
     }
 }

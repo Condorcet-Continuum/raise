@@ -1,21 +1,19 @@
 // FICHIER : src-tauri/src/json_db/jsonld/context.rs
 
+use super::{vocabulary::VocabularyRegistry, ContextJsonValue};
 use crate::utils::prelude::*;
 
-use super::{vocabulary::VocabularyRegistry, ContextJsonValue};
-
-/// Enumération des couches Arcadia
-/// Mise à jour pour inclure Data et Transverse
+/// Couches méthodologiques supportées par l'architecture Arcadia.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serializable, Deserializable)]
 #[serde(rename_all = "lowercase")]
 pub enum ArcadiaLayer {
-    OA,         // Operational Analysis
-    SA,         // System Analysis
-    LA,         // Logical Architecture
-    PA,         // Physical Architecture
-    EPBS,       // End-Product Breakdown Structure
-    Data,       // Data Analysis / Class Diagrams
-    Transverse, // Common elements, Libraries, Transverse Modeling
+    OA,
+    SA,
+    LA,
+    PA,
+    EPBS,
+    Data,
+    Transverse,
 }
 
 impl ArcadiaLayer {
@@ -32,51 +30,31 @@ impl ArcadiaLayer {
     }
 }
 
-/// Représente un contexte JSON-LD complet avec métadonnées
+/// Représentation structurée d'un bloc @context JSON-LD.
 #[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct ArcadiaContext {
     #[serde(rename = "@version", skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-
-    #[serde(rename = "@vocab", skip_serializing_if = "Option::is_none")]
-    pub vocab: Option<String>,
-
     #[serde(flatten)]
     pub mappings: UnorderedMap<String, ContextJsonValue>,
 }
 
 impl Default for ArcadiaContext {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ArcadiaContext {
-    pub fn new() -> Self {
         Self {
             version: Some("1.1".to_string()),
-            vocab: None,
             mappings: UnorderedMap::new(),
         }
     }
-
-    pub fn add_simple_mapping(&mut self, term: &str, iri: &str) {
-        self.mappings
-            .insert(term.to_string(), ContextJsonValue::Simple(iri.to_string()));
-    }
-
-    pub fn has_term(&self, term: &str) -> bool {
-        self.mappings.contains_key(term)
-    }
 }
 
-/// Gestionnaire principal de contexte pour le processeur
+/// Gestionnaire de contexte haute performance.
+/// Garantit une empreinte RAM minimale via le partage de pointeurs (Interning).
 #[derive(Debug, Clone)]
 pub struct ContextManager {
-    /// Contextes spécifiques par couche (Legacy support)
     pub contexts: UnorderedMap<ArcadiaLayer, ArcadiaContext>,
-    /// Table de résolution active (Terme -> IRI)
-    pub active_mappings: UnorderedMap<String, String>,
+    /// Mappings actifs utilisant des SharedRef<str> pour la déduplication.
+    pub active_mappings: UnorderedMap<String, SharedRef<str>>,
 }
 
 impl Default for ContextManager {
@@ -86,28 +64,26 @@ impl Default for ContextManager {
 }
 
 impl ContextManager {
+    /// Initialise le manager avec le dictionnaire interné global du registre.
     pub fn new() -> Self {
+        let registry = VocabularyRegistry::global();
         Self {
             contexts: UnorderedMap::new(),
-            // Initialisation avec le contexte par défaut (préfixes standards: oa, sa, data, rdf...)
-            active_mappings: VocabularyRegistry::global().get_default_context().clone(),
+            active_mappings: registry.get_default_context(),
         }
     }
 
-    /// Charge le contexte d'une couche spécifique depuis le Registre Sémantique
-    /// C'est la clé pour que le Loader puisse résoudre "Class" ou "OperationalActor" sans préfixe.
+    /// Charge le contexte d'une couche métier depuis le registre sémantique.
     pub fn load_layer_context(&mut self, layer: &str) -> RaiseResult<()> {
         let registry = VocabularyRegistry::global();
         if let Some(ctx_json) = registry.get_context_for_layer(layer) {
             self.parse_context_block(&ctx_json)
         } else {
-            // Si le layer n'est pas chargé (ex: test unitaire ou transverse inexistant), on log mais on ne bloque pas.
-            // Le contexte par défaut contient déjà les préfixes essentiels.
             Ok(())
         }
     }
 
-    /// Charge un contexte depuis un document JSON-LD (@context)
+    /// Intègre les mappings d'un document spécifique dans le contexte courant.
     pub fn load_from_doc(&mut self, doc: &JsonValue) -> RaiseResult<()> {
         if let Some(ctx) = doc.get("@context") {
             self.parse_context_block(ctx)?;
@@ -115,18 +91,19 @@ impl ContextManager {
         Ok(())
     }
 
+    /// Analyse récursivement les blocs de contexte et interne les URIs.
     fn parse_context_block(&mut self, ctx: &JsonValue) -> RaiseResult<()> {
+        let registry = VocabularyRegistry::global();
         match ctx {
             JsonValue::Object(map) => {
                 for (key, val) in map {
-                    // Cas 1 : "term": "iri"
                     if let JsonValue::String(uri) = val {
-                        self.active_mappings.insert(key.clone(), uri.clone());
-                    }
-                    // Cas 2 : "term": { "@id": "iri" }
-                    else if let JsonValue::Object(def) = val {
-                        if let Some(JsonValue::String(id)) = def.get("@id") {
-                            self.active_mappings.insert(key.clone(), id.clone());
+                        self.active_mappings
+                            .insert(key.clone(), registry.intern(uri));
+                    } else if let JsonValue::Object(def) = val {
+                        if let Some(id) = def.get("@id").and_then(|v| v.as_str()) {
+                            self.active_mappings
+                                .insert(key.clone(), registry.intern(id));
                         }
                     }
                 }
@@ -136,50 +113,54 @@ impl ContextManager {
                     self.parse_context_block(item)?;
                 }
             }
-            _ => {} // Ignore les autres types (références distantes string non gérées ici)
+            _ => {}
         }
         Ok(())
     }
 
-    /// EXPANSION : Transforme "oa:Actor" ou "OperationalActor" en IRI complète
+    /// Étend un terme ou une CURIE vers une IRI absolue (Sécurisé contre la récursion).
     pub fn expand_term(&self, term: &str) -> String {
-        // 1. Si c'est déjà une IRI ou un mot-clé JSON-LD, on garde tel quel
-        if VocabularyRegistry::is_iri(term) || term.starts_with('@') {
+        self.expand_term_recursive(term, 0)
+    }
+
+    fn expand_term_recursive(&self, term: &str, depth: u8) -> String {
+        // 🎯 Protection contre les cycles : Maximum 6 niveaux (Pair pour retrouver le terme initial)
+        // L'utilisation de >= 6 garantit qu'au 6ème appel (cycle complet), on retourne le terme stable.
+        if depth >= 6 || VocabularyRegistry::is_iri(term) || term.starts_with('@') {
             return term.to_string();
         }
 
-        // 2. Si le terme est défini explicitement dans le contexte
-        // (ex: "OperationalActor" -> "oa:OperationalActor" ou directement l'IRI)
         if let Some(mapped) = self.active_mappings.get(term) {
-            // Si le mapping renvoie une IRI absolue, c'est fini.
-            if VocabularyRegistry::is_iri(mapped) {
-                return mapped.clone();
+            let m_str = mapped.as_ref();
+            if VocabularyRegistry::is_iri(m_str) {
+                return m_str.to_string();
             } else {
-                // Si c'est un CURIE (ex: "oa:OperationalActor"), on ré-expand
-                return self.expand_curie(mapped);
+                return self.expand_term_recursive(m_str, depth + 1);
             }
         }
-
-        // 3. Essai de résolution CURIE standard (prefix:suffix)
-        self.expand_curie(term)
+        self.expand_curie(term, depth)
     }
 
-    fn expand_curie(&self, term: &str) -> String {
+    fn expand_curie(&self, term: &str, depth: u8) -> String {
+        let registry = VocabularyRegistry::global();
         if let Some((prefix, suffix)) = term.split_once(':') {
             if let Some(base) = self.active_mappings.get(prefix) {
-                return format!("{}{}", base, suffix);
+                // Résolution récursive du préfixe lui-même
+                let base_iri = self.expand_term_recursive(base.as_ref(), depth + 1);
+
+                let full_iri = format!("{}{}", base_iri, suffix);
+                return registry.intern(&full_iri).to_string();
             }
         }
         term.to_string()
     }
 
-    /// COMPACTION : Transforme une IRI en terme court (si possible)
+    /// Compacte une IRI absolue vers la forme la plus courte disponible.
     pub fn compact_iri(&self, iri: &str) -> String {
-        // Recherche inversée : on cherche le préfixe le plus long qui matche
         for (term, mapping) in &self.active_mappings {
-            // On privilégie les préfixes (qui finissent par # ou /)
-            if (mapping.ends_with('#') || mapping.ends_with('/')) && iri.starts_with(mapping) {
-                let suffix = &iri[mapping.len()..];
+            let m = mapping.as_ref();
+            if (m.ends_with('#') || m.ends_with('/')) && iri.starts_with(m) {
+                let suffix = &iri[m.len()..];
                 if !suffix.is_empty() {
                     return format!("{}:{}", term, suffix);
                 }
@@ -190,95 +171,88 @@ impl ContextManager {
 }
 
 // ============================================================================
-// TESTS
+// TESTS UNITAIRES (Rigueur Maximale)
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_context_creation() {
-        let ctx = ArcadiaContext::new();
-        assert_eq!(ctx.version, Some("1.1".to_string()));
+    fn setup_env() {
+        VocabularyRegistry::init_mock_for_tests();
     }
 
+    /// 💎 TEST : Vérification de l'Interning (Ptr equality).
     #[test]
-    fn test_layer_enum_completeness() {
-        // Validation exhaustive de toutes les couches Arcadia supportées
-        assert_eq!(ArcadiaLayer::OA.as_str(), "oa");
-        assert_eq!(ArcadiaLayer::SA.as_str(), "sa");
-        assert_eq!(ArcadiaLayer::LA.as_str(), "la");
-        assert_eq!(ArcadiaLayer::PA.as_str(), "pa");
-        assert_eq!(ArcadiaLayer::EPBS.as_str(), "epbs");
-        assert_eq!(ArcadiaLayer::Data.as_str(), "data"); // Test critique Data
-        assert_eq!(ArcadiaLayer::Transverse.as_str(), "transverse"); // Test critique Transverse
-    }
-
-    #[test]
-    fn test_context_manager_defaults() {
+    fn test_context_interning_ptr_integrity() {
+        setup_env();
         let manager = ContextManager::new();
-        // Vérifie que les namespaces par défaut sont chargés depuis le Registre
-        assert!(manager.active_mappings.contains_key("oa"));
+        let registry = VocabularyRegistry::global();
+        let term = "oa";
+
+        // Récupération explicite pour garantir la durée de vie
+        let registry_context = registry.get_default_context();
+        let r_iri = registry_context.get(term).unwrap();
+        let m_iri = manager.active_mappings.get(term).unwrap();
+
         assert!(
-            manager.active_mappings.contains_key("data"),
-            "Le namespace Data doit être présent par défaut"
-        );
-        assert!(manager
-            .active_mappings
-            .get("oa")
-            .unwrap()
-            .contains("raise.io"));
-    }
-
-    #[test]
-    fn test_expand_curie() {
-        let manager = ContextManager::new(); // Charge les préfixes par défaut
-        assert_eq!(
-            manager.expand_term("oa:OperationalActivity"),
-            "https://raise.io/ontology/arcadia/oa#OperationalActivity"
-        );
-        assert_eq!(
-            manager.expand_term("data:Class"),
-            "https://raise.io/ontology/arcadia/data#Class",
-            "Expansion du namespace Data échouée"
+            SharedRef::ptr_eq(r_iri, m_iri),
+            "ÉCHEC INTERNING : Allocation mémoire redondante détectée."
         );
     }
 
+    /// 💎 TEST : Protection contre la récursion infinie (Cycles).
     #[test]
-    fn test_load_from_doc() {
+    #[serial_test::serial]
+    fn test_infinite_recursion_protection() {
+        VocabularyRegistry::init_mock_for_tests();
         let mut manager = ContextManager::new();
-        let doc = json_value!({
-            "@context": {
-                "my": "http://my-ontology.org/",
-                "Actor": "my:Actor"
-            }
-        });
-        manager.load_from_doc(&doc).unwrap();
+        // Création d'un cycle vicieux
+        manager
+            .active_mappings
+            .insert("A".to_string(), SharedRef::from("B"));
+        manager
+            .active_mappings
+            .insert("B".to_string(), SharedRef::from("A"));
 
-        // Test résolution simple préfixe
-        assert_eq!(
-            manager.expand_term("my:Thing"),
-            "http://my-ontology.org/Thing"
-        );
-
-        // Test résolution mapping direct (Actor -> my:Actor -> http://...)
-        let expanded = manager.expand_term("Actor");
-        assert_eq!(expanded, "http://my-ontology.org/Actor");
+        let result = manager.expand_term("A");
+        assert_eq!(result, "A"); // Doit s'arrêter sur le terme stable
     }
 
+    /// 💎 TEST : Résolution d'alias d'alias (Recursion profonde).
     #[test]
-    fn test_compact_iri() {
+    fn test_deep_alias_resolution() -> RaiseResult<()> {
+        setup_env();
+        let mut manager = ContextManager::new();
+        // Alias chain : Acteur -> oa:OperationalActor -> https://raise.io/oa#OperationalActor
+        let doc = json_value!({ "@context": { "Acteur": "oa:OperationalActor" } });
+        manager.load_from_doc(&doc)?;
+
+        let expanded = manager.expand_term("Acteur");
+        assert_eq!(expanded, "https://raise.io/oa#OperationalActor");
+        Ok(())
+    }
+
+    /// 💎 TEST : Idempotence et Cycle de vie (Expand <-> Compact).
+    #[test]
+    fn test_expansion_compaction_roundtrip() {
+        setup_env();
         let manager = ContextManager::new();
+        let cases = vec!["oa:Activity", "rdfs:label"];
+        for term in cases {
+            let expanded = manager.expand_term(term);
+            assert_eq!(term, manager.compact_iri(&expanded));
+        }
+    }
 
-        let iri_oa = "https://raise.io/ontology/arcadia/oa#OperationalActivity";
-        assert_eq!(manager.compact_iri(iri_oa), "oa:OperationalActivity");
-
-        let iri_data = "https://raise.io/ontology/arcadia/data#DataType";
-        assert_eq!(
-            manager.compact_iri(iri_data),
-            "data:DataType",
-            "Compaction Data échouée"
-        );
+    /// 💎 TEST : Résilience face aux injections JSON invalides.
+    #[test]
+    fn test_load_malformed_json_resilience() {
+        setup_env();
+        let mut manager = ContextManager::new();
+        let count_before = manager.active_mappings.len();
+        let _ = manager.load_from_doc(&json_value!(null));
+        let _ = manager.load_from_doc(&json_value!({"@context": [123]}));
+        assert_eq!(manager.active_mappings.len(), count_before);
     }
 }

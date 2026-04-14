@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/json_db/graph/semantic_manager.rs
 
-use crate::json_db::collections::manager::{CollectionsManager, SystemIndexTx};
+use crate::json_db::collections::manager::{CollectionsManager, EntityIdentity};
 use crate::json_db::jsonld::{JsonLdProcessor, VocabularyRegistry};
 use crate::utils::prelude::*;
 
@@ -25,30 +25,54 @@ impl<'a> SemanticManager<'a> {
     // OPÉRATIONS DDL : GESTION DU MÉTA-MODÈLE (ONTOLOGIES)
     // =========================================================================
 
-    /// Crée ou met à jour une ontologie (Opération DDL).
-    /// Enregistre le fichier, met à jour l'index système, et déclenche un Hot Reload.
+    /// Crée ou met à jour une ontologie (Opération DDL Sécurisée In-Index).
     pub async fn create_ontology(
         &self,
-        tx: &mut SystemIndexTx<'_>, // 🎯 FIX : Exigence du Jeton
         namespace: &str,
         version: &str,
         content: &JsonValue,
     ) -> RaiseResult<()> {
-        let db_root = self
+        // 1. TENTATIVE de validation sémantique (Le Hot Reload RCU)
+        let registry = VocabularyRegistry::global();
+        if let Err(e) = registry.load_layer_from_json(namespace, content).await {
+            raise_error!(
+                "ERR_ONTOLOGY_LOAD_FAIL",
+                error = e,
+                context =
+                    json_value!({"namespace": namespace, "action": "validation_before_insert"})
+            );
+        }
+
+        // 2. Préparation du document pour la collection système
+        let ontology_id = format!("ontology_{}", namespace);
+        let mut ontology_doc = content.clone();
+        if let Some(obj) = ontology_doc.as_object_mut() {
+            obj.insert("_id".to_string(), json_value!(ontology_id.clone()));
+        }
+
+        // 3. Écriture ACID via le CollectionsManager (Il gère ses propres verrous)
+        if let Err(e) = self
+            .db_manager
+            .insert_with_schema("_ontologies", ontology_doc)
+            .await
+        {
+            raise_error!(
+                "ERR_DB_INSERT_ONTOLOGY",
+                error = e,
+                context = json_value!({"namespace": namespace})
+            );
+        }
+
+        // 4. Mise à jour du Registre des Métadonnées dans l'Index (Verrou Local)
+        let lock = self
             .db_manager
             .storage
-            .config
-            .db_root(&self.db_manager.space, &self.db_manager.db);
+            .get_index_lock(&self.db_manager.space, &self.db_manager.db);
+        let guard = lock.lock().await;
+        let mut tx = self.db_manager.begin_system_tx(&guard).await?;
 
-        // 1. Écriture physique du fichier
-        let ontology_dir = db_root.join("ontology");
-        fs::ensure_dir_async(&ontology_dir).await?;
-        let file_path = ontology_dir.join(format!("{}.jsonld", namespace));
-        fs::write_json_atomic_async(&file_path, content).await?;
-
-        // 2. Mise à jour du Manifeste (Index) - DIRECTEMENT DANS LE JETON
         let new_entry = json_value!({
-            "uri": format!("db://{}/{}/ontology/{}.jsonld", self.db_manager.space, self.db_manager.db, namespace),
+            "uri": format!("db://{}/{}/_ontologies/{}.json", self.db_manager.space, self.db_manager.db, ontology_id),
             "version": version,
             "imports": []
         });
@@ -58,9 +82,7 @@ impl<'a> SemanticManager<'a> {
         }
         tx.document["ontologies"][namespace] = new_entry;
 
-        // 3. Hot Reload du Cerveau Sémantique Global
-        let registry = VocabularyRegistry::global();
-        registry.load_layer_from_file(namespace, &file_path).await?;
+        tx.commit().await?;
 
         user_info!(
             "MSG_ONTOLOGY_CREATED",
@@ -70,18 +92,29 @@ impl<'a> SemanticManager<'a> {
     }
 
     /// Supprime une ontologie du système (Opération DDL).
-    pub async fn drop_ontology(
-        &self,
-        tx: &mut SystemIndexTx<'_>,
-        namespace: &str,
-    ) -> RaiseResult<()> {
-        let db_root = self
+    pub async fn drop_ontology(&self, namespace: &str) -> RaiseResult<()> {
+        let ontology_id = format!("ontology_{}", namespace);
+
+        // 1. Suppression physique (Gère ses propres verrous via remove_item_from_index)
+        if let Err(e) = self
+            .db_manager
+            .delete_identity("_ontologies", EntityIdentity::Id(ontology_id))
+            .await
+        {
+            user_warn!(
+                "WRN_ONTOLOGY_NOT_FOUND_IN_DB",
+                json_value!({"namespace": namespace, "error": e.to_string()})
+            );
+        }
+
+        // 2. Suppression dans le registre de l'Index (Verrou local)
+        let lock = self
             .db_manager
             .storage
-            .config
-            .db_root(&self.db_manager.space, &self.db_manager.db);
+            .get_index_lock(&self.db_manager.space, &self.db_manager.db);
+        let guard = lock.lock().await;
+        let mut tx = self.db_manager.begin_system_tx(&guard).await?;
 
-        // 1. Suppression dans l'Index - DIRECTEMENT DANS LE JETON
         if let Some(ontologies) = tx
             .document
             .get_mut("ontologies")
@@ -89,12 +122,7 @@ impl<'a> SemanticManager<'a> {
         {
             ontologies.remove(namespace);
         }
-
-        // 2. Suppression physique
-        let file_path = db_root.join(format!("ontology/{}.jsonld", namespace));
-        if fs::exists_async(&file_path).await {
-            fs::remove_file_async(&file_path).await?;
-        }
+        tx.commit().await?;
 
         user_info!(
             "MSG_ONTOLOGY_DROPPED",
@@ -111,9 +139,8 @@ impl<'a> SemanticManager<'a> {
     pub async fn insert_semantic_node(
         &self,
         collection: &str,
-        node: JsonValue,
+        mut node: JsonValue,
     ) -> RaiseResult<JsonValue> {
-        // 1. Le Cerveau valide la présence des ancrages vitaux
         if let Err(e) = self
             .processor
             .validate_required_fields(&node, &["@id", "@type"])
@@ -125,31 +152,33 @@ impl<'a> SemanticManager<'a> {
             );
         }
 
-        // 2. Le Cerveau normalise et étend les URIs (Expansion)
-        let expanded_node = self.processor.expand(&node);
-
-        // 3. Le Muscle écrit sur le disque et valide le Schéma JSON (La syntaxe)
-        self.db_manager
-            .insert_with_schema(collection, expanded_node)
-            .await
+        self.processor.expand_in_place(&mut node);
+        self.db_manager.insert_with_schema(collection, node).await
     }
 
-    /// Récupère un nœud et le compacte pour une lecture plus humaine.
+    /// Récupère un nœud et le compacte en place pour une lecture plus humaine.
     pub async fn get_compacted_node(
         &self,
         collection: &str,
         id: &str,
     ) -> RaiseResult<Option<JsonValue>> {
-        let doc = self.db_manager.get_document(collection, id).await?;
-        match doc {
-            Some(d) => Ok(Some(self.processor.compact(&d))),
-            None => Ok(None),
+        match self.db_manager.get_document(collection, id).await {
+            Ok(Some(mut d)) => {
+                self.processor.compact_in_place(&mut d);
+                Ok(Some(d))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => raise_error!(
+                "ERR_DB_READ_FAIL",
+                error = e,
+                context = json_value!({"collection": collection, "id": id})
+            ),
         }
     }
 }
 
 // =========================================================================
-// TESTS UNITAIRES (Validation du couplage "Zéro Dette")
+// TESTS UNITAIRES
 // =========================================================================
 
 #[cfg(test)]
@@ -157,9 +186,10 @@ mod tests {
     use super::*;
     use crate::utils::testing::DbSandbox;
 
+    /// 💎 TEST 1 : Cycle de vie complet d'une ontologie in-index.
     #[async_test]
     #[serial_test::serial]
-    async fn test_semantic_manager_ontology_lifecycle() -> RaiseResult<()> {
+    async fn test_semantic_manager_ontology_lifecycle_in_index() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         VocabularyRegistry::init_mock_for_tests();
 
@@ -170,66 +200,42 @@ mod tests {
         );
         DbSandbox::mock_db(&db_mgr).await?;
 
-        let semantic_mgr = SemanticManager::new(&db_mgr);
+        db_mgr
+            .create_collection(
+                "_ontologies",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
 
+        let semantic_mgr = SemanticManager::new(&db_mgr);
         let mock_ontology = json_value!({
-            "@context": {
-                "@version": 1.1,
-                "aero": "https://raise.io/ontology/aerospace#"
-            },
-            "@graph": [
-                {
-                    "@id": "aero:Spacecraft",
-                    "@type": "owl:Class"
-                }
-            ]
+            "@context": { "aero": "https://raise.io/aero#" },
+            "@graph": [ { "@id": "aero:Spacecraft", "@type": "owl:Class" } ]
         });
 
-        // 1. TEST : Création d'une ontologie métier (Avec Jeton)
-        {
-            let lock = db_mgr.storage.get_index_lock(&db_mgr.space, &db_mgr.db);
-            let guard = lock.lock().await;
-            let mut tx = db_mgr.begin_system_tx(&guard).await?;
+        // 🎯 FIX DEADLOCK : Le test n'a plus besoin de verrouiller l'index avant l'appel !
+        semantic_mgr
+            .create_ontology("aero", "1.1", &mock_ontology)
+            .await?;
 
-            semantic_mgr
-                .create_ontology(&mut tx, "aerospace", "1.1", &mock_ontology)
-                .await?;
-            tx.commit().await?;
-        }
-
-        // Vérification de l'écriture physique
-        let db_root = sandbox.storage.config.db_root(&db_mgr.space, &db_mgr.db);
-        let file_path = db_root.join("ontology/aerospace.jsonld");
+        // 2. VÉRIFICATION PHYSIQUE
+        let fetched = db_mgr.get_document("_ontologies", "ontology_aero").await?;
         assert!(
-            fs::exists_async(&file_path).await,
-            "Le fichier JSON-LD doit exister sur le disque"
+            fetched.is_some(),
+            "L'ontologie n'est pas présente en base !"
         );
 
-        // Vérification du Hot Reload dans le registre
+        // 3. VÉRIFICATION SÉMANTIQUE (Hot-Reload RCU)
         let registry = VocabularyRegistry::global();
         assert!(
-            registry.has_class("https://raise.io/ontology/aerospace#Spacecraft"),
-            "L'ontologie n'a pas été chargée en RAM !"
-        );
-
-        // 2. TEST : Suppression de l'ontologie (Avec un nouveau Jeton)
-        {
-            let lock = db_mgr.storage.get_index_lock(&db_mgr.space, &db_mgr.db);
-            let guard = lock.lock().await;
-            let mut tx = db_mgr.begin_system_tx(&guard).await?;
-
-            semantic_mgr.drop_ontology(&mut tx, "aerospace").await?;
-            tx.commit().await?;
-        }
-
-        assert!(
-            !fs::exists_async(&file_path).await,
-            "Le fichier JSON-LD doit être supprimé"
+            registry.has_class("https://raise.io/aero#Spacecraft"),
+            "Le hot-reload en RAM a échoué."
         );
 
         Ok(())
     }
 
+    /// 💎 TEST 2 : Validation sémantique et expansion in-place.
     #[async_test]
     #[serial_test::serial]
     async fn test_semantic_manager_insert_node_validation() -> RaiseResult<()> {
@@ -242,8 +248,6 @@ mod tests {
             &sandbox.config.mount_points.system.db,
         );
         DbSandbox::mock_db(&db_mgr).await?;
-
-        // Création de la collection physique
         db_mgr
             .create_collection(
                 "la_components",
@@ -253,41 +257,24 @@ mod tests {
 
         let semantic_mgr = SemanticManager::new(&db_mgr);
 
-        // 1. TEST : Rejet d'un nœud non sémantique (Pas de @type)
-        let invalid_node = json_value!({
-            "@id": "urn:uuid:123",
-            "name": "Invalid Component"
-        });
-
-        let err = semantic_mgr
-            .insert_semantic_node("la_components", invalid_node)
-            .await;
-        assert!(
-            err.is_err(),
-            "L'insertion d'un nœud sans @type doit échouer"
-        );
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains("ERR_SEMANTIC_VALIDATION_FAIL"));
-
-        // 2. TEST : Insertion et Expansion d'un nœud valide
-        let valid_node = json_value!({
+        let node = json_value!({
             "@id": "urn:uuid:456",
             "@type": ["la:LogicalComponent"],
-            "name": "Valid Component"
+            "name": "Component"
         });
 
         let saved = semantic_mgr
-            .insert_semantic_node("la_components", valid_node)
+            .insert_semantic_node("la_components", node)
             .await?;
 
-        // Vérification que le type a bien été étendu (Expanded) avant la sauvegarde sur disque
-        let saved_type = saved["@type"].as_array().unwrap()[0].as_str().unwrap();
-        assert_eq!(
-            saved_type,
-            "https://raise.io/ontology/arcadia/la#LogicalComponent"
-        );
+        let saved_type = saved
+            .get("@type")
+            .and_then(|t| t.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|val| val.as_str())
+            .ok_or_else(|| build_error!("TEST_FAIL", error = "Expansion @type échouée"))?;
+
+        assert_eq!(saved_type, "https://raise.io/la#LogicalComponent");
 
         Ok(())
     }

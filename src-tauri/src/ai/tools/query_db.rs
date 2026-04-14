@@ -121,10 +121,12 @@ impl McpTool for QueryDbTool {
 
         // 5. Traitement du résultat et conversion sémantique
         match doc_res {
-            Ok(Some(doc)) => {
+            // 🎯 FIX : On récupère le document en tant que variable mutable (mut doc)
+            Ok(Some(mut doc)) => {
                 let processor = JsonLdProcessor::new();
                 if as_rdf {
-                    match processor.to_ntriples(&doc) {
+                    // 🎯 FIX : On passe la référence mutable pour expansion RDF en place
+                    match processor.to_ntriples(&mut doc) {
                         Ok(triples) => McpToolResult::success(
                             call.id,
                             json_value!({"format": "n-triples", "data": triples}),
@@ -134,10 +136,9 @@ impl McpTool for QueryDbTool {
                         }
                     }
                 } else {
-                    McpToolResult::success(
-                        call.id,
-                        json_value!({"format": "json-ld", "data": processor.compact(&doc)}),
-                    )
+                    // 🎯 FIX : Compaction en place puis on retourne le document muté !
+                    processor.compact_in_place(&mut doc);
+                    McpToolResult::success(call.id, json_value!({"format": "json-ld", "data": doc}))
                 }
             }
             Ok(None) => McpToolResult::error(

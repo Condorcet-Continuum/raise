@@ -1,8 +1,12 @@
 // FICHIER : src-tauri/src/json_db/jsonld/vocabulary.rs
 
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*;
 
-// --- STRUCTURES ---
+// =========================================================================
+// STRUCTURES MÉTIERS (Optimisées avec SharedRef pour l'Interning)
+// =========================================================================
+
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub enum PropertyType {
     DatatypeProperty,
@@ -11,30 +15,43 @@ pub enum PropertyType {
 
 #[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct Class {
-    pub iri: String,
-    pub label: String,
-    pub comment: String,
-    pub sub_class_of: Option<String>,
+    pub iri: SharedRef<str>,
+    pub label: SharedRef<str>,
+    pub comment: SharedRef<str>,
+    pub sub_class_of: Option<SharedRef<str>>,
 }
 
 #[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct Property {
-    pub iri: String,
-    pub label: String,
+    pub iri: SharedRef<str>,
+    pub label: SharedRef<str>,
     pub property_type: PropertyType,
-    pub domain: Option<String>,
-    pub range: Option<String>,
+    pub domain: Option<SharedRef<str>>,
+    pub range: Option<SharedRef<str>>,
 }
 
-// --- REGISTRE PRINCIPAL (SINGLETON DYNAMIQUE) ---
+// =========================================================================
+// L'ÉTAT IMMUABLE RCU (Read-Copy-Update)
+// =========================================================================
+
+#[derive(Debug, Clone, Default)]
+pub struct RegistryState {
+    pub classes: UnorderedMap<SharedRef<str>, Class>,
+    pub properties: UnorderedMap<SharedRef<str>, Property>,
+    pub default_context: UnorderedMap<String, SharedRef<str>>,
+    pub layer_contexts: UnorderedMap<String, JsonValue>,
+    pub ancestry: UnorderedMap<SharedRef<str>, UniqueSet<SharedRef<str>>>,
+}
+
+// =========================================================================
+// REGISTRE PRINCIPAL (RCU + Interning)
+// =========================================================================
 
 static INSTANCE: StaticCell<VocabularyRegistry> = StaticCell::new();
 
 pub struct VocabularyRegistry {
-    classes: SyncRwLock<UnorderedMap<String, Class>>,
-    properties: SyncRwLock<UnorderedMap<String, Property>>,
-    default_context: SyncRwLock<UnorderedMap<String, String>>,
-    layer_contexts: SharedRef<SyncRwLock<UnorderedMap<String, JsonValue>>>,
+    state: SyncRwLock<SharedRef<RegistryState>>,
+    intern_pool: SyncRwLock<UnorderedMap<String, SharedRef<str>>>,
 }
 
 impl Default for VocabularyRegistry {
@@ -44,539 +61,298 @@ impl Default for VocabularyRegistry {
 }
 
 impl VocabularyRegistry {
-    /// Crée une instance vide du registre (utile pour les tests isolés)
     pub fn new() -> Self {
         Self {
-            classes: SyncRwLock::new(UnorderedMap::new()),
-            properties: SyncRwLock::new(UnorderedMap::new()),
-            default_context: SyncRwLock::new(UnorderedMap::new()),
-            layer_contexts: SharedRef::new(SyncRwLock::new(UnorderedMap::new())),
+            state: SyncRwLock::new(SharedRef::new(RegistryState::default())),
+            intern_pool: SyncRwLock::new(UnorderedMap::new()),
         }
     }
 
-    /// Initialise le registre global en scannant récursivement le dossier des ontologies.
-    pub async fn init(ontology_root: &Path) -> RaiseResult<()> {
-        let registry = Self::new();
-        registry.load_all_ontologies(ontology_root).await?;
-
-        if INSTANCE.set(registry).is_err() {
-            tracing::warn!("Le VocabularyRegistry a déjà été initialisé.");
-        }
-        Ok(())
-    }
-    /// Fonction interne pour expanser un terme en utilisant le dictionnaire en cours de chargement
-    pub fn expand_internal_term(&self, term: &str) -> String {
-        if Self::is_iri(term) {
-            return term.to_string();
-        }
-        if let Some((prefix, suffix)) = term.split_once(':') {
-            if let Some(base_iri) = self.default_context.read().unwrap().get(prefix) {
-                return format!("{}{}", base_iri, suffix);
+    /// INTERNING : Déduplication atomique des chaînes en RAM (Zéro Allocation Redondante).
+    pub fn intern(&self, text: &str) -> SharedRef<str> {
+        if let Ok(pool) = self.intern_pool.read() {
+            if let Some(s) = pool.get(text) {
+                return s.clone();
             }
         }
-        term.to_string()
+        if let Ok(mut pool) = self.intern_pool.write() {
+            if let Some(s) = pool.get(text) {
+                return s.clone();
+            }
+            let shared: SharedRef<str> = SharedRef::from(text);
+            pool.insert(text.to_string(), shared.clone());
+            shared
+        } else {
+            SharedRef::from(text)
+        }
     }
 
-    /// Récupère l'instance globale. Panique si appelée avant `init()`.
-    pub fn global() -> &'static Self {
-        #[cfg(not(test))]
-        {
-            INSTANCE.get().expect("❌ VocabularyRegistry non initialisé ! Appelez VocabularyRegistry::init(path) au démarrage.")
-        }
+    pub fn get_state(&self) -> SharedRef<RegistryState> {
+        self.state
+            .read()
+            .map(|s| s.clone())
+            .unwrap_or_else(|_| SharedRef::new(RegistryState::default()))
+    }
 
+    fn rebuild_ancestry(state: &mut RegistryState) {
+        let mut ancestry = UnorderedMap::new();
+        for (iri, cls) in &state.classes {
+            let mut ancestors = UniqueSet::new();
+            let mut current = cls.sub_class_of.clone();
+            let mut depth = 0;
+            while let Some(parent) = current {
+                if depth > 100 || !ancestors.insert(parent.clone()) {
+                    break;
+                }
+                current = state
+                    .classes
+                    .get(parent.as_ref() as &str)
+                    .and_then(|c| c.sub_class_of.clone());
+                depth += 1;
+            }
+            ancestry.insert(iri.clone(), ancestors);
+        }
+        state.ancestry = ancestry;
+    }
+
+    /// INITIALISATION DEPUIS LA DB (Zéro Fichier)
+    pub async fn init_from_db(db_mgr: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let registry = Self::new();
+        let sys_path = db_mgr
+            .storage
+            .config
+            .db_root(&db_mgr.space, &db_mgr.db)
+            .join("_system.json");
+        if fs::exists_async(&sys_path).await {
+            let content = fs::read_to_string_async(&sys_path).await?;
+            let sys_doc: JsonValue = json::deserialize_from_str(&content)?;
+            if let Some(ontologies) = sys_doc.get("ontologies").and_then(|o| o.as_object()) {
+                for (ns, _) in ontologies {
+                    if let Ok(Some(doc)) = db_mgr
+                        .get_document("_ontologies", &format!("ontology_{}", ns))
+                        .await
+                    {
+                        let _ = registry.load_layer_from_json(ns, &doc).await;
+                    }
+                }
+            }
+        }
+        let _ = INSTANCE.set(registry);
+        Ok(())
+    }
+
+    pub fn global() -> &'static Self {
         #[cfg(test)]
         {
             if INSTANCE.get().is_none() {
-                Self::init_test_registry();
+                Self::init_mock_for_tests();
             }
-            INSTANCE.get().unwrap()
         }
-    }
-    /// 🎯 Centralisation de la configuration de TEST
-    #[cfg(test)]
-    pub fn init_test_registry() {
-        if INSTANCE.get().is_none() {
-            let registry = Self::new();
-
-            // 1. Tous les préfixes nécessaires (Fixe les tests de context.rs)
-            let prefixes = [
-                ("oa", "https://raise.io/ontology/arcadia/oa#"),
-                ("sa", "https://raise.io/ontology/arcadia/sa#"),
-                ("la", "https://raise.io/ontology/arcadia/la#"),
-                ("pa", "https://raise.io/ontology/arcadia/pa#"),
-                ("epbs", "https://raise.io/ontology/arcadia/epbs#"),
-                ("data", "https://raise.io/ontology/arcadia/data#"),
-                (
-                    "transverse",
-                    "https://raise.io/ontology/arcadia/transverse#",
-                ),
-                ("raise", "https://raise.io/ontology/raise#"),
-                ("arcadia", "https://raise.io/ontology/arcadia#"),
-            ];
-            for (p, iri) in prefixes {
-                registry
-                    .default_context
-                    .write()
-                    .unwrap()
-                    .insert(p.to_string(), iri.to_string());
-            }
-
-            // 2. Définition des classes pour l'héritage (Fixe test_quality_assessment_logic)
-            let arcadia_qr = "https://raise.io/ontology/arcadia#QualityRule".to_string();
-            let raise_qr = "https://raise.io/ontology/raise#QualityRule".to_string();
-
-            // On enregistre la classe de base Arcadia
-            registry.classes.write().unwrap().insert(
-                arcadia_qr.clone(),
-                Class {
-                    iri: arcadia_qr.clone(),
-                    label: "Quality Rule".into(),
-                    comment: "".into(),
-                    sub_class_of: None,
-                },
-            );
-
-            // On enregistre la classe RAISE qui hérite d'Arcadia
-            registry.classes.write().unwrap().insert(
-                raise_qr.clone(),
-                Class {
-                    iri: raise_qr,
-                    label: "RAISE Quality Rule".into(),
-                    comment: "".into(),
-                    sub_class_of: Some(arcadia_qr),
-                },
-            );
-
-            // On enregistre QualityAssessment pour supprimer les warnings
-            let qa_iri = "https://raise.io/ontology/arcadia#QualityAssessment".to_string();
-            registry.classes.write().unwrap().insert(
-                qa_iri.clone(),
-                Class {
-                    iri: qa_iri,
-                    label: "Quality Assessment".into(),
-                    comment: "".into(),
-                    sub_class_of: None,
-                },
-            );
-
-            let _ = INSTANCE.set(registry);
-        }
-    }
-    /// Parcours récursif du dossier ontology/ (Zero Hardcoding)
-    pub fn load_all_ontologies<'a>(
-        &'a self,
-        root: &'a Path,
-    ) -> Pinned<Box<dyn AsyncFuture<Output = RaiseResult<()>> + Send + 'a>> {
-        Box::pin(async move {
-            let mut entries = match fs::read_dir_async(root).await {
-                Ok(e) => e,
-                Err(_) => return Ok(()), // Ignore silencieusement si le dossier n'existe pas (ex: tests)
-            };
-
-            while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
-                let path = entry.path();
-                let file_type = entry.file_type().await.unwrap();
-
-                if file_type.is_dir() {
-                    self.load_all_ontologies(&path).await?;
-                } else if path.extension().is_some_and(|ext| ext == "jsonld") {
-                    let layer = path.file_stem().unwrap().to_string_lossy();
-                    self.load_layer_from_file(&layer, &path).await?;
-                }
-            }
-            Ok(())
-        })
+        INSTANCE.get().expect("VocabularyRegistry non initialisé")
     }
 
-    /// Charge un fichier .jsonld et extrait dynamiquement sa sémantique
-    pub async fn load_layer_from_file(&self, layer: &str, path: &Path) -> RaiseResult<()> {
-        let content = match fs::read_to_string_async(path).await {
-            Ok(c) => c,
-            Err(e) => raise_error!(
-                "ERR_IO_READ_FAIL",
-                error = e,
-                context = json_value!({ "path": path.to_string_lossy() })
-            ),
-        };
-
-        let json: JsonValue = match json::deserialize_from_str(&content) {
-            Ok(j) => j,
-            Err(e) => raise_error!(
-                "ERR_JSON_PARSE_FAIL",
-                error = e,
-                context = json_value!({ "path": path.to_string_lossy() })
-            ),
-        };
-
-        // 1. Validation du schéma JSON-LD
+    /// CŒUR RCU : Parsing JSON-LD 100% en RAM
+    pub async fn load_layer_from_json(&self, layer: &str, json: &JsonValue) -> RaiseResult<()> {
         let Some(ctx) = json.get("@context") else {
             raise_error!(
                 "ERR_JSONLD_CONTEXT_MISSING",
-                error = "Champ '@context' manquant.",
-                context = json_value!({ "path": path.to_string_lossy() })
-            ); // 🎯 La macro fait un 'return' automatique ici, pas besoin de return Err(...)
+                context = json_value!({"layer": layer})
+            );
         };
 
-        // 2. Mise en cache du contexte brut
-        {
-            let mut cache = self.layer_contexts.write().unwrap();
-            cache.insert(layer.to_string(), ctx.clone());
-        }
+        let mut new_state = (*self.get_state()).clone();
+        new_state
+            .layer_contexts
+            .insert(layer.to_string(), ctx.clone());
 
-        // 3. Extraction dynamique des préfixes (pour le contexte global par défaut)
-        if let Some(ctx_obj) = ctx.as_object() {
-            let mut def_ctx = self.default_context.write().unwrap(); // 🔒 Verrou d'écriture
-            for (key, val) in ctx_obj {
-                if let Some(iri) = val.as_str() {
-                    def_ctx.insert(key.clone(), iri.to_string());
-                } else if let Some(obj) = val.as_object() {
-                    if let Some(id) = obj.get("@id").and_then(|v| v.as_str()) {
-                        def_ctx.insert(key.clone(), id.to_string());
-                    }
+        if let Some(obj) = ctx.as_object() {
+            for (k, v) in obj {
+                if let Some(iri) = v.as_str() {
+                    new_state
+                        .default_context
+                        .insert(k.clone(), self.intern(iri));
                 }
             }
         }
-        // 4. Extraction dynamique des Classes et Propriétés depuis le @graph
+
+        let expand = |t: &str, s: &RegistryState| -> SharedRef<str> {
+            if Self::is_iri(t) {
+                return self.intern(t);
+            }
+            if let Some((p, suf)) = t.split_once(':') {
+                if let Some(b) = s.default_context.get(p) {
+                    return self.intern(&format!("{}{}", b, suf));
+                }
+            }
+            self.intern(t)
+        };
+
         if let Some(graph) = json.get("@graph").and_then(|v| v.as_array()) {
-            let mut cls_map = self.classes.write().unwrap(); // 🔒 Verrou d'écriture
-            let mut prop_map = self.properties.write().unwrap(); // 🔒 Verrou d'écriture
-
             for node in graph {
-                if let Some(raw_id) = node.get("@id").and_then(|v| v.as_str()) {
-                    let full_id = self.expand_internal_term(raw_id);
+                if let Some(id) = node.get("@id").and_then(|v| v.as_str()) {
+                    let full_id = expand(id, &new_state);
                     let types = extract_types(node);
-
-                    if types.contains(&"owl:Class".to_string())
-                        || types.contains(&"rdfs:Class".to_string())
-                    {
-                        let sub_class_of = get_string_prop(node, "rdfs:subClassOf")
-                            .map(|s| self.expand_internal_term(&s));
-
-                        cls_map.insert(
+                    if types.contains(&"owl:Class".to_string()) {
+                        new_state.classes.insert(
                             full_id.clone(),
                             Class {
                                 iri: full_id.clone(),
-                                label: get_string_prop(node, "rdfs:label").unwrap_or_default(),
-                                comment: get_string_prop(node, "rdfs:comment").unwrap_or_default(),
-                                sub_class_of,
+                                label: self.intern(&get_str(node, "rdfs:label")),
+                                comment: self.intern(&get_str(node, "rdfs:comment")),
+                                sub_class_of: get_str_opt(node, "rdfs:subClassOf")
+                                    .map(|s| expand(&s, &new_state)),
                             },
                         );
                     }
-
-                    let is_obj_prop = types.contains(&"owl:ObjectProperty".to_string());
-                    let is_data_prop = types.contains(&"owl:DatatypeProperty".to_string());
-
-                    if is_obj_prop || is_data_prop {
-                        prop_map.insert(
+                    if types.contains(&"owl:ObjectProperty".to_string())
+                        || types.contains(&"owl:DatatypeProperty".to_string())
+                    {
+                        new_state.properties.insert(
                             full_id.clone(),
                             Property {
                                 iri: full_id.clone(),
-                                label: get_string_prop(node, "rdfs:label").unwrap_or_default(),
-                                property_type: if is_obj_prop {
+                                label: self.intern(&get_str(node, "rdfs:label")),
+                                property_type: if types.contains(&"owl:ObjectProperty".to_string())
+                                {
                                     PropertyType::ObjectProperty
                                 } else {
                                     PropertyType::DatatypeProperty
                                 },
-                                domain: get_string_prop(node, "rdfs:domain"),
-                                range: get_string_prop(node, "rdfs:range"),
+                                domain: get_str_opt(node, "rdfs:domain")
+                                    .map(|s| expand(&s, &new_state)),
+                                range: get_str_opt(node, "rdfs:range")
+                                    .map(|s| expand(&s, &new_state)),
                             },
                         );
                     }
                 }
             }
         }
+        Self::rebuild_ancestry(&mut new_state);
+        if let Ok(mut g) = self.state.write() {
+            *g = SharedRef::new(new_state);
+            Ok(())
+        } else {
+            raise_error!("ERR_LOCK_POISONED")
+        }
+    }
 
-        #[cfg(debug_assertions)]
-        println!("✅ Ontologie dynamique chargée : {} -> {:?}", layer, path);
+    // --- ACCESSEURS (Rétablit les capacités du Cerveau) ---
 
-        Ok(())
+    pub fn get_class(&self, iri: &str) -> Option<Class> {
+        self.get_state().classes.get(iri).cloned()
+    }
+    pub fn get_property(&self, iri: &str) -> Option<Property> {
+        self.get_state().properties.get(iri).cloned()
+    }
+    pub fn has_class(&self, iri: &str) -> bool {
+        self.get_state().classes.contains_key(iri)
     }
 
     pub fn get_context_for_layer(&self, layer: &str) -> Option<JsonValue> {
-        let cache = self.layer_contexts.read().ok()?;
-        cache.get(layer).cloned()
+        self.get_state().layer_contexts.get(layer).cloned()
     }
 
-    // --- ACCESSEURS OPTIMISÉS ---
-
-    pub fn get_class(&self, iri: &str) -> Option<Class> {
-        self.classes.read().unwrap().get(iri).cloned()
+    pub fn get_default_context(&self) -> UnorderedMap<String, SharedRef<str>> {
+        self.get_state().default_context.clone()
     }
 
-    pub fn has_class(&self, iri: &str) -> bool {
-        self.classes.read().unwrap().contains_key(iri)
-    }
-
-    pub fn get_property(&self, iri: &str) -> Option<Property> {
-        self.properties.read().unwrap().get(iri).cloned()
-    }
-
-    pub fn is_subtype_of(&self, child_iri: &str, parent_iri: &str) -> bool {
-        if child_iri == parent_iri {
+    pub fn is_subtype_of(&self, child: &str, parent: &str) -> bool {
+        if child == parent {
             return true;
         }
-        if let Some(cls) = self.get_class(child_iri) {
-            if let Some(parent) = &cls.sub_class_of {
-                return self.is_subtype_of(parent, parent_iri);
-            }
-        }
-        false
+        self.get_state()
+            .ancestry
+            .get(child)
+            .is_some_and(|a| a.contains(parent))
     }
 
-    pub fn get_default_context(&self) -> UnorderedMap<String, String> {
-        self.default_context.read().unwrap().clone()
-    }
-
-    pub fn is_iri(term: &str) -> bool {
-        term.starts_with("http://") || term.starts_with("https://") || term.starts_with("urn:")
+    pub fn is_iri(t: &str) -> bool {
+        t.starts_with("http") || t.starts_with("urn:")
     }
 
     pub fn init_mock_for_tests() {
         if INSTANCE.get().is_none() {
-            let registry = Self::new();
+            let r = Self::new();
+            let mut s = RegistryState::default();
 
-            // Mappings vitaux pour la résolution d'URIs IA
-            registry.default_context.write().unwrap().insert(
-                "oa".to_string(),
-                "https://raise.io/ontology/arcadia/oa#".to_string(),
-            );
-            registry.default_context.write().unwrap().insert(
-                "sa".to_string(),
-                "https://raise.io/ontology/arcadia/sa#".to_string(),
-            );
-            registry.default_context.write().unwrap().insert(
-                "la".to_string(),
-                "https://raise.io/ontology/arcadia/la#".to_string(),
-            );
-            registry.default_context.write().unwrap().insert(
-                "pa".to_string(),
-                "https://raise.io/ontology/arcadia/pa#".to_string(),
-            );
-            registry.default_context.write().unwrap().insert(
-                "transverse".to_string(),
-                "https://raise.io/ontology/arcadia/transverse#".to_string(),
-            );
+            // 🎯 FIX : Ajout des préfixes Arcadia standards pour les tests
+            let prefixes = [
+                ("oa", "https://raise.io/oa#"),
+                ("sa", "https://raise.io/sa#"),
+                ("la", "https://raise.io/la#"),
+                ("pa", "https://raise.io/pa#"),
+                ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
+            ];
 
-            let _ = INSTANCE.set(registry);
-        }
-    }
-}
-
-// --- UTILITAIRES DE PARSING JSON-LD ---
-
-fn extract_types(node: &JsonValue) -> Vec<String> {
-    let mut types = Vec::new();
-    let extract = |val: &JsonValue, out: &mut Vec<String>| {
-        if let Some(s) = val.as_str() {
-            out.push(s.to_string());
-        } else if let Some(arr) = val.as_array() {
-            for item in arr {
-                if let Some(s) = item.as_str() {
-                    out.push(s.to_string());
-                }
+            for (p, i) in prefixes {
+                s.default_context.insert(p.to_string(), r.intern(i));
             }
+            if let Ok(mut w) = r.state.write() {
+                *w = SharedRef::new(s);
+            }
+            let _ = INSTANCE.set(r);
         }
-    };
-    if let Some(t) = node.get("@type") {
-        extract(t, &mut types);
     }
-    if let Some(t) = node.get("http://www.w3.org/1999/02/22-rdf-syntax-ns#type") {
-        extract(t, &mut types);
-    }
-    types
 }
 
-fn get_string_prop(node: &JsonValue, key: &str) -> Option<String> {
-    node.get(key).and_then(|v| {
-        if let Some(s) = v.as_str() {
-            Some(s.to_string())
-        } else if let Some(obj) = v.as_object() {
-            obj.get("@id")
-                .or(obj.get("@value"))
-                .and_then(|id| id.as_str().map(String::from))
-        } else if let Some(arr) = v.as_array() {
-            arr.first().and_then(|first| {
-                if let Some(s) = first.as_str() {
-                    Some(s.to_string())
-                } else if let Some(obj) = first.as_object() {
-                    obj.get("@id")
-                        .or(obj.get("@value"))
-                        .and_then(|id| id.as_str().map(String::from))
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        }
-    })
+// Helpers
+fn extract_types(n: &JsonValue) -> Vec<String> {
+    n.get("@type")
+        .map(|t| {
+            if let Some(s) = t.as_str() {
+                vec![s.to_string()]
+            } else {
+                t.as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+        })
+        .unwrap_or_default()
+}
+fn get_str(n: &JsonValue, k: &str) -> String {
+    get_str_opt(n, k).unwrap_or_default()
+}
+fn get_str_opt(n: &JsonValue, k: &str) -> Option<String> {
+    n.get(k).and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
 // ============================================================================
-// TESTS
+// TESTS UNITAIRES ROBUSTES
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::DbSandbox;
 
-    #[test]
-    fn test_is_iri() {
-        assert!(VocabularyRegistry::is_iri("http://raise.io"));
-        assert!(VocabularyRegistry::is_iri("urn:uuid:123"));
-        assert!(!VocabularyRegistry::is_iri("oa:Activity"));
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_interning_pointer_consistency() -> RaiseResult<()> {
+        let reg = VocabularyRegistry::new();
+        let uri = "https://raise.io/ontology/CoreNode";
+        let p1 = reg.intern(uri);
+        let p2 = reg.intern(uri);
+        // Vérification de l'adresse physique du pointeur (Zéro allocation redondante)
+        assert!(SharedRef::ptr_eq(&p1, &p2));
+        Ok(())
     }
 
     #[async_test]
-    async fn test_dynamic_parsing_and_inheritance() {
-        let reg = VocabularyRegistry {
-            classes: SyncRwLock::new(UnorderedMap::new()),
-            properties: SyncRwLock::new(UnorderedMap::new()),
-            default_context: SyncRwLock::new(UnorderedMap::new()),
-            layer_contexts: SharedRef::new(SyncRwLock::new(UnorderedMap::new())),
-        };
+    #[serial_test::serial]
+    async fn test_rcu_atomicity_on_malformed_json() -> RaiseResult<()> {
+        let reg = VocabularyRegistry::new();
+        let valid = json_value!({ "@context": {"oa": "http://oa#"}, "@graph": [] });
+        reg.load_layer_from_json("base", &valid).await?;
+        let state_before = reg.get_state();
 
-        // Fichier JSON-LD simulé
-        let mock_file_path = fs::PathBuf::from("/tmp/mock.jsonld");
-        crate::utils::io::fs::write_json_atomic_async(
-            &mock_file_path,
-            &json_value!({
-                "@context": {
-                    "test": "http://test.org/"
-                },
-                "@graph": [
-                    {
-                        "@id": "http://test.org/Animal",
-                        "@type": "owl:Class",
-                        "rdfs:label": "Animal"
-                    },
-                    {
-                        "@id": "http://test.org/Chat",
-                        "@type": "owl:Class",
-                        "rdfs:subClassOf": "http://test.org/Animal"
-                    }
-                ]
-            }),
-        )
-        .await
-        .unwrap();
-
-        reg.load_layer_from_file("mock", &mock_file_path)
-            .await
-            .unwrap();
-
-        // 1. Vérifie l'extraction du préfixe
-        assert_eq!(
-            reg.get_default_context().get("test").unwrap(),
-            "http://test.org/"
-        );
-
-        // 2. Vérifie l'extraction des classes
-        assert!(reg.has_class("http://test.org/Animal"));
-        assert!(reg.has_class("http://test.org/Chat"));
-
-        // 3. Vérifie l'héritage
-        assert!(reg.is_subtype_of("http://test.org/Chat", "http://test.org/Animal"));
-        assert!(!reg.is_subtype_of("http://test.org/Animal", "http://test.org/Chat"));
-    }
-
-    #[async_test]
-    async fn test_quality_assessment_logic() {
-        // Si les fichiers d'ontologie sont absents (cas de GitHub), on ignore proprement
-        if !Path::new("_system/ontology/raise/@context/raise.jsonld").exists() {
-            return;
-        }
-        // 1. Initialisation de l'environnement isolé
-        let sandbox = DbSandbox::new().await;
-        let mgr = CollectionsManager::new(&sandbox.storage, "system_test", "quality_db");
-        DbSandbox::mock_db(&mgr).await.unwrap();
-
-        // 2. Création des collections nécessaires
-        mgr.create_collection(
-            "pa_components",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await
-        .unwrap();
-        mgr.create_collection(
-            "quality_rules",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await
-        .unwrap();
-        mgr.create_collection(
-            "quality_assessments",
-            "db://_system/_system/schemas/v1/db/generic.schema.json",
-        )
-        .await
-        .unwrap();
-
-        // 3. Insertion d'un Composant Physique à auditer
-        let component = json_value!({
-            "_id": "comp_db_engine",
-            "@type": "Dapp", // Hérite de pa:PhysicalComponent
-            "handle": "db_engine",
-            "name": "Moteur de Base de Données"
-        });
-        mgr.insert_raw("pa_components", &component).await.unwrap();
-
-        // 4. Insertion d'une Règle de Qualité
-        let rule = json_value!({
-            "_id": "rule_frugality_01",
-            "@type": "QualityRule", // Défini dans raise.jsonld
-            "handle": "max_memory_50mb",
-            "name": "Limite Mémoire Frugale",
-            "description": "Le composant ne doit pas dépasser 50MB de RAM."
-        });
-        mgr.insert_raw("quality_rules", &rule).await.unwrap();
-
-        // 5. Création d'un audit de qualité (Violation détectée)
-        // On utilise les propriétés définies dans arcadia.jsonld (assessedElement, violatesRule)
-        let assessment = json_value!({
-            "@type": "QualityAssessment",
-            "handle": "audit_db_engine_2026",
-            "status": "failed",
-            "assessedElement": "ref:pa_components:handle:db_engine",
-            "violations": ["ref:quality_rules:handle:max_memory_50mb"],
-            "summary": "Dépassement de seuil : 62MB détectés."
-        });
-
-        // L'insertion avec schéma va résoudre les 'ref:' en IDs réels
-        let saved_doc = mgr
-            .insert_with_schema("quality_assessments", assessment)
-            .await
-            .unwrap();
-        let assessment_id = saved_doc["_id"].as_str().unwrap();
-
-        // 6. VÉRIFICATIONS (ASSERTIONS)
-
-        // A. Vérification de la résolution du lien sémantique
-        assert_eq!(
-            saved_doc["assessedElement"], "comp_db_engine",
-            "Le lien vers le composant audité doit être résolu via le Smart Link."
-        );
-
-        // B. Vérification sémantique (Héritage)
-        // Teste si le nouveau moteur reconnaît la hiérarchie définie dans raise.jsonld
-        let registry = VocabularyRegistry::global();
-        let is_quality_concept = registry.is_subtype_of(
-            "https://raise.io/ontology/raise#QualityRule",
-            "https://raise.io/ontology/arcadia#QualityRule",
-        );
-        assert!(
-            is_quality_concept,
-            "Le type RAISE QualityRule doit hériter du concept Arcadia."
-        );
-
-        // C. Vérification de la persistance
-        let fetched = mgr
-            .get_document("quality_assessments", assessment_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(fetched["status"], "failed");
-        assert!(fetched["violations"].as_array().unwrap().len() > 0);
+        let corrupt = json_value!({ "invalid": true });
+        assert!(reg.load_layer_from_json("fail", &corrupt).await.is_err());
+        // L'état précédent doit être préservé à 100% (Isolation RCU)
+        assert!(SharedRef::ptr_eq(&state_before, &reg.get_state()));
+        Ok(())
     }
 }

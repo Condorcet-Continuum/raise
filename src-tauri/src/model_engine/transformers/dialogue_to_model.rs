@@ -61,9 +61,8 @@ impl DialogueToModelTransformer {
                 _ => "sa",
             };
             // Si non trouvé dans le registre, on construit l'URI standard RAISE
-            ArcadiaOntology::get_uri(prefix, type_str).unwrap_or_else(|| {
-                format!("https://raise.io/ontology/arcadia/{}#{}", prefix, type_str)
-            })
+            ArcadiaOntology::get_uri(prefix, type_str)
+                .unwrap_or_else(|| format!("https://raise.io/{}#{}", prefix, type_str))
         });
 
         // 3. Gestion dynamique des propriétés (Architecture Pure Graph)
@@ -116,13 +115,10 @@ mod tests {
 
         assert_eq!(el.name.as_str(), "Navigation System");
 
-        // 🎯 FIX : Validation de l'URI complète produite par le fallback sémantique
-        // C'est ici que l'assertion est corrigée pour correspondre au comportement réel du moteur.
         assert_eq!(
             el.kind,
-            "https://raise.io/ontology/arcadia/la#LogicalComponent"
+            "https://raise.io/la#LogicalComponent" // <-- On retire "/ontology/arcadia"
         );
-
         // Vérification de l'aplatissement des propriétés dynamiques (Pure Graph)
         assert_eq!(
             el.properties.get("description").and_then(|v| v.as_str()),

@@ -388,6 +388,61 @@ pub async fn inject_mock_schema_to_index(
     );
 }
 
+pub async fn inject_v2_schema_mock(
+    db_cfg: &JsonDbConfig,
+    sys_doc: &mut JsonValue,
+    logical_path: &str, // ex: "assurance/quality_report"
+) {
+    if sys_doc.get("schemas").is_none() {
+        *sys_doc = json_value!({ "schemas": { "v1": {}, "v2": {} } });
+    }
+    let schemas_v2 = sys_doc["schemas"]["v2"].as_object_mut().unwrap();
+
+    // 1. Détermination des chemins virtuels
+    let file_name = format!(
+        "{}.schema.json",
+        Path::new(logical_path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    let parent_dir = Path::new(logical_path).parent().unwrap_or(Path::new(""));
+    let schemas_dir = db_cfg
+        .db_schemas_root(BOOTSTRAP_DOMAIN, BOOTSTRAP_DB)
+        .join("v2")
+        .join(parent_dir);
+
+    let _ = fs::create_dir_all_async(&schemas_dir).await;
+
+    // 2. Création d'un schéma fantôme (Valide mais vide)
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v2/{}.schema.json",
+        BOOTSTRAP_DOMAIN, BOOTSTRAP_DB, logical_path
+    );
+
+    let schema_mock = json_value!({
+        "$id": schema_uri,
+        "type": "object",
+        "properties": {
+            "_id": { "type": "string", "x_compute": { "plan": { "op": "uuid_v4" }, "update": "if_missing" } },
+            "_created_at": { "type": "string", "x_compute": { "plan": { "op": "now_rfc3339" }, "update": "if_missing" } },
+            "_updated_at": { "type": "string", "x_compute": { "plan": { "op": "now_rfc3339" }, "update": "always" } }
+        },
+        "required": ["_id"],
+        "additionalProperties": true
+    });
+
+    // 3. Écriture sur le disque de la Sandbox
+    let _ = fs::write_json_atomic_async(&schemas_dir.join(&file_name), &schema_mock).await;
+
+    // 4. Inscription officielle dans l'index de test
+    schemas_v2.insert(
+        format!("{}.schema.json", logical_path),
+        json_value!({ "file": format!("v2/{}.schema.json", logical_path) }),
+    );
+}
+
 pub async fn inject_mock_user(manager: &CollectionsManager<'_>, userhandle: &str) {
     let user_doc = json_value!({
         "handle": userhandle,
@@ -710,6 +765,23 @@ impl DbSandbox {
             FINANCE_SCHEMA_MOCK,
         )
         .await;
+
+        inject_v2_schema_mock(&db_cfg, &mut initial_system_doc, "assurance/quality_report").await;
+        inject_v2_schema_mock(&db_cfg, &mut initial_system_doc, "assurance/xai_frame").await;
+        inject_v2_schema_mock(&db_cfg, &mut initial_system_doc, "common/types/base").await;
+
+        inject_v2_schema_mock(
+            &db_cfg,
+            &mut initial_system_doc,
+            "agents/memory/vector_store_record",
+        )
+        .await;
+        inject_v2_schema_mock(
+            &db_cfg,
+            &mut initial_system_doc,
+            "agents/memory/chat_session",
+        )
+        .await;
         // On écrit le fichier avec les schémas AVANT de lancer le CollectionsManager
         fs::write_json_atomic_async(&sys_path, &initial_system_doc)
             .await
@@ -805,6 +877,25 @@ impl DbSandbox {
                 FINANCE_SCHEMA_MOCK,
             )
             .await;
+
+            inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/quality_report")
+                .await;
+            inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/xai_frame").await;
+            inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "common/types/base").await;
+
+            inject_v2_schema_mock(
+                db_cfg,
+                &mut initial_system_doc,
+                "agents/memory/vector_store_record",
+            )
+            .await;
+            inject_v2_schema_mock(
+                db_cfg,
+                &mut initial_system_doc,
+                "agents/memory/chat_session",
+            )
+            .await;
+
             fs::write_json_atomic_async(&sys_path, &initial_system_doc)
                 .await
                 .unwrap();
