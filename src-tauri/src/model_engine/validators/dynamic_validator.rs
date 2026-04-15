@@ -48,20 +48,24 @@ impl ModelValidator for DynamicValidator {
         let context = Self::build_context(element);
 
         for rule in &self.rules {
-            // Une règle s'applique si la cible est "all" ou si le type (URI) contient la cible
-            if rule.target == "all" || element.kind.contains(&rule.target) {
-                // Évaluation de l'expression de la règle via le Rules Engine
-                if let Ok(result) = Evaluator::evaluate(&rule.expr, &context, loader).await {
-                    // Si l'expression retourne 'false', une issue est créée
-                    if result.as_bool() == Some(false) {
-                        issues.push(ValidationIssue {
-                            severity: Severity::Warning,
-                            rule_id: rule.id.clone(),
-                            element_id: element.id.clone(),
-                            message: rule.description.clone().unwrap_or_else(|| {
-                                format!("Violation de la règle dynamique : {}", rule.id)
-                            }),
-                        });
+            // 🎯 GARDE D'INTÉGRITÉ : On extrait l'UUID. Si la règle n'est pas persistée (None), on l'ignore.
+            if let Some(technical_uuid) = &rule._id {
+                // Une règle s'applique si la cible est "all" ou si le type (URI) contient la cible
+                if rule.target == "all" || element.kind.contains(&rule.target) {
+                    // Évaluation de l'expression de la règle via le Rules Engine
+                    if let Ok(result) = Evaluator::evaluate(&rule.expr, &context, loader).await {
+                        // Si l'expression retourne 'false', une issue est créée
+                        if result.as_bool() == Some(false) {
+                            issues.push(ValidationIssue {
+                                severity: Severity::Warning,
+                                rule_id: technical_uuid.clone(), // ✅ On utilise l'UUID garanti par le 'if let'
+                                element_id: element.id.clone(),
+                                message: rule.description.clone().unwrap_or_else(|| {
+                                    format!("Violation de la règle dynamique : {}", rule.handle)
+                                    // ✅ On utilise 'handle'
+                                }),
+                            });
+                        }
                     }
                 }
             }
@@ -92,7 +96,6 @@ impl ModelValidator for DynamicValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // 🎯 FIX : Suppression des imports inutilisés (CollectionsManager, NameType)
     use crate::rules_engine::ast::Expr;
     use crate::utils::testing::AgentDbSandbox;
 
@@ -102,9 +105,10 @@ mod tests {
         let loader = ModelLoader::from_engine(&sandbox.db, "test", "db");
 
         // Règle : La masse doit être inférieure à 500 (mass < 500)
-        // 🎯 FIX : Utilisation de Box::new() pour les 2 arguments requis par Lt
         let rule = Rule {
-            id: "CHECK_MASS".into(),
+            // 🎯 FIX : Un faux _id est obligatoire pour que la règle passe la "garde d'intégrité"
+            _id: Some("mock-uuid-mass-1234".into()),
+            handle: "CHECK_MASS".into(),
             target: "all".into(),
             expr: Expr::Lt(
                 Box::new(Expr::Var("mass".to_string())),
@@ -139,7 +143,8 @@ mod tests {
 
         let issues_ko = validator.validate_element(&el_ko, &loader).await;
         assert_eq!(issues_ko.len(), 1);
-        assert_eq!(issues_ko[0].rule_id, "CHECK_MASS");
+        // 🎯 FIX : On vérifie que le validateur a bien remonté l'UUID technique et non le handle
+        assert_eq!(issues_ko[0].rule_id, "mock-uuid-mass-1234");
     }
 
     #[async_test]
@@ -149,7 +154,8 @@ mod tests {
 
         // Règle ciblant uniquement les "LogicalFunction"
         let rule = Rule {
-            id: "FUNC_ONLY".into(),
+            _id: Some("mock-uuid-func-5678".into()), // 🎯 FIX : UUID factice
+            handle: "FUNC_ONLY".into(),
             target: "LogicalFunction".into(),
             expr: Expr::Val(json_value!(false)), // Échoue toujours
             description: Some("Erreur fonction".into()),

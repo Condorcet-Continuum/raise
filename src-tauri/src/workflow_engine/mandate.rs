@@ -245,7 +245,8 @@ impl Mandate {
                     }
                 };
                 Analyzer::validate_depth(&expr, 50)?;
-                let deps = Analyzer::get_dependencies(&expr).into_iter().collect();
+                let deps_set = Analyzer::get_dependencies(&expr, 50)?;
+                let deps: Vec<String> = deps_set.into_iter().collect();
                 Ok(deps)
             })();
 

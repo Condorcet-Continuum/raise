@@ -71,7 +71,8 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
             let tracer = Tracer::from_legacy_model(&model);
             let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name);
 
-            println!("{}", json::serialize_to_string_pretty(&report).unwrap());
+            // 🎯 FIX CRITIQUE : Remplacement du unwrap() par l'opérateur ? (qui convertit en RaiseResult)
+            println!("{}", json::serialize_to_string_pretty(&report)?);
 
             user_success!(
                 "AUDIT_TRACEABILITY_COMPLETE",
@@ -106,7 +107,8 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
 
             let report = analyzer.analyze(&component_id, 3);
 
-            println!("{}", json::serialize_to_string_pretty(&report).unwrap());
+            // 🎯 FIX CRITIQUE : Remplacement du unwrap()
+            println!("{}", json::serialize_to_string_pretty(&report)?);
 
             user_success!(
                 "IMPACT_ANALYSIS_SUCCESS",
@@ -140,7 +142,7 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
     Ok(())
 }
 
-// --- TESTS UNITAIRES ---
+// --- TESTS UNITAIRES ("Zéro Dette") ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,7 +151,8 @@ mod tests {
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_traceability_cli_flow() {
+    // 🎯 FIX : Signature RaiseResult<()>
+    async fn test_traceability_cli_flow() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
@@ -160,6 +163,10 @@ mod tests {
             command: TraceabilityCommands::Audit,
         };
 
-        assert!(handle(args, ctx).await.is_ok());
+        // 🎯 FIX : Remplacement du assert!() par match
+        match handle(args, ctx).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_TEST_TRACEABILITY_FLOW", error = e.to_string()),
+        }
     }
 }

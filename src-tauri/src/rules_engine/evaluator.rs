@@ -751,16 +751,26 @@ mod tests {
     use super::*;
 
     #[async_test]
-    async fn test_eq_async() {
+    async fn test_eq_async() -> RaiseResult<()> {
         let provider = NoOpDataProvider;
         let ctx = json_value!({});
         let expr = Expr::Eq(vec![Expr::Val(json_value!(10)), Expr::Val(json_value!(10))]);
-        let res = Evaluator::evaluate(&expr, &ctx, &provider).await.unwrap();
+
+        let res = match Evaluator::evaluate(&expr, &ctx, &provider).await {
+            Ok(val) => val,
+            Err(e) => raise_error!(
+                "ERR_TEST_EVALUATION_FAILED",
+                error = e.to_string(),
+                context = json_value!({ "test": "test_eq_async" })
+            ),
+        };
+
         assert_eq!(res.as_bool(), Some(true));
+        Ok(())
     }
 
     #[async_test]
-    async fn test_lookup_mock() {
+    async fn test_lookup_mock() -> RaiseResult<()> {
         struct MockProvider;
         #[async_interface]
         impl DataProvider for MockProvider {
@@ -768,15 +778,24 @@ mod tests {
                 Some(json_value!("Alice"))
             }
         }
+
         let expr = Expr::Lookup {
             collection: "users".into(),
             id: Box::new(Expr::Val(json_value!("u1"))),
             field: "name".into(),
         };
         let context_data = json_value!({});
-        let res = Evaluator::evaluate(&expr, &context_data, &MockProvider)
-            .await
-            .unwrap();
+
+        let res = match Evaluator::evaluate(&expr, &context_data, &MockProvider).await {
+            Ok(val) => val,
+            Err(e) => raise_error!(
+                "ERR_TEST_EVALUATION_FAILED",
+                error = e.to_string(),
+                context = json_value!({ "test": "test_lookup_mock" })
+            ),
+        };
+
         assert_eq!(res.as_str(), Some("Alice"));
+        Ok(())
     }
 }

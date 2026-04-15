@@ -98,8 +98,8 @@ impl<'a> Migrator<'a> {
 
         // Enregistrement du succès
         let record = json_value!({
-            "$schema": "db://_system/_system/schemas/v2/system/db/migration.schema.json",
             "_id": migration.id.clone(),
+            "$schema": "db://_system/_system/schemas/v2/system/db/migration.schema.json",
             "handle": format!("migration_{}", migration.version).replace('.', "_"),
             "name": { "fr": migration.description.clone(), "en": migration.description.clone() },
             "version": migration.version.clone(),

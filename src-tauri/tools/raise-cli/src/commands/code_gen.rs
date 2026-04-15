@@ -169,7 +169,7 @@ mod tests {
     use raise::json_db::query::{Query, QueryEngine};
 
     #[async_test]
-    async fn test_codegen_cli_dispatch() {
+    async fn test_codegen_cli_dispatch() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
@@ -183,11 +183,15 @@ mod tests {
             },
         };
 
-        assert!(handle(args, ctx).await.is_ok());
+        // 🎯 FIX : Suppression du unwrap() implicite
+        match handle(args, ctx).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_TEST_CODEGEN_DISPATCH", error = e.to_string()),
+        }
     }
 
     #[async_test]
-    async fn test_cli_ingest_and_weave_flow() {
+    async fn test_cli_ingest_and_weave_flow() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
@@ -196,14 +200,21 @@ mod tests {
         let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
 
         let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
-        DbSandbox::mock_db(&manager).await.unwrap();
-        manager
+
+        // 🎯 FIX : Suppression des unwraps/expects de préparation
+        if let Err(e) = DbSandbox::mock_db(&manager).await {
+            raise_error!("ERR_TEST_MOCK_DB", error = e.to_string());
+        }
+
+        if let Err(e) = manager
             .create_collection(
                 "code_elements",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
             .await
-            .expect("Le setup de la collection 'code_elements' a échoué");
+        {
+            raise_error!("ERR_TEST_CREATE_COL", error = e.to_string());
+        }
 
         // 1. SCÉNARIO INITIAL : Le développeur ou l'IA a créé un fichier de base
         let file_path = sandbox.storage.config.data_root.join("test_forgeron.rs");
@@ -215,7 +226,9 @@ pub fn test_weave() {
     let base = 1;
 }
 ";
-        fs::write_sync(&file_path, initial_code).unwrap();
+        if let Err(e) = fs::write_sync(&file_path, initial_code) {
+            raise_error!("ERR_TEST_FS_WRITE", error = e.to_string());
+        }
 
         // 2. INGESTION : Le Jumeau Numérique lit la réalité
         let args_ingest = CodeGenArgs {
@@ -223,24 +236,34 @@ pub fn test_weave() {
                 path: path_str.clone(),
             },
         };
-        handle(args_ingest, ctx.clone()).await.unwrap();
+
+        if let Err(e) = handle(args_ingest, ctx.clone()).await {
+            raise_error!("ERR_TEST_INGEST", error = e.to_string());
+        }
 
         // 3. MUTATION EN BASE : L'Agent IA réfléchit et modifie le code dans la DB
         let query = Query::new("code_elements");
-        let db_result = QueryEngine::new(&manager)
-            .execute_query(query)
-            .await
-            .unwrap();
+        let db_result = match QueryEngine::new(&manager).execute_query(query).await {
+            Ok(res) => res,
+            Err(e) => raise_error!("ERR_TEST_QUERY", error = e.to_string()),
+        };
+
+        if db_result.documents.is_empty() {
+            raise_error!(
+                "ERR_TEST_ASSERTION",
+                error = "Aucun élément ingéré trouvé en base."
+            );
+        }
 
         let mut mutated_doc = db_result.documents[0].clone();
 
         // L'IA remplace le body pour y injecter son code
         mutated_doc["body"] =
             json_value!("{\n    let base = 1;\n    println!(\"IA was here\");\n}");
-        manager
-            .upsert_document("code_elements", mutated_doc)
-            .await
-            .unwrap();
+
+        if let Err(e) = manager.upsert_document("code_elements", mutated_doc).await {
+            raise_error!("ERR_TEST_UPSERT", error = e.to_string());
+        }
 
         // 4. WEAVE : L'Agent Forgeron applique la mutation dans le monde réel
         let args_weave = CodeGenArgs {
@@ -249,18 +272,32 @@ pub fn test_weave() {
                 path: path_str.clone(),
             },
         };
-        handle(args_weave, ctx.clone())
-            .await
-            .expect("Le tissage a échoué");
+
+        if let Err(e) = handle(args_weave, ctx.clone()).await {
+            raise_error!("ERR_TEST_WEAVE", error = e.to_string());
+        }
 
         // 5. VÉRIFICATION : Le fichier a-t-il bien été modifié par le Juge de Paix ?
-        let final_code = fs::read_to_string_sync(&file_path).unwrap();
-        assert!(
-            final_code.contains("IA was here"),
-            "Le code n'a pas été tissé correctement !"
-        );
+        let final_code = match fs::read_to_string_sync(&file_path) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_FS_READ", error = e.to_string()),
+        };
+
+        if !final_code.contains("IA was here") {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Le code n'a pas été tissé correctement !"
+            );
+        }
 
         // Bonus : La signature d'origine doit avoir été préservée
-        assert!(final_code.contains("pub fn test_weave()"));
+        if !final_code.contains("pub fn test_weave()") {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "La signature de fonction d'origine a été perdue !"
+            );
+        }
+
+        Ok(())
     }
 }

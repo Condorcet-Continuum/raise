@@ -115,7 +115,16 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
             };
 
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
-            let json_mandate = json::serialize_to_value(&mandate).expect("Serialization fail");
+
+            // 🎯 FIX CRITIQUE : Suppression du expect() en production
+            let json_mandate = match json::serialize_to_value(&mandate) {
+                Ok(v) => v,
+                Err(e) => raise_error!(
+                    "ERR_JSON_SERIALIZE",
+                    error = e.to_string(),
+                    context = json_value!({"action": "serialize_mandate"})
+                ),
+            };
 
             manager.upsert_document("mandates", json_mandate).await?;
 
@@ -194,8 +203,16 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 ),
             };
 
-            let instance: WorkflowInstance =
-                json::deserialize_from_value(doc).expect("Deserialization fail");
+            // 🎯 FIX CRITIQUE : Suppression du expect() en production
+            let instance: WorkflowInstance = match json::deserialize_from_value(doc) {
+                Ok(i) => i,
+                Err(e) => raise_error!(
+                    "ERR_JSON_PARSE",
+                    error = e.to_string(),
+                    context = json_value!({"action": "deserialize_instance", "id": instance_id})
+                ),
+            };
+
             scheduler
                 .load_mission(&instance.mission_id, &manager)
                 .await?;
@@ -213,7 +230,6 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
         }
 
         WorkflowCommands::Status { instance_id } => {
-            // Résilience : Utilisation des points de montage système pour le monitoring
             let manager = CollectionsManager::new(
                 &ctx.storage,
                 &ctx.config.mount_points.system.domain,
@@ -225,8 +241,16 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
                 .await?
             {
                 Some(doc) => {
-                    let instance: WorkflowInstance =
-                        json::deserialize_from_value(doc).expect("Deserialization fail");
+                    // 🎯 FIX CRITIQUE : Suppression du expect() en production
+                    let instance: WorkflowInstance = match json::deserialize_from_value(doc) {
+                        Ok(i) => i,
+                        Err(e) => raise_error!(
+                            "ERR_JSON_PARSE",
+                            error = e.to_string(),
+                            context = json_value!({"action": "deserialize_instance_status", "id": instance_id})
+                        ),
+                    };
+
                     user_info!(
                         "INSTANCE_SYNC",
                         json_value!({
@@ -255,7 +279,7 @@ pub async fn handle(args: WorkflowArgs, ctx: CliContext) -> RaiseResult<()> {
 }
 
 // =========================================================================
-// TESTS UNITAIRES ET RÉSILIENCE
+// TESTS UNITAIRES ET RÉSILIENCE ("Zéro Dette")
 // =========================================================================
 #[cfg(test)]
 mod tests {
@@ -265,7 +289,7 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
-    async fn test_cli_set_sensor_writes_to_db() {
+    async fn test_cli_set_sensor_writes_to_db() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
@@ -274,15 +298,17 @@ mod tests {
             &sandbox.config.mount_points.system.domain,
             &sandbox.config.mount_points.system.db,
         );
-        DbSandbox::mock_db(&manager).await.expect("Init index fail");
+
+        if let Err(e) = DbSandbox::mock_db(&manager).await {
+            raise_error!("ERR_TEST_INIT", error = e.to_string());
+        }
 
         manager
             .create_collection(
                 "digital_twin",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
         let ctx = CliContext::mock(
             AppConfig::get(),
@@ -299,20 +325,20 @@ mod tests {
             },
             ctx,
         )
-        .await
-        .unwrap();
+        .await?;
 
-        let doc = manager
-            .get_document("digital_twin", "vibration_z")
-            .await
-            .unwrap()
-            .expect("Doc missing");
+        let doc = match manager.get_document("digital_twin", "vibration_z").await? {
+            Some(d) => d,
+            None => raise_error!("ERR_TEST_ASSERTION_FAILED", error = "Document missing"),
+        };
+
         assert_eq!(doc["value"], 42.5);
+        Ok(())
     }
 
     #[async_test]
     #[serial_test::serial]
-    async fn test_cli_submit_mandate_persists() {
+    async fn test_cli_submit_mandate_persists() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
@@ -327,8 +353,7 @@ mod tests {
                 "mandates",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
+            .await?;
 
         let ctx = CliContext::mock(
             AppConfig::get(),
@@ -347,9 +372,10 @@ mod tests {
             "hardLogic": { "vetos": [] },
             "observability": { "heartbeatMs": 100 }
         });
-        fs::write_async(&mandate_path, valid_mandate.to_string())
-            .await
-            .unwrap();
+
+        if let Err(e) = fs::write_async(&mandate_path, valid_mandate.to_string()).await {
+            raise_error!("ERR_TEST_FS", error = e.to_string());
+        }
 
         handle(
             WorkflowArgs {
@@ -359,21 +385,23 @@ mod tests {
             },
             ctx,
         )
-        .await
-        .unwrap();
+        .await?;
 
-        let doc = manager
+        let doc = match manager
             .get_document("mandates", "mandate_cli_test_123")
-            .await
-            .unwrap()
-            .expect("Mandate missing");
+            .await?
+        {
+            Some(d) => d,
+            None => raise_error!("ERR_TEST_ASSERTION_FAILED", error = "Mandate missing"),
+        };
+
         assert_eq!(
             doc["meta"]["mandator_id"],
             "00000000-0000-0000-0000-000000000000"
         );
+        Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience de la résolution des Mount Points en mode Workflow
     #[async_test]
     async fn test_workflow_mount_point_integrity() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;

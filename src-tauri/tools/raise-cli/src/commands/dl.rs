@@ -141,18 +141,28 @@ mod tests {
     use raise::utils::testing::mock;
 
     #[test]
-    fn test_parse_csv_floats_valid() {
+    fn test_parse_csv_floats_valid() -> RaiseResult<()> {
         let input = "0.5, -1.2 , 3.14  ,0";
-        let result = parse_csv_floats(input).unwrap();
+        let result = match parse_csv_floats(input) {
+            Ok(res) => res,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
         assert_eq!(result.len(), 4);
         assert_eq!(result[0], 0.5);
+        Ok(())
     }
 
     #[test]
-    fn test_parse_csv_floats_invalid() {
+    fn test_parse_csv_floats_invalid() -> RaiseResult<()> {
         let input = "0.5, abc, 3.14";
         let result = parse_csv_floats(input);
-        assert!(result.is_err(), "Le parseur devrait rejeter 'abc'");
+        if result.is_ok() {
+            raise_error!(
+                "ERR_TEST_ASSERTION",
+                error = "Le parseur devrait rejeter 'abc'"
+            );
+        }
+        Ok(())
     }
 
     #[derive(Parser)]
@@ -162,8 +172,8 @@ mod tests {
     }
 
     #[test]
-    fn test_dl_cli_parsing_train() {
-        let cli = TestCli::try_parse_from(vec![
+    fn test_dl_cli_parsing_train() -> RaiseResult<()> {
+        let cli = match TestCli::try_parse_from(vec![
             "test",
             "train",
             "ref:dl_models:handle:routing_v1",
@@ -173,8 +183,11 @@ mod tests {
             "2",
             "-e",
             "10",
-        ])
-        .unwrap();
+        ]) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_CLI_PARSE", error = e.to_string()),
+        };
+
         if let DlCommands::Train {
             urn,
             input,
@@ -186,8 +199,12 @@ mod tests {
             assert_eq!(input, "0.1,0.2");
             assert_eq!(target_class, 2);
             assert_eq!(epochs, 10);
+            Ok(())
         } else {
-            panic!("Mauvaise commande parsée");
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Mauvaise commande parsée"
+            )
         }
     }
 
@@ -207,7 +224,7 @@ mod tests {
             "hyperparameters": { "input_size": 2, "hidden_size": 4, "output_size": 2, "learning_rate": 0.001 }
         });
 
-        storage
+        if let Err(e) = storage
             .write_document(
                 &ctx.active_domain,
                 &ctx.active_db,
@@ -216,7 +233,9 @@ mod tests {
                 &model_doc,
             )
             .await
-            .unwrap();
+        {
+            raise_error!("ERR_TEST_DB_WRITE", error = e.to_string());
+        }
 
         let mock_input = "0.5, -0.5".to_string();
         let urn = "ref:dl_models:handle:cli_routing_v1".to_string();
@@ -230,7 +249,9 @@ mod tests {
                 epochs: 2,
             },
         };
-        assert!(handle(args_train, ctx.clone()).await.is_ok());
+        if let Err(e) = handle(args_train, ctx.clone()).await {
+            raise_error!("ERR_TEST_TRAIN_FAIL", error = e.to_string());
+        }
 
         // 3. PREDICT via le CLI
         let args_predict = DlArgs {
@@ -239,7 +260,9 @@ mod tests {
                 input: mock_input,
             },
         };
-        assert!(handle(args_predict, ctx.clone()).await.is_ok());
+        if let Err(e) = handle(args_predict, ctx.clone()).await {
+            raise_error!("ERR_TEST_PREDICT_FAIL", error = e.to_string());
+        }
 
         // Nettoyage
         let _ = raise::utils::io::fs::remove_dir_all_async(&db_root).await;

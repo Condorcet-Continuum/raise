@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 
 // --- IMPORTS RAISE ---
 use raise::json_db::{
-    collections::manager::{CollectionsManager, EntityIdentity},
+    collections::manager::CollectionsManager,
     indexes::manager::IndexManager,
     query::{Condition, FilterOperator, Projection, Query, QueryEngine, QueryFilter},
     transactions::{manager::TransactionManager, TransactionRequest},
@@ -171,7 +171,7 @@ pub enum JsondbCommands {
         #[arg(long)]
         id: Option<String>,
         #[arg(long)]
-        name: Option<String>,
+        handle: Option<String>,
     },
 
     // --- QUERIES & TOOLS ---
@@ -504,17 +504,31 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
         JsondbCommands::Delete {
             collection,
             id,
-            name,
+            handle,
         } => {
-            let identity = if let Some(id_val) = id {
-                EntityIdentity::Id(id_val.clone())
-            } else if let Some(name_val) = name {
-                EntityIdentity::Name(name_val.clone())
-            } else {
-                raise_error!("ERR_CLI_MISSING_ARG", error = "Fournir --id ou --name");
-            };
+            let id_or_handle = id.or(handle);
 
-            col_mgr.delete_identity(&collection, identity).await?;
+            if let Some(target) = id_or_handle {
+                let doc = match col_mgr.get_document(&collection, &target).await? {
+                    Some(d) => d,
+                    None => raise_error!(
+                        "ERR_DB_ENTITY_NOT_FOUND",
+                        error = format!("Aucun document trouvé pour '{}'", target)
+                    ),
+                };
+
+                let doc_id = match doc.get("_id").and_then(|v| v.as_str()) {
+                    Some(valid_id) => valid_id.to_string(),
+                    None => raise_error!(
+                        "ERR_DB_CORRUPTION",
+                        error = "Le document trouvé ne possède pas d'_id"
+                    ),
+                };
+
+                col_mgr.delete_document(&collection, &doc_id).await?;
+            } else {
+                raise_error!("ERR_CLI_MISSING_ARG", error = "Fournir --id ou --handle");
+            }
 
             user_success!(
                 "JSONDB_DELETE_SUCCESS",
@@ -673,6 +687,7 @@ fn print_examples() {
 }
 
 // --- TESTS UNITAIRES (Patrimoine Conservé & Adapté) ---
+// --- TESTS UNITAIRES ("Zéro Dette") ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_create_index_defaults() {
+    fn test_parse_create_index_defaults() -> RaiseResult<()> {
         let args = vec![
             "test",
             "create-index",
@@ -700,15 +715,24 @@ mod tests {
             "--field",
             "email",
         ];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
-            JsondbCommands::CreateIndex { kind, .. } => assert_eq!(kind, "hash"),
-            _ => panic!("Mauvaise commande parsée"),
+            JsondbCommands::CreateIndex { kind, .. } => {
+                assert_eq!(kind, "hash");
+                Ok(())
+            }
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Mauvaise commande parsée"
+            ),
         }
     }
 
     #[test]
-    fn test_parse_list_indexes_command() {
+    fn test_parse_list_indexes_command() -> RaiseResult<()> {
         let args = vec![
             "test",
             "list-indexes",
@@ -717,41 +741,64 @@ mod tests {
             "--field",
             "email",
         ];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
             JsondbCommands::ListIndexes { collection, field } => {
                 assert_eq!(collection, "users");
                 assert_eq!(field, Some("email".to_string()));
+                Ok(())
             }
-            _ => panic!("Parsing list-indexes failed"),
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Parsing list-indexes failed"
+            ),
         }
     }
 
     #[test]
-    fn test_parse_drop_db_flag() {
+    fn test_parse_drop_db_flag() -> RaiseResult<()> {
         let args = vec!["test", "drop-db", "-f"];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
-            JsondbCommands::DropDb { force } => assert!(force),
-            _ => panic!("Mauvaise commande parsée"),
+            JsondbCommands::DropDb { force } => {
+                assert!(force);
+                Ok(())
+            }
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Mauvaise commande parsée"
+            ),
         }
     }
 
     #[test]
-    fn test_parse_query_optional() {
+    fn test_parse_query_optional() -> RaiseResult<()> {
         let args = vec!["test", "query", "--collection", "users"];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
             JsondbCommands::Query { filter, limit, .. } => {
                 assert!(filter.is_none());
                 assert!(limit.is_none());
+                Ok(())
             }
-            _ => panic!("Mauvaise commande parsée"),
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Mauvaise commande parsée"
+            ),
         }
     }
 
     #[test]
-    fn test_parse_update_command() {
+    fn test_parse_update_command() -> RaiseResult<()> {
         let args = vec![
             "test",
             "update",
@@ -762,58 +809,75 @@ mod tests {
             "--data",
             "{}",
         ];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
             JsondbCommands::Update { collection, id, .. } => {
                 assert_eq!(collection, "users");
                 assert_eq!(id, "123");
+                Ok(())
             }
-            _ => panic!("Parsing update failed"),
+            _ => raise_error!("ERR_TEST_ASSERTION_FAILED", error = "Parsing update failed"),
         }
     }
 
     #[test]
-    fn test_parse_upsert_command() {
+    fn test_parse_upsert_command() -> RaiseResult<()> {
         let args = vec!["test", "upsert", "--collection", "users", "--data", "{}"];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
-            JsondbCommands::Upsert { collection, .. } => assert_eq!(collection, "users"),
-            _ => panic!("Parsing upsert failed"),
+            JsondbCommands::Upsert { collection, .. } => {
+                assert_eq!(collection, "users");
+                Ok(())
+            }
+            _ => raise_error!("ERR_TEST_ASSERTION_FAILED", error = "Parsing upsert failed"),
         }
     }
 
     #[test]
-    fn test_parse_delete_command() {
+    fn test_parse_delete_command() -> RaiseResult<()> {
         let args = vec!["test", "delete", "--collection", "items", "--id", "abc"];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
             JsondbCommands::Delete {
                 collection,
                 id,
-                name: _,
+                handle,
             } => {
                 assert_eq!(collection, "items");
                 assert_eq!(id, Some("abc".to_string()));
+                assert_eq!(handle, None);
+                Ok(())
             }
-            _ => panic!("Parsing delete failed"),
+            _ => raise_error!("ERR_TEST_ASSERTION_FAILED", error = "Parsing delete failed"),
         }
     }
 
     #[test]
-    fn test_transaction_wrapper_deserialization() {
+    fn test_transaction_wrapper_deserialization() -> RaiseResult<()> {
         let json = r#"{"operations": []}"#;
         let res: RaiseResult<JsonValue> = json::deserialize_from_str(json);
         assert!(res.is_ok());
+        Ok(())
     }
 
     #[async_test]
-    async fn test_parse_data_helper_robustness() {
+    async fn test_parse_data_helper_robustness() -> RaiseResult<()> {
         assert!(parse_data(r#"{"test":true}"#).await.is_ok());
         assert!(parse_data("invalid").await.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_parse_create_schema_command() {
+    fn test_parse_create_schema_command() -> RaiseResult<()> {
         let args = vec![
             "test",
             "create-schema",
@@ -822,17 +886,24 @@ mod tests {
             "--schema",
             "{}",
         ];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
             JsondbCommands::CreateSchema { name, .. } => {
                 assert_eq!(name, "db://test/schema");
+                Ok(())
             }
-            _ => panic!("Parsing create-schema failed"),
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Parsing create-schema failed"
+            ),
         }
     }
 
     #[test]
-    fn test_parse_register_ontology_command() {
+    fn test_parse_register_ontology_command() -> RaiseResult<()> {
         let args = vec![
             "test",
             "register-ontology",
@@ -843,7 +914,10 @@ mod tests {
             "--version",
             "1.1.0",
         ];
-        let cli = TestCli::parse_from(args);
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
         match cli.args.command {
             JsondbCommands::RegisterOntology {
                 namespace,
@@ -856,8 +930,12 @@ mod tests {
                     "db://_system/bootstrap/schemas/v2/system/db/arcadia.jsonld"
                 );
                 assert_eq!(version, "1.1.0");
+                Ok(())
             }
-            _ => panic!("Parsing register-ontology failed"),
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Parsing register-ontology failed"
+            ),
         }
     }
 }

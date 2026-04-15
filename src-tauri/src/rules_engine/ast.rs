@@ -5,12 +5,24 @@ use crate::utils::prelude::*;
 /// Représentation en mémoire d'une règle définie dans 'quality-rule.schema.json'.
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct Rule {
-    #[serde(rename = "_id", alias = "id")]
-    pub id: String,
+    /// 🆔 L'UUID technique (nom du fichier).
+    /// Optionnel car généré par le Manager lors du premier insert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub _id: Option<String>,
+
+    /// 🏷️ L'identité métier stable (ex: "rule-auto-hd").
+    /// Utilisé comme clé dans le registre 'rules: {}' de l'index.
+    #[serde(alias = "id")]
+    pub handle: String,
+
+    #[serde(rename = "target_path", alias = "target")]
     pub target: String,
+
     pub expr: Expr,
+
     #[serde(default)]
     pub description: Option<String>,
+
     #[serde(default)]
     pub severity: Option<String>,
 }
@@ -113,14 +125,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ast_serialization_primitive() {
+    fn test_ast_serialization_primitive() -> RaiseResult<()> {
         let expr = Expr::Val(json_value!(42));
-        let json = json::serialize_to_string(&expr).unwrap();
+
+        let json = match json::serialize_to_string(&expr) {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_TEST_SERIALIZATION",
+                error = e.to_string(),
+                context = json_value!({ "target": "Expr::Val" })
+            ),
+        };
+
         assert_eq!(json, r#"{"val":42}"#);
+        Ok(())
     }
 
     #[test]
-    fn test_ast_deserialization_complex_rule() {
+    fn test_ast_deserialization_complex_rule() -> RaiseResult<()> {
         let json_str = r#"{
             "if": {
                 "condition": { "gt": [{ "var": "sensors.temp" }, { "val": 100 }] },
@@ -128,27 +150,43 @@ mod tests {
                 "else_branch": { "val": "OK" }
             }
         }"#;
-        let expr: Expr = json::deserialize_from_str(json_str).expect("Désérialisation échouée");
+
+        let expr: Expr = match json::deserialize_from_str(json_str) {
+            Ok(e) => e,
+            Err(e) => raise_error!("ERR_TEST_DESERIALIZATION", error = e.to_string()),
+        };
+
         match expr {
             Expr::If { .. } => assert!(true),
-            _ => panic!("Structure incorrecte"),
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Structure incorrecte : Expr::If attendu"
+            ),
         }
+        Ok(())
     }
 
     #[test]
-    fn test_rule_struct_compliance() {
+    fn test_rule_struct_compliance() -> RaiseResult<()> {
         let json_rule = r#"{
-            "_id": "RULE_001",
+            "id": "RULE_001",
             "target": "oa.actors",
             "description": "Check",
             "expr": { "len": { "var": "name" } }
         }"#;
-        let rule: Rule = json::deserialize_from_str(json_rule).unwrap();
-        assert_eq!(rule.id, "RULE_001");
+
+        let rule: Rule = match json::deserialize_from_str(json_rule) {
+            Ok(r) => r,
+            Err(e) => raise_error!("ERR_TEST_DESERIALIZATION", error = e.to_string()),
+        };
+
+        assert_eq!(rule.handle, "RULE_001");
+        assert!(rule._id.is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_ast_extensions() {
+    fn test_ast_extensions() -> RaiseResult<()> {
         // Teste spécifiquement les variantes "Extensions" (Map, Filter, Regex)
         // pour garantir que le moteur supporte la logique complexe.
 
@@ -160,11 +198,19 @@ mod tests {
                 "expr": { "mul": [{ "var": "item.price" }, { "val": 1.2 }] }
             }
         }"#;
-        let map_expr: Expr = json::deserialize_from_str(map_json).unwrap();
+
+        let map_expr: Expr = match json::deserialize_from_str(map_json) {
+            Ok(e) => e,
+            Err(e) => raise_error!("ERR_TEST_DESERIALIZATION", error = e.to_string()),
+        };
+
         if let Expr::Map { alias, .. } = map_expr {
             assert_eq!(alias, "item");
         } else {
-            panic!("Map non reconnu");
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Structure incorrecte : Expr::Map attendu"
+            );
         }
 
         // 2. Test RegexMatch
@@ -174,10 +220,19 @@ mod tests {
                 "pattern": { "val": "^[A-Z]{3}-\\d{3}$" }
             }
         }"#;
-        let regex_expr: Expr = json::deserialize_from_str(regex_json).unwrap();
+
+        let regex_expr: Expr = match json::deserialize_from_str(regex_json) {
+            Ok(e) => e,
+            Err(e) => raise_error!("ERR_TEST_DESERIALIZATION", error = e.to_string()),
+        };
+
         match regex_expr {
             Expr::RegexMatch { .. } => assert!(true),
-            _ => panic!("RegexMatch non reconnu"),
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Structure incorrecte : Expr::RegexMatch attendu"
+            ),
         }
+        Ok(())
     }
 }

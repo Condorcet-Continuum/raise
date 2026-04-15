@@ -109,7 +109,7 @@ pub async fn handle(args: PluginsArgs, ctx: CliContext) -> RaiseResult<()> {
     Ok(())
 }
 
-// --- TESTS UNITAIRES ---
+// --- TESTS UNITAIRES ("Zéro Dette") ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,7 +120,8 @@ mod tests {
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_plugins_list_flow() {
+    // 🎯 FIX : On utilise RaiseResult<()>
+    async fn test_plugins_list_flow() -> RaiseResult<()> {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
@@ -132,6 +133,10 @@ mod tests {
             command: PluginsCommands::List,
         };
 
-        assert!(handle(args, ctx).await.is_ok());
+        // 🎯 FIX : Disparition du assert!() masqué, gestion propre des erreurs
+        match handle(args, ctx).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_TEST_PLUGINS_LIST", error = e.to_string()),
+        }
     }
 }

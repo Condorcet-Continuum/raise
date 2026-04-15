@@ -55,8 +55,6 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
         Ok(_) => user_success!("SUC_TEST_DB_READY"),
         Err(e) => panic!("❌ Échec initialisation index système : {}", e),
     }
-    // 🎯 INJECTION PROPRE DANS LE REGISTRE DDL
-    inject_custom_test_schemas(&mgr).await;
 
     // =========================================================================
     // 🎯 INITIALISATION DES COLLECTIONS (Résilience & Isolation)
@@ -160,74 +158,6 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
         client,
         space: system_domain,
         db: system_db,
-    }
-}
-
-/// Injection des schémas JSON pour la validation des tests
-async fn inject_custom_test_schemas(mgr: &CollectionsManager<'_>) {
-    let schemas = vec![
-        (
-            "configuration_items",
-            r#"{ "type": "object", "properties": { "name": { "type": "string" } } }"#,
-        ),
-        (
-            "actors",
-            r#"{ "type": "object", "properties": { "handle": { "type": "string" } } }"#,
-        ),
-        (
-            "articles",
-            r#"{ "type": "object", "properties": { "title": { "type": "string" } } }"#,
-        ),
-        (
-            "finance",
-            r#"{
-                "type": "object",
-                "x_rules": [
-                    { 
-                        "_id": "rule_net_margin_low",
-                        "target": "summary.net_margin_low", 
-                        "expr": { "mul": [ { "var": "revenue_scenarios.low_eur" }, { "var": "gross_margin.low_pct" } ] }
-                    },
-                    { 
-                        "_id": "rule_net_margin_mid",
-                        "target": "summary.net_margin_mid", 
-                        "expr": { "mul": [ { "var": "revenue_scenarios.mid_eur" }, { "var": "gross_margin.mid_pct" } ] }
-                    },
-                    { 
-                        "_id": "rule_mid_profitable",
-                        "target": "summary.mid_is_profitable", 
-                        "expr": { "gt": [ { "var": "summary.net_margin_mid" }, { "val": 0 } ] }
-                    },
-                    { 
-                        "_id": "rule_gen_ref",
-                        "target": "summary.generated_ref", 
-                        "expr": {
-                            "replace": {
-                                "value": { "var": "billing_model" },
-                                "pattern": { "val": "fixed" },
-                                "replacement": { "val": "FIN-2025-OK" }
-                            }
-                        }
-                    }
-                ]
-            }"#,
-        ),
-    ];
-
-    for (name, content) in schemas {
-        let uri = format!(
-            "db://{}/{}/schemas/v1/mock/{}.schema.json",
-            mgr.space, mgr.db, name
-        );
-        let mut schema_val: raise::utils::data::json::JsonValue =
-            raise::utils::data::json::deserialize_from_str(content).unwrap();
-        if let Some(obj) = schema_val.as_object_mut() {
-            obj.insert(
-                "$id".to_string(),
-                raise::utils::data::json::JsonValue::String(uri.clone()),
-            );
-        }
-        let _ = mgr.create_schema_def(&uri, schema_val).await;
     }
 }
 

@@ -163,10 +163,15 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
     // 1. GESTION DE SESSION OBLIGATOIRE (Heartbeat global pour toutes les commandes)
     let _ = ctx.session_mgr.touch().await;
 
-    let domain_path = ctx
-        .config
-        .get_path("PATH_RAISE_DOMAIN")
-        .expect("ERREUR: PATH_RAISE_DOMAIN introuvable !");
+    // 🎯 FIX CRITIQUE : Suppression du expect() en production
+    let domain_path = match ctx.config.get_path("PATH_RAISE_DOMAIN") {
+        Some(path) => path,
+        None => raise_error!(
+            "CLI_MISSING_DOMAIN_PATH",
+            error = "Le chemin PATH_RAISE_DOMAIN est introuvable !",
+            context = json_value!({"required_for": "ai_assets_and_db_access"})
+        ),
+    };
 
     let dataset_path = ctx
         .config
@@ -196,14 +201,12 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
                 json_value!({ "domain": final_domain, "db": final_db, "lr": final_lr, "epochs": final_epochs })
             );
 
-            // 🎯 FIX : Initialisation du CollectionsManager pour l'entraînement natif
             let manager = raise::json_db::collections::manager::CollectionsManager::new(
                 &storage,
                 &ctx.active_domain,
                 &final_db,
             );
 
-            // 🎯 FIX : Appel avec la signature mise à jour (manager)
             match ai_train_domain_native(&manager, &final_domain, final_epochs, final_lr).await {
                 Ok(msg) => user_success!("AI_TRAIN_SUCCESS", json_value!({ "result": msg })),
                 Err(e) => user_error!(
@@ -251,10 +254,16 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         .unwrap_or_else(|| "cli_session".to_string());
 
     let wm_config = raise::utils::data::config::WorldModelConfig::default();
-    let world_engine = SharedRef::new(
-        raise::ai::world_model::NeuroSymbolicEngine::new_empty(wm_config)
-            .expect("Échec de l'initialisation du Cerveau dans le CLI"),
-    );
+
+    // 🎯 FIX CRITIQUE : Suppression du expect() en production
+    let world_engine = match raise::ai::world_model::NeuroSymbolicEngine::new_empty(wm_config) {
+        Ok(engine) => SharedRef::new(engine),
+        Err(e) => raise_error!(
+            "ERR_WORLD_ENGINE_INIT",
+            error = e.to_string(),
+            context = json_value!({"action": "initialize_neuro_symbolic_engine"})
+        ),
+    };
 
     let agent_ctx = AgentContext::new(
         &ctx.active_user,
@@ -283,7 +292,6 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         AiCommands::TrainWorld { iterations } => {
             run_train_world_action(ctx.storage.clone(), &manager, iterations).await?;
         }
-
         AiCommands::Execute {
             prompt_handle,
             vars,
@@ -292,7 +300,6 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         } => {
             run_execute_action(&ctx, client, &prompt_handle, vars, out, ingest).await?;
         }
-
         _ => unreachable!(),
     }
 
@@ -817,28 +824,24 @@ async fn run_execute_action(
     prompt_handle: &str,
     vars_json: Option<String>,
     out_path: Option<String>,
-    ingest: bool, // 🎯 NOUVEAU PARAMÈTRE
+    ingest: bool,
 ) -> RaiseResult<()> {
     user_info!("AI_EXECUTE_START", json_value!({"prompt": prompt_handle}));
 
-    // 1. Parsing des variables via la façade json
     let vars: Option<JsonValue> = if let Some(s) = vars_json {
         Some(json::deserialize_from_str(&s)?)
     } else {
         None
     };
 
-    // 2. Initialisation du moteur de prompt avec le storage du contexte
     let prompt_engine = PromptEngine::new(ctx.storage.clone(), &ctx.active_domain, &ctx.active_db);
 
-    // 3. Compilation et Hydratation du Blueprint
     user_info!(
         "AI_PROMPT_COMPILING",
         json_value!({"handle": prompt_handle})
     );
     let system_prompt = prompt_engine.compile(prompt_handle, vars.as_ref()).await?;
 
-    // 4. Inférence LLM
     println!("🤖 Inférence RAISE en cours ({})...", prompt_handle);
     let response = client
         .ask(
@@ -848,10 +851,8 @@ async fn run_execute_action(
         )
         .await?;
 
-    // 5. Nettoyage JSON via la Toolbox officielle
     let clean_json = extract_json_from_llm(&response);
 
-    // 🎯 5.BIS L'INGESTION AUTOMATIQUE (C'EST ICI QUE TOUT SE JOUE !)
     if ingest {
         println!("📥 Routage ontologique et ingestion dans le Graphe Arcadia...");
         let ids = ingest_arcadia_elements(
@@ -867,17 +868,14 @@ async fn run_execute_action(
         );
     }
 
-    // 6. Persistance via la façade fs (Optionnel, même si on a ingéré)
     match out_path {
         Some(p) => {
             let path = PathBuf::from(&p);
-            // On utilise write_async de fs.rs qui accepte le contenu en AsRef<[u8]>
             fs::write_async(&path, clean_json).await?;
             user_success!("AI_EXECUTE_SUCCESS", json_value!({"out_file": p}));
             println!("✅ Artefact JSON brut sauvegardé dans : {}", p);
         }
         None => {
-            // Si on n'a pas demandé d'ingestion ni de fichier de sortie, on affiche le JSON.
             if !ingest {
                 println!("\n📦 --- RÉSULTAT DU BLUEPRINT ---");
                 println!("{}", clean_json);
@@ -903,28 +901,39 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_ai_parsing_robustness() {
+    async fn test_ai_parsing_robustness() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
-        let cli = TestCli::parse_from(vec!["test"]);
+        let cli = match TestCli::try_parse_from(vec!["test"]) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
         assert!(cli.args.command.is_none());
 
-        let cli = TestCli::parse_from(vec![
+        let cli = match TestCli::try_parse_from(vec![
             "test",
             "classify",
             "créer un composant SA",
             "--execute",
-        ]);
+        ]) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
+
         if let Some(AiCommands::Classify { input, execute }) = cli.args.command {
             assert_eq!(input, "créer un composant SA");
             assert!(execute);
+            Ok(())
         } else {
-            panic!("Échec du parsing de la commande Classify");
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Échec du parsing de la commande Classify"
+            )
         }
     }
 
     #[async_test]
-    async fn test_intent_dispatch_layers() {
+    async fn test_intent_dispatch_layers() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
         let test_cases = vec![
@@ -944,10 +953,11 @@ mod tests {
 
             assert_eq!(intent.recommended_agent_id(), expected_urn);
         }
+        Ok(())
     }
 
     #[async_test]
-    async fn test_intent_dispatch_software_logic() {
+    async fn test_intent_dispatch_software_logic() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
         let intent_la = EngineeringIntent::CreateElement {
@@ -960,10 +970,11 @@ mod tests {
             intent_la.recommended_agent_id(),
             "ref:agents:handle:agent_software"
         );
+        Ok(())
     }
 
     #[async_test]
-    async fn test_business_dispatch() {
+    async fn test_business_dispatch() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
         let intent = EngineeringIntent::DefineBusinessUseCase {
@@ -976,15 +987,19 @@ mod tests {
             intent.recommended_agent_id(),
             "ref:agents:handle:agent_business"
         );
+        Ok(())
     }
 
     #[async_test]
-    async fn test_ai_train_parsing() {
+    async fn test_ai_train_parsing() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
-        let cli = TestCli::parse_from(vec![
+        let cli = match TestCli::try_parse_from(vec![
             "test", "train", "--domain", "safety", "--epochs", "10",
-        ]);
+        ]) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
 
         if let Some(AiCommands::Train {
             domain,
@@ -997,27 +1012,45 @@ mod tests {
             assert_eq!(epochs.unwrap(), 10);
             assert!(db.is_none());
             assert!(lr.is_none());
+            Ok(())
         } else {
-            panic!("Échec du parsing de la commande Train");
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Échec du parsing de la commande Train"
+            )
         }
     }
 
     #[async_test]
-    async fn test_ai_listen_parsing() {
+    async fn test_ai_listen_parsing() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
-        let cli = TestCli::parse_from(vec!["test", "listen"]);
+        let cli = match TestCli::try_parse_from(vec!["test", "listen"]) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
+
         if let Some(AiCommands::Listen) = cli.args.command {
-            assert!(true);
+            // OK
         } else {
-            panic!("Échec du parsing de la commande complète 'listen'");
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Échec du parsing de la commande complète 'listen'"
+            )
         }
 
-        let cli_alias = TestCli::parse_from(vec!["test", "l"]);
+        let cli_alias = match TestCli::try_parse_from(vec!["test", "l"]) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
+
         if let Some(AiCommands::Listen) = cli_alias.args.command {
-            assert!(true);
+            Ok(())
         } else {
-            panic!("Échec du parsing de l'alias 'l'");
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Échec du parsing de l'alias 'l'"
+            )
         }
     }
 }

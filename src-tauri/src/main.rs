@@ -91,7 +91,7 @@ fn main() {
             let system_db = &app_config.mount_points.system.db;
 
 
-// ---------------------------------------------------------
+            // ---------------------------------------------------------
             // 🛡️ MOTEUR DE RÉSILIENCE (WAL Crash Recovery)
             // ---------------------------------------------------------
             let wal_config = config.clone();
@@ -122,6 +122,23 @@ fn main() {
                 }
             });
             // ---------------------------------------------------------
+            // 🎯 BOOTSTRAP DU MOTEUR DE RÈGLES
+            // ---------------------------------------------------------
+            let storage_rules = storage.clone();
+            let domain_rules = system_domain.clone();
+            let db_rules = system_db.clone();
+
+            // On utilise block_on car l'existence de _system_rules est un prérequis critique
+            tauri::async_runtime::block_on(async move {
+                let manager = CollectionsManager::new(&storage_rules, &domain_rules, &db_rules);
+                match raise::rules_engine::initialize_rules_engine(&manager).await {
+                    Ok(_) => user_success!("SUC_RULES_ENGINE_READY"),
+                    Err(e) => user_error!(
+                        "ERR_RULES_ENGINE_BOOT_FAIL", 
+                        json_value!({"error": e.to_string()})
+                    ),
+                }
+            });
 
             // ---------------------------------------------------------
             // 3. INITIALISATION SÉMANTIQUE (Bootstrapping "In-Index")

@@ -94,7 +94,7 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
 }
 
 // =========================================================================
-// TESTS UNITAIRES (Conformité & Résilience Mount Points)
+// TESTS UNITAIRES (Conformité & Résilience Mount Points - "Zéro Dette")
 // =========================================================================
 
 #[cfg(test)]
@@ -117,10 +117,10 @@ mod tests {
             command: BlockchainCommands::Status,
         };
 
-        // On vérifie que le handle retourne un RaiseResult (Ok)
+        // 🎯 FIX : Suppression du panic!
         match handle(args, ctx).await {
             Ok(_) => Ok(()),
-            Err(e) => panic!("Échec inattendu du status blockchain : {:?}", e),
+            Err(e) => raise_error!("ERR_TEST_BLOCKCHAIN_STATUS", error = e.to_string()),
         }
     }
 
@@ -137,9 +137,10 @@ mod tests {
             },
         };
 
+        // 🎯 FIX : Suppression du panic!
         match handle(args, ctx).await {
             Ok(_) => Ok(()),
-            Err(e) => panic!("Échec inattendu de la vérification VPN : {:?}", e),
+            Err(e) => raise_error!("ERR_TEST_VPN_CHECK", error = e.to_string()),
         }
     }
 
@@ -148,11 +149,15 @@ mod tests {
     async fn test_blockchain_mount_point_integrity() -> RaiseResult<()> {
         let _sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
-        // Vérifie que les points de montage système sont accessibles pour le module Blockchain
-        assert!(
-            !config.mount_points.system.domain.is_empty(),
-            "Partition système non résolue"
-        );
+
+        // 🎯 FIX : Utilisation d'une assertion "Zéro Dette" sans panic
+        if config.mount_points.system.domain.is_empty() {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Partition système non résolue"
+            );
+        }
+
         Ok(())
     }
 }

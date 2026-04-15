@@ -126,7 +126,7 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
     Ok(())
 }
 
-// --- TESTS UNITAIRES ---
+// --- TESTS UNITAIRES ("Zéro Dette") ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,7 +138,8 @@ mod tests {
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_model_engine_logic() {
+    // 🎯 FIX : Ajout du retour RaiseResult<()>
+    async fn test_model_engine_logic() -> RaiseResult<()> {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
@@ -150,6 +151,10 @@ mod tests {
             command: ModelCommands::Validate,
         };
 
-        assert!(handle(args, ctx).await.is_ok());
+        // 🎯 FIX : Suppression du assert! au profit d'un match structuré
+        match handle(args, ctx).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_TEST_MODEL_ENGINE", error = e.to_string()),
+        }
     }
 }

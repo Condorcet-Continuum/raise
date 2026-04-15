@@ -36,12 +36,12 @@ async fn test_end_to_end_rules_execution() {
         },
         "x_rules": [
             {
-                "id": "calc_total",
+                "handle": "calc_total",
                 "target": "total",
                 "expr": { "mul": [ { "var": "qty" }, { "var": "price" } ] }
             },
             {
-                "id": "gen_ref",
+                "handle": "gen_ref",
                 "target": "ref",
                 "expr": {
                     "concat": [

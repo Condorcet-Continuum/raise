@@ -87,7 +87,8 @@ async fn test_full_stack_integration() -> RaiseResult<()> {
     ])));
 
     let rule = Rule {
-        id: "RULE_DOC_MANDATORY".to_string(),
+        _id: Some("mock-uuid-mass-1234".into()),
+        handle: "RULE_DOC_MANDATORY".to_string(),
         target: "LogicalComponent".to_string(),
         expr: rule_expr,
         description: Some("La description est obligatoire.".to_string()),

@@ -7,7 +7,7 @@ use raise::utils::prelude::*;
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::json_db::storage::JsonDbConfig;
 
-// 🎯 NOUVEAU : Import du contexte global CLI
+// 🎯 Import du contexte global CLI
 use crate::CliContext;
 
 #[derive(Args, Debug, Clone)]
@@ -29,9 +29,15 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
     // 1. RÉCUPÉRATION DE LA CONFIGURATION (via le contexte)
     let app_config = ctx.config;
 
-    let domain_root = app_config
-        .get_path("PATH_RAISE_DOMAIN")
-        .expect("ERREUR: Le chemin PATH_RAISE_DOMAIN est introuvable !");
+    // 🎯 FIX CRITIQUE : Suppression du .expect() en production
+    let domain_root = match app_config.get_path("PATH_RAISE_DOMAIN") {
+        Some(path) => path,
+        None => raise_error!(
+            "CLI_MISSING_DOMAIN_PATH",
+            error = "Le chemin PATH_RAISE_DOMAIN est introuvable !",
+            context = json_value!({"required_for": "domain_root_resolution"})
+        ),
+    };
 
     // Chemin DATASET (Piloté par la config globale avec fallback sur le domaine)
     let dataset_root = app_config
@@ -104,7 +110,6 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
     let data_full_path = dataset_root.join(&args.data);
 
     // REFACTOR : Lecture asynchrone, typée et sécurisée
-    // Plus besoin de fs::read_to_string manuel ni de json::deserialize_from_str
     let mut doc: JsonValue = fs::read_json_async(&data_full_path).await?;
 
     // 5. VALIDATION
@@ -161,7 +166,7 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
     }
 }
 
-// --- TESTS UNITAIRES (Patrimoine Conservé) ---
+// --- TESTS UNITAIRES ("Zéro Dette") ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,28 +179,32 @@ mod tests {
     }
 
     #[test]
-    fn test_validator_parsing() {
-        // Vérifie que les arguments obligatoires sont bien capturés
+    fn test_validator_parsing() -> RaiseResult<()> {
         let args = vec!["test", "--data", "file.json", "--schema", "uri.json"];
-        let cli = TestCli::parse_from(args);
+        // 🎯 FIX DETTE : try_parse_from au lieu de parse_from (qui fait un panic)
+        let cli = match TestCli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
         assert_eq!(cli.args.data, "file.json");
         assert_eq!(cli.args.schema, "uri.json");
+        Ok(())
     }
 
     #[test]
-    fn test_validator_missing_args() {
-        // Vérifie que le manque d'arguments provoque une erreur de parsing
+    fn test_validator_missing_args() -> RaiseResult<()> {
         let args = vec!["test", "--data", "file.json"];
         let res = TestCli::try_parse_from(args);
         assert!(res.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_path_logic_robustness() {
-        // Teste la logique de construction de chemin sans accès disque
+    fn test_path_logic_robustness() -> RaiseResult<()> {
         let base = PathBuf::from("/tmp/raise");
         let sub = "data/test.json";
         let full = base.join(sub);
         assert!(full.to_string_lossy().contains("data/test.json"));
+        Ok(())
     }
 }

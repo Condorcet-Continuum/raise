@@ -112,7 +112,7 @@ pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
     Ok(())
 }
 
-// --- TESTS UNITAIRES ---
+// --- TESTS UNITAIRES ("Zéro Dette") ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,7 +123,8 @@ mod tests {
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_spatial_health_check() {
+    // 🎯 FIX : Signature avec RaiseResult
+    async fn test_spatial_health_check() -> RaiseResult<()> {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
@@ -135,6 +136,10 @@ mod tests {
             command: SpatialCommands::Health,
         };
 
-        assert!(handle(args, ctx).await.is_ok());
+        // 🎯 FIX : Remplacement du assert!() par un match structuré
+        match handle(args, ctx).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_TEST_SPATIAL_HEALTH", error = e.to_string()),
+        }
     }
 }

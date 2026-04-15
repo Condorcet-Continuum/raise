@@ -65,9 +65,15 @@ pub async fn insert_with_schema(
     // ✅ On réutilise l'instance persistante du StorageEngine !
     let manager = CollectionsManager::new(storage, space, db);
 
-    if let Err(e) =
-        manager::apply_business_rules(&manager, &collection_name, &mut doc, None, &reg, &root_uri)
-            .await
+    if let Err(e) = crate::rules_engine::apply_business_rules(
+        &manager,
+        &collection_name,
+        &mut doc,
+        None,
+        &reg,
+        &root_uri,
+    )
+    .await
     {
         raise_error!(
             "ERR_DB_BUSINESS_RULES_EXEC",

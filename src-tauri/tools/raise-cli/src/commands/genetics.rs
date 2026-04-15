@@ -109,16 +109,13 @@ pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
         }
         GeneticsCommands::Inspect { id } => {
             let target = id.as_deref().unwrap_or("Meilleur Pareto Front");
-            user_info!(
-                "INSPECT_TARGET",
-                json_value!({ "target": target }) // format!("{:?}", target) n'est plus nécessaire
-            );
+            user_info!("INSPECT_TARGET", json_value!({ "target": target }));
         }
     }
     Ok(())
 }
 
-// --- TESTS UNITAIRES ---
+// --- TESTS UNITAIRES ("Zéro Dette") ---
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,7 +124,8 @@ mod tests {
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_genetics_config_mapping() {
+    // 🎯 FIX : Signature avec RaiseResult pour la propagation d'erreur
+    async fn test_genetics_config_mapping() -> RaiseResult<()> {
         // 🎯 On simule le contexte global pour le test
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
@@ -144,6 +142,10 @@ mod tests {
             },
         };
 
-        assert!(handle(args, ctx).await.is_ok());
+        // 🎯 FIX : Remplacement du assert! par un match exhaustif
+        match handle(args, ctx).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_TEST_GENETICS_EVOLVE", error = e.to_string()),
+        }
     }
 }

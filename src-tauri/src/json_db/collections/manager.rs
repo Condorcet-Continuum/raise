@@ -7,10 +7,8 @@ use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, Query
 use crate::json_db::schema::ddl::DdlHandler;
 use crate::json_db::schema::{SchemaRegistry, SchemaValidator};
 use crate::json_db::storage::{file_storage, StorageEngine};
-use crate::rules_engine::{Evaluator, Rule, RuleStore};
 
 use super::collection;
-use super::data_provider::CachedDataProvider;
 
 pub enum EntityIdentity {
     Id(String),
@@ -353,8 +351,15 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
-        if let Err(e) =
-            apply_business_rules(self, "_system_index", doc, None, &reg, &schema_uri).await
+        if let Err(e) = crate::rules_engine::apply_business_rules(
+            self,
+            "_system_index",
+            doc,
+            None,
+            &reg,
+            &schema_uri,
+        )
+        .await
         {
             user_warn!(
                 "WRN_SYSTEM_RULE_INDEX_FAIL",
@@ -813,7 +818,10 @@ impl<'a> CollectionsManager<'a> {
             let reg =
                 SchemaRegistry::from_uri(&self.storage.config, uri, &self.space, &self.db).await?;
 
-            if let Err(e) = apply_business_rules(self, collection, doc, None, &reg, uri).await {
+            if let Err(e) =
+                crate::rules_engine::apply_business_rules(self, collection, doc, None, &reg, uri)
+                    .await
+            {
                 user_warn!(
                     "WRN_BUSINESS_RULE_FAILURE",
                     json_value!({
@@ -1093,177 +1101,6 @@ fn json_merge(a: &mut JsonValue, b: JsonValue) {
         }
         (a, b) => *a = b,
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-#[async_recursive]
-pub async fn apply_business_rules(
-    manager: &CollectionsManager<'_>,
-    collection_name: &str,
-    doc: &mut JsonValue,
-    old_doc: Option<&JsonValue>,
-    registry: &SchemaRegistry,
-    schema_uri: &str,
-) -> RaiseResult<()> {
-    let mut store = RuleStore::new(manager);
-
-    if let Err(e) = store.sync_from_db().await {
-        user_warn!(
-            "WRN_SYSTEM_RULES_LOAD_FAILED",
-            json_value!({
-                "component": "RULES_ENGINE",
-                "scope": "system_rules",
-                "technical_error": e.to_string(),
-                "hint": "Le moteur de règles fonctionnera avec les paramètres par défaut."
-            })
-        );
-    }
-
-    if let Some(schema) = registry.get_by_uri(schema_uri) {
-        if let Some(rules_array) = schema.get("x_rules").and_then(|v| v.as_array()) {
-            for (index, rule_val) in rules_array.iter().enumerate() {
-                match json::deserialize_from_value::<Rule>(rule_val.clone()) {
-                    Ok(rule) => {
-                        if let Err(e) = store.register_rule(collection_name, rule).await {
-                            user_warn!(
-                                "WRN_RULE_REGISTRATION_FAILED",
-                                json_value!({
-                                    "component": "RULES_ENGINE",
-                                    "item_index": index,
-                                    "technical_error": e.to_string()
-                                })
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        user_warn!(
-                            "WRN_SCHEMA_RULE_INVALID",
-                            json_value!({
-                                "component": "RULES_ENGINE",
-                                "item_index": index,
-                                "technical_error": e.to_string()
-                            })
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    let provider = CachedDataProvider::new(manager.storage, &manager.space, &manager.db);
-    let mut current_changes = compute_diff(doc, old_doc);
-    let mut passes = 0;
-    const MAX_PASSES: usize = 10;
-
-    while !current_changes.is_empty() && passes < MAX_PASSES {
-        let rules = store.get_impacted_rules(collection_name, &current_changes);
-        if rules.is_empty() {
-            break;
-        }
-
-        let mut next_changes = UniqueSet::new();
-        for rule in rules {
-            match Evaluator::evaluate(&rule.expr, doc, &provider).await {
-                Ok(result) => {
-                    if set_value_by_path(doc, &rule.target, result.into_owned()) {
-                        next_changes.insert(rule.target.clone());
-                    }
-                }
-                Err(AppError::Structured(ref data)) if data.code == "ERR_RULE_VAR_NOT_FOUND" => {
-                    continue;
-                }
-                Err(e) => {
-                    raise_error!(
-                        "ERR_DB_RULE_EVAL_FAIL",
-                        context = json_value!({
-                            "rule_id": rule.id,
-                            "target_path": rule.target,
-                            "evaluator_error": e.to_string(),
-                            "action": "apply_document_rules"
-                        })
-                    );
-                }
-            }
-        }
-        current_changes = next_changes;
-        passes += 1;
-    }
-    Ok(())
-}
-
-fn compute_diff(new_doc: &JsonValue, old_doc: Option<&JsonValue>) -> UniqueSet<String> {
-    let mut changes = UniqueSet::new();
-    //  Utilisation d'une pile de références (Stack) au lieu d'allocations de Strings
-    let mut path_stack = Vec::new();
-    find_changes(&mut path_stack, new_doc, old_doc, &mut changes);
-    changes
-}
-
-fn find_changes<'a>(
-    path_stack: &mut Vec<&'a str>,
-    new_val: &'a JsonValue,
-    old_val: Option<&JsonValue>,
-    changes: &mut UniqueSet<String>,
-) {
-    if let Some(old) = old_val {
-        if new_val == old {
-            return; // 🛑 Court-circuit : aucune modification dans cette branche !
-        }
-    }
-
-    if !path_stack.is_empty() {
-        // C'est le SEUL moment où on alloue une vraie String (uniquement quand ça change)
-        changes.insert(path_stack.join("."));
-    }
-
-    match (new_val, old_val) {
-        (JsonValue::Object(new_map), Some(JsonValue::Object(old_map))) => {
-            for (k, v) in new_map {
-                path_stack.push(k.as_str()); // On descend : +1 référence
-                find_changes(path_stack, v, old_map.get(k), changes);
-                path_stack.pop(); // 🎯 ZÉRO ALLOCATION : on remonte dans l'arbre en libérant le pointeur !
-            }
-        }
-        (JsonValue::Object(new_map), None) => {
-            for (k, v) in new_map {
-                path_stack.push(k.as_str());
-                find_changes(path_stack, v, None, changes);
-                path_stack.pop();
-            }
-        }
-        _ => {} // Ni array deep-diff ni valeurs simples à itérer, on s'arrête ici.
-    }
-}
-
-fn set_value_by_path(doc: &mut JsonValue, path: &str, value: JsonValue) -> bool {
-    let parts: Vec<&str> = path.split('.').collect();
-    let mut current = doc;
-    for (i, part) in parts.iter().enumerate() {
-        if i == parts.len() - 1 {
-            if let Some(obj) = current.as_object_mut() {
-                let old_val = obj.get(*part);
-                if old_val != Some(&value) {
-                    obj.insert(part.to_string(), value);
-                    return true;
-                }
-                return false;
-            } else {
-                return false;
-            }
-        } else {
-            if !current.is_object() {
-                *current = json_value!({});
-            }
-            if current.get(*part).is_none() {
-                current
-                    .as_object_mut()
-                    .unwrap()
-                    .insert(part.to_string(), json_value!({}));
-            }
-            current = current.get_mut(*part).unwrap();
-        }
-    }
-    false
 }
 
 pub enum SmartLink<'a> {

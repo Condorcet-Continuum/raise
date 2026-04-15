@@ -71,22 +71,22 @@ pub const FINANCE_SCHEMA_MOCK: &str = r#"{
     "type": "object",
     "x_rules": [
         { 
-            "_id": "rule_net_margin_low",
+            "handle": "rule_net_margin_low",
             "target": "summary.net_margin_low", 
             "expr": { "mul": [ { "var": "revenue_scenarios.low_eur" }, { "var": "gross_margin.low_pct" } ] }
         },
         { 
-            "_id": "rule_net_margin_mid",
+            "handle": "rule_net_margin_mid",
             "target": "summary.net_margin_mid", 
             "expr": { "mul": [ { "var": "revenue_scenarios.mid_eur" }, { "var": "gross_margin.mid_pct" } ] }
         },
         { 
-            "_id": "rule_mid_profitable",
+            "handle": "rule_mid_profitable",
             "target": "summary.mid_is_profitable", 
             "expr": { "gt": [ { "var": "summary.net_margin_mid" }, { "val": 0 } ] }
         },
         { 
-            "_id": "rule_gen_ref",
+            "handle": "rule_gen_ref",
             "target": "summary.generated_ref", 
             "expr": {
                 "replace": {
@@ -123,6 +123,102 @@ pub const USER_SCHEMA_MOCK: &str = r#"{
 // =========================================================================
 // 🔧 UTILS DE CONFIGURATION DE TEST
 // =========================================================================
+/// Injecte de manière idempotente tous les schémas Core, V1 et V2 nécessaires aux tests.
+pub async fn bootstrap_system_index(
+    db_cfg: &JsonDbConfig,
+    space: &str,
+    db: &str,
+) -> RaiseResult<()> {
+    let sys_path = db_cfg.db_root(space, db).join("_system.json");
+
+    // Idempotence : On ne recrée pas l'index s'il existe déjà
+    if fs::exists_async(&sys_path).await {
+        return Ok(());
+    }
+
+    fs::ensure_dir_async(sys_path.parent().unwrap())
+        .await
+        .unwrap();
+
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/db/index.schema.json",
+        BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+    );
+
+    let mut initial_system_doc = json_value!({
+        "$schema": schema_uri,
+        "name": format!("{}_{}", space, db),
+        "space": space,
+        "database": db,
+        "schemas": { "v1": {}, "v2": {} }
+    });
+
+    // --- 1. Mocks Core ---
+    inject_core_schemas_to_index(db_cfg, &mut initial_system_doc).await;
+
+    // --- 2. Mocks V1 ---
+    inject_mock_schema_to_index(
+        db_cfg,
+        &mut initial_system_doc,
+        "sessions",
+        SESSION_SCHEMA_MOCK,
+    )
+    .await;
+    inject_mock_schema_to_index(db_cfg, &mut initial_system_doc, "users", USER_SCHEMA_MOCK).await;
+    inject_mock_schema_to_index(
+        db_cfg,
+        &mut initial_system_doc,
+        "actors",
+        ACTORS_SCHEMA_MOCK,
+    )
+    .await;
+    inject_mock_schema_to_index(
+        db_cfg,
+        &mut initial_system_doc,
+        "articles",
+        ARTICLES_SCHEMA_MOCK,
+    )
+    .await;
+    inject_mock_schema_to_index(
+        db_cfg,
+        &mut initial_system_doc,
+        "configuration_items",
+        CONFIG_ITEMS_SCHEMA_MOCK,
+    )
+    .await;
+    inject_mock_schema_to_index(
+        db_cfg,
+        &mut initial_system_doc,
+        "finance",
+        FINANCE_SCHEMA_MOCK,
+    )
+    .await;
+
+    // --- 3. Mocks V2 ---
+    inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/quality_report").await;
+    inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/xai_frame").await;
+    inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/rules/rule").await;
+    inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "common/types/base").await;
+    inject_v2_schema_mock(
+        db_cfg,
+        &mut initial_system_doc,
+        "agents/memory/vector_store_record",
+    )
+    .await;
+    inject_v2_schema_mock(
+        db_cfg,
+        &mut initial_system_doc,
+        "agents/memory/chat_session",
+    )
+    .await;
+
+    // Écriture atomique
+    fs::write_json_atomic_async(&sys_path, &initial_system_doc)
+        .await
+        .unwrap();
+
+    Ok(())
+}
 
 pub fn create_default_test_config() -> AppConfig {
     let mut paths = UnorderedMap::new();
@@ -707,83 +803,7 @@ impl DbSandbox {
 
         let db_cfg = JsonDbConfig::new(root_path.clone());
 
-        // 🎯 NOUVELLE LOGIQUE DDL : On prépare l'index de test
-        let sys_path = db_cfg
-            .db_root(BOOTSTRAP_DOMAIN, BOOTSTRAP_DB)
-            .join("_system.json");
-        fs::ensure_dir_async(sys_path.parent().unwrap())
-            .await
-            .unwrap();
-
-        let schema_uri = format!(
-            "db://{}/{}/schemas/v1/db/index.schema.json",
-            BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
-        );
-        let mut initial_system_doc = json_value!({
-            "$schema": schema_uri,
-            "name": format!("{}_{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB),
-            "space": BOOTSTRAP_DOMAIN,
-            "database": BOOTSTRAP_DB,
-            "schemas": { "v1": {}, "v2": {} }
-        });
-
-        inject_core_schemas_to_index(&db_cfg, &mut initial_system_doc).await;
-        inject_mock_schema_to_index(
-            &db_cfg,
-            &mut initial_system_doc,
-            "sessions",
-            SESSION_SCHEMA_MOCK,
-        )
-        .await;
-        inject_mock_schema_to_index(&db_cfg, &mut initial_system_doc, "users", USER_SCHEMA_MOCK)
-            .await;
-        inject_mock_schema_to_index(
-            &db_cfg,
-            &mut initial_system_doc,
-            "actors",
-            ACTORS_SCHEMA_MOCK,
-        )
-        .await;
-        inject_mock_schema_to_index(
-            &db_cfg,
-            &mut initial_system_doc,
-            "articles",
-            ARTICLES_SCHEMA_MOCK,
-        )
-        .await;
-        inject_mock_schema_to_index(
-            &db_cfg,
-            &mut initial_system_doc,
-            "configuration_items",
-            CONFIG_ITEMS_SCHEMA_MOCK,
-        )
-        .await;
-        inject_mock_schema_to_index(
-            &db_cfg,
-            &mut initial_system_doc,
-            "finance",
-            FINANCE_SCHEMA_MOCK,
-        )
-        .await;
-
-        inject_v2_schema_mock(&db_cfg, &mut initial_system_doc, "assurance/quality_report").await;
-        inject_v2_schema_mock(&db_cfg, &mut initial_system_doc, "assurance/xai_frame").await;
-        inject_v2_schema_mock(&db_cfg, &mut initial_system_doc, "common/types/base").await;
-
-        inject_v2_schema_mock(
-            &db_cfg,
-            &mut initial_system_doc,
-            "agents/memory/vector_store_record",
-        )
-        .await;
-        inject_v2_schema_mock(
-            &db_cfg,
-            &mut initial_system_doc,
-            "agents/memory/chat_session",
-        )
-        .await;
-        // On écrit le fichier avec les schémas AVANT de lancer le CollectionsManager
-        fs::write_json_atomic_async(&sys_path, &initial_system_doc)
+        bootstrap_system_index(&db_cfg, BOOTSTRAP_DOMAIN, BOOTSTRAP_DB)
             .await
             .unwrap();
 
@@ -825,81 +845,9 @@ impl DbSandbox {
 
     pub async fn mock_db(manager: &CollectionsManager<'_>) -> RaiseResult<bool> {
         // Pré-injection vitale pour les tests ciblés sur d'autres espaces (space_test, db_test)
-        let sys_path = manager
-            .storage
-            .config
-            .db_root(&manager.space, &manager.db)
-            .join("_system.json");
-        if !fs::exists_async(&sys_path).await {
-            fs::ensure_dir_async(sys_path.parent().unwrap())
-                .await
-                .unwrap();
-            let schema_uri = format!(
-                "db://{}/{}/schemas/v1/db/index.schema.json",
-                BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
-            );
-            let mut initial_system_doc = json_value!({
-                "$schema": schema_uri,
-                "name": format!("{}_{}", manager.space, manager.db),
-                "space": manager.space,
-                "database": manager.db,
-                "schemas": { "v1": {}, "v2": {} }
-            });
-            let db_cfg = &manager.storage.config;
-            inject_core_schemas_to_index(db_cfg, &mut initial_system_doc).await;
-            inject_mock_schema_to_index(db_cfg, &mut initial_system_doc, "users", USER_SCHEMA_MOCK)
-                .await;
-            inject_mock_schema_to_index(
-                db_cfg,
-                &mut initial_system_doc,
-                "actors",
-                ACTORS_SCHEMA_MOCK,
-            )
-            .await;
-            inject_mock_schema_to_index(
-                db_cfg,
-                &mut initial_system_doc,
-                "articles",
-                ARTICLES_SCHEMA_MOCK,
-            )
-            .await;
-            inject_mock_schema_to_index(
-                db_cfg,
-                &mut initial_system_doc,
-                "configuration_items",
-                CONFIG_ITEMS_SCHEMA_MOCK,
-            )
-            .await;
-            inject_mock_schema_to_index(
-                db_cfg,
-                &mut initial_system_doc,
-                "finance",
-                FINANCE_SCHEMA_MOCK,
-            )
-            .await;
-
-            inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/quality_report")
-                .await;
-            inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/xai_frame").await;
-            inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "common/types/base").await;
-
-            inject_v2_schema_mock(
-                db_cfg,
-                &mut initial_system_doc,
-                "agents/memory/vector_store_record",
-            )
-            .await;
-            inject_v2_schema_mock(
-                db_cfg,
-                &mut initial_system_doc,
-                "agents/memory/chat_session",
-            )
-            .await;
-
-            fs::write_json_atomic_async(&sys_path, &initial_system_doc)
-                .await
-                .unwrap();
-        }
+        bootstrap_system_index(&manager.storage.config, &manager.space, &manager.db)
+            .await
+            .unwrap();
 
         let uri = format!(
             "db://{}/{}/schemas/v1/db/index.schema.json",
@@ -968,58 +916,7 @@ impl GlobalDbSandbox {
 
         let _ = manager.drop_db().await;
 
-        // 🎯 NOUVELLE LOGIQUE DDL
-        let sys_path = cfg_db
-            .db_root(BOOTSTRAP_DOMAIN, BOOTSTRAP_DB)
-            .join("_system.json");
-        fs::ensure_dir_async(sys_path.parent().unwrap())
-            .await
-            .unwrap();
-        let schema_uri = format!(
-            "db://{}/{}/schemas/v1/db/index.schema.json",
-            BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
-        );
-        let mut initial_system_doc = json_value!({
-            "$schema": schema_uri,
-            "name": format!("{}_{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB),
-            "space": BOOTSTRAP_DOMAIN,
-            "database": BOOTSTRAP_DB,
-            "schemas": { "v1": {}, "v2": {} }
-        });
-
-        let db_cfg = &manager.storage.config;
-        inject_core_schemas_to_index(db_cfg, &mut initial_system_doc).await;
-        inject_mock_schema_to_index(db_cfg, &mut initial_system_doc, "users", USER_SCHEMA_MOCK)
-            .await;
-        inject_mock_schema_to_index(
-            db_cfg,
-            &mut initial_system_doc,
-            "actors",
-            ACTORS_SCHEMA_MOCK,
-        )
-        .await;
-        inject_mock_schema_to_index(
-            db_cfg,
-            &mut initial_system_doc,
-            "articles",
-            ARTICLES_SCHEMA_MOCK,
-        )
-        .await;
-        inject_mock_schema_to_index(
-            db_cfg,
-            &mut initial_system_doc,
-            "configuration_items",
-            CONFIG_ITEMS_SCHEMA_MOCK,
-        )
-        .await;
-        inject_mock_schema_to_index(
-            db_cfg,
-            &mut initial_system_doc,
-            "finance",
-            FINANCE_SCHEMA_MOCK,
-        )
-        .await;
-        fs::write_json_atomic_async(&sys_path, &initial_system_doc)
+        bootstrap_system_index(&cfg_db, BOOTSTRAP_DOMAIN, BOOTSTRAP_DB)
             .await
             .unwrap();
 

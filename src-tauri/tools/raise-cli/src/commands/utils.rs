@@ -256,7 +256,7 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
 }
 
 // =========================================================================
-// TESTS UNITAIRES ET D'INTÉGRATION CLI (Strictement respectés)
+// TESTS UNITAIRES ET D'INTÉGRATION CLI (Strictement respectés "Zéro Dette")
 // =========================================================================
 #[cfg(test)]
 mod tests {
@@ -267,7 +267,7 @@ mod tests {
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_session_full_lifecycle() {
+    async fn test_session_full_lifecycle() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
@@ -279,8 +279,14 @@ mod tests {
         let who_args = UtilsArgs {
             command: UtilsCommands::Whoami,
         };
-        handle(who_args, ctx.clone()).await.unwrap();
-        assert!(session_mgr.get_current_session().await.is_none());
+        handle(who_args, ctx.clone()).await?;
+
+        if session_mgr.get_current_session().await.is_some() {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Une session ne devrait pas exister"
+            );
+        }
 
         let test_user = "Astra-CLI-Tester";
         let db_mgr = CollectionsManager::new(
@@ -296,24 +302,41 @@ mod tests {
                 userhandle: test_user.into(),
             },
         };
-        handle(login_args, ctx.clone()).await.unwrap();
+        handle(login_args, ctx.clone()).await?;
 
-        let s = session_mgr
-            .get_current_session()
-            .await
-            .expect("Session fail");
-        assert_eq!(s.user_handle, test_user);
+        let s = match session_mgr.get_current_session().await {
+            Some(session) => session,
+            None => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Échec de création de la session"
+            ),
+        };
+
+        if s.user_handle != test_user {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Le handle de session ne correspond pas"
+            );
+        }
 
         // 3. Logout
         let logout_args = UtilsArgs {
             command: UtilsCommands::Logout,
         };
-        handle(logout_args, ctx.clone()).await.unwrap();
-        assert!(session_mgr.get_current_session().await.is_none());
+        handle(logout_args, ctx.clone()).await?;
+
+        if session_mgr.get_current_session().await.is_some() {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "La session devrait être vide après le logout"
+            );
+        }
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_logout_without_session() {
+    async fn test_logout_without_session() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let ctx = CliContext::mock(
@@ -324,11 +347,15 @@ mod tests {
         let args = UtilsArgs {
             command: UtilsCommands::Logout,
         };
-        assert!(handle(args, ctx).await.is_ok());
+
+        match handle(args, ctx).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_TEST_LOGOUT", error = e.to_string()),
+        }
     }
 
     #[async_test]
-    async fn test_relogin_switches_user() {
+    async fn test_relogin_switches_user() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
@@ -354,8 +381,8 @@ mod tests {
             },
             ctx.clone(),
         )
-        .await
-        .unwrap();
+        .await?;
+
         handle(
             UtilsArgs {
                 command: UtilsCommands::Login {
@@ -364,15 +391,28 @@ mod tests {
             },
             ctx.clone(),
         )
-        .await
-        .unwrap();
+        .await?;
 
-        let current = session_mgr.get_current_session().await.unwrap();
-        assert_eq!(current.user_handle, user_b);
+        let current = match session_mgr.get_current_session().await {
+            Some(session) => session,
+            None => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Aucune session active trouvée"
+            ),
+        };
+
+        if current.user_handle != user_b {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "La session n'a pas basculé sur le nouvel utilisateur"
+            );
+        }
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_info_command_execution() {
+    async fn test_info_command_execution() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
@@ -384,15 +424,32 @@ mod tests {
         let args = UtilsArgs {
             command: UtilsCommands::Info,
         };
-        assert!(handle(args, ctx).await.is_ok());
+
+        match handle(args, ctx).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!("ERR_TEST_INFO", error = e.to_string()),
+        }
     }
 
     /// 🎯 NOUVEAU TEST : Résilience de la partition système
     #[async_test]
     async fn test_utils_mount_point_integrity() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
-        assert!(!sandbox.config.mount_points.system.domain.is_empty());
-        assert!(!sandbox.config.mount_points.system.db.is_empty());
+
+        if sandbox.config.mount_points.system.domain.is_empty() {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Le domaine du point de montage système est vide"
+            );
+        }
+
+        if sandbox.config.mount_points.system.db.is_empty() {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "La base de données du point de montage système est vide"
+            );
+        }
+
         Ok(())
     }
 }

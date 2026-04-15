@@ -2,7 +2,7 @@
 
 use crate::utils::prelude::*;
 
-use crate::json_db::collections::manager::{self, CollectionsManager};
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{sql::SqlRequest, Query, QueryEngine, QueryResult};
 use crate::json_db::schema::SchemaRegistry;
 use crate::json_db::storage::StorageEngine;
@@ -292,7 +292,7 @@ pub async fn jsondb_evaluate_draft(
     let manager = mgr(&storage, &space, &db)?;
 
     // On passe &schema_uri car String implémente Deref pour str
-    match manager::apply_business_rules(
+    match crate::rules_engine::apply_business_rules(
         &manager,
         &collection,
         &mut doc,

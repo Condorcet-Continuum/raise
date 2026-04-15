@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tests/json_db_suite/workunits_x_compute.rs
 
 use crate::common::{setup_test_env, LlmMode};
-use raise::json_db::collections::manager::{self, CollectionsManager};
+use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::utils::prelude::*; // Apporte json!, JsonValue, Uuid, etc.
 
@@ -109,7 +109,7 @@ async fn finance_compute_minimal() {
 
     // 3. EXÉCUTION DU MOTEUR DE RÈGLES (Business Logic)
     // On applique les règles dynamiques définies dans le schéma
-    manager::apply_business_rules(
+    raise::rules_engine::apply_business_rules(
         &mgr,
         "finance_test_collection",
         &mut finance_doc,

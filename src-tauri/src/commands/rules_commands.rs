@@ -96,7 +96,8 @@ mod tests {
     #[async_test]
     async fn test_dry_run_rule_async() -> RaiseResult<()> {
         let rule = Rule {
-            id: "test_rule".to_string(),
+            _id: None,
+            handle: "test_rule".to_string(),
             target: "result".to_string(),
             expr: Expr::Eq(vec![Expr::Val(json_value!(10)), Expr::Val(json_value!(10))]),
             description: None,
@@ -112,7 +113,8 @@ mod tests {
     #[async_test]
     async fn test_dry_run_error_async() -> RaiseResult<()> {
         let rule = Rule {
-            id: "error_rule".to_string(),
+            _id: None,
+            handle: "error_rule".to_string(),
             target: "result".to_string(),
             expr: Expr::Add(vec![Expr::Val(json_value!("not_a_number"))]),
             description: None,

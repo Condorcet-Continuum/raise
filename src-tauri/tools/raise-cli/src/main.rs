@@ -8,7 +8,6 @@ mod commands;
 use raise::{
     json_db::{
         collections::manager::CollectionsManager,
-        jsonld::VocabularyRegistry,
         storage::{JsonDbConfig, StorageEngine},
     },
     raise_error, user_debug, user_error, user_info, user_warn,
@@ -163,32 +162,6 @@ async fn main() -> RaiseResult<()> {
     let storage = SharedRef::new(StorageEngine::new(JsonDbConfig::new(db_root)));
 
     // ---------------------------------------------------------
-    // 🛡️ MOTEUR DE RÉSILIENCE (WAL Crash Recovery)
-    // ---------------------------------------------------------
-
-    match raise::json_db::transactions::wal::recover_pending_transactions(
-        &storage.config,
-        &config.mount_points.system.domain,
-        &config.mount_points.system.db,
-        &storage,
-    )
-    .await
-    {
-        Ok(count) if count > 0 => {
-            user_warn!(
-                "WRN_DB_CRASH_RECOVERED",
-                json_value!({"recovered_transactions": count, "action": "rollback_applied_via_cli"})
-            );
-        }
-        Err(e) => {
-            user_error!(
-                "ERR_DB_RECOVERY_FAIL",
-                json_value!({"error": e.to_string()})
-            );
-        }
-        _ => {} // Tout va bien, aucun crash détecté
-    }
-    // ---------------------------------------------------------
     // 🧠 INITIALISATION SÉMANTIQUE (Bootstrapping In-Index)
     // ---------------------------------------------------------
 
@@ -198,15 +171,13 @@ async fn main() -> RaiseResult<()> {
         &config.mount_points.system.db,
     );
 
-    match VocabularyRegistry::init_from_db(&system_mgr).await {
-        Ok(_) => user_success!("SEMANTIC_ENGINE_READY", json_value!({"mode": "in-index"})),
-        Err(e) => {
-            user_error!(
-                "ERR_SEMANTIC_BOOTSTRAP",
-                json_value!({"error": e.to_string()})
-            );
-            // On continue en mode dégradé (sans sémantique) pour permettre les réparations CLI
-        }
+    // Le CLI délègue tout au Core : WAL, Sémantique et Rules.
+    if let Err(e) = raise::bootstrap_core(&system_mgr).await {
+        user_error!(
+            "CLI_BOOTSTRAP_FAILED",
+            json_value!({"error": e.to_string(), "hint": "Échec de l'initialisation des moteurs Core."})
+        );
+        return Err(e);
     }
 
     let session_mgr = context::SessionManager::new(storage.clone());
@@ -428,26 +399,42 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_ai() {
+    fn test_dispatch_ai() -> RaiseResult<()> {
         let args = vec!["raise-cli", "ai"];
-        let cli = Cli::try_parse_from(args).expect("Parsing failed");
+
+        let cli = match Cli::try_parse_from(args) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        };
+
         match cli.command {
-            Some(Commands::Ai(_)) => assert!(true),
-            _ => panic!("Le dispatch vers le module AI a échoué"),
+            Some(Commands::Ai(_)) => Ok(()),
+            _ => raise_error!(
+                "ERR_TEST_DISPATCH_FAILED",
+                error = "Le dispatch vers le module AI a échoué"
+            ),
         }
     }
 
     /// 🎯 NOUVEAU TEST : Résilience de la résolution des Mount Points
     #[test]
-    fn test_mount_point_resolution_integrity() {
+    fn test_mount_point_resolution_integrity() -> RaiseResult<()> {
         let config = AppConfig::get();
-        assert!(
-            !config.mount_points.system.domain.is_empty(),
-            "Partition système manquante"
-        );
-        assert!(
-            !config.mount_points.system.db.is_empty(),
-            "Base système manquante"
-        );
+
+        if config.mount_points.system.domain.is_empty() {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Partition système manquante"
+            );
+        }
+
+        if config.mount_points.system.db.is_empty() {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Base système manquante"
+            );
+        }
+
+        Ok(())
     }
 }
