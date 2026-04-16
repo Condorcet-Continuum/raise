@@ -1,13 +1,12 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/spatial.rs
 
 use clap::{Args, Subcommand};
+use raise::{user_error, user_info, user_success, user_warn, utils::prelude::*}; // 🎯 Façade Unique RAISE
 
-use raise::{user_info, user_success, utils::prelude::*};
-
-// Import de la fonction principale de topologie
+// Import de la logique spatiale du cœur
 use raise::spatial_engine::get_spatial_topology;
 
-// 🎯 NOUVEAU : Import du contexte global CLI
+// 🎯 Import du contexte global CLI
 use crate::CliContext;
 
 /// Pilotage du Spatial Engine (Visualisation 3D & Jumeau Numérique)
@@ -19,127 +18,104 @@ pub struct SpatialArgs {
 
 #[derive(Subcommand, Clone, Debug)]
 pub enum SpatialCommands {
-    /// Génère la topologie 3D actuelle et affiche les métadonnées
+    /// Génère la topologie 3D actuelle et affiche les métadonnées de structure
     Topology,
-    /// Liste les composants présentant une instabilité (vibration)
+    /// Identifie les composants présentant une instabilité physique (vibration/dérive)
     Health,
 }
 
-// 🎯 La signature intègre le CliContext
 pub async fn handle(args: SpatialArgs, ctx: CliContext) -> RaiseResult<()> {
-    // 🎯 Heartbeat automatique
-    let _ = ctx.session_mgr.touch().await;
+    // 🎯 Heartbeat de session
+    if let Err(e) = ctx.session_mgr.touch().await {
+        user_error!(
+            "ERR_SESSION_HEARTBEAT",
+            json_value!({"error": e.to_string()})
+        );
+    }
 
     match args.command {
         SpatialCommands::Topology => {
-            // 🎯 Mise en conformité stricte JSON
             user_info!(
-                "SPATIAL_START",
-                json_value!({
-                    "action": "Génération procédurale de la topologie Arcadia...",
-                    "active_domain": ctx.active_domain,
-                    "active_user": ctx.active_user
-                })
+                "SPATIAL_TOPOLOGY_GEN",
+                json_value!({ "domain": ctx.active_domain })
             );
-
-            // Récupération du graphe spatial
             let graph = get_spatial_topology();
 
             user_info!(
-                "GRAPH_STATS_NODES",
+                "GRAPH_STATS",
                 json_value!({
-                    "count": graph.meta.node_count,
-                    "complexity": if graph.meta.node_count > 1000 { "high" } else { "standard" }
+                    "nodes": graph.meta.node_count,
+                    "total_elements": graph.meta.layer_distribution.iter().copied().sum::<usize>()
                 })
             );
 
-            // Accès aux statistiques par couche (OA, SA, LA, PA, Chaos)
-            user_info!(
-                "GRAPH_LAYERS_DISTRIBUTION",
-                json_value!({
-                    "oa": graph.meta.layer_distribution[0],
-                    "sa": graph.meta.layer_distribution[1],
-                    "la": graph.meta.layer_distribution[2],
-                    "pa": graph.meta.layer_distribution[3],
-                    "chaos": graph.meta.layer_distribution[4],
-                    "total": graph.meta.layer_distribution.iter().copied().sum::<usize>()
-                })
-            );
-
-            // 🎯 Payload JSON pour le succès
             user_success!(
-                "GEN_OK",
-                json_value!({"status": "Topologie 3D extraite avec succès."})
+                "SPATIAL_GEN_OK",
+                json_value!({ "status": "topology_extracted" })
             );
         }
 
         SpatialCommands::Health => {
-            // 🎯 Mise en conformité stricte JSON
             user_info!(
-                "HEALTH_START",
-                json_value!({
-                    "action": "Analyse de la stabilité des nœuds...",
-                    "active_domain": ctx.active_domain,
-                    "active_user": ctx.active_user
-                })
+                "SPATIAL_HEALTH_START",
+                json_value!({ "action": "node_stability_analysis" })
             );
-            let graph = get_spatial_topology();
 
-            // Identification des composants instables (stabilité < 0.5)
+            let graph = get_spatial_topology();
+            // Création de la liste des nœuds instables
             let unstable_nodes: Vec<_> = graph.nodes.iter().filter(|n| n.stability < 0.5).collect();
 
             if unstable_nodes.is_empty() {
-                // 🎯 Payload JSON pour le succès
                 user_success!(
-                    "HEALTH_OK",
-                    json_value!({"status": "Stabilité nominale sur tous les nœuds."})
+                    "SPATIAL_HEALTH_NOMINAL",
+                    json_value!({ "status": "all_nodes_stable" })
                 );
             } else {
-                for node in unstable_nodes {
+                // 🎯 FIX : Utilisation de &unstable_nodes pour éviter le "move"
+                for node in &unstable_nodes {
                     user_info!(
-                        "GRAPH_VIBRATION_ALERT",
+                        "SPATIAL_NODE_ALERT",
                         json_value!({
-                            "node_id": node.label,
+                            "id": node.label,
                             "stability": node.stability,
-                            "is_critical": node.stability < 0.5,
-                            "action": "check_convergence"
+                            "critical": node.stability < 0.3
                         })
                     );
                 }
+                // 🎯 Désormais accessible sans erreur de borrow
+                user_warn!(
+                    "SPATIAL_HEALTH_WARNING",
+                    json_value!({ "unstable_count": unstable_nodes.len() })
+                );
             }
         }
     }
     Ok(())
 }
 
-// --- TESTS UNITAIRES ("Zéro Dette") ---
+// =========================================================================
+// TESTS UNITAIRES (Conformité « Zéro Dette »)
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CliContext;
-    use raise::utils::context::SessionManager;
-
-    #[cfg(test)]
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    // 🎯 FIX : Signature avec RaiseResult
-    async fn test_spatial_health_check() -> RaiseResult<()> {
-        // 🎯 On simule le contexte global pour le test
+    #[serial_test::serial]
+    async fn test_spatial_health_workflow() -> RaiseResult<()> {
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
+
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
-        let session_mgr = SessionManager::new(storage.clone());
+        let session_mgr = crate::context::SessionManager::new(storage.clone());
 
-        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
-
+        let ctx = crate::CliContext::mock(AppConfig::get(), session_mgr, storage);
         let args = SpatialArgs {
             command: SpatialCommands::Health,
         };
 
-        // 🎯 FIX : Remplacement du assert!() par un match structuré
-        match handle(args, ctx).await {
-            Ok(_) => Ok(()),
-            Err(e) => raise_error!("ERR_TEST_SPATIAL_HEALTH", error = e.to_string()),
-        }
+        handle(args, ctx).await
     }
 }

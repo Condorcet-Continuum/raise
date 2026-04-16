@@ -1,12 +1,12 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/genetics.rs
 
 use clap::{Args, Subcommand};
-use raise::{user_info, user_success, user_warn, utils::prelude::*}; // 🎯 Ajout de user_warn
+use raise::{user_info, user_success, user_warn, utils::prelude::*}; // 🎯 Façade Unique RAISE
 
-// Imports du Core (chemin relatif à l'arborescence src-tauri)
+// Imports du Core (Logique métier)
 use raise::genetics::engine::GeneticConfig;
 
-// 🎯 NOUVEAU : Import du contexte global CLI
+// 🎯 Import du contexte global CLI
 use crate::CliContext;
 
 /// Commandes pour le Moteur Génétique (Raise Genetics Engine)
@@ -22,11 +22,11 @@ pub enum GeneticsCommands {
     Evolve {
         /// Taille de la population initiale
         #[arg(short, long, default_value = "100")]
-        population: usize, // Changé en usize pour correspondre à GeneticConfig
+        population: usize,
 
         /// Nombre de générations à simuler
         #[arg(short, long, default_value = "50")]
-        generations: usize, // Changé en usize pour correspondre à GeneticConfig
+        generations: usize,
 
         /// Taux de mutation (0.0 - 1.0)
         #[arg(short, long, default_value = "0.05")]
@@ -38,14 +38,14 @@ pub enum GeneticsCommands {
     },
     /// Inspecte le génome du meilleur individu
     Inspect {
+        /// ID spécifique d'un individu ou front de Pareto
         #[arg(short, long)]
         id: Option<String>,
     },
 }
 
-// 🎯 La signature intègre le CliContext
 pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
-    // 🎯 Heartbeat automatique
+    // 🎯 Heartbeat de session
     let _ = ctx.session_mgr.touch().await;
 
     match args.command {
@@ -55,83 +55,77 @@ pub async fn handle(args: GeneticsArgs, ctx: CliContext) -> RaiseResult<()> {
             mutation_rate,
             crossover_rate,
         } => {
-            // 🎯 Mise en conformité stricte JSON
             user_info!(
-                "GENETICS_START",
+                "GENETICS_INIT",
                 json_value!({
-                    "action": "Initialisation du moteur NSGA-II...",
                     "active_domain": ctx.active_domain,
                     "active_user": ctx.active_user
                 })
             );
 
-            // 1. Création de la configuration réelle du Core
+            // 1. Création de la configuration réelle
             let config = GeneticConfig {
                 population_size: population,
                 max_generations: generations,
                 mutation_rate,
                 crossover_rate,
-                elitism_count: 5, // Valeur par défaut
+                elitism_count: 5,
             };
 
-            // Validation conforme Clippy
+            // 2. Validation des hyperparamètres
             if !(0.0..=1.0).contains(&config.mutation_rate) {
-                // 🎯 Utilisation de user_warn avec payload structuré
                 user_warn!(
-                    "CONFIG_WARN",
+                    "GENETICS_CONFIG_BOUNDS",
                     json_value!({
-                        "issue": "Mutation rate hors bornes, ajustement requis.",
                         "field": "mutation_rate",
-                        "value": config.mutation_rate
+                        "value": config.mutation_rate,
+                        "hint": "Le taux devrait être entre 0.0 et 1.0."
                     })
                 );
             }
 
             user_info!(
-                "CONFIG_READY",
+                "GENETICS_READY",
                 json_value!({
-                    "population": config.population_size,
-                    "generations": config.max_generations,
-                    "mutation": config.mutation_rate,
-                    "crossover": config.crossover_rate,
-                    "action": "initialize_genetic_engine"
+                    "pop_size": config.population_size,
+                    "max_gen": config.max_generations
                 })
             );
 
-            // TODO: Ici nous instancierons le GeneticEngine avec SystemModelProvider
-            // Pour l'instant on valide que la structure de config est acceptée
+            // TODO: Intégration future avec le GeneticEngine et le SystemModelProvider
 
-            // 🎯 Payload JSON pour le succès
             user_success!(
-                "GENETICS_DONE",
-                json_value!({"status": "Simulation prête à être exécutée sur le modèle système."})
+                "GENETICS_SUCCESS",
+                json_value!({"status": "Simulation configurée et prête pour le modèle système."})
             );
         }
         GeneticsCommands::Inspect { id } => {
-            let target = id.as_deref().unwrap_or("Meilleur Pareto Front");
-            user_info!("INSPECT_TARGET", json_value!({ "target": target }));
+            let target = id.as_deref().unwrap_or("Pareto Front Best");
+            user_info!("GENETICS_INSPECT", json_value!({ "target": target }));
         }
     }
     Ok(())
 }
 
-// --- TESTS UNITAIRES ("Zéro Dette") ---
+// =========================================================================
+// TESTS UNITAIRES (Conformité "Zéro Dette")
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CliContext;
-    use raise::utils::context::SessionManager;
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    // 🎯 FIX : Signature avec RaiseResult pour la propagation d'erreur
+    #[serial_test::serial] // 🎯 FIX : Empêche les collisions de sandbox
     async fn test_genetics_config_mapping() -> RaiseResult<()> {
-        // 🎯 On simule le contexte global pour le test
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
+
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
-        let session_mgr = SessionManager::new(storage.clone());
+        let session_mgr = crate::context::SessionManager::new(storage.clone());
 
-        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
+        let ctx = crate::CliContext::mock(AppConfig::get(), session_mgr, storage);
 
         let args = GeneticsArgs {
             command: GeneticsCommands::Evolve {
@@ -142,10 +136,6 @@ mod tests {
             },
         };
 
-        // 🎯 FIX : Remplacement du assert! par un match exhaustif
-        match handle(args, ctx).await {
-            Ok(_) => Ok(()),
-            Err(e) => raise_error!("ERR_TEST_GENETICS_EVOLVE", error = e.to_string()),
-        }
+        handle(args, ctx).await
     }
 }

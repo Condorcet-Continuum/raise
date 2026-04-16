@@ -26,63 +26,41 @@ pub fn extract_json_from_llm(response: &str) -> String {
     }
 }
 
-/// Sauvegarde un artefact métier dynamiquement via l'Ontologie (Knowledge Graph)
-pub async fn save_artifact(ctx: &AgentContext, doc: &JsonValue) -> RaiseResult<CreatedArtifact> {
-    // 🎯 Zéro Dette : Match explicite sur l'ID pour éviter les corruptions
-    let doc_id = match doc
-        .get("_id")
-        .or_else(|| doc.get("id"))
-        .and_then(|v| v.as_str())
-    {
-        Some(id) => id.to_string(),
-        None => {
-            raise_error!(
-                "ERR_ARTIFACT_ID_INVALID",
-                error = "L'artefact produit par l'IA n'a pas d'identifiant valide.",
-                context = json_value!({ "doc": doc })
-            );
-        }
-    };
+/// 🎯 NOUVEAU : Sauvegarde en lot des artefacts via `insert_with_schema` pour garantir la validation
+pub async fn save_artifacts_batch(
+    ctx: &AgentContext,
+    docs: Vec<JsonValue>,
+) -> RaiseResult<Vec<CreatedArtifact>> {
+    let mut artifacts = Vec::new();
 
-    let name = doc["name"].as_str().unwrap_or("Unnamed").to_string();
-    let element_type = doc
-        .get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("UnknownElement")
-        .to_string();
+    if docs.is_empty() {
+        return Ok(artifacts);
+    }
 
-    // 🎯 Résolution du mapping via le Knowledge Graph
+    // 1. Résolution du mapping via le Knowledge Graph
     let mapping_doc =
         match query_knowledge_graph(ctx, "ref:configs:handle:ontological_mapping", false).await {
             Ok(d) => d,
-            Err(_) => {
-                raise_error!(
-                    "ERR_MISSING_ONTOLOGY_MAPPING",
-                    error = "Le document de configuration 'ontological_mapping' est introuvable."
-                );
-            }
+            Err(e) => raise_error!(
+                "ERR_MISSING_ONTOLOGY_MAPPING",
+                error = "Le document de configuration 'ontological_mapping' est introuvable.",
+                context = json_value!({ "technical_error": e.to_string() })
+            ),
         };
 
-    let route = &mapping_doc["mappings"][&element_type];
-    let layer = route["layer"]
-        .as_str()
-        .unwrap_or_else(|| doc["layer"].as_str().unwrap_or("unknown"));
-    let collection = route["collection"].as_str().unwrap_or("elements");
-
     let config = AppConfig::get();
-
-    // 🎯 FIX MOUNT POINTS : Utilisation du domaine système via les points de montage
     let sys_mgr = CollectionsManager::new(
         &ctx.db,
         &config.mount_points.system.domain,
         &config.mount_points.system.db,
     );
 
-    let settings = AppConfig::get_component_settings(&sys_mgr, "ai_agents")
-        .await
-        .unwrap_or(json_value!({}));
+    let settings = match AppConfig::get_component_settings(&sys_mgr, "ai_agents").await {
+        Ok(s) => s,
+        Err(_) => json_value!({}),
+    };
 
-    // On détermine la destination (par défaut le workspace actif)
+    // 2. Détermination du Workspace de destination
     let active_domain = settings["target_domain"]
         .as_str()
         .unwrap_or(&config.mount_points.modeling.domain);
@@ -93,24 +71,76 @@ pub async fn save_artifact(ctx: &AgentContext, doc: &JsonValue) -> RaiseResult<C
 
     let target_manager = CollectionsManager::new(&ctx.db, active_domain, active_db);
 
-    let mut final_doc = doc.clone();
-    if let Some(obj) = final_doc.as_object_mut() {
-        if !obj.contains_key("_id") {
-            obj.insert("_id".to_string(), json_value!(doc_id.clone()));
+    // 3. Traitement itératif des documents (Validation DDL + JSON-LD via la Forteresse)
+    for mut doc in docs {
+        let doc_id = match doc
+            .get("_id")
+            .or_else(|| doc.get("id"))
+            .and_then(|v| v.as_str())
+        {
+            Some(id) => id.to_string(),
+            None => {
+                user_warn!(
+                    "WARN_ARTIFACT_IGNORED",
+                    json_value!({ "reason": "ID manquant", "doc": doc })
+                );
+                continue;
+            }
+        };
+
+        let name = doc["name"].as_str().unwrap_or("Unnamed").to_string();
+        let element_type = doc
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("UnknownElement")
+            .to_string();
+
+        let route_opt = mapping_doc
+            .get("mappings")
+            .and_then(|m| m.get(&element_type));
+
+        let layer = match route_opt.and_then(|r| r.get("layer").and_then(|l| l.as_str())) {
+            Some(l) => l.to_string(),
+            None => doc["layer"].as_str().unwrap_or("unknown").to_string(),
+        };
+
+        let collection = match route_opt.and_then(|r| r.get("collection").and_then(|c| c.as_str()))
+        {
+            Some(c) => c.to_string(),
+            None => "elements".to_string(),
+        };
+
+        if let Some(obj) = doc.as_object_mut() {
+            if !obj.contains_key("_id") {
+                obj.insert("_id".to_string(), json_value!(doc_id.clone()));
+            }
+        }
+
+        // 🎯 STRICT : Utilisation de insert_with_schema pour forcer le passage par la "Forteresse"
+        match target_manager.insert_with_schema(&collection, doc).await {
+            Ok(_) => {
+                artifacts.push(CreatedArtifact {
+                    id: doc_id.clone(),
+                    name,
+                    layer: layer.to_uppercase(),
+                    element_type,
+                    path: format!("ref:{}:id:{}", collection, doc_id),
+                });
+            }
+            Err(e) => {
+                user_warn!(
+                    "WARN_ARTIFACT_SAVE_FAILED",
+                    json_value!({
+                        "id": doc_id,
+                        "collection": collection,
+                        "error": e.to_string()
+                    })
+                );
+            }
         }
     }
 
-    target_manager
-        .upsert_document(collection, final_doc)
-        .await?;
-
-    Ok(CreatedArtifact {
-        id: doc_id.clone(),
-        name,
-        layer: layer.to_uppercase(),
-        element_type,
-        path: format!("ref:{}:id:{}", collection, doc_id),
-    })
+    Ok(artifacts)
 }
 
 /// Interroge le Knowledge Graph système
@@ -121,7 +151,6 @@ pub async fn query_knowledge_graph(
 ) -> RaiseResult<JsonValue> {
     let config = AppConfig::get();
 
-    // 🎯 FIX MOUNT POINTS : Résolution via point de montage système
     let target_domain = &config.mount_points.system.domain;
     let target_db = &config.mount_points.system.db;
 
@@ -138,6 +167,7 @@ pub async fn query_knowledge_graph(
     let result = tool.execute(call).await;
 
     if result.is_error {
+        // 🎯 FIX : Utilisation directe de la macro divergente
         raise_error!(
             "ERR_AGENT_QUERY_DB_FAIL",
             error = result
@@ -148,7 +178,17 @@ pub async fn query_knowledge_graph(
         );
     }
 
-    Ok(result.content["data"].clone())
+    match result.content.get("data") {
+        Some(data) => Ok(data.clone()),
+        None => {
+            // 🎯 FIX : Divergence pure
+            raise_error!(
+                "ERR_AGENT_KG_INVALID_PAYLOAD",
+                error = "La réponse de la base ne contient pas d'objet 'data'.",
+                context = json_value!({ "reference": reference })
+            );
+        }
+    }
 }
 
 /// Charge l'historique d'une session agent depuis la base système
@@ -177,17 +217,21 @@ pub async fn load_session(ctx: &AgentContext) -> RaiseResult<AgentSession> {
 
     if !result.is_error {
         let doc = &result.content["data"];
-        if let Some(msgs_array) = doc["messages"].as_array() {
+        if let Some(msgs_array) = doc.get("messages").and_then(|m| m.as_array()) {
             if let Ok(msgs) = json::deserialize_from_value(json_value!(msgs_array)) {
                 session.messages = msgs;
             }
         }
-        if let Some(summary) = doc["summary"].as_str() {
+        if let Some(summary) = doc.get("summary").and_then(|s| s.as_str()) {
             session.summary = Some(summary.to_string());
         }
     } else {
-        // Sauvegarde initiale si inexistante
-        let _ = Box::pin(save_session(ctx, &session)).await;
+        if let Err(e) = Box::pin(save_session(ctx, &session)).await {
+            user_warn!(
+                "WARN_SESSION_INIT_SAVE_FAILED",
+                json_value!({"err": e.to_string()})
+            );
+        }
     }
 
     Ok(session)
@@ -206,19 +250,7 @@ pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> RaiseRe
         .replace("_", "-")
         .to_lowercase();
 
-    // Récupération de l'ID existant pour éviter les doublons
-    let tool = QueryDbTool::new(
-        ctx.db.clone(),
-        target_domain.to_string(),
-        target_db.to_string(),
-    );
-    let call = McpToolCall::new(
-        "query_db",
-        json_value!({ "reference": format!("ref:session_agents:handle:{}", handle_slug), "as_rdf": false }),
-    );
-    let result = tool.execute(call).await;
-
-    let mut session_doc = json_value!({
+    let session_doc = json_value!({
         "handle": handle_slug,
         "session_id": ctx.session_id,
         "agent_id": ctx.agent_id,
@@ -228,17 +260,15 @@ pub async fn save_session(ctx: &AgentContext, session: &AgentSession) -> RaiseRe
         "updated_at": UtcClock::now().to_rfc3339()
     });
 
-    if !result.is_error {
-        if let Some(id) = result.content["data"].get("_id") {
-            if let Some(obj) = session_doc.as_object_mut() {
-                obj.insert("_id".to_string(), id.clone());
-            }
-        }
+    if let Err(e) = manager.upsert_document("session_agents", session_doc).await {
+        // 🎯 FIX : Divergence pure sans enveloppe
+        raise_error!(
+            "ERR_SESSION_DB_SAVE_FAIL",
+            error = e,
+            context = json_value!({ "session_handle": handle_slug })
+        );
     }
 
-    manager
-        .upsert_document("session_agents", session_doc)
-        .await?;
     Ok(())
 }
 

@@ -2,9 +2,8 @@
 
 use clap::{Args, Subcommand};
 use raise::json_db::collections::manager::CollectionsManager;
-use raise::utils::prelude::*;
-use raise::workflow_engine::Mandate; // Import depuis le cœur
-use raise::{raise_error, user_error, user_info, user_success, user_warn};
+use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
+use raise::workflow_engine::Mandate;
 
 use crate::CliContext;
 
@@ -16,12 +15,11 @@ pub struct RulesArgs {
 
 #[derive(Subcommand, Clone, Debug)]
 pub enum RulesCommands {
-    /// Analyse statique d'une règle AST ou des règles d'un Mandat
+    /// Analyse statique des règles AST d'un Mandat (Vetos/Lignes Rouges)
     Analyze {
-        /// L'ID ou le handle du mandat contenant les Lignes Rouges
+        /// ID ou handle du mandat à auditer
         mandate_id: String,
     },
-
     /// 🚀 Évalue et applique les règles (x_rules) d'un schéma sur un document
     Evaluate {
         #[arg(long)]
@@ -33,30 +31,23 @@ pub enum RulesCommands {
 
 pub async fn handle(args: RulesArgs, ctx: CliContext) -> RaiseResult<()> {
     let _ = ctx.session_mgr.touch().await;
-
     let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
     match args.command {
         RulesCommands::Analyze { mandate_id } => {
             user_info!(
                 "RULES_ANALYZE_START",
-                json_value!({
-                    "mandate_id": mandate_id,
-                    "active_domain": ctx.active_domain,
-                    "active_user": ctx.active_user
-                })
+                json_value!({ "mandate": mandate_id })
             );
 
-            // 1. Fetch via la logique métier du Core
+            // 1. Récupération du Mandat (Logique Core)
             let mandate = Mandate::fetch_from_store(&manager, &mandate_id).await?;
-
-            // 2. Analyse via la logique métier du Core
             let analyses = mandate.analyze_vetos();
 
             if analyses.is_empty() {
                 user_warn!(
                     "RULES_ANALYZE_EMPTY",
-                    json_value!({ "hint": "Aucune règle AST trouvée dans ce Mandat." })
+                    json_value!({ "hint": "Aucune règle trouvée." })
                 );
                 return Ok(());
             }
@@ -64,154 +55,136 @@ pub async fn handle(args: RulesArgs, ctx: CliContext) -> RaiseResult<()> {
             println!("\n🔍 --- RÉSULTATS DE L'ANALYSE STATIQUE ---");
             let mut error_count = 0;
 
-            // 3. Affichage
             for analysis in &analyses {
                 println!("🛡️  Règle : {}", analysis.rule_name);
                 match &analysis.status {
                     Ok(deps) => {
-                        println!("   ✅ Syntaxe & Profondeur : Conformes");
+                        println!("   ✅ Syntaxe conforme");
                         println!("   🔗 Dépendances : {:?}", deps);
                     }
                     Err(err) => {
                         println!("   ❌ ÉCHEC : {}", err);
                         user_error!(
                             "RULES_AST_INVALID",
-                            // 🎯 FIX : On force le .to_string() pour éviter un crash de sérialisation JSON
                             json_value!({"rule": analysis.rule_name, "error": err.to_string()})
                         );
                         error_count += 1;
                     }
                 }
-                println!();
             }
 
             if error_count == 0 {
                 user_success!(
                     "RULES_ANALYZE_SUCCESS",
-                    json_value!({"status": "all_rules_valid", "count": analyses.len()})
+                    json_value!({ "count": analyses.len() })
                 );
+                Ok(())
             } else {
-                user_error!("RULES_ANALYZE_FAILED", json_value!({"errors": error_count}));
+                // 🎯 FIX : On retourne une erreur pour signaler l'échec au Shell (Exit Code != 0)
+                raise_error!(
+                    "ERR_RULES_VIOLATION",
+                    error = format!("{} violation(s) détectée(s) dans le mandat.", error_count),
+                    context = json_value!({ "mandate": mandate_id, "errors": error_count })
+                )
             }
         }
 
         RulesCommands::Evaluate { collection, handle } => {
-            user_info!(
-                "RULES_EVAL_START",
-                json_value!({"handle": handle, "col": collection})
-            );
+            user_info!("RULES_EVAL_START", json_value!({ "handle": handle }));
 
-            // 1. On récupère le document via l'API Core
-            let doc = match manager.get_document(&collection, &handle).await? {
-                Some(d) => d,
-                None => raise_error!(
-                    "ERR_DOC_NOT_FOUND",
-                    error = format!("Document '{}' introuvable", handle)
-                ),
-            };
+            let doc = manager
+                .get_document(&collection, &handle)
+                .await?
+                .ok_or_else(|| {
+                    build_error!(
+                        "ERR_DOC_NOT_FOUND",
+                        error = format!("Document '{}' introuvable", handle)
+                    )
+                })?;
 
-            // 2. On extrait son ID de manière sécurisée
-            let doc_id = match doc.get("_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => raise_error!(
-                    "ERR_DB_CORRUPTION",
-                    error = format!("Le document '{}' ne possède pas d'_id.", handle)
-                ),
-            };
+            let doc_id = doc
+                .get("_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| build_error!("ERR_DB_CORRUPTION", error = "Document sans _id"))?;
 
-            user_info!(
-                "RULES_COMPUTING",
-                json_value!({"action": "Délégation au moteur JSON DB..."})
-            );
-
-            // 3. 🚀 L'ÉLÉGANCE ARCHITECTURALE :
-            // On fait un "update" avec un patch vide JSON {}.
-            // Le CollectionsManager va charger le document, le faire passer dans `prepare_document()`,
-            // ce qui déclenche NATIVEMENT `apply_business_rules` et l'évaluation de l'AST !
+            // 🚀 L'ÉLÉGANCE RAISE : Un update vide {} force le passage dans `apply_business_rules`
             let updated_doc = manager
-                .update_document(&collection, &doc_id, json_value!({}))
+                .update_document(&collection, doc_id, json_value!({}))
                 .await?;
 
             user_success!(
                 "RULES_EVAL_SUCCESS",
                 json_value!({
                     "target": handle,
-                    "status": "computed_and_saved",
-                    "new_state": updated_doc["ui"] // On affiche la partie UI pour prouver la mutation
+                    "status": "computed",
+                    "ui_state": updated_doc["ui"]
                 })
             );
+            Ok(())
         }
     }
-    Ok(())
 }
 
 // =========================================================================
-// TESTS UNITAIRES (Parsing CLI - "Zéro Dette")
+// TESTS UNITAIRES (Conformité "Zéro Dette")
 // =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
-    use clap::Parser;
-
-    #[derive(Parser)]
-    struct TestCli {
-        #[command(flatten)]
-        args: RulesArgs,
-    }
+    use raise::utils::testing::DbSandbox;
 
     #[test]
-    fn verify_cli_structure() {
-        TestCli::command().debug_assert();
-    }
+    #[serial_test::serial]
+    fn test_parse_analyze_logic() -> RaiseResult<()> {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: RulesArgs,
+        }
 
-    #[test]
-    fn test_parse_analyze_command() -> RaiseResult<()> {
-        let args = vec!["test", "analyze", "mandate_v1"];
+        let cli = TestCli::try_parse_from(vec!["test", "analyze", "m_v1"])
+            .map_err(|e| build_error!("ERR_TEST", error = e))?;
 
-        let cli = match TestCli::try_parse_from(args) {
-            Ok(c) => c,
-            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
-        };
-
-        match cli.args.command {
-            RulesCommands::Analyze { mandate_id } => {
-                assert_eq!(mandate_id, "mandate_v1");
-                Ok(())
-            }
-            _ => raise_error!(
-                "ERR_TEST_ASSERTION_FAILED",
-                error = "Mauvaise commande parsée"
-            ),
+        if let RulesCommands::Analyze { mandate_id } = cli.args.command {
+            assert_eq!(mandate_id, "m_v1");
+            Ok(())
+        } else {
+            raise_error!("ERR_TEST_FAIL", error = "Parsing failed")
         }
     }
 
-    #[test]
-    fn test_parse_evaluate_command() -> RaiseResult<()> {
-        let args = vec![
-            "test",
-            "evaluate",
-            "--collection",
-            "dapps",
-            "--handle",
-            "defi",
-        ];
+    /// 🎯 TEST D'INTÉGRATION : Vérification du moteur de règles
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_rules_evaluation_workflow() -> RaiseResult<()> {
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
+        let sandbox = DbSandbox::new().await;
+        let storage = SharedRef::new(sandbox.storage.clone());
+        let session_mgr = crate::context::SessionManager::new(storage.clone());
+        let ctx = crate::CliContext::mock(AppConfig::get(), session_mgr, storage);
+        let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-        let cli = match TestCli::try_parse_from(args) {
-            Ok(c) => c,
-            Err(e) => raise_error!("ERR_TEST_PARSE_FAILED", error = e.to_string()),
+        DbSandbox::mock_db(&manager).await?;
+        manager
+            .create_collection(
+                "items",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+
+        // Insertion d'un document test
+        manager
+            .upsert_document("items", json_value!({ "_id": "t1", "handle": "test_item" }))
+            .await?;
+
+        let args = RulesArgs {
+            command: RulesCommands::Evaluate {
+                collection: "items".into(),
+                handle: "test_item".into(),
+            },
         };
-
-        match cli.args.command {
-            RulesCommands::Evaluate { collection, handle } => {
-                assert_eq!(collection, "dapps");
-                assert_eq!(handle, "defi");
-                Ok(())
-            }
-            _ => raise_error!(
-                "ERR_TEST_ASSERTION_FAILED",
-                error = "Mauvaise commande parsée"
-            ),
-        }
+        handle(args, ctx).await
     }
 }

@@ -30,7 +30,7 @@ pest_derive = "2.7"
 tokio = { version = "1.36", features = ["full"] }
 tokio-stream = "0.1"
 async-trait = "0.1"
-lru = "0.16.3"
+lru = "0.17.0"
 
 # --- Utilitaires Système & Fichiers (Workspace) ---
 anyhow = { workspace = true }
@@ -85,6 +85,7 @@ candle-core = "0.10.2"
 candle-nn = "0.10.2"
 candle-transformers = "0.10.2"
 safetensors = "0.7.0"
+nvml-wrapper = "0.12.1"
 
 tokenizers = { version = "0.22.2", features = ["http"] }
 fastembed = "5.5.0"

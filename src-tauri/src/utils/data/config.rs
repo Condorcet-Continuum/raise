@@ -238,7 +238,6 @@ pub struct DeepLearningConfig {
     pub hidden_size: usize,
     pub output_size: usize,
     pub learning_rate: f64,
-    pub device: String,
 }
 
 #[derive(Clone, Serializable, Deserializable, PartialEq, Default)]
@@ -501,17 +500,29 @@ impl AppConfig {
     }
 
     fn detect_best_device(config: &AppConfig) -> candle_core::Device {
+        // 1. Respect de la frugalité : priorité au CPU si demandé
         if !config.world_model.use_gpu {
             return candle_core::Device::Cpu;
         }
-        #[cfg(feature = "metal")]
-        if let Ok(dev) = candle_core::Device::new_metal(0) {
-            return dev;
-        }
+
+        // 2. Accélération CUDA (Linux/Windows)
         #[cfg(feature = "cuda")]
-        if let Ok(dev) = candle_core::Device::new_cuda(0) {
-            return dev;
+        {
+            // On tente l'index 0 (ta RTX 5060 physique validée par nvidia-smi)
+            if let Ok(dev) = candle_core::Device::new_cuda(0) {
+                return dev;
+            }
         }
+
+        // 3. Accélération Metal (Mac)
+        #[cfg(feature = "metal")]
+        {
+            if let Ok(dev) = candle_core::Device::new_metal(0) {
+                return dev;
+            }
+        }
+
+        // 4. Fallback universel vers le CPU si aucune accélération n'est disponible
         candle_core::Device::Cpu
     }
 
@@ -543,11 +554,6 @@ impl Default for DeepLearningConfig {
             hidden_size: 20,
             output_size: 5,
             learning_rate: 0.01,
-            device: if cfg!(feature = "cuda") {
-                "cuda".into()
-            } else {
-                "cpu".into()
-            },
         }
     }
 }

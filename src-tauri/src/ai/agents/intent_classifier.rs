@@ -51,7 +51,7 @@ fn default_scope() -> String {
 }
 
 impl EngineeringIntent {
-    /// 🎯 NOUVEAU : Retourne l'URN (Universal Resource Name) de l'agent en base de données
+    /// 🎯 Retourne l'URN (Universal Resource Name) de l'agent en base de données
     pub fn recommended_agent_id(&self) -> &'static str {
         match self {
             Self::DefineBusinessUseCase { .. } => "ref:agents:handle:agent_business",
@@ -128,23 +128,41 @@ impl IntentClassifier {
                 )
             };
 
+            // 🎯 FIX : On trace l'erreur matérielle avant le fallback
             let response = match self
                 .llm
                 .ask(LlmBackend::LocalLlama, system_prompt, &user_prompt)
                 .await
             {
                 Ok(res) => res,
-                Err(_) => break,
+                Err(e) => {
+                    user_warn!(
+                        "WARN_INTENT_LLM_FAIL",
+                        json_value!({
+                            "component": "IntentClassifier",
+                            "error": e.to_string(),
+                            "action": "Fallback to heuristics"
+                        })
+                    );
+                    break;
+                }
             };
 
             let clean_json = extract_json_from_llm(&response);
-            let mut val: JsonValue =
-                json::deserialize_from_str(&clean_json).unwrap_or(json_value!({}));
+
+            // 🎯 FIX : Boucle de feedback intelligente
+            let mut val: JsonValue = match json::deserialize_from_str(&clean_json) {
+                Ok(v) => v,
+                Err(e) => {
+                    current_feedback = format!("ERREUR : Le format JSON est invalide ({}). Veille à ne répondre QUE par un objet JSON strict.", e);
+                    continue;
+                }
+            };
 
             // --- VALIDATION ET AUTO-CORRECTION DES CHAMPS CRITIQUES ---
             if let Some(intent_name) = val["intent"].as_str() {
                 if intent_name == "create_element" {
-                    if val["layer"].is_null() {
+                    if val.get("layer").is_none() || val["layer"].is_null() {
                         let h = heuristic_fallback(user_input);
                         val["layer"] = h["layer"].clone();
                         val["element_type"] = h["element_type"].clone();
@@ -162,16 +180,18 @@ impl IntentClassifier {
                     Ok(intent) => return intent,
                     Err(e) => {
                         current_feedback = format!(
-                            "ERREUR JSON : {}. Assure-toi de fournir tous les champs requis.",
+                            "ERREUR JSON : {}. Assure-toi de fournir tous les champs requis pour l'intent.",
                             e
                         );
                         continue;
                     }
                 }
+            } else {
+                current_feedback = "ERREUR : La clé 'intent' est manquante.".to_string();
             }
         }
 
-        // 3. FALLBACK ULTIME (Si le LLM échoue 2 fois)
+        // 3. FALLBACK ULTIME (Si le LLM échoue)
         let fallback_val = heuristic_fallback(user_input);
         json::deserialize_from_value::<EngineeringIntent>(fallback_val)
             .unwrap_or(EngineeringIntent::Unknown)
@@ -191,7 +211,14 @@ fn extract_target_heuristics(input: &str) -> String {
         "verification ",
     ] {
         if let Some(idx) = lower.find(kw) {
-            return input[idx + kw.len()..].trim().to_string();
+            // 🎯 FIX UTF-8 : Comptage strict par caractères pour éviter le Panic
+            let char_offset = lower[..idx + kw.len()].chars().count();
+            return input
+                .chars()
+                .skip(char_offset)
+                .collect::<String>()
+                .trim()
+                .to_string();
         }
     }
     input.to_string()
@@ -244,8 +271,11 @@ mod tests {
     fn extract_name(input: &str, keyword: &str) -> String {
         let lower = input.to_lowercase();
         if let Some(idx) = lower.find(keyword) {
-            let raw = &input[idx + keyword.len()..].trim();
+            // 🎯 FIX UTF-8 : Dans les tests également
+            let char_offset = lower[..idx + keyword.len()].chars().count();
+            let raw: String = input.chars().skip(char_offset).collect();
             let clean = raw
+                .trim()
                 .trim_start_matches("de ")
                 .trim_start_matches("du ")
                 .trim_start_matches("la ")

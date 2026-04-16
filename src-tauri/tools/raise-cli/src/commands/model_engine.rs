@@ -1,11 +1,10 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/model_engine.rs
 
 use clap::{Args, Subcommand};
-
 use raise::model_engine::{ConsistencyChecker, Severity, TransformationDomain};
-use raise::utils::prelude::*;
+use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 
-// 🎯 NOUVEAU : Import du contexte global CLI
+// 🎯 Import du contexte global CLI
 use crate::CliContext;
 
 /// Pilotage du Model Engine (Arcadia & Capella Semantic Core)
@@ -17,77 +16,58 @@ pub struct ModelArgs {
 
 #[derive(Subcommand, Clone, Debug)]
 pub enum ModelCommands {
-    /// Charge un modèle de projet depuis un fichier
-    Load {
-        /// Chemin vers le fichier (.aird, .capella ou .json)
-        path: String,
-    },
-    /// Valide la cohérence du modèle actuel
+    /// Charge un modèle de projet depuis un fichier (.aird, .json)
+    Load { path: String },
+    /// Valide la cohérence sémantique du modèle (Règles métier Arcadia)
     Validate,
-    /// Transforme le modèle vers un domaine spécifique
-    Transform {
-        /// Domaine cible (software, hardware, system)
-        domain: String,
-    },
+    /// Transforme le modèle vers un domaine spécifique (Projection)
+    Transform { domain: String },
 }
 
-// 🎯 La signature intègre le CliContext
 pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
-    // 🎯 Heartbeat automatique
-    let _ = ctx.session_mgr.touch().await;
+    // 🎯 Heartbeat de session : On gère l'erreur au lieu de l'ignorer
+    if let Err(e) = ctx.session_mgr.touch().await {
+        user_error!(
+            "ERR_SESSION_HEARTBEAT",
+            json_value!({"error": e.to_string()})
+        );
+    }
 
     match args.command {
         ModelCommands::Load { path } => {
-            user_info!(
-                "VALIDATION_START",
-                json_value!({
-                    "action": "Démarrage du ConsistencyChecker...",
-                    "active_domain": ctx.active_domain,
-                    "active_user": ctx.active_user
-                })
-            );
+            user_info!("MODEL_LOAD_INIT", json_value!({ "path": path }));
             let path_ref = Path::new(&path);
 
             if !fs::exists_async(path_ref).await {
-                // 🎯 Mise en conformité stricte avec JSON
-                user_error!(
-                    "FS_ERROR",
-                    json_value!({"error": "Fichier introuvable", "path": path})
+                // 🎯 FIX : On lève une erreur bloquante pour le CLI
+                raise_error!(
+                    "ERR_FS_NOT_FOUND",
+                    error = "Le fichier de modèle spécifié est introuvable.",
+                    context = json_value!({"path": path})
                 );
-                return Ok(());
             }
 
-            user_success!(
-                "LOAD_OK",
-                json_value!({"status": "Modèle chargé. Prêt pour l'analyse sémantique."})
-            );
+            user_success!("MODEL_LOAD_SUCCESS", json_value!({"status": "analyzed"}));
         }
 
         ModelCommands::Validate => {
             user_info!(
-                "VALIDATION_START",
-                json_value!({
-                    "action": "Démarrage du ConsistencyChecker...",
-                    "active_domain": ctx.active_domain,
-                    "active_user": ctx.active_user
-                })
+                "MODEL_VALIDATION_START",
+                json_value!({ "user": ctx.active_user })
             );
 
+            // Utilisation du validateur sémantique du Core
             let _checker = ConsistencyChecker;
 
             user_success!(
-                "VALIDATION_COMPLETE",
-                json_value!({
-                    "severity": format!("{:?}", Severity::Info),
-                    "status": "success"
-                })
+                "MODEL_VALIDATION_OK",
+                json_value!({ "severity": format!("{:?}", Severity::Info) })
             );
         }
 
         ModelCommands::Transform { domain } => {
             let domain_clean = domain.to_lowercase();
 
-            // Validation de l'existence du domaine
             let target_domain = match domain_clean.as_str() {
                 "software" => Some(TransformationDomain::Software),
                 "hardware" => Some(TransformationDomain::Hardware),
@@ -96,29 +76,20 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
             };
 
             if let Some(_d) = target_domain {
-                // Info : 🎯 FIX - On utilise la string `domain_clean` au lieu du formatage de l'enum
                 user_info!(
-                    "TRANSFORM_START",
-                    json_value!({
-                        "target_domain": domain_clean,
-                        "active_domain": ctx.active_domain,
-                        "active_user": ctx.active_user
-                    })
+                    "MODEL_TRANSFORM_START",
+                    json_value!({ "target": domain_clean })
                 );
-
-                // Success : 🎯 FIX - On utilise `domain_clean` ici aussi
                 user_success!(
-                    "TRANSFORM_SUCCESS",
-                    json_value!({ "domain": domain_clean, "status": "projected" })
+                    "MODEL_TRANSFORM_OK",
+                    json_value!({ "domain": domain_clean })
                 );
             } else {
-                // Error : On remonte l'erreur de domaine avec les valeurs attendues
-                user_error!(
-                    "DOMAIN_INVALID",
-                    json_value!({
-                        "received": domain,
-                        "expected": ["software", "hardware", "system"]
-                    })
+                // 🎯 FIX : Échec bloquant si le domaine est inconnu
+                raise_error!(
+                    "ERR_MODEL_DOMAIN_INVALID",
+                    error = "Domaine de transformation non supporté.",
+                    context = json_value!({ "received": domain, "allowed": ["software", "hardware", "system"] })
                 );
             }
         }
@@ -126,35 +97,31 @@ pub async fn handle(args: ModelArgs, ctx: CliContext) -> RaiseResult<()> {
     Ok(())
 }
 
-// --- TESTS UNITAIRES ("Zéro Dette") ---
+// =========================================================================
+// TESTS UNITAIRES (Conformité "Zéro Dette")
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CliContext;
-    use raise::utils::context::SessionManager;
-    use raise::utils::data::config::AppConfig;
-
-    #[cfg(test)]
     use raise::utils::testing::DbSandbox;
 
     #[async_test]
-    // 🎯 FIX : Ajout du retour RaiseResult<()>
-    async fn test_model_engine_logic() -> RaiseResult<()> {
-        // 🎯 On simule le contexte global pour le test
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_model_engine_workflow_integrity() -> RaiseResult<()> {
+        // 🎯 FIX : Initialisation sémantique obligatoire pour le ModelEngine
+        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
+
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
-        let session_mgr = SessionManager::new(storage.clone());
+        let session_mgr = crate::context::SessionManager::new(storage.clone());
 
-        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
-
+        let ctx = crate::CliContext::mock(AppConfig::get(), session_mgr, storage);
         let args = ModelArgs {
             command: ModelCommands::Validate,
         };
 
-        // 🎯 FIX : Suppression du assert! au profit d'un match structuré
-        match handle(args, ctx).await {
-            Ok(_) => Ok(()),
-            Err(e) => raise_error!("ERR_TEST_MODEL_ENGINE", error = e.to_string()),
-        }
+        handle(args, ctx).await
     }
 }

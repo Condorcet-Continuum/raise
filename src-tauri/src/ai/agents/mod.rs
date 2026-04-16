@@ -4,7 +4,7 @@ pub mod context;
 pub mod dynamic_agent;
 pub mod intent_classifier;
 pub mod prompt_engine;
-pub mod tools; // 🎯 Le nouveau module physique
+pub mod tools;
 
 pub use self::context::AgentContext;
 
@@ -28,6 +28,8 @@ pub struct AgentResult {
     pub artifacts: Vec<CreatedArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outgoing_message: Option<AclMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xai_frame: Option<crate::ai::assurance::XaiFrame>,
 }
 
 impl AgentResult {
@@ -36,6 +38,7 @@ impl AgentResult {
             message: msg,
             artifacts: vec![],
             outgoing_message: None,
+            xai_frame: None,
         }
     }
 
@@ -44,6 +47,7 @@ impl AgentResult {
             message: format!("🔄 Communication sortante vers {}", msg.receiver),
             artifacts: vec![],
             outgoing_message: Some(msg),
+            xai_frame: None,
         }
     }
 }

@@ -183,6 +183,7 @@ impl AiOrchestrator {
             message: accumulated_messages.join("\n\n---\n\n"),
             artifacts: accumulated_artifacts,
             outgoing_message: None,
+            xai_frame: None,
         })
     }
 

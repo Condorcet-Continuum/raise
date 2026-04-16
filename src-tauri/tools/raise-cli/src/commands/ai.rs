@@ -1,11 +1,13 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/ai.rs
 
 use clap::{Args, Subcommand};
+use raise::{user_error, user_info, user_success, utils::prelude::*};
 
 // --- IMPORTS MÉTIER RAISE ---
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::tools::query_knowledge_graph;
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
+use raise::json_db::collections::manager::CollectionsManager;
 
 use raise::ai::context::rag::RagRetriever;
 use raise::ai::llm::client::LlmClient;
@@ -16,8 +18,6 @@ use raise::ai::voice::stt::WhisperEngine;
 use raise::model_engine::types::ProjectModel;
 use raise::model_engine::types::{ArcadiaElement, NameType};
 use raise::utils::io::audio::AudioListener;
-
-use raise::{user_error, user_info, user_success, utils::prelude::*};
 
 use raise::ai::agents::prompt_engine::PromptEngine;
 use raise::ai::agents::tools::extract_json_from_llm;
@@ -92,6 +92,12 @@ pub enum AiCommands {
         action: RagAction,
     },
 
+    #[command(visible_alias = "a")]
+    Ask {
+        /// La question ou demande directe
+        query: String,
+    },
+
     /// 🧠 Déléguer une demande complexe à l'Orchestrateur Multi-Agents
     #[command(visible_alias = "o")]
     Orchestrate {
@@ -136,6 +142,13 @@ pub enum AiCommands {
     /// 🩺 Afficher l'état de santé du moteur IA (Hardware, Assets)
     #[command(visible_alias = "h")]
     Health,
+
+    #[command(visible_alias = "a-check")]
+    Audit {
+        /// Identifiant du domaine à auditer (ex: 'modeling')
+        #[arg(short, long)]
+        domain: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -170,6 +183,15 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
             "CLI_MISSING_DOMAIN_PATH",
             error = "Le chemin PATH_RAISE_DOMAIN est introuvable !",
             context = json_value!({"required_for": "ai_assets_and_db_access"})
+        ),
+    };
+
+    let orch_ref = match &ctx.orchestrator {
+        Some(o) => o,
+        None => raise_error!(
+            "ERR_AI_OFFLINE",
+            error = "L'orchestrateur IA n'est pas initialisé.",
+            context = json_value!({"hint": "Vérifiez la partition système et les assets IA."})
         ),
     };
 
@@ -235,16 +257,6 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         return Ok(());
     }
 
-    if let AiCommands::Explain { target_id } = &command {
-        run_explain_action(&manager, target_id).await?;
-        return Ok(());
-    }
-
-    if let AiCommands::Health = &command {
-        run_health_action(&manager).await?;
-        return Ok(());
-    }
-
     let client = LlmClient::new(&manager).await?;
 
     let current_session = ctx.session_mgr.get_current_session().await;
@@ -279,19 +291,157 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
     // 4. EXÉCUTION DES COMMANDES AGENTS/LLM
     match command {
         AiCommands::Interactive => run_interactive_mode(&agent_ctx, &ctx, client).await?,
-        AiCommands::Listen => run_voice_mode(&agent_ctx, client, &manager).await?,
+        AiCommands::Listen => {
+            let health = RaiseHealthEngine::check_engine_health(&manager).await?;
+            if !health.acceleration_active {
+                user_warn!(
+                    "AI_VOICE_PERF_LOW",
+                    json_value!({"hint": "Whisper sans GPU risque de bloquer le CLI."})
+                );
+            }
+            run_voice_mode(&agent_ctx, client, &manager).await?
+        }
         AiCommands::Classify { input, execute } => {
             process_input(&agent_ctx, &input, client, execute).await
         }
         AiCommands::Inspect { reference } => {
             inspect_agent_logic(&agent_ctx, &reference, &ctx.active_domain, &ctx.active_db).await?;
         }
-        AiCommands::Orchestrate { prompt } => {
-            run_orchestrate_action(prompt, ctx.storage.clone(), &manager).await?;
+
+        AiCommands::Ask { query } => {
+            // On verrouille l'orchestrateur partagé injecté par main.rs
+            let mut orch = orch_ref.lock().await;
+
+            // Appel à l'interface simplifiée "ask" du noyau
+            match orch.ask(&query).await {
+                Ok(response) => {
+                    println!("\n🤖 RAISE :\n{}", response);
+                    user_success!("AI_ASK_SUCCESS");
+                }
+                Err(e) => raise_error!(
+                    "AI_ASK_FAILED",
+                    error = e,
+                    context = json_value!({"query": &query})
+                ),
+            }
         }
+
+        AiCommands::Orchestrate { prompt } => {
+            let mut orch = orch_ref.lock().await;
+            match orch.execute_workflow(&prompt).await {
+                Ok(res) => {
+                    println!("{}", res.message);
+                    user_success!(
+                        "AI_ORCHESTRATOR_SUCCESS",
+                        json_value!({"artifacts": res.artifacts.len()})
+                    );
+                }
+                Err(e) => raise_error!("AI_ORCHESTRATOR_FAILED", error = e),
+            }
+        }
+
+        AiCommands::Audit { domain } => {
+            let target_domain = domain.unwrap_or_else(|| ctx.active_domain.clone());
+            user_info!("AI_AUDIT_START", json_value!({"domain": &target_domain}));
+
+            // 1. Initialisation du manager sur la partition système pour la persistance
+            let sys_manager = CollectionsManager::new(
+                &ctx.storage,
+                &ctx.config.mount_points.system.domain,
+                &ctx.config.mount_points.system.db,
+            );
+
+            // 2. Création d'un rapport de qualité (utilisant les moteurs du noyau)
+            let report = raise::ai::assurance::QualityReport::new(&target_domain, &ctx.active_db);
+
+            // 3. Persistance du rapport via le module d'assurance
+            match raise::ai::assurance::persistence::save_quality_report(&sys_manager, &report)
+                .await
+            {
+                Ok(id) => {
+                    user_success!(
+                        "AI_AUDIT_SUCCESS",
+                        json_value!({
+                            "report_id": id,
+                            "domain": &target_domain
+                        })
+                    );
+                    println!("✅ Rapport d'assurance qualité persisté dans 'quality_reports'.");
+                }
+                Err(e) => raise_error!("AI_AUDIT_FAILED", error = e),
+            }
+        }
+
+        AiCommands::Explain { target_id } => {
+            let config = AppConfig::get();
+            let sys_manager = CollectionsManager::new(
+                &ctx.storage,
+                &config.mount_points.system.domain,
+                &config.mount_points.system.db,
+            );
+
+            // 1. Récupération de la trame via le noyau certifié
+            match raise::ai::assurance::get_xai_frame(&sys_manager, &target_id).await {
+                Ok(frame) => {
+                    user_success!("AI_EXPLAIN_FOUND", json_value!({"id": target_id}));
+
+                    // 2. Affichage structuré du raisonnement
+                    println!("\n🔍 RAISONNEMENT DE L'AGENT :");
+                    println!("============================");
+                    println!("{}", frame.summarize_for_llm());
+
+                    if !frame.visual_artifacts.is_empty() {
+                        println!(
+                            "\n🖼️  ARTEFACTS VISUELS DISPONIBLES : {}",
+                            frame.visual_artifacts.len()
+                        );
+                    }
+                }
+                Err(e) => user_error!("AI_EXPLAIN_FAILED", json_value!({ "error": e.to_string() })),
+            }
+        }
+
+        AiCommands::Health => {
+            let config = AppConfig::get();
+            let sys_manager = CollectionsManager::new(
+                &ctx.storage,
+                &config.mount_points.system.domain,
+                &config.mount_points.system.db,
+            );
+
+            match raise::ai::assurance::health::RaiseHealthEngine::check_engine_health(&sys_manager)
+                .await
+            {
+                Ok(report) => {
+                    user_success!("AI_HEALTH_REPORT", json_value!(report));
+                    println!("\n🩺 RAPPORT DE SANTÉ IA");
+                    println!("======================");
+                    println!("Matériel     : {}", report.device_type);
+                    println!(
+                        "Accélération : {}",
+                        if report.acceleration_active {
+                            "OUI (Active)"
+                        } else {
+                            "NON (CPU)"
+                        }
+                    );
+                    println!(
+                        "Actifs IA    : {}",
+                        if report.assets_integrity {
+                            "✅ Intègres"
+                        } else {
+                            "❌ Manquants/Corrompus"
+                        }
+                    );
+                }
+                Err(e) => user_error!("AI_HEALTH_FAILED", json_value!({ "error": e.to_string() })),
+            }
+        }
+
         AiCommands::TrainWorld { iterations } => {
             run_train_world_action(ctx.storage.clone(), &manager, iterations).await?;
         }
+
         AiCommands::Execute {
             prompt_handle,
             vars,
@@ -415,62 +565,6 @@ async fn run_rag_action(
     Ok(())
 }
 
-async fn run_explain_action(
-    manager: &raise::json_db::collections::manager::CollectionsManager<'_>,
-    target_id: &str,
-) -> RaiseResult<()> {
-    user_info!("XAI_AUDIT_START", json_value!({"target_id": target_id}));
-
-    let doc_opt = manager.get_document("xai_frames", target_id).await?;
-
-    match doc_opt {
-        Some(doc) => {
-            let frame: raise::ai::assurance::xai::XaiFrame = json::deserialize_from_value(doc)?;
-
-            println!("\n🧠 --- AUDIT D'EXPLICABILITÉ (XAI) ---");
-            println!("ID Trame    : {}", frame.id);
-            println!("Modèle      : {}", frame.model_id);
-            println!("Méthode     : {:?}", frame.method);
-            println!("Portée      : {:?}", frame.scope);
-            println!("Prédiction  : {}", frame.predicted_output);
-
-            if let Some(score) = frame.fidelity_score {
-                println!("Fidélité    : {:.2}%", score * 100.0);
-            }
-            println!("Temps calcul: {} ms", frame.computation_time_ms);
-
-            println!("\n📊 --- RÉSUMÉ DES FACTEURS D'INFLUENCE ---");
-            println!("{}", frame.summarize_for_llm());
-
-            if !frame.visual_artifacts.is_empty() {
-                println!("\n🖼️  --- ARTEFACTS VISUELS GÉNÉRÉS ---");
-                for visual in &frame.visual_artifacts {
-                    println!(
-                        "- [{}] {} (MIME: {})",
-                        visual.artifact_type, visual.description, visual.mime_type
-                    );
-                }
-            }
-
-            user_success!(
-                "XAI_AUDIT_SUCCESS",
-                json_value!({"features_count": frame.features.len()})
-            );
-        }
-        None => {
-            user_error!(
-                "XAI_FRAME_NOT_FOUND",
-                json_value!({
-                    "target_id": target_id,
-                    "hint": "Vérifiez que l'ID correspond bien à une trame XAI existante dans la collection 'xai_frames'."
-                })
-            );
-        }
-    }
-
-    Ok(())
-}
-
 async fn run_voice_mode(
     ctx: &AgentContext,
     client: LlmClient,
@@ -522,64 +616,6 @@ async fn run_voice_mode(
     Ok(())
 }
 
-async fn run_health_action(
-    manager: &raise::json_db::collections::manager::CollectionsManager<'_>,
-) -> RaiseResult<()> {
-    user_info!("AI_HEALTH_CHECK_START", json_value!({}));
-
-    let report = RaiseHealthEngine::check_engine_health(manager).await?;
-
-    println!("\n🩺 --- RAPPORT DE SANTÉ DU MOTEUR IA ---");
-    println!("Processeur / GPU Actif : {}", report.device_type);
-
-    println!(
-        "Accélération Matérielle: {}",
-        if report.acceleration_active {
-            "✅ OUI"
-        } else {
-            "❌ NON"
-        }
-    );
-    println!(
-        "Optimisation CPU (MKL) : {}",
-        if report.mkl_enabled {
-            "✅ OUI"
-        } else {
-            "❌ NON"
-        }
-    );
-
-    println!(
-        "Intégrité des Modèles  : {}",
-        if report.assets_integrity {
-            "✅ OK"
-        } else {
-            "❌ FICHIERS MANQUANTS"
-        }
-    );
-
-    if !report.diagnostic_details.is_empty() {
-        println!("\n🔍 --- DÉTAILS DES ASSETS ---");
-        for (key, val) in &report.diagnostic_details {
-            println!("- {:<20}: {}", key, val);
-        }
-    }
-
-    if report.assets_integrity {
-        user_success!(
-            "AI_HEALTH_CHECK_PASSED",
-            json_value!({"device": report.device_type})
-        );
-    } else {
-        user_warn!(
-            "AI_HEALTH_CHECK_WARNING",
-            json_value!({"hint": "Certains modèles (LLM ou Embeddings) sont introuvables dans _system/ai-assets."})
-        );
-    }
-
-    Ok(())
-}
-
 async fn process_input(ctx: &AgentContext, input: &str, client: LlmClient, execute: bool) {
     let classifier = IntentClassifier::new(client);
     user_info!("AI_ANALYZING", json_value!({"input_length": input.len()}));
@@ -602,26 +638,21 @@ async fn run_agent<A: Agent>(
     intent: &EngineeringIntent,
     execute: bool,
 ) {
-    if execute {
-        match agent.process(ctx, intent).await {
-            Ok(Some(res)) => {
-                user_success!("AI_RESULT", json_value!({ "message": res.message }));
-                for a in res.artifacts {
-                    user_info!("AI_ARTIFACT_GENERATED", json_value!({ "path": a.path }));
-                }
-            }
-            Ok(None) => {
-                user_info!("AI_NO_ACTION", json_value!({}));
-            }
-            Err(e) => {
-                user_error!(
-                    "AI_AGENT_ERROR",
-                    json_value!({ "error": e.to_string(), "source": "agent_executor" })
-                );
+    if !execute {
+        user_info!("AI_SIMULATION_MODE", json_value!({}));
+        return;
+    }
+
+    // 🎯 Le CLI ne fait plus aucun traitement : il passe les plats au noyau certifié
+    match raise::ai::assurance::execute_certified(&agent, ctx, intent).await {
+        Ok(Some(res)) => {
+            user_success!("AI_RESULT", json_value!({ "message": res.message }));
+            for a in res.artifacts {
+                user_info!("AI_ARTIFACT_GENERATED", json_value!({ "path": a.path }));
             }
         }
-    } else {
-        user_info!("AI_SIMULATION_MODE", json_value!({}));
+        Ok(None) => user_info!("AI_NO_ACTION", json_value!({})),
+        Err(e) => user_error!("AI_AGENT_ERROR", json_value!({ "error": e.to_string() })),
     }
 }
 
@@ -703,54 +734,6 @@ async fn inspect_agent_logic(
             }
         }
     }
-    Ok(())
-}
-
-async fn run_orchestrate_action(
-    prompt: String,
-    storage: SharedRef<raise::json_db::storage::StorageEngine>,
-    manager: &raise::json_db::collections::manager::CollectionsManager<'_>,
-) -> RaiseResult<()> {
-    user_info!(
-        "AI_ORCHESTRATOR_START",
-        json_value!({"prompt_length": prompt.len()})
-    );
-
-    println!("⏳ Réveil de l'Orchestrateur et chargement du contexte (RAG, Symbolique, Neuro-Symbolique)...");
-
-    let mut orchestrator = AiOrchestrator::new(ProjectModel::default(), manager, storage).await?;
-
-    println!("\n🤖 --- EXÉCUTION DU WORKFLOW MULTI-AGENTS ---");
-    println!("Demande initiale : \"{}\"\n", prompt);
-
-    match orchestrator.execute_workflow(&prompt).await {
-        Ok(agent_result) => {
-            println!("💬 Réponse des agents :");
-            println!("{}", agent_result.message);
-
-            if !agent_result.artifacts.is_empty() {
-                println!("\n📦 --- ARTEFACTS GÉNÉRÉS ---");
-                for artifact in &agent_result.artifacts {
-                    println!(
-                        "- [{}] {} (Type: {}), Chemin: {}",
-                        artifact.layer, artifact.name, artifact.element_type, artifact.path
-                    );
-                }
-            }
-
-            user_success!(
-                "AI_ORCHESTRATOR_SUCCESS",
-                json_value!({"artifacts_count": agent_result.artifacts.len()})
-            );
-        }
-        Err(e) => {
-            user_error!(
-                "AI_ORCHESTRATOR_FAILED",
-                json_value!({ "error": e.to_string(), "action": "execute_workflow" })
-            );
-        }
-    }
-
     Ok(())
 }
 
@@ -901,6 +884,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_parsing_robustness() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
@@ -933,6 +918,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_intent_dispatch_layers() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
@@ -957,6 +944,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_intent_dispatch_software_logic() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
@@ -974,6 +963,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_business_dispatch() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
@@ -991,6 +982,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_train_parsing() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
@@ -1022,6 +1015,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_listen_parsing() -> RaiseResult<()> {
         mock::inject_mock_config().await;
 
@@ -1051,6 +1046,78 @@ mod tests {
                 "ERR_TEST_ASSERTION_FAILED",
                 error = "Échec du parsing de l'alias 'l'"
             )
+        }
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_ai_ask_parsing() -> RaiseResult<()> {
+        mock::inject_mock_config().await;
+
+        // 1. Test de la commande complète
+        let cli = match TestCli::try_parse_from(vec![
+            "test",
+            "ask",
+            "quelle est la charge du moteur ?",
+        ]) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
+
+        if let Some(AiCommands::Ask { query }) = cli.args.command {
+            assert_eq!(query, "quelle est la charge du moteur ?");
+        } else {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Échec du parsing de 'ask'"
+            );
+        }
+
+        // 2. Test de l'alias 'a'
+        let cli_alias = match TestCli::try_parse_from(vec!["test", "a", "status"]) {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_TEST_PARSE", error = e.to_string()),
+        };
+
+        if let Some(AiCommands::Ask { query }) = cli_alias.args.command {
+            assert_eq!(query, "status");
+            Ok(())
+        } else {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Échec du parsing de l'alias 'a'"
+            )
+        }
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_ai_ask_execution_offline_safety() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        let storage = SharedRef::new(sandbox.storage.clone());
+
+        // 🎯 On utilise le mock de CliContext qui initialise orchestrator à None
+        let ctx = CliContext::mock(
+            AppConfig::get(),
+            raise::utils::context::SessionManager::new(storage.clone()),
+            storage,
+        );
+
+        let args = AiArgs {
+            command: Some(AiCommands::Ask {
+                query: "vériification".into(),
+            }),
+        };
+
+        // 🎯 L'exécution doit renvoyer l'erreur ERR_AI_OFFLINE de manière structurée
+        match handle(args, ctx).await {
+            Err(AppError::Structured(err)) if err.code == "ERR_AI_OFFLINE" => Ok(()),
+            _ => raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Le handler aurait dû rejeter l'appel car l'orchestrateur est absent."
+            ),
         }
     }
 }

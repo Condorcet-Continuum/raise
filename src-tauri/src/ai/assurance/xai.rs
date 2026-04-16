@@ -1,11 +1,14 @@
+// FICHIER : src-tauri/src/ai/assurance/xai.rs
+
 use crate::utils::prelude::*;
 
 #[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum ExplanationScope {
-    Local,
-    Global,
+    Local,  // Explication d'une instance précise (Inference)
+    Global, // Explication du comportement global du modèle
 }
 
+/// Méthodes d'explicabilité supportées par le XaiFrame
 #[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum XaiMethod {
     Shap { variant: String },
@@ -13,9 +16,9 @@ pub enum XaiMethod {
     AttentionMap,
     IntegratedGradients,
     GradCam,
-    ChainOfThought,
-    Counterfactual,
-    Manual,
+    ChainOfThought, // Raisonnement textuel (LLM)
+    Counterfactual, // Scénario "What-if"
+    Manual,         // Annotation par un expert métier
 }
 
 #[derive(Debug, Serializable, Deserializable, Clone)]
@@ -29,12 +32,14 @@ pub struct FeatureImportance {
 
 #[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct VisualArtifact {
-    pub artifact_type: String,
+    pub artifact_type: String, // ex: "heatmap", "tree"
     pub mime_type: String,
-    pub payload: String,
+    pub payload: String, // Base64 ou URI
     pub description: String,
 }
 
+/// 🔮 XAI FRAME (Preuve d'Explicabilité)
+/// Documente pourquoi une décision a été prise par un agent.
 #[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct XaiFrame {
     #[serde(rename = "_id")]
@@ -80,26 +85,20 @@ impl XaiFrame {
         });
     }
 
-    pub fn add_visual(&mut self, type_: &str, mime: &str, data: &str) {
-        self.visual_artifacts.push(VisualArtifact {
-            artifact_type: type_.to_string(),
-            mime_type: mime.to_string(),
-            payload: data.to_string(),
-            description: format!("Visualisation auto-generated via {:?}", self.method),
-        });
-    }
-
-    /// Génère un résumé textuel pour inclusion dans un Prompt LLM (RAG)
+    /// Résumé structuré pour injection dans le contexte d'un Agent (Prompt Engineering)
     pub fn summarize_for_llm(&self) -> String {
         let mut summary = format!(
-            "Explication ({:?}) pour la prédiction '{}'.\nFacteurs principaux :\n",
+            "### Justification IA ({:?})\nSortie prédite : '{}'\nFacteurs d'influence prioritaires :\n",
             self.method, self.predicted_output
         );
 
-        // On prend le top 3 des features
-        for f in self.features.iter().take(3) {
+        // Tri par importance absolue (rank)
+        let mut sorted_features = self.features.clone();
+        sorted_features.sort_by_key(|f| f.rank);
+
+        for f in sorted_features.iter().take(5) {
             summary.push_str(&format!(
-                "- {} (Valeur: {}): Impact {:.2}\n",
+                "- **{}** (valeur: {}): Influence {:.2}\n",
                 f.feature_id, f.raw_value, f.attribution_score
             ));
         }
@@ -112,14 +111,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_xai_summary() {
-        let mut frame = XaiFrame::new("test", XaiMethod::Lime, ExplanationScope::Local);
-        frame.predicted_output = "Rejected".into();
-        frame.add_feature("Salary", "low", -0.8, 1);
+    #[serial_test::serial]
+    fn test_xai_frame_summary_generation() {
+        let mut frame = XaiFrame::new(
+            "model_abc",
+            XaiMethod::AttentionMap,
+            ExplanationScope::Local,
+        );
+        frame.predicted_output = "Critical_Failure".into();
+        frame.add_feature("Temperature", "150°C", 0.85, 1);
 
         let summary = frame.summarize_for_llm();
-        assert!(summary.contains("Rejected"));
-        assert!(summary.contains("Salary"));
-        assert!(summary.contains("-0.8"));
+        assert!(summary.contains("Critical_Failure"));
+        assert!(summary.contains("Temperature"));
+        assert!(summary.contains("0.85"));
     }
 }

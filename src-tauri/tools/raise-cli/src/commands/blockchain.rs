@@ -29,21 +29,20 @@ pub enum BlockchainCommands {
 /// Handler principal pour les commandes Blockchain
 pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
     // 🎯 Heartbeat automatique pour maintenir la session active
-    match ctx.session_mgr.touch().await {
-        Ok(_) => user_debug!("SESSION_TOUCHED"),
-        Err(e) => user_error!(
+    if let Err(e) = ctx.session_mgr.touch().await {
+        user_error!(
             "ERR_SESSION_HEARTBEAT",
             json_value!({"error": e.to_string()})
-        ),
+        );
+    } else {
+        user_debug!("SESSION_TOUCHED");
     }
 
     match args.command {
         BlockchainCommands::Status => {
-            // 🎯 Utilisation des points de montage pour la traçabilité sémantique
             user_info!(
-                "BLOCKCHAIN",
+                "BLOCKCHAIN_STATUS_QUERY",
                 json_value!({
-                    "action": "Interrogation des états globaux...",
                     "active_domain": ctx.active_domain,
                     "system_partition": ctx.config.mount_points.system.domain,
                     "active_user": ctx.active_user
@@ -52,29 +51,25 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
 
             // Simulation d'un client Fabric (utilisant le ré-export FabricClient)
             user_info!(
-                "FABRIC",
-                json_value!({"status": "Client initialisé (en attente de transaction)"})
+                "FABRIC_NODE",
+                json_value!({"status": "Client initialisé (IDLE)"})
             );
 
             // Simulation VPN via Innernet
             user_info!(
                 "VPN_MESH",
-                json_value!({"status": "Connecté (Innernet Client actif)"})
+                json_value!({"status": "Innernet Client actif (connected)"})
             );
 
             user_success!(
                 "BC_STATUS_OK",
-                json_value!({"message": "Tous les sous-systèmes blockchain sont opérationnels."})
+                json_value!({"message": "Sous-systèmes blockchain et VPN opérationnels."})
             );
         }
 
         BlockchainCommands::VpnCheck { profile } => {
-            user_info!(
-                "VPN_INIT",
-                json_value!({ "profile": profile, "action": "establish_connection" })
-            );
+            user_info!("VPN_DIAGNOSTIC_INIT", json_value!({ "profile": profile }));
 
-            // 🎯 Match strict pour la validation de configuration
             let _config = VpnConfig {
                 name: profile.clone(),
                 ..Default::default()
@@ -84,7 +79,6 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
                 "VPN_READY",
                 json_value!({
                     "profile": profile,
-                    "status": "connected",
                     "mesh_verified": true
                 })
             );
@@ -94,37 +88,33 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
 }
 
 // =========================================================================
-// TESTS UNITAIRES (Conformité & Résilience Mount Points - "Zéro Dette")
+// TESTS UNITAIRES (Conformité "Zéro Dette")
 // =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CliContext;
     use raise::utils::context::SessionManager;
     use raise::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
+    #[serial_test::serial] // 🎯 FIX : Évite les conflits de lock sur la Sandbox
     async fn test_blockchain_status_mock() -> RaiseResult<()> {
-        // 🎯 Isolation via Sandbox
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
-
         let args = BlockchainArgs {
             command: BlockchainCommands::Status,
         };
 
-        // 🎯 FIX : Suppression du panic!
-        match handle(args, ctx).await {
-            Ok(_) => Ok(()),
-            Err(e) => raise_error!("ERR_TEST_BLOCKCHAIN_STATUS", error = e.to_string()),
-        }
+        // 🎯 Rigueur : On utilise directement le RaiseResult
+        handle(args, ctx).await
     }
 
     #[async_test]
+    #[serial_test::serial]
     async fn test_vpn_config_flow() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         let storage = SharedRef::new(sandbox.storage.clone());
@@ -133,28 +123,24 @@ mod tests {
         let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
         let args = BlockchainArgs {
             command: BlockchainCommands::VpnCheck {
-                profile: "test-net".into(),
+                profile: "raise-mesh-01".into(),
             },
         };
 
-        // 🎯 FIX : Suppression du panic!
-        match handle(args, ctx).await {
-            Ok(_) => Ok(()),
-            Err(e) => raise_error!("ERR_TEST_VPN_CHECK", error = e.to_string()),
-        }
+        handle(args, ctx).await
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience de la configuration Blockchain via Mount Points
     #[async_test]
+    #[serial_test::serial]
     async fn test_blockchain_mount_point_integrity() -> RaiseResult<()> {
         let _sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
-        // 🎯 FIX : Utilisation d'une assertion "Zéro Dette" sans panic
         if config.mount_points.system.domain.is_empty() {
+            // 🎯 FIX : Pas de 'return', la macro diverge
             raise_error!(
                 "ERR_TEST_ASSERTION_FAILED",
-                error = "Partition système non résolue"
+                error = "Partition système non résolue dans la configuration globale."
             );
         }
 

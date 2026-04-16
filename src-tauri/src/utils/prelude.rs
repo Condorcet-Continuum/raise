@@ -94,6 +94,32 @@ pub use crate::utils::data::{
     UnorderedMap, // 🎯 HashMap sémantique
 };
 
+// --- 5. INFÉRENCE & MACHINE LEARNING (Forteresse RAISE) ---
+// Ces exports masquent totalement l'écosystème ML (Candle, FastEmbed, Rayon)
+// au reste du projet pour garantir un couplage faible et une haute résilience.
+pub use crate::utils::inference::{
+    configure_parallel_pool, // Limiteur de ressources pour éviter d'étouffer l'OS
+    // ⚡ 5. Parallélisme CPU (Multi-threading)
+    execute_parallel_map, // Itération parallèle ultra-rapide et thread-safe
+    load_neural_weights,  // Charge les fichiers .safetensors sans risque de crash (mmap)
+
+    // 🛡️ 3. Fonctions d'Initialisation Sécurisées (Fail-Fast)
+    resolve_compute_device, // Alloue le meilleur GPU disponible avec fallback CPU
+    ComputeHardware,        // Matériel physique cible (CUDA, Metal, CPU)
+    // 🧬 1. Types Fondamentaux (Calcul Matriciel)
+    ComputeType, // Précision mathématique requise (ex: F32, F16)
+    DimIndex,    // Outil d'indexation pour manipuler les dimensions (D)
+
+    NeuralShape,  // Dimensions des matrices/tenseurs
+    NeuralTensor, // Structure de données cœur pour les calculs d'IA
+    // ⚖️ 2. Gestion des Modèles et Poids (NN)
+    NeuralWeightsBuilder, // Constructeur pour charger les paramètres d'un modèle
+    NeuralWeightsMap,     // Espace mémoire hébergeant les poids du réseau
+
+    // 🧠 4. Moteurs Sémantiques
+    TextEmbedder, // Générateur de vecteurs pour la recherche RAG
+};
+
 // --- 4. RÉSEAU & CONNECTIVITÉ ---
 pub use crate::utils::network::http_types::{
     run_http_server, HttpClient, HttpClientBuilder, HttpJsonPayload, HttpRouter, HttpStatusCode,

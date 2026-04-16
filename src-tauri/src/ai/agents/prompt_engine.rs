@@ -25,7 +25,6 @@ impl PromptEngine {
     /// Compile un prompt complet à partir de son ID ou de sa référence (URN) en DB.
     pub async fn compile(&self, prompt_id: &str, vars: Option<&JsonValue>) -> RaiseResult<String> {
         // 🎯 1. RÉSOLUTION DE L'URI (Smart Link)
-        // On détermine où se trouve physiquement le prompt demandé.
         let (target_space, target_db, target_col, target_id) = match parse_smart_link(prompt_id) {
             Some(SmartLink::Absolute {
                 space,
@@ -48,8 +47,17 @@ impl PromptEngine {
         // 🎯 2. INITIALISATION DYNAMIQUE DU MANAGER
         let manager = CollectionsManager::new(&self.db, target_space, target_db);
 
-        // 3. Récupération du document via Match exhaustif
-        let doc = match manager.get_document(target_col, target_id).await? {
+        // 🎯 3. Récupération du document via Match exhaustif (Zéro Dette)
+        let doc_opt = match manager.get_document(target_col, target_id).await {
+            Ok(d) => d,
+            Err(e) => raise_error!(
+                "ERR_PROMPT_DB_READ",
+                error = e,
+                context = json_value!({ "target_id": target_id, "target_col": target_col })
+            ),
+        };
+
+        let doc = match doc_opt {
             Some(d) => d,
             None => {
                 raise_error!(
@@ -64,7 +72,7 @@ impl PromptEngine {
         };
 
         // 🎯 4. Validation du contrat de variables (Fail-Fast)
-        if let Some(expected_vars) = doc["input_variables"].as_array() {
+        if let Some(expected_vars) = doc.get("input_variables").and_then(|v| v.as_array()) {
             let provided_vars = vars.and_then(|v| v.as_object());
             for var_name in expected_vars.iter().filter_map(|v| v.as_str()) {
                 if provided_vars.is_none_or(|obj| !obj.contains_key(var_name)) {
@@ -80,7 +88,7 @@ impl PromptEngine {
         }
 
         // 🎯 5. Extraction des champs OBLIGATOIRES (Zéro Dette)
-        let role = match doc["role"].as_str() {
+        let role = match doc.get("role").and_then(|v| v.as_str()) {
             Some(r) => r,
             None => raise_error!(
                 "ERR_PROMPT_CORRUPTION",
@@ -88,7 +96,11 @@ impl PromptEngine {
             ),
         };
 
-        let persona = match doc["identity"]["persona"].as_str() {
+        let persona = match doc
+            .get("identity")
+            .and_then(|i| i.get("persona"))
+            .and_then(|p| p.as_str())
+        {
             Some(p) => p,
             None => raise_error!(
                 "ERR_PROMPT_CORRUPTION",
@@ -96,7 +108,7 @@ impl PromptEngine {
             ),
         };
 
-        let mut environment = match doc["environment"].as_str() {
+        let mut environment = match doc.get("environment").and_then(|e| e.as_str()) {
             Some(e) => e.to_string(),
             None => raise_error!(
                 "ERR_PROMPT_CORRUPTION",
@@ -104,7 +116,7 @@ impl PromptEngine {
             ),
         };
 
-        let mut directives = match doc["directives"].as_array() {
+        let mut directives = match doc.get("directives").and_then(|d| d.as_array()) {
             Some(arr) => arr
                 .iter()
                 .filter_map(|v| v.as_str())
@@ -118,12 +130,15 @@ impl PromptEngine {
         };
 
         // 🎯 6. Extraction des champs OPTIONNELS (Sûr via unwrap_or)
-        let tone = doc["identity"]["tone"]
-            .as_str()
+        let tone = doc
+            .get("identity")
+            .and_then(|i| i.get("tone"))
+            .and_then(|t| t.as_str())
             .unwrap_or("professionnel et précis");
 
-        let constraints = doc["constraints"]
-            .as_array()
+        let constraints = doc
+            .get("constraints")
+            .and_then(|c| c.as_array())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.as_str())
@@ -133,7 +148,10 @@ impl PromptEngine {
             })
             .unwrap_or_default();
 
-        let format_instructions = doc["format_instructions"].as_str().unwrap_or_default();
+        let format_instructions = doc
+            .get("format_instructions")
+            .and_then(|f| f.as_str())
+            .unwrap_or_default();
 
         // 🎯 7. Hydratation (Remplacement des {{placeholders}})
         if let Some(v_obj) = vars.and_then(|v| v.as_object()) {
@@ -176,13 +194,12 @@ mod tests {
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_compile_prompt_success() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
-        // 🎯 FIX MOUNT POINTS
         let manager = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
@@ -197,8 +214,9 @@ mod tests {
             )
             .await?;
 
+        // 🎯 FIX : Utilisation stricte de insert_with_schema
         manager
-            .upsert_document(
+            .insert_with_schema(
                 "prompts",
                 json_value!({
                     "_id": "test_prompt",
@@ -227,14 +245,12 @@ mod tests {
     }
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_compile_prompt_with_absolute_smart_link() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
-        // 1. Configurer la base de données distante (Le domaine Système Central)
-        // On simule que le prompt est stocké dans le point de montage "Raise"
         let remote_space = &config.mount_points.raise.domain;
         let remote_db = &config.mount_points.raise.db;
 
@@ -248,8 +264,9 @@ mod tests {
             )
             .await?;
 
+        // 🎯 FIX : Utilisation stricte de insert_with_schema
         global_mgr
-            .upsert_document(
+            .insert_with_schema(
                 "prompts",
                 json_value!({
                     "_id": "prompt_global",
@@ -262,28 +279,25 @@ mod tests {
             )
             .await?;
 
-        // 2. Configurer le moteur sur un projet Workspace différent
         let engine = PromptEngine::new(
             sandbox.db.clone(),
             &config.mount_points.modeling.domain,
             &config.mount_points.modeling.db,
         );
 
-        // 3. Appel de compile avec l'URI absolue vers le point de montage Raise
         let prompt_uri = format!(
             "db://{}/{}/prompts/handle/prompt_global",
             remote_space, remote_db
         );
         let result = engine.compile(&prompt_uri, None).await?;
 
-        // 4. Vérifications
         assert!(result.contains("Architecte Global"));
         assert!(result.contains("Persona Central"));
         Ok(())
     }
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_err_prompt_missing_variable() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
@@ -301,10 +315,12 @@ mod tests {
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
             .await?;
+
+        // 🎯 FIX : Utilisation stricte de insert_with_schema
         manager
-            .insert_raw(
+            .insert_with_schema(
                 "prompts",
-                &json_value!({
+                json_value!({
                     "_id": "p_var",
                     "input_variables": ["user_name"],
                     "role": "Test",
@@ -324,7 +340,10 @@ mod tests {
 
         match result {
             Err(e) if e.to_string().contains("ERR_PROMPT_MISSING_VARIABLE") => Ok(()),
-            _ => panic!("Le moteur aurait dû détecter la variable manquante"),
+            _ => raise_error!(
+                "ERR_TEST_FAIL",
+                error = "Le moteur aurait dû détecter la variable manquante"
+            ),
         }
     }
 }

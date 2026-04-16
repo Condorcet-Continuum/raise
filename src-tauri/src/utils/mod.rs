@@ -9,6 +9,7 @@
 pub mod context;
 pub mod core;
 pub mod data;
+pub mod inference;
 pub mod io;
 pub mod network;
 pub mod prelude;

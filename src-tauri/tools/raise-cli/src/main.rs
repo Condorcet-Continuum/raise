@@ -4,7 +4,9 @@ use clap::{Parser, Subcommand};
 
 // On garde le module local des commandes
 mod commands;
-
+use raise::ai::agents::AgentContext;
+use raise::ai::orchestrator::AiOrchestrator;
+use raise::model_engine::types::ProjectModel;
 use raise::{
     json_db::{
         collections::manager::CollectionsManager,
@@ -22,6 +24,7 @@ pub struct CliContext {
     pub config: &'static AppConfig,
     pub session_mgr: context::SessionManager,
     pub storage: SharedRef<StorageEngine>,
+    pub orchestrator: Option<SharedRef<AsyncMutex<AiOrchestrator>>>,
     pub active_user: String,
     pub active_domain: String,
     pub active_db: String,
@@ -187,11 +190,31 @@ async fn main() -> RaiseResult<()> {
     let sim_domain = cli.sim_domain.unwrap_or_else(|| "sim_mbse2".to_string());
     let sim_db = cli.sim_db.unwrap_or_else(|| "sim_raise".to_string());
 
+    // 🧠 INITIALISATION DE L'ORCHESTRATEUR IA
+    // On utilise le manager système pour résoudre les configurations des moteurs
+    let orchestrator = match AiOrchestrator::new(
+        ProjectModel::default(),
+        &system_mgr,
+        storage.clone(),
+    )
+    .await
+    {
+        Ok(orch) => Some(SharedRef::new(AsyncMutex::new(orch))),
+        Err(e) => {
+            user_warn!(
+                "CLI_AI_OFFLINE",
+                json_value!({"error": e.to_string(), "hint": "Le CLI fonctionnera en mode dégradé (Sans IA)."})
+            );
+            None // 🎯 FIX : Pas de crash, on continue sans IA
+        }
+    };
+
     // 6. CRÉATION DU CONTEXTE UNIFIÉ
     let ctx = CliContext {
         config,
         session_mgr,
         storage,
+        orchestrator,
         active_user,
         active_domain,
         active_db,
@@ -329,7 +352,9 @@ async fn run_global_shell(mut ctx: CliContext) -> RaiseResult<()> {
                             }
                         }
                     }
-                    Err(e) => eprintln!("❌ Erreur de syntaxe : {}", e),
+                    Err(e) => {
+                        user_error!("CLI_SYNTAX_ERROR", json_value!({"error": e.to_string()}))
+                    }
                 }
             }
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
@@ -366,6 +391,56 @@ async fn execute_command(cmd: Commands, ctx: CliContext) -> RaiseResult<()> {
     }
 }
 
+// ============================================================================
+// 🎯 LOGIQUE MÉTIER DU CONTEXTE CLI
+// ============================================================================
+impl CliContext {
+    /// 🎯 BRIDGE : Transforme le contexte CLI en un contexte d'Agent prêt à l'emploi.
+    /// Cette méthode résout les chemins physiques et la session active pour l'IA.
+    pub async fn to_agent_context(&self, agent_id: &str) -> RaiseResult<AgentContext> {
+        // Extraction sécurisée de l'orchestrateur
+        let orch_ref = self.orchestrator.as_ref().ok_or_else(|| {
+            build_error!(
+                "ERR_AI_OFFLINE",
+                error = "L'orchestrateur IA n'est pas initialisé."
+            )
+        })?;
+
+        let orch = orch_ref.lock().await;
+
+        let session = self
+            .session_mgr
+            .get_current_session()
+            .await
+            .ok_or_else(|| build_error!("ERR_CLI_NO_SESSION", error = "Session active requise."))?;
+
+        let domain_path = self.config.get_path("PATH_RAISE_DOMAIN").ok_or_else(|| {
+            build_error!("ERR_CLI_CONFIG_PATH", error = "PATH_RAISE_DOMAIN manquant.")
+        })?;
+
+        let dataset_path = self
+            .config
+            .get_path("PATH_RAISE_DATASET")
+            .unwrap_or_else(|| domain_path.join("dataset"));
+
+        // 🎯 Forge du contexte en utilisant les moteurs de l'orchestrateur
+        Ok(AgentContext::new(
+            agent_id,
+            &session.id,
+            self.storage.clone(),
+            orch.llm.clone(),          // 🎯 Réutilisation du client LLM chargé
+            orch.world_engine.clone(), // 🎯 Réutilisation du World Model chargé
+            domain_path,
+            dataset_path,
+        )
+        .await)
+    }
+}
+
+// =========================================================================
+// TESTS UNITAIRES (Conformité « Zéro Dette »)
+// =========================================================================
+
 #[cfg(test)]
 impl CliContext {
     pub fn mock(
@@ -377,6 +452,7 @@ impl CliContext {
             config,
             session_mgr,
             storage,
+            orchestrator: None,
             active_user: "mock_user".to_string(),
             active_domain: "mock_domain".to_string(),
             active_db: "mock_db".to_string(),
@@ -394,11 +470,13 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
+    #[serial_test::serial]
     fn verify_cli_structure() {
         Cli::command().debug_assert();
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_dispatch_ai() -> RaiseResult<()> {
         let args = vec!["raise-cli", "ai"];
 
@@ -418,6 +496,7 @@ mod tests {
 
     /// 🎯 NOUVEAU TEST : Résilience de la résolution des Mount Points
     #[test]
+    #[serial_test::serial]
     fn test_mount_point_resolution_integrity() -> RaiseResult<()> {
         let config = AppConfig::get();
 

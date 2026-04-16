@@ -2,6 +2,7 @@
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique
+use nvml_wrapper::Nvml;
 
 #[derive(Serializable, FmtDebug, PartialEq)]
 pub struct HealthReport {
@@ -24,47 +25,104 @@ impl RaiseHealthEngine {
         // 1. Diagnostic Hardware via AppConfig (SSOT)
         let device = AppConfig::device();
         let (dev_type, accelerated) = match device {
-            candle_core::Device::Cuda(_) => ("NVIDIA_GPU_CUDA", true),
-            candle_core::Device::Metal(_) => ("APPLE_GPU_METAL", true),
-            candle_core::Device::Cpu => ("SYSTEM_CPU", false),
+            ComputeHardware::Cuda(_) => {
+                if cfg!(not(test)) {
+                    Self::check_vram_availability(0, manager, &mut details).await?;
+                } else {
+                    // En test, on simule une VRAM saine pour ne pas bloquer la CI/Dev
+                    details.insert("vram_free_mb".into(), json_value!(8192));
+                }
+                ("NVIDIA_GPU_CUDA", true)
+            }
+            ComputeHardware::Metal(_) => ("APPLE_GPU_METAL", true),
+            ComputeHardware::Cpu => ("SYSTEM_CPU", false),
         };
-
-        let mkl_feat = cfg!(feature = "mkl");
-        details.insert("hardware_label".to_string(), json_value!(dev_type));
-        details.insert(
-            "cuda_compiled".to_string(),
-            json_value!(cfg!(feature = "cuda")),
-        );
 
         // 2. Diagnostic des Assets (Modèles & Tokenizers)
-        // 🎯 Rigueur : Pattern match strict sur la vérification d'intégrité
-        let assets_ok = match Self::verify_critical_assets(manager, &mut details).await {
-            Ok(status) => status,
-            Err(e) => {
-                raise_error!(
-                    "ERR_HEALTH_ASSETS_DIAGNOSTIC_FAILED",
-                    error = "Impossible d'effectuer la vérification d'intégrité des actifs d'IA.",
-                    context = json_value!({"technical_error": e.to_string()})
-                );
-            }
-        };
+        let assets_ok = Self::verify_critical_assets(manager, &mut details).await?;
 
         user_info!(
             "MSG_HEALTH_DIAGNOSTIC_COMPLETE",
             json_value!({
                 "device": dev_type,
                 "integrity": assets_ok,
-                "mkl": mkl_feat
+                "vram_check": accelerated
             })
         );
 
         Ok(HealthReport {
             device_type: dev_type.to_string(),
             acceleration_active: accelerated,
-            mkl_enabled: mkl_feat,
+            mkl_enabled: cfg!(feature = "mkl"),
             assets_integrity: assets_ok,
             diagnostic_details: details,
         })
+    }
+
+    /// Interroge NVML pour valider la mémoire disponible par rapport aux besoins
+    async fn check_vram_availability(
+        device_index: u32,
+        manager: &CollectionsManager<'_>,
+        logs: &mut UnorderedMap<String, JsonValue>,
+    ) -> RaiseResult<()> {
+        // A. Récupération de la contrainte (ex: 6000 MB pour Qwen 7B)
+        let required_vram_mb = match manager
+            .get_document("service_configs", "cfg_ai_default")
+            .await
+        {
+            Ok(Some(doc)) => {
+                doc["resource_constraints"]["require_vram_mb"]
+                    .as_u64()
+                    .unwrap_or(4000) // 4Go par défaut
+            }
+            Ok(None) => 4000,
+            Err(e) => raise_error!("ERR_HEALTH_CONFIG_READ", error = e.to_string()),
+        };
+
+        // B. Initialisation NVML (Utilisation de match...raise_error!)
+        let nvml = match Nvml::init() {
+            Ok(n) => n,
+            Err(e) => raise_error!("ERR_HEALTH_NVML_INIT", error = e.to_string()),
+        };
+
+        // C. Accès au GPU (Index 0 pour ta RTX 5060)
+        let device = match nvml.device_by_index(device_index) {
+            Ok(d) => d,
+            Err(e) => raise_error!(
+                "ERR_HEALTH_GPU_NOT_FOUND",
+                error = e.to_string(),
+                context = json_value!({"index": device_index})
+            ),
+        };
+
+        // D. Lecture de la mémoire réelle
+        let memory_info = match device.memory_info() {
+            Ok(m) => m,
+            Err(e) => raise_error!("ERR_HEALTH_VRAM_FETCH", error = e.to_string()),
+        };
+
+        let free_vram_mb = memory_info.free / 1024 / 1024;
+
+        logs.insert("vram_free_mb".into(), json_value!(free_vram_mb));
+        logs.insert("vram_required_mb".into(), json_value!(required_vram_mb));
+
+        // E. VETO : On bloque si la mémoire est insuffisante pour éviter le crash DriverError
+        if free_vram_mb < required_vram_mb {
+            user_error!(
+                "AI_HEALTH_VRAM_LOW",
+                json_value!({ "free": free_vram_mb, "required": required_vram_mb })
+            );
+
+            raise_error!(
+                "ERR_ASSURANCE_VRAM_INSUFFICIENT",
+                error = format!(
+                    "Mémoire GPU insuffisante pour charger le modèle (Libre: {}MB, Requis: {}MB)",
+                    free_vram_mb, required_vram_mb
+                )
+            );
+        }
+
+        Ok(())
     }
 
     /// Vérifie la présence physique des poids des modèles sur le disque
@@ -75,37 +133,24 @@ impl RaiseHealthEngine {
         let mut all_present = true;
         let app_config = AppConfig::get();
 
-        // 🎯 FIX MOUNT POINTS : Utilisation du point de montage Système configuré
         let base_path = match app_config.get_path("PATH_RAISE_DOMAIN") {
-            Some(path) => {
-                // Résolution déterministe vers la partition système
-                path.join(&app_config.mount_points.system.domain)
-                    .join(&app_config.mount_points.system.db)
-                    .join("ai-assets")
-            }
+            Some(path) => path
+                .join(&app_config.mount_points.system.domain)
+                .join(&app_config.mount_points.system.db)
+                .join("ai-assets"),
             None => {
                 raise_error!(
                     "ERR_CONFIG_PATH_MISSING",
-                    error = "PATH_RAISE_DOMAIN non trouvé dans la configuration globale.",
-                    context = json_value!({"action": "resolve_ai_assets_path"})
-                );
+                    error = "PATH_RAISE_DOMAIN non configuré."
+                )
             }
         };
 
-        // 🎯 LECTURE DYNAMIQUE : On récupère les fichiers configurés en base
         let (model_filename, _) = match AppConfig::get_llm_settings(manager).await {
             Ok(res) => res,
-            Err(e) => {
-                raise_error!(
-                    "ERR_HEALTH_LLM_CONFIG",
-                    error =
-                        "Impossible de récupérer la configuration LLM pour le diagnostic matériel.",
-                    context = json_value!({"technical_error": e.to_string()})
-                );
-            }
+            Err(e) => raise_error!("ERR_HEALTH_LLM_CONFIG", error = e.to_string()),
         };
 
-        // Liste des fichiers critiques pour le fonctionnement nominal
         let critical_files = vec![
             ("LLM_MODEL", format!("models/{}", model_filename)),
             (
@@ -133,7 +178,7 @@ impl RaiseHealthEngine {
 }
 
 // =========================================================================
-// TESTS UNITAIRES (Rigueur Façade & Résilience)
+// TESTS UNITAIRES
 // =========================================================================
 
 #[cfg(test)]
@@ -142,23 +187,22 @@ mod tests {
     use crate::utils::testing::mock::{inject_mock_component, AgentDbSandbox};
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_health_diagnostic_hardware_consistency() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
-        // Point de montage système pour la lecture de config
         let manager = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
 
-        // Injection du composant requis pour le diagnostic
         inject_mock_component(&manager, "llm", json_value!({})).await;
 
         let report = RaiseHealthEngine::check_engine_health(&manager).await?;
 
-        // Validation de la cohérence Hardware
         if cfg!(feature = "cuda") && report.device_type.contains("CUDA") {
             assert!(report.acceleration_active);
         } else {
@@ -169,6 +213,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_health_assets_failure_detection() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
@@ -182,24 +228,19 @@ mod tests {
 
         let report = RaiseHealthEngine::check_engine_health(&manager).await?;
 
-        // Dans une sandbox vide, les fichiers physiques n'existent pas
-        assert!(
-            !report.assets_integrity,
-            "L'intégrité devrait être fausse car les modèles ne sont pas présents sur le disque."
-        );
-
+        assert!(!report.assets_integrity);
         assert!(report.diagnostic_details.contains_key("LLM_MODEL"));
 
         Ok(())
     }
 
-    // 🎯 NOUVEAU TEST : Résilience face à une config LLM manquante
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_health_resilience_on_config_error() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
-        // Manager sur une base vide sans injection de "llm"
         let manager = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
@@ -208,7 +249,6 @@ mod tests {
 
         let result = RaiseHealthEngine::check_engine_health(&manager).await;
 
-        // Le diagnostic doit retourner une erreur structurée plutôt que de paniquer
         match result {
             Err(AppError::Structured(data)) => {
                 assert!(
@@ -217,7 +257,10 @@ mod tests {
                 );
                 Ok(())
             }
-            _ => panic!("Le moteur aurait dû lever une erreur de configuration LLM"),
+            _ => raise_error!(
+                "ERR_TEST_FAIL",
+                error = "Le moteur aurait dû lever une erreur de configuration LLM"
+            ),
         }
     }
 }

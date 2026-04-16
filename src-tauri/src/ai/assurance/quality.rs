@@ -1,20 +1,23 @@
+// FICHIER : src-tauri/src/ai/assurance/quality.rs
+
 use crate::utils::prelude::*;
 
-/// Catégorie de la métrique mesurée
+/// 📈 CATÉGORIES DE MÉTRIQUES D'ASSURANCE
+/// Définit l'axe d'évaluation conforme à la norme DO-178C / AI Act.
 #[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum MetricCategory {
     Performance, // Précision, Rappel, F1-Score...
-    Robustness,  // Stabilité face au bruit
-    Fairness,    // Biais
-    Efficiency,  // Latence, CPU
+    Robustness,  // Stabilité face au bruit ou données hors-distribution
+    Fairness,    // Détection de biais sémantiques
+    Efficiency,  // Latence, consommation VRAM (Critique pour limite 8 Go)
 }
 
-/// Statut global du rapport de qualité
+/// 🚥 STATUT DE CONFORMITÉ
 #[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum QualityStatus {
-    Pass,    // Succès total
-    Warning, // Succès mitigé
-    Fail,    // Échec critique
+    Pass,    // Conforme aux exigences de sécurité
+    Warning, // Dérive mineure détectée
+    Fail,    // Échec critique - nécessite une intervention humaine (HITL)
 }
 
 #[derive(Debug, Serializable, Deserializable, Clone)]
@@ -28,6 +31,8 @@ pub struct QualityMetric {
     pub passed: bool,
 }
 
+/// 📄 RAPPORT DE QUALITÉ (Artefact de Gouvernance)
+/// Cet objet est destiné à être hydraté en JSON-LD pour le Knowledge Graph.
 #[derive(Debug, Serializable, Deserializable, Clone)]
 pub struct QualityReport {
     #[serde(rename = "_id")]
@@ -37,7 +42,7 @@ pub struct QualityReport {
     pub timestamp: i64,
     pub metrics: Vec<QualityMetric>,
     pub overall_status: QualityStatus,
-    /// Score global calculé (0.0 à 100.0)
+    /// Score global (0.0 à 100.0)
     pub global_score: f64,
 }
 
@@ -54,6 +59,7 @@ impl QualityReport {
         }
     }
 
+    /// Ajoute une métrique et déclenche la réévaluation automatique du statut.
     pub fn add_metric(
         &mut self,
         name: &str,
@@ -88,7 +94,15 @@ impl QualityReport {
         self.evaluate_status();
     }
 
+    /// Calcule l'état de santé global du modèle.
+    /// 🎯 LOGIQUE : Un seul échec critique (is_critical: true) entraîne un statut FAIL.
     fn evaluate_status(&mut self) {
+        if self.metrics.is_empty() {
+            self.overall_status = QualityStatus::Warning;
+            self.global_score = 0.0;
+            return;
+        }
+
         let has_critical_failure = self.metrics.iter().any(|m| m.is_critical && !m.passed);
         let has_minor_failure = self.metrics.iter().any(|m| !m.is_critical && !m.passed);
 
@@ -100,14 +114,8 @@ impl QualityReport {
             QualityStatus::Pass
         };
 
-        // Calcul du score global simple (Ratio de succès pondéré par la criticité ?)
-        // Ici simple ratio de succès pour l'exemple
-        if self.metrics.is_empty() {
-            self.global_score = 0.0;
-        } else {
-            let passed_count = self.metrics.iter().filter(|m| m.passed).count();
-            self.global_score = (passed_count as f64 / self.metrics.len() as f64) * 100.0;
-        }
+        let passed_count = self.metrics.iter().filter(|m| m.passed).count();
+        self.global_score = (passed_count as f64 / self.metrics.len() as f64) * 100.0;
     }
 }
 
@@ -116,31 +124,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quality_scoring() {
+    #[serial_test::serial]
+    fn test_quality_scoring_integrity() {
         let mut report = QualityReport::new("test_model", "v1");
 
-        // 1. Succès Critique (1/1 -> 100%)
+        // Cas 1 : Succès nominal
         report.add_metric(
-            "Acc",
+            "Accuracy",
             MetricCategory::Performance,
-            0.9,
-            Some(0.8),
+            0.95,
+            Some(0.9),
             None,
             true,
         );
         assert_eq!(report.overall_status, QualityStatus::Pass);
         assert_eq!(report.global_score, 100.0);
 
-        // 2. Échec Mineur (1/2 -> 50%)
+        // Cas 2 : Échec mineur (Warning)
         report.add_metric(
-            "Lat",
+            "Latency",
             MetricCategory::Efficiency,
-            100.0,
+            120.0,
             None,
-            Some(50.0),
+            Some(100.0),
             false,
         );
         assert_eq!(report.overall_status, QualityStatus::Warning);
-        assert_eq!(report.global_score, 50.0);
+        assert!((report.global_score - 50.0).abs() < f64::EPSILON);
     }
 }

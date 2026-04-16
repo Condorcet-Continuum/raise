@@ -64,7 +64,6 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
-    use candle_nn::VarMap;
 
     #[async_test]
     #[serial_test::serial]
@@ -93,7 +92,7 @@ mod tests {
         let wm_config = crate::utils::data::config::WorldModelConfig::default();
 
         // 🎯 Rigueur : Match sur la création du World Model
-        let world_engine = match NeuroSymbolicEngine::new(wm_config, VarMap::new()) {
+        let world_engine = match NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new()) {
             Ok(engine) => SharedRef::new(engine),
             Err(e) => panic!("Échec de l'initialisation du NeuroSymbolicEngine : {:?}", e),
         };
@@ -136,7 +135,7 @@ mod tests {
         };
 
         let wm_config = crate::utils::data::config::WorldModelConfig::default();
-        let world_engine = match NeuroSymbolicEngine::new(wm_config, VarMap::new()) {
+        let world_engine = match NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new()) {
             Ok(engine) => SharedRef::new(engine),
             Err(e) => panic!("Échec Neuro : {:?}", e),
         };
