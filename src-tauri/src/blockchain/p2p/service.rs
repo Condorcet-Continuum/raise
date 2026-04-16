@@ -85,22 +85,20 @@ pub fn spawn_p2p_service(
                             let mut engine = consensus_state.lock().await; // 🎯 consensus_state est utilisé !
 
                             match net_msg {
-                                ArcadiaNetMessage::AnnounceCommit(commit) => {
-                                    if engine.verify_authority(&commit) {
-                                        let _ = engine.register_proposal(commit.clone());
+                                ArcadiaNetMessage::AnnounceCommit(commit) if engine.verify_authority(&commit) => {
+                                    let _ = engine.register_proposal(commit.clone());
 
-                                        // On génère notre vote
-                                        let my_vote = Vote {
-                                            commit_id: commit.id.clone(),
-                                            validator_key: local_peer_id.clone(),
-                                            signature: vec![1, 0, 1, 0], // Simulation signature
-                                        };
+                                    // On génère notre vote
+                                    let my_vote = Vote {
+                                        commit_id: commit.id.clone(),
+                                        validator_key: local_peer_id.clone(),
+                                        signature: vec![1, 0, 1, 0], // Simulation signature
+                                    };
 
-                                        // On publie notre vote sur le réseau
-                                        if let Ok(vote_data) = json::serialize_to_bytes(&ArcadiaNetMessage::SubmitVote(my_vote)) {
-                                            let topic = libp2p::gossipsub::IdentTopic::new("arcadia-consensus");
-                                            let _ = swarm.behaviour_mut().gossipsub.publish(topic, vote_data);
-                                        }
+                                    // On publie notre vote sur le réseau
+                                    if let Ok(vote_data) = json::serialize_to_bytes(&ArcadiaNetMessage::SubmitVote(my_vote)) {
+                                        let topic = libp2p::gossipsub::IdentTopic::new("arcadia-consensus");
+                                        let _ = swarm.behaviour_mut().gossipsub.publish(topic, vote_data);
                                     }
                                 },
                                 ArcadiaNetMessage::SubmitVote(vote) => {

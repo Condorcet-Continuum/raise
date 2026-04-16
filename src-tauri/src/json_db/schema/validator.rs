@@ -244,10 +244,8 @@ fn validate_node(
                     raise_type_error("integer", instance)?;
                 }
             }
-            "boolean" => {
-                if !instance.is_boolean() {
-                    raise_type_error("boolean", instance)?;
-                }
+            "boolean" if !instance.is_boolean() => {
+                raise_type_error("boolean", instance)?;
             }
             "array" => {
                 if instance.is_array() {
@@ -256,10 +254,8 @@ fn validate_node(
                     raise_type_error("array", instance)?;
                 }
             }
-            "null" => {
-                if !instance.is_null() {
-                    raise_type_error("null", instance)?;
-                }
+            "null" if !instance.is_null() => {
+                raise_type_error("null", instance)?;
             }
             _ => {}
         }
