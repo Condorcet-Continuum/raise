@@ -6,8 +6,6 @@ use crate::ai::deep_learning::{
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 use crate::utils::prelude::*; // 🎯 Utilisation stricte de la façade RAISE
-use candle_core::{DType, Tensor};
-use candle_nn::{VarBuilder, VarMap};
 
 /// 🔍 Fonction interne : Récupère les métadonnées depuis JSON-DB et résout dynamiquement le chemin des tenseurs.
 async fn fetch_model_metadata(
@@ -15,7 +13,7 @@ async fn fetch_model_metadata(
     domain: &str,
     db: &str,
     urn: &str,
-) -> RaiseResult<(DeepLearningConfig, PathBuf, VarMap)> {
+) -> RaiseResult<(DeepLearningConfig, PathBuf, NeuralWeightsMap)> {
     // 1. Décodage de l'URN via Match strict
     let (col, field, val) = if urn.starts_with("ref:") {
         let parts: Vec<&str> = urn.splitn(4, ':').collect();
@@ -115,11 +113,18 @@ async fn fetch_model_metadata(
         .join(format!("{}.safetensors", model_id));
 
     // 5. ZÉRO SETUP : Auto-création résiliente du répertoire binaire
+    // 5. ZÉRO SETUP : Auto-création résiliente du répertoire binaire
     if let Some(parent) = weights_path.parent() {
-        fs::ensure_dir_async(parent).await?;
+        if let Err(e) = fs::ensure_dir_async(parent).await {
+            raise_error!(
+                "ERR_DL_FS_MKDIR",
+                error = e.to_string(),
+                context = json_value!({"path": parent.to_string_lossy()})
+            );
+        }
     }
 
-    let mut varmap = VarMap::new();
+    let mut varmap = NeuralWeightsMap::new();
     let device = AppConfig::device(); // 🎯 Façade centralisée pour CUDA/CPU
 
     // 6. Chargement ou Initialisation à froid (Cold Start)
@@ -136,7 +141,7 @@ async fn fetch_model_metadata(
             }
         }
     } else {
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device);
         match SequenceNet::new(
             config.input_size,
             config.hidden_size,
@@ -184,7 +189,7 @@ pub async fn train_model_semantic(
     }
 
     let device = AppConfig::device();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+    let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device);
 
     let model = match SequenceNet::new(
         config.input_size,
@@ -201,12 +206,12 @@ pub async fn train_model_semantic(
         Err(e) => raise_error!("ERR_DL_TRAINER_INIT", error = e.to_string()),
     };
 
-    let t_in = match Tensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
+    let t_in = match NeuralTensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
         Ok(t) => t,
         Err(e) => raise_error!("ERR_DL_TENSOR_IN", error = e.to_string()),
     };
 
-    let t_tgt = match Tensor::from_vec(vec![target_class], (1usize, 1usize), device) {
+    let t_tgt = match NeuralTensor::from_vec(vec![target_class], (1usize, 1usize), device) {
         Ok(t) => t,
         Err(e) => raise_error!("ERR_DL_TENSOR_TGT", error = e.to_string()),
     };
@@ -252,7 +257,7 @@ pub async fn predict_semantic(
         Err(e) => raise_error!("ERR_DL_LOAD", error = e.to_string()),
     };
 
-    let t_in = match Tensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
+    let t_in = match NeuralTensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
         Ok(t) => t,
         Err(e) => raise_error!("ERR_DL_TENSOR_IN", error = e.to_string()),
     };

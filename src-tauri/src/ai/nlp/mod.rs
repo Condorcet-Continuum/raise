@@ -4,7 +4,7 @@
 pub mod embeddings;
 pub mod preprocessing; // Nettoyage de texte
 pub mod splitting; // Découpage en chunks (text-splitter)
-pub mod tokenizers; // Découpage en mots // Vectorisation (Candle/BERT)
+pub mod tokenizers; // Découpage en mots // Vectorisation (NativeEngine/BERT)
 
 // Modules d'analyse sémantique (Nouveaux)
 pub mod entity_extractor; // Extraction de noms

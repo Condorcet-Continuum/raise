@@ -1,21 +1,15 @@
-// FICHIER : src-tauri/src/ai/llm/candle_engine.rs
+// FICHIER : src-tauri/src/ai/llm/native_engine.rs
 
 use crate::utils::prelude::*; // 🎯 Façade Unique
 
-use candle_core::quantized::gguf_file;
-use candle_core::{Device, Tensor};
-use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::quantized_qwen2 as model;
-use tokenizers::Tokenizer;
-
-pub struct CandleLlmEngine {
-    model: model::ModelWeights,
-    tokenizer: Tokenizer,
-    device: Device,
-    logits_processor: LogitsProcessor,
+pub struct NativeTensorEngine {
+    model: Qwen2QuantizedModel::ModelWeights,
+    tokenizer: TextTokenizer,
+    device: ComputeHardware,
+    logits_processor: TokenLogitsProcessor,
 }
 
-impl CandleLlmEngine {
+impl NativeTensorEngine {
     /// Initialise le moteur LLM local en respectant les points de montage et la config dynamique.
     pub async fn new(
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
@@ -71,8 +65,8 @@ impl CandleLlmEngine {
             json_value!({ "model": model_filename, "device": format!("{:?}", device) })
         );
 
-        // 5. Chargement sécurisé du Tokenizer
-        let tokenizer = match tokenizers::Tokenizer::from_file(&tokenizer_path) {
+        // 5. Chargement sécurisé du TextTokenizer
+        let tokenizer = match TextTokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,
             Err(e) => raise_error!(
                 "ERR_AI_TOKENIZER_LOAD_FAILED",
@@ -91,22 +85,23 @@ impl CandleLlmEngine {
             ),
         };
 
-        let model_content = match gguf_file::Content::read(&mut file) {
+        let model_content = match GgufFileFormat::Content::read(&mut file) {
             Ok(m) => m,
             Err(e) => raise_error!("ERR_AI_MODEL_READ_CONTENT", error = e.to_string()),
         };
 
         // 7. Instanciation des poids neuronaux
-        let weights = match model::ModelWeights::from_gguf(model_content, &mut file, &device) {
-            Ok(w) => w,
-            Err(e) => raise_error!("ERR_AI_QWEN2_WEIGHTS_LOAD", error = e.to_string()),
-        };
+        let weights =
+            match Qwen2QuantizedModel::ModelWeights::from_gguf(model_content, &mut file, &device) {
+                Ok(w) => w,
+                Err(e) => raise_error!("ERR_AI_QWEN2_WEIGHTS_LOAD", error = e.to_string()),
+            };
 
         Ok(Self {
             model: weights,
             tokenizer,
             device,
-            logits_processor: LogitsProcessor::new(299792458, Some(0.7), None),
+            logits_processor: TokenLogitsProcessor::new(299792458, Some(0.7), None),
         })
     }
 
@@ -152,7 +147,7 @@ impl CandleLlmEngine {
             let context_size = if index_pos == 0 { tokens.len() } else { 1 };
             let start_pos = tokens.len().saturating_sub(context_size);
 
-            let input = match Tensor::new(&tokens[start_pos..], &self.device) {
+            let input = match NeuralTensor::new(&tokens[start_pos..], &self.device) {
                 Ok(t) => t,
                 Err(e) => raise_error!("ERR_AI_TENSOR_INPUT_FAILED", error = e.to_string()),
             };
@@ -172,7 +167,7 @@ impl CandleLlmEngine {
                 Err(e) => raise_error!("ERR_AI_TENSOR_REDUCTION_FAILED", error = e.to_string()),
             };
 
-            let logits = match logits.to_dtype(candle_core::DType::F32) {
+            let logits = match logits.to_dtype(ComputeType::F32) {
                 Ok(l) => l,
                 Err(e) => raise_error!("ERR_AI_DTYPE_CONVERSION_FAILED", error = e.to_string()),
             };
@@ -212,7 +207,7 @@ mod tests {
         let sys = "Sys";
         let user = "User";
         let expected = "<|im_start|>system\nSys<|im_end|>\n<|im_start|>user\nUser<|im_end|>\n<|im_start|>assistant\n";
-        assert_eq!(CandleLlmEngine::format_prompt(sys, user), expected);
+        assert_eq!(NativeTensorEngine::format_prompt(sys, user), expected);
     }
 
     #[async_test]
@@ -230,7 +225,7 @@ mod tests {
 
         inject_mock_component(&manager, "llm", json_value!({})).await;
 
-        let mut engine = CandleLlmEngine::new(&manager).await?;
+        let mut engine = NativeTensorEngine::new(&manager).await?;
         let response = engine.generate("Réponds 'OK'.", "Test", 5)?;
 
         assert!(!response.is_empty());
@@ -260,7 +255,7 @@ mod tests {
         )
         .await;
 
-        let result = CandleLlmEngine::new(&manager).await;
+        let result = NativeTensorEngine::new(&manager).await;
 
         match result {
             Err(AppError::Structured(err)) => {

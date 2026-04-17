@@ -7,9 +7,6 @@ use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 // Import Moteur Natif
 use crate::ai::llm::NativeLlmState;
 
-use candle_core::{DType, Tensor};
-use candle_nn::{VarBuilder, VarMap};
-
 // Imports World Model
 use crate::ai::nlp::parser::CommandType;
 use crate::model_engine::types::{ArcadiaElement, NameType};
@@ -293,18 +290,18 @@ pub async fn validate_arcadia_gnn(
         }
     }
 
-    let edge_src = match Tensor::new(src_indices, device) {
+    let edge_src = match NeuralTensor::new(src_indices, device) {
         Ok(tensor) => tensor,
         Err(e) => raise_error!("ERR_GNN_TENSOR_SRC", error = e.to_string()),
     };
 
-    let edge_dst = match Tensor::new(dst_indices, device) {
+    let edge_dst = match NeuralTensor::new(dst_indices, device) {
         Ok(tensor) => tensor,
         Err(e) => raise_error!("ERR_GNN_TENSOR_DST", error = e.to_string()),
     };
 
-    let varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+    let varmap = NeuralWeightsMap::new();
+    let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device);
 
     let in_dim = match features.matrix.dims().get(1) {
         Some(&d) => d,
@@ -400,7 +397,7 @@ mod tests_gnn_cmd {
     async fn test_ai_commands_device_ssot() -> RaiseResult<()> {
         let _sandbox = AgentDbSandbox::new().await;
         let device = AppConfig::device();
-        // Le périphérique doit être valide pour Candle
+        // Le périphérique doit être valide pour le moteur natif
         assert!(device.is_cpu() || device.is_cuda() || device.is_metal());
         Ok(())
     }

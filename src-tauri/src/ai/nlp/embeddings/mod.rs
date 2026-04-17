@@ -3,13 +3,13 @@
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique
 
-pub mod candle;
 pub mod fast;
+pub mod native_nlp;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EngineType {
-    FastEmbed,
-    Candle,
+    Lightweight,
+    Native,
 }
 
 pub struct EmbeddingEngine {
@@ -17,33 +17,33 @@ pub struct EmbeddingEngine {
 }
 
 enum EngineImplementation {
-    Fast(Box<fast::FastEmbedEngine>),
-    Candle(Box<candle::CandleEngine>),
+    Lightweight(Box<fast::FastEmbedEngine>),
+    Native(Box<native_nlp::NativeNlpEngine>),
 }
 
 impl EmbeddingEngine {
     /// Initialise le moteur d'embeddings en respectant les points de montage système.
-    /// Tente d'abord le moteur natif (Candle) avant de basculer sur FastEmbed en cas d'échec.
+    /// Tente d'abord le moteur natif   avant de basculer sur Lightweight en cas d'échec.
     pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         user_info!(
             "MSG_NLP_ENGINE_INIT_START",
-            json_value!({ "action": "attempt_native_candle_init" })
+            json_value!({ "action": "attempt_native_nlp_init" })
         );
 
-        // Tentative d'initialisation sur le moteur Candle (Performance maximale)
-        match Self::new_with_type(EngineType::Candle, manager).await {
+        // Tentative d'initialisation sur le moteur Native (Performance maximale)
+        match Self::new_with_type(EngineType::Native, manager).await {
             Ok(engine) => Ok(engine),
             Err(e) => {
-                // Bascule automatique vers FastEmbed (CPU/ONNX) en cas d'échec matériel ou logiciel
+                // Bascule automatique vers Lightweight (CPU/ONNX) en cas d'échec matériel ou logiciel
                 user_warn!(
-                    "WRN_NLP_CANDLE_FALLBACK",
+                    "WRN_NLP_NATIVE_FALLBACK",
                     json_value!({
                         "error": e.to_string(),
                         "action": "fallback_to_fastembed",
-                        "hint": "Candle indisponible (GPU/Poids manquants). Utilisation du backend CPU FastEmbed."
+                        "hint": "NLP Native indisponible (GPU/Poids manquants). Utilisation du backend CPU Lightweight."
                     })
                 );
-                Self::new_with_type(EngineType::FastEmbed, manager).await
+                Self::new_with_type(EngineType::Lightweight, manager).await
             }
         }
     }
@@ -54,23 +54,23 @@ impl EmbeddingEngine {
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
         let inner = match engine_type {
-            EngineType::FastEmbed => {
+            EngineType::Lightweight => {
                 user_info!(
                     "MSG_NLP_ENGINE_TYPE_ACTIVE",
-                    json_value!({ "type": "FastEmbed", "backend": "ONNX/CPU" })
+                    json_value!({ "type": "Lightweight", "backend": "ONNX/CPU" })
                 );
                 // 🎯 Match strict sur l'initialisation asynchrone
                 let fast_engine = fast::FastEmbedEngine::new(manager).await?;
-                EngineImplementation::Fast(Box::new(fast_engine))
+                EngineImplementation::Lightweight(Box::new(fast_engine))
             }
-            EngineType::Candle => {
+            EngineType::Native => {
                 user_info!(
                     "MSG_NLP_ENGINE_TYPE_ACTIVE",
-                    json_value!({ "type": "Candle", "backend": "BERT/Native" })
+                    json_value!({ "type": "Native", "backend": "BERT/Native" })
                 );
                 // 🎯 Match strict sur l'initialisation asynchrone
-                let candle_engine = candle::CandleEngine::new(manager).await?;
-                EngineImplementation::Candle(Box::new(candle_engine))
+                let native_engine = native_nlp::NativeNlpEngine::new(manager).await?;
+                EngineImplementation::Native(Box::new(native_engine))
             }
         };
         Ok(Self { inner })
@@ -84,7 +84,7 @@ impl EmbeddingEngine {
         }
 
         match &mut self.inner {
-            EngineImplementation::Fast(e) => match e.embed_batch(texts) {
+            EngineImplementation::Lightweight(e) => match e.embed_batch(texts) {
                 Ok(res) => Ok(res),
                 Err(err) => raise_error!(
                     "ERR_AI_ENGINE_FAST_BATCH_FAILED",
@@ -92,8 +92,8 @@ impl EmbeddingEngine {
                     context = json_value!({ "batch_size": batch_size })
                 ),
             },
-            // Candle gère ses propres erreurs sémantiques
-            EngineImplementation::Candle(e) => e.embed_batch(texts),
+            // Native gère ses propres erreurs sémantiques
+            EngineImplementation::Native(e) => e.embed_batch(texts),
         }
     }
 
@@ -107,7 +107,7 @@ impl EmbeddingEngine {
         }
 
         match &mut self.inner {
-            EngineImplementation::Fast(e) => match e.embed_query(text) {
+            EngineImplementation::Lightweight(e) => match e.embed_query(text) {
                 Ok(vec) => Ok(vec),
                 Err(err) => raise_error!(
                     "ERR_AI_ENGINE_FAST_QUERY_FAILED",
@@ -115,7 +115,7 @@ impl EmbeddingEngine {
                     context = json_value!({ "text_len": text.len() })
                 ),
             },
-            EngineImplementation::Candle(e) => e.embed_query(text),
+            EngineImplementation::Native(e) => e.embed_query(text),
         }
     }
 }
@@ -165,18 +165,18 @@ mod tests {
 
         inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
 
-        // Test FastEmbed
+        // Test Lightweight
         let mut fast_engine =
-            EmbeddingEngine::new_with_type(EngineType::FastEmbed, &manager).await?;
-        let vec_fast = fast_engine.embed_query("Test Fast")?;
+            EmbeddingEngine::new_with_type(EngineType::Lightweight, &manager).await?;
+        let vec_fast = fast_engine.embed_query("Test Lightweight")?;
         assert_eq!(vec_fast.len(), 384);
 
-        // Test Candle (si les poids de test sont présents ou mockés)
-        if let Ok(mut candle_engine) =
-            EmbeddingEngine::new_with_type(EngineType::Candle, &manager).await
+        // Test Native (si les poids de test sont présents ou mockés)
+        if let Ok(mut native_engine) =
+            EmbeddingEngine::new_with_type(EngineType::Native, &manager).await
         {
-            let vec_candle = candle_engine.embed_query("Test Candle")?;
-            assert_eq!(vec_candle.len(), 384);
+            let vec_native = native_engine.embed_query("Test Native")?;
+            assert_eq!(vec_native.len(), 384);
         }
 
         Ok(())
@@ -192,10 +192,10 @@ mod tests {
         // Manager pointant sur un domaine inexistant
         let manager = CollectionsManager::new(&sandbox.db, "ghost_zone", "ghost_db");
 
-        // 🎯 On appelle new_with_type(Candle) directement
+        // 🎯 On appelle new_with_type(Native) directement
         // Cela évite le fallback automatique de EmbeddingEngine::new()
         // et permet de vérifier que la couche DB lève bien l'erreur attendue.
-        let result = EmbeddingEngine::new_with_type(EngineType::Candle, &manager).await;
+        let result = EmbeddingEngine::new_with_type(EngineType::Native, &manager).await;
 
         match result {
         Err(AppError::Structured(_)) => Ok(()),
@@ -217,7 +217,7 @@ mod tests {
         );
 
         inject_mock_component(&manager, "nlp", json_value!({})).await;
-        let mut engine = EmbeddingEngine::new_with_type(EngineType::FastEmbed, &manager).await?;
+        let mut engine = EmbeddingEngine::new_with_type(EngineType::Lightweight, &manager).await?;
 
         let result = engine.embed_query("");
         match result {

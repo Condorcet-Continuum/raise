@@ -1,18 +1,10 @@
 // FICHIER : src-tauri/src/ai/deep_learning/models/sequence_net.rs
 use crate::utils::prelude::*;
 
-use candle_core::{Module, Tensor};
-// 🎯 On retire RNNConfig de l'import, on utilisera l'inférence de type !
-use candle_nn::{
-    linear,
-    rnn::{lstm, LSTM, RNN},
-    Linear, VarBuilder,
-};
-
 /// Modèle de séquence complet (RNN natif).
 pub struct SequenceNet {
-    pub lstm: LSTM,
-    pub head: Linear,
+    pub lstm: NeuralLstmLayer,
+    pub head: NeuralLinearLayer,
     pub hidden_size: usize,
 }
 
@@ -21,15 +13,16 @@ impl SequenceNet {
         input_size: usize,
         hidden_size: usize,
         output_size: usize,
-        vb: VarBuilder,
+        vb: NeuralWeightsBuilder,
     ) -> RaiseResult<Self> {
         // 🎯 L'inférence Default::default() trouve la bonne configuration toute seule !
-        let lstm_layer = match lstm(input_size, hidden_size, Default::default(), vb.pp("lstm")) {
-            Ok(l) => l,
-            Err(e) => raise_error!("ERR_SEQNET_LSTM_INIT", error = e.to_string()), // Plus de return Err()
-        };
+        let lstm_layer =
+            match init_lstm_layer(input_size, hidden_size, Default::default(), vb.pp("lstm")) {
+                Ok(l) => l,
+                Err(e) => raise_error!("ERR_SEQNET_LSTM_INIT", error = e.to_string()), // Plus de return Err()
+            };
 
-        let head_layer = match linear(hidden_size, output_size, vb.pp("head")) {
+        let head_layer = match init_linear_layer(hidden_size, output_size, vb.pp("head")) {
             Ok(l) => l,
             Err(e) => raise_error!("ERR_SEQNET_HEAD_INIT", error = e.to_string()), // Plus de return Err()
         };
@@ -41,13 +34,13 @@ impl SequenceNet {
         })
     }
 
-    pub fn forward(&self, input_seq: &Tensor) -> RaiseResult<Tensor> {
+    pub fn forward(&self, input_seq: &NeuralTensor) -> RaiseResult<NeuralTensor> {
         let (batch_size, seq_len, _) = match input_seq.dims3() {
             Ok(d) => d,
             Err(e) => raise_error!("ERR_SEQNET_DIMS", error = e.to_string()),
         };
 
-        // 🎯 Initialisation de l'état caché (h, c) 100% géré par Candle sur le GPU
+        // 🎯 Initialisation de l'état caché (h, c) 100% géré par LSTM sur le GPU
         let mut state = match self.lstm.zero_state(batch_size) {
             Ok(s) => s,
             Err(e) => raise_error!("ERR_SEQNET_STATE", error = e.to_string()),
@@ -64,13 +57,13 @@ impl SequenceNet {
                 Err(e) => raise_error!("ERR_SEQNET_NARROW", error = e.to_string()),
             };
 
-            // 🎯 Exécution optimisée via la primitive .step() de Candle
+            // 🎯 Exécution optimisée via la primitive .step() de LSTM
             state = match self.lstm.step(&step_input, &state) {
                 Ok(s) => s,
                 Err(e) => raise_error!("ERR_SEQNET_STEP", error = e.to_string()),
             };
 
-            // L'état LSTM de Candle expose .h() pour obtenir le tenseur de sortie !
+            // L'état LSTM expose .h() pour obtenir le tenseur de sortie !
             let projection = match self.head.forward(state.h()) {
                 Ok(t) => t,
                 Err(e) => raise_error!("ERR_SEQNET_PROJECTION", error = e.to_string()),
@@ -79,7 +72,7 @@ impl SequenceNet {
             outputs.push(projection);
         }
 
-        match Tensor::stack(&outputs, 1) {
+        match NeuralTensor::stack(&outputs, 1) {
             Ok(t) => Ok(t),
             Err(e) => raise_error!("ERR_SEQNET_STACK", error = e.to_string()),
         }
@@ -89,16 +82,14 @@ impl SequenceNet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{DType, Device}; // DType est ramené ici pour les tests
-    use candle_nn::VarMap;
 
     #[test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_sequence_net_flow() -> RaiseResult<()> {
-        let device = Device::Cpu;
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let device = ComputeHardware::Cpu;
+        let varmap = NeuralWeightsMap::new();
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &device);
 
         let batch_size = 2;
         let seq_len = 5;
@@ -108,7 +99,7 @@ mod tests {
 
         let model = SequenceNet::new(input_dim, hidden_dim, output_dim, vb)?;
 
-        let input = Tensor::randn(0f32, 1.0, (batch_size, seq_len, input_dim), &device)?;
+        let input = NeuralTensor::randn(0f32, 1.0, (batch_size, seq_len, input_dim), &device)?;
         let output = model.forward(&input)?;
 
         assert_eq!(output.dims(), &[batch_size, seq_len, output_dim]);

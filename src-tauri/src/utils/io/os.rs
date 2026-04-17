@@ -103,6 +103,30 @@ pub async fn exec_command_async(
     }
 }
 
+/// Exécute une tâche d'inférence ou de calcul intensif (CPU/GPU) sur un thread dédié.
+/// 🎯 ZÉRO DETTE : Isole le runtime Tokio des opérations bloquantes pour éviter le gel de l'UI.
+#[instrument(skip(task))]
+pub async fn execute_native_inference<F, T>(task: F) -> RaiseResult<T>
+where
+    F: FnOnce() -> RaiseResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    // On utilise le pool de threads bloquants de l'exécuteur asynchrone
+    let join_res = tokio::task::spawn_blocking(task).await;
+
+    match join_res {
+        Ok(res) => res, // On propage le RaiseResult<T> de la tâche
+        Err(e) => raise_error!(
+            "ERR_OS_INFERENCE_THREAD_PANIC",
+            error = e.to_string(),
+            context = json_value!({
+                "action": "execute_native_inference",
+                "hint": "Le thread de calcul intensif a été interrompu ou a paniqué."
+            })
+        ),
+    }
+}
+
 /// Passe une chaîne de caractères dans l'entrée standard (stdin) d'une commande
 /// et récupère le résultat transformé (stdout).
 #[instrument(skip(input), fields(cmd = cmd))]

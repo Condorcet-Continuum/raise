@@ -145,7 +145,7 @@ pub mod test_utils {
                 "_id": "mock-llm-comp",
                 "identity": { "component_id": "llm", "version": "1.0.0" },
                 "settings": {
-                    "provider": "candle_native",
+                    "provider": "native_engine",
                     "model_name": "llama3-1b-test",
                     "rust_repo_id": "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
                 }
@@ -160,7 +160,7 @@ pub mod test_utils {
                 "_id": "mock-mem-comp",
                 "identity": { "component_id": "memory", "version": "1.0.0" },
                 "settings": {
-                    "provider": "candle_embeddings",
+                    "provider": "native_embeddings",
                     "model_name": "minilm-test"
                 }
             }),

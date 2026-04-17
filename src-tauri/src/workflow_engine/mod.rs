@@ -31,7 +31,7 @@ pub enum NodeType {
     QualityGate, // (Ex-GatePolicy) Vérification auto via les QualityRules (AST)
 
     Genetics,   // Optimisation topologique via Algorithmes Génétiques (CPU/Rayon)
-    WorldModel, // Simulation d'impact via GNN et Candle (CPU/GPU)
+    WorldModel, // Simulation d'impact via GNN et Native Engine (CPU/GPU)
 
     CallMcp,    // Appel outil externe direct (Model Context Protocol)
     Wasm,       // Exécution d'un module WebAssembly

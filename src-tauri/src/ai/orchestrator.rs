@@ -11,7 +11,6 @@ use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
-use candle_nn::VarMap;
 
 // --- IMPORTS AGENTS ---
 use crate::ai::agents::intent_classifier::IntentClassifier;
@@ -61,7 +60,7 @@ impl AiOrchestrator {
                         "WRN_ORCH_WM_CORRUPTED",
                         json_value!({"error": e.to_string(), "action": "reset_to_empty"})
                     );
-                    NeuroSymbolicEngine::new(wm_config, VarMap::new())?
+                    NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new())?
                 }
             }
         } else {
@@ -69,7 +68,7 @@ impl AiOrchestrator {
                 "MSG_ORCH_WM_NEW",
                 json_value!({"action": "init_empty_world_model"})
             );
-            NeuroSymbolicEngine::new(wm_config, VarMap::new())?
+            NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new())?
         };
 
         // 3. Initialisation du stockage de mémoire conversationnelle

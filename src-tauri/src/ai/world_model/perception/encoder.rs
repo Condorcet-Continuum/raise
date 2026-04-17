@@ -4,7 +4,6 @@ use crate::utils::prelude::*;
 
 use crate::model_engine::arcadia::element_kind::{ArcadiaSemantics, ElementCategory, Layer};
 use crate::model_engine::types::ArcadiaElement;
-use candle_core::{Device, Tensor};
 
 /// Dimensions fixes pour l'encodage One-Hot
 /// OA, SA, LA, PA, EPBS, Data, Transverse, Unknown -> 8 dimensions
@@ -17,7 +16,7 @@ pub struct ArcadiaEncoder;
 
 impl ArcadiaEncoder {
     /// Encode la couche (Layer) en vecteur One-Hot [1, 8]
-    pub fn encode_layer(layer: Layer) -> RaiseResult<Tensor> {
+    pub fn encode_layer(layer: Layer) -> RaiseResult<NeuralTensor> {
         let index = match layer {
             Layer::OperationalAnalysis => 0,
             Layer::SystemAnalysis => 1,
@@ -33,7 +32,7 @@ impl ArcadiaEncoder {
     }
 
     /// Encode la catégorie fonctionnelle en vecteur One-Hot [1, 8]
-    pub fn encode_category(category: ElementCategory) -> RaiseResult<Tensor> {
+    pub fn encode_category(category: ElementCategory) -> RaiseResult<NeuralTensor> {
         let index = match category {
             ElementCategory::Component => 0,
             ElementCategory::Function => 1,
@@ -50,7 +49,7 @@ impl ArcadiaEncoder {
 
     /// Encode un élément complet (Concaténation Layer + Category)
     /// Dimension de sortie : [1, 16] (8 + 8)
-    pub fn encode_element(element: &ArcadiaElement) -> RaiseResult<Tensor> {
+    pub fn encode_element(element: &ArcadiaElement) -> RaiseResult<NeuralTensor> {
         // 1. Extraction sémantique
         let layer = element.get_layer();
         let category = element.get_category();
@@ -60,7 +59,7 @@ impl ArcadiaEncoder {
         let t_cat = Self::encode_category(category)?;
 
         // 3. Concaténation (Feature Fusion)
-        let t_combined = match Tensor::cat(&[&t_layer, &t_cat], 1) {
+        let t_combined = match NeuralTensor::cat(&[&t_layer, &t_cat], 1) {
             Ok(t) => t,
             Err(e) => raise_error!(
                 "ERR_AI_ENCODER_FUSION_FAILED",
@@ -78,14 +77,14 @@ impl ArcadiaEncoder {
     }
 
     /// Helper pour générer un vecteur One-Hot
-    fn one_hot(index: usize, size: usize) -> RaiseResult<Tensor> {
+    fn one_hot(index: usize, size: usize) -> RaiseResult<NeuralTensor> {
         let mut data = vec![0f32; size];
         if index < size {
             data[index] = 1.0;
         }
 
-        // Utilisation d'un match pour une extraction de type Tensor sans "oignon de Result"
-        match Tensor::from_vec(data, (1, size), &Device::Cpu) {
+        // Utilisation d'un match pour une extraction de type NeuralTensor sans "oignon de Result"
+        match NeuralTensor::from_vec(data, (1, size), &ComputeHardware::Cpu) {
             Ok(t) => Ok(t),
             Err(e) => raise_error!(
                 "ERR_AI_ENCODER_ONE_HOT_FAILED",

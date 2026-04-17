@@ -1,13 +1,12 @@
 // FICHIER : src-tauri/src/ai/context/rag.rs
-use crate::ai::memory::{candle_store::CandleLocalStore, MemoryRecord, VectorStore};
+use crate::ai::memory::{native_store::NativeLocalStore, MemoryRecord, VectorStore};
 use crate::ai::nlp::{embeddings::EmbeddingEngine, splitting};
 use crate::json_db::collections::manager::CollectionsManager;
 
 use crate::utils::prelude::*;
-use candle_core::Device;
 
 pub struct RagRetriever {
-    backend: CandleLocalStore, // 🎯 Connexion directe et exclusive au moteur natif
+    backend: NativeLocalStore, // 🎯 Connexion directe et exclusive au moteur natif
     embedder: EmbeddingEngine,
     collection_name: String,
 }
@@ -35,13 +34,13 @@ impl RagRetriever {
         let collection_name = "raise_knowledge_base".to_string();
 
         user_info!(
-            "INF_RAG_CANDLE_INIT",
-            json_value!({"backend": "CANDLE", "device": "Native"})
+            "INF_RAG_NATIVEENGINE_INIT",
+            json_value!({"backend": "NATIVE_EMBEDDING", "device": "Native"})
         );
 
-        let device = Device::Cpu;
+        let device = ComputeHardware::Cpu;
         let store_dir = storage_path.join("vector_store");
-        let memory = CandleLocalStore::new(&store_dir, &device);
+        let memory = NativeLocalStore::new(&store_dir, &device);
 
         // 🎯 Rigueur : Passage du manager à l'infrastructure vectorielle
         memory
@@ -75,7 +74,11 @@ impl RagRetriever {
         // 🎯 Match strict sur le batch d'embeddings
         let vectors = match self.embedder.embed_batch(chunks.clone()) {
             Ok(v) => v,
-            Err(e) => return Err(e),
+            Err(e) => raise_error!(
+                "ERR_RAG_EMBEDDING_BATCH",
+                error = e,
+                context = json_value!({"source": source, "chunks_count": chunks.len()})
+            ),
         };
 
         let ingest_time = UtcClock::now().to_rfc3339();
@@ -95,10 +98,24 @@ impl RagRetriever {
             });
         }
 
-        self.backend
+        if let Err(e) = self
+            .backend
             .add_documents(manager, &self.collection_name, records)
-            .await?;
-        self.backend.save().await?; // Persistance atomique
+            .await
+        {
+            raise_error!(
+                "ERR_RAG_ADD_DOCUMENTS",
+                error = e,
+                context = json_value!({"collection": self.collection_name, "source": source})
+            );
+        }
+        if let Err(e) = self.backend.save().await {
+            raise_error!(
+                "ERR_RAG_SAVE_BACKEND",
+                error = e,
+                context = json_value!({"collection": self.collection_name})
+            );
+        }
 
         Ok(chunks.len())
     }
@@ -109,12 +126,19 @@ impl RagRetriever {
         query: &str,
         limit: u64,
     ) -> RaiseResult<String> {
-        let query_vector = self.embedder.embed_query(query)?;
+        let query_vector = match self.embedder.embed_query(query) {
+            Ok(v) => v,
+            Err(e) => raise_error!(
+                "ERR_RAG_EMBED_QUERY",
+                error = e,
+                context = json_value!({"query": query})
+            ),
+        };
 
         // Seuil Arcadia pour la pertinence sémantique
         let min_similarity = 0.65;
 
-        let docs = self
+        let docs = match self
             .backend
             .search_similarity(
                 manager,
@@ -124,7 +148,15 @@ impl RagRetriever {
                 min_similarity,
                 None,
             )
-            .await?;
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => raise_error!(
+                "ERR_RAG_SEARCH",
+                error = e,
+                context = json_value!({"query": query, "limit": limit})
+            ),
+        };
 
         if docs.is_empty() {
             return Ok(String::new());
@@ -162,8 +194,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_rag_candle_end_to_end() -> RaiseResult<()> {
-        let _guard = get_hf_lock().lock().await;
+    async fn test_rag_engine_end_to_end() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
@@ -182,20 +213,33 @@ mod tests {
         rag.index_document(&manager, content, "spec_secu_v2.pdf")
             .await?;
 
-        // 🎯 FIX : Requête avec un fort chevauchement sémantique pour exploser le seuil de 0.65
-        let context = rag
-            .retrieve(&manager, "validation cryptographique SHA-256", 1)
-            .await?;
+        {
+            let _guard = get_hf_lock().lock().await;
 
-        assert!(context.contains("SHA-256"));
-        assert!(context.contains("spec_secu_v2.pdf"));
+            let content = "Le module de sécurité requiert une validation cryptographique SHA-256.";
+            rag.index_document(&manager, content, "spec_secu_v2.pdf")
+                .await?;
+
+            let context = rag
+                .retrieve(&manager, "validation cryptographique SHA-256", 1)
+                .await?;
+
+            assert!(
+                context.contains("SHA-256"),
+                "Le contexte doit contenir la donnée"
+            );
+            assert!(
+                context.contains("spec_secu_v2.pdf"),
+                "Le contexte doit contenir la source"
+            );
+        }
         Ok(())
     }
 
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_rag_candle_empty_results() -> RaiseResult<()> {
+    async fn test_rag_engine_empty_results() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
@@ -219,7 +263,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_rag_candle_persistence() -> RaiseResult<()> {
+    async fn test_rag_engine_persistence() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();

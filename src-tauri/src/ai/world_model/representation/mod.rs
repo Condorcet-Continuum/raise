@@ -10,13 +10,12 @@ pub use quantizer::VectorQuantizer;
 mod tests {
     use super::*;
     use crate::utils::prelude::*;
-    use candle_core::{DType, Device};
-    use candle_nn::{VarBuilder, VarMap};
 
     #[test]
     fn test_representation_public_api() {
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+        let varmap = NeuralWeightsMap::new();
+        let vb =
+            NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &ComputeHardware::Cpu);
 
         // 🎯 FIX : On crée une config locale pour le test
         let config = WorldModelConfig {

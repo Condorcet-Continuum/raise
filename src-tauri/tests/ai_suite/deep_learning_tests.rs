@@ -1,8 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/deep_learning_tests.rs
 use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 
-use candle_core::{DType, Device, Tensor};
-use candle_nn::{VarBuilder, VarMap};
 use raise::ai::deep_learning::models::sequence_net::SequenceNet;
 use raise::ai::deep_learning::serialization;
 use raise::ai::deep_learning::trainer::Trainer;
@@ -19,7 +17,7 @@ async fn test_dl_e2e_integration() -> RaiseResult<()> {
     let config = &AppConfig::get().deep_learning;
 
     // 🎯 FIX : Résolution manuelle du device (CPU pour les tests) car to_device() est manquant
-    let device = Device::Cpu;
+    let device = ComputeHardware::Cpu;
 
     let state = DlState::new();
     let start = SystemTime::now();
@@ -38,8 +36,8 @@ async fn test_dl_e2e_integration() -> RaiseResult<()> {
 
     // --- Étape 1 : Initialisation du Modèle (Match strict) ---
     {
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let varmap = NeuralWeightsMap::new();
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &device);
 
         let model = match SequenceNet::new(
             config.input_size,
@@ -76,12 +74,13 @@ async fn test_dl_e2e_integration() -> RaiseResult<()> {
                     Err(e) => raise_error!("ERR_DL_TRAINER_CONFIG", error = e.to_string()),
                 };
 
-                let input = match Tensor::randn(0f32, 1.0, (1, 1, config.input_size), &device) {
+                let input = match NeuralTensor::randn(0f32, 1.0, (1, 1, config.input_size), &device)
+                {
                     Ok(t) => t,
                     Err(e) => raise_error!("ERR_DL_TENSOR_GEN", error = e.to_string()),
                 };
 
-                let target = match Tensor::zeros((1, 1), DType::U32, &device) {
+                let target = match NeuralTensor::zeros((1, 1), ComputeType::U32, &device) {
                     Ok(t) => t,
                     Err(e) => raise_error!("ERR_DL_TARGET_GEN", error = e.to_string()),
                 };
@@ -153,9 +152,9 @@ mod resilience_tests {
         let mut config = AppConfig::get().deep_learning.clone();
         config.input_size = 0;
 
-        let device = Device::Cpu;
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let device = ComputeHardware::Cpu;
+        let varmap = NeuralWeightsMap::new();
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &device);
 
         match SequenceNet::new(
             config.input_size,

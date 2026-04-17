@@ -64,7 +64,7 @@ pub async fn handle(args: DlArgs, ctx: CliContext) -> RaiseResult<()> {
                 json_value!({"urn": &urn, "epochs": epochs})
             );
 
-            // 🎯 Délégation sémantique au moteur Candle (Forteresse Inférence)
+            // 🎯 Délégation sémantique au moteur Natif (Forteresse Inférence)
             let final_loss = train_model_semantic(
                 &manager,
                 &ctx.active_domain,

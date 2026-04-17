@@ -6,14 +6,13 @@ use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 use crate::ai::deep_learning::{
     models::sequence_net::SequenceNet, serialization, trainer::Trainer,
 };
-use candle_core::{DType, Tensor};
-use candle_nn::{VarBuilder, VarMap};
+
 use tauri::{command, State};
 
 // --- STATE ---
 pub struct DlState {
     pub model: SyncMutex<Option<SequenceNet>>,
-    pub varmap: SyncMutex<Option<VarMap>>,
+    pub varmap: SyncMutex<Option<NeuralWeightsMap>>,
 }
 
 impl DlState {
@@ -64,8 +63,8 @@ fn init_dl_model_internal(state: &DlState) -> RaiseResult<String> {
     let config = &AppConfig::get().deep_learning;
     let device = AppConfig::device(); // 🎯 Façade SSOT
 
-    let varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+    let varmap = NeuralWeightsMap::new();
+    let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device);
 
     let model = match SequenceNet::new(
         config.input_size,
@@ -105,7 +104,7 @@ fn run_dl_prediction_internal(state: &DlState, input: Vec<f32>) -> RaiseResult<V
     };
 
     if let Some(model) = &*guard {
-        let t = match Tensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
+        let t = match NeuralTensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
             Ok(tensor) => tensor,
             Err(e) => raise_error!("ERR_MODEL_INPUT_TENSOR", error = e.to_string()),
         };
@@ -139,12 +138,13 @@ fn train_dl_step_internal(state: &DlState, input: Vec<f32>, target: u32) -> Rais
 
     match (&*mg, &*vg) {
         (Some(model), Some(vars)) => {
-            let t_in = match Tensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
-                Ok(t) => t,
-                Err(e) => raise_error!("ERR_TRAIN_INPUT_TENSOR", error = e.to_string()),
-            };
+            let t_in =
+                match NeuralTensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
+                    Ok(t) => t,
+                    Err(e) => raise_error!("ERR_TRAIN_INPUT_TENSOR", error = e.to_string()),
+                };
 
-            let t_tgt = match Tensor::from_vec(vec![target], (1usize, 1usize), device) {
+            let t_tgt = match NeuralTensor::from_vec(vec![target], (1usize, 1usize), device) {
                 Ok(t) => t,
                 Err(e) => raise_error!("ERR_TRAIN_TARGET_TENSOR", error = e.to_string()),
             };
@@ -247,7 +247,7 @@ mod tests {
         mock::inject_mock_config().await;
 
         let device = AppConfig::device();
-        // Le périphérique doit être valide pour le moteur Candle
+        // Le périphérique doit être valide pour le moteur Native
         assert!(device.is_cpu() || device.is_cuda() || device.is_metal());
         Ok(())
     }

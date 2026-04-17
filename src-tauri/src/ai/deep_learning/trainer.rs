@@ -2,40 +2,40 @@
 use crate::utils::prelude::*; // 🎯 Utilisation stricte de la façade RAISE
 
 use crate::ai::deep_learning::models::sequence_net::SequenceNet;
-use candle_core::Tensor;
-use candle_nn::optim::{AdamW, Optimizer, ParamsAdamW};
-use candle_nn::VarMap;
 
-/// Gère l'apprentissage du réseau avec l'optimiseur accéléré AdamW.
+/// Gère l'apprentissage du réseau avec l'optimiseur accéléré NeuralOptimizerAdamW.
 /// Intègre la gestion des Momentum et la résilience aux erreurs de calcul.
 pub struct Trainer {
-    optimizer: AdamW,
+    optimizer: NeuralOptimizerAdamW,
 }
 
 impl Trainer {
     /// 🎯 Crée un Trainer à partir de la configuration centralisée des points de montage.
-    pub fn from_config(varmap: &VarMap, config: &DeepLearningConfig) -> RaiseResult<Self> {
+    pub fn from_config(
+        varmap: &NeuralWeightsMap,
+        config: &DeepLearningConfig,
+    ) -> RaiseResult<Self> {
         Self::new(varmap, config.learning_rate)
     }
 
-    /// Constructeur sémantique avec initialisation de l'optimiseur AdamW.
-    pub fn new(varmap: &VarMap, learning_rate: f64) -> RaiseResult<Self> {
+    /// Constructeur sémantique avec initialisation de l'optimiseur NeuralOptimizerAdamW.
+    pub fn new(varmap: &NeuralWeightsMap, learning_rate: f64) -> RaiseResult<Self> {
         let vars = varmap.all_vars();
 
         // 🛡️ Sécurité : Empêcher l'initialisation sans paramètres
         if vars.is_empty() {
             raise_error!(
                 "ERR_OPTIMIZER_INIT",
-                error = "Aucune variable trouvée dans le VarMap pour l'entraînement.",
+                error = "Aucune variable trouvée dans le NeuralWeightsMap pour l'entraînement.",
                 context = json_value!({ "action": "check_varmap_not_empty" })
             );
         }
 
-        let params = ParamsAdamW {
+        let params = OptimizerConfigAdamW {
             lr: learning_rate,
             ..Default::default()
         };
-        match AdamW::new(vars, params) {
+        match NeuralOptimizerAdamW::new(vars, params) {
             Ok(opt) => Ok(Self { optimizer: opt }),
             Err(e) => raise_error!("ERR_OPTIMIZER_INIT", error = e.to_string()),
         }
@@ -46,8 +46,8 @@ impl Trainer {
     pub fn train_step(
         &mut self,
         model: &SequenceNet,
-        input: &Tensor,
-        targets: &Tensor,
+        input: &NeuralTensor,
+        targets: &NeuralTensor,
     ) -> RaiseResult<f64> {
         // 1. Forward Pass sécurisé
         let logits = match model.forward(input) {
@@ -76,7 +76,7 @@ impl Trainer {
         };
 
         // 3. Calcul de la perte via fonction native optimisée
-        let loss = match candle_nn::loss::cross_entropy(&flat_logits, &flat_targets) {
+        let loss = match compute_cross_entropy(&flat_logits, &flat_targets) {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_LOSS_CALC", error = e.to_string()),
         };
@@ -102,8 +102,6 @@ impl Trainer {
 mod tests {
     use super::*;
     use crate::utils::testing::{mock, DbSandbox};
-    use candle_core::DType;
-    use candle_nn::VarBuilder;
 
     #[async_test]
     #[serial_test::serial]
@@ -114,8 +112,8 @@ mod tests {
         let config = &sandbox.config.deep_learning;
         let device = AppConfig::device(); // 🎯 Source unique de vérité pour le matériel
 
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+        let varmap = NeuralWeightsMap::new();
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device);
 
         let model = SequenceNet::new(
             config.input_size,
@@ -127,11 +125,11 @@ mod tests {
         let mut trainer = Trainer::from_config(&varmap, config)?;
 
         // Création de données synthétiques sur le device configuré
-        let input = match Tensor::randn(0f32, 1.0, (1, 1, config.input_size), device) {
+        let input = match NeuralTensor::randn(0f32, 1.0, (1, 1, config.input_size), device) {
             Ok(t) => t,
             Err(e) => return Err(build_error!("ERR_TENSOR_IN", error = e.to_string())),
         };
-        let target = match Tensor::zeros((1, 1), DType::U32, device) {
+        let target = match NeuralTensor::zeros((1, 1), ComputeType::U32, device) {
             Ok(t) => t,
             Err(e) => return Err(build_error!("ERR_TENSOR_TGT", error = e.to_string())),
         };
@@ -158,18 +156,18 @@ mod tests {
         mock::inject_mock_config().await;
         let device = AppConfig::device();
 
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+        let varmap = NeuralWeightsMap::new();
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device);
 
         let model = SequenceNet::new(5, 10, 2, vb)?;
         let mut trainer = Trainer::new(&varmap, 0.01)?;
 
         // Injection d'une dimension erronée (10 au lieu de 5)
-        let bad_input = match Tensor::zeros((1, 1, 10), DType::F32, device) {
+        let bad_input = match NeuralTensor::zeros((1, 1, 10), ComputeType::F32, device) {
             Ok(t) => t,
             Err(e) => return Err(build_error!("ERR_TENSOR_BAD", error = e.to_string())),
         };
-        let target = match Tensor::zeros((1, 1), DType::U32, device) {
+        let target = match NeuralTensor::zeros((1, 1), ComputeType::U32, device) {
             Ok(t) => t,
             Err(e) => return Err(build_error!("ERR_TENSOR_BAD", error = e.to_string())),
         };
@@ -197,10 +195,10 @@ mod tests {
         let config = &sandbox.config.deep_learning;
         let device = AppConfig::device();
 
-        let varmap = VarMap::new();
+        let varmap = NeuralWeightsMap::new();
 
-        // 🎯 ÉTAPE CRUCIALE : Enregistrer les variables du modèle dans le VarMap
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+        // 🎯 ÉTAPE CRUCIALE : Enregistrer les variables du modèle dans le NeuralWeightsMap
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device);
         let _model = SequenceNet::new(
             config.input_size,
             config.hidden_size,
@@ -213,7 +211,7 @@ mod tests {
 
         assert!(
             trainer.is_ok(),
-            "Le Trainer doit pouvoir s'initialiser quand le VarMap contient les variables du modèle"
+            "Le Trainer doit pouvoir s'initialiser quand le NeuralWeightsMap contient les variables du modèle"
         );
 
         Ok(())
@@ -224,9 +222,9 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_empty_varmap() -> RaiseResult<()> {
-        let varmap = VarMap::new(); // Pas de variables enregistrées dans ce varmap
+        let varmap = NeuralWeightsMap::new(); // Pas de variables enregistrées dans ce varmap
 
-        // AdamW échouera s'il n'y a aucun paramètre à optimiser
+        // NeuralOptimizerAdamW échouera s'il n'y a aucun paramètre à optimiser
         let trainer = Trainer::new(&varmap, 0.01);
 
         match trainer {
@@ -234,7 +232,7 @@ mod tests {
                 assert_eq!(data.code, "ERR_OPTIMIZER_INIT");
                 Ok(())
             }
-            _ => panic!("L'initialisation aurait dû échouer pour un VarMap vide"),
+            _ => panic!("L'initialisation aurait dû échouer pour un NeuralWeightsMap vide"),
         }
     }
 }

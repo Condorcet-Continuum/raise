@@ -1,7 +1,6 @@
 // FICHIER : src-tauri/src/ai/world_model/training.rs
 
 use crate::utils::prelude::*;
-use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 
 use crate::ai::world_model::engine::{NeuroSymbolicEngine, WorldAction};
 use crate::ai::world_model::perception::ArcadiaEncoder;
@@ -10,16 +9,16 @@ use crate::model_engine::types::ArcadiaElement;
 /// Le Coach du World Model.
 pub struct WorldTrainer<'a> {
     engine: &'a NeuroSymbolicEngine,
-    opt: AdamW,
+    opt: NeuralOptimizerAdamW,
 }
 
 impl<'a> WorldTrainer<'a> {
     pub fn new(engine: &'a NeuroSymbolicEngine, lr: f64) -> RaiseResult<Self> {
         let vars = engine.varmap.all_vars();
 
-        let opt = match AdamW::new(
+        let opt = match NeuralOptimizerAdamW::new(
             vars,
-            ParamsAdamW {
+            OptimizerConfigAdamW {
                 lr,
                 ..Default::default()
             },
@@ -32,7 +31,7 @@ impl<'a> WorldTrainer<'a> {
                     context = json_value!({
                         "learning_rate": lr,
                         "variable_count": engine.varmap.all_vars().len(),
-                        "hint": "Échec de l'initialisation d'AdamW. Vérifiez que le Varmap contient des variables entraînables valides."
+                        "hint": "Échec de l'initialisation du NeuralOptimizerAdamW. Vérifiez que le Varmap contient des variables entraînables valides."
                     })
                 )
             }
@@ -102,8 +101,6 @@ mod tests {
     use crate::ai::nlp::parser::CommandType;
     use crate::model_engine::types::NameType;
 
-    use candle_nn::VarMap;
-
     fn make_dummy(id: &str, layer_idx: usize) -> ArcadiaElement {
         let kind = match layer_idx {
             // CORRECTION : Utilisation des URIs officielles
@@ -124,7 +121,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_training_loop_convergence() {
         // 1. Setup
-        let varmap = VarMap::new();
+        let varmap = NeuralWeightsMap::new();
 
         // 🎯 Création de la config pour l'entraînement
         let config = WorldModelConfig {

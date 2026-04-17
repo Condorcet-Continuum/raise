@@ -1,22 +1,19 @@
 use crate::utils::prelude::*;
 
-use candle_core::{Device, Tensor};
-use candle_nn::{Linear, Module, VarMap};
-
 pub struct LoraLinear {
-    old_linear: Linear,
-    pub lora_a: Tensor, // Projection : [Out, Rank]
-    pub lora_b: Tensor, // Réduction  : [Rank, In]
+    old_linear: NeuralLinearLayer,
+    pub lora_a: NeuralTensor, // Projection : [Out, Rank]
+    pub lora_b: NeuralTensor, // Réduction  : [Rank, In]
     scale: f64,
 }
 
 impl LoraLinear {
     pub fn new(
-        old_linear: Linear,
+        old_linear: NeuralLinearLayer,
         rank: usize,
         alpha: f64,
-        varmap: &mut VarMap,
-        device: &Device,
+        varmap: &mut NeuralWeightsMap,
+        device: &ComputeHardware,
     ) -> RaiseResult<Self> {
         let (out_dims, in_dims) = old_linear.weight().shape().dims2()?;
         let dtype = old_linear.weight().dtype();
@@ -25,7 +22,7 @@ impl LoraLinear {
         let lora_a = varmap.get(
             (out_dims, rank),
             "lora_a",
-            candle_nn::init::DEFAULT_KAIMING_NORMAL,
+            NeuralInitStrategy::DEFAULT_KAIMING_NORMAL,
             dtype,
             device,
         )?;
@@ -33,7 +30,7 @@ impl LoraLinear {
         let lora_b = varmap.get(
             (rank, in_dims),
             "lora_b",
-            candle_nn::init::ZERO,
+            NeuralInitStrategy::ZERO,
             dtype,
             device,
         )?;
@@ -49,8 +46,8 @@ impl LoraLinear {
     }
 }
 
-impl Module for LoraLinear {
-    fn forward(&self, x: &Tensor) -> std::result::Result<Tensor, candle_core::Error> {
+impl NeuralModule for LoraLinear {
+    fn forward(&self, x: &NeuralTensor) -> std::result::Result<NeuralTensor, NeuralCoreError> {
         // Calcul standard
         let standard_output = self.old_linear.forward(x)?;
 
@@ -68,25 +65,23 @@ impl Module for LoraLinear {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{DType, Device};
-    use candle_nn::VarMap;
 
     #[test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_lora_linear_forward_shape() -> RaiseResult<()> {
-        let device = Device::Cpu;
-        let mut varmap = VarMap::new();
+        let device = ComputeHardware::Cpu;
+        let mut varmap = NeuralWeightsMap::new();
 
         // Simule une couche 10 (In) -> 20 (Out)
-        let weight = Tensor::zeros((20, 10), DType::F32, &device)?;
-        let bias = Tensor::zeros(20, DType::F32, &device)?;
-        let linear = Linear::new(weight, Some(bias));
+        let weight = NeuralTensor::zeros((20, 10), ComputeType::F32, &device)?;
+        let bias = NeuralTensor::zeros(20, ComputeType::F32, &device)?;
+        let linear = NeuralLinearLayer::new(weight, Some(bias));
 
         let lora = LoraLinear::new(linear, 4, 1.0, &mut varmap, &device)?;
 
         // Input [1, 10]
-        let input = Tensor::ones((1, 10), DType::F32, &device)?;
+        let input = NeuralTensor::ones((1, 10), ComputeType::F32, &device)?;
         let output = lora.forward(&input)?;
 
         // Output doit être [1, 20]

@@ -2,11 +2,9 @@
 
 use crate::ai::deep_learning::models::sequence_net::SequenceNet;
 use crate::utils::prelude::*; // 🎯 Façade Unique
-use candle_core::DType;
-use candle_nn::{VarBuilder, VarMap};
 
 /// Sauvegarde les poids du modèle dans un fichier au format SafeTensors.
-pub fn save_model(varmap: &VarMap, path: impl AsRef<Path>) -> RaiseResult<()> {
+pub fn save_model(varmap: &NeuralWeightsMap, path: impl AsRef<Path>) -> RaiseResult<()> {
     // 🎯 Pattern matching pour la gestion des erreurs d'I/O SafeTensors
     match varmap.save(path.as_ref()) {
         Ok(_) => Ok(()),
@@ -33,7 +31,11 @@ pub fn load_model(path: impl AsRef<Path>, config: &DeepLearningConfig) -> RaiseR
     }
 
     let vb = unsafe {
-        match VarBuilder::from_mmaped_safetensors(&[path.as_ref()], DType::F32, device) {
+        match NeuralWeightsBuilder::from_mmaped_safetensors(
+            &[path.as_ref()],
+            ComputeType::F32,
+            device,
+        ) {
             Ok(v) => v,
             Err(e) => raise_error!(
                 "ERR_DL_MMAP_FAILED",
@@ -54,8 +56,8 @@ pub fn load_model(path: impl AsRef<Path>, config: &DeepLearningConfig) -> RaiseR
     }
 }
 
-/// Charge des poids dans un VarMap existant (Fine-Tuning / Reprise d'entraînement).
-pub fn load_checkpoint(varmap: &mut VarMap, path: impl AsRef<Path>) -> RaiseResult<()> {
+/// Charge des poids dans un NeuralWeightsMap existant (Fine-Tuning / Reprise d'entraînement).
+pub fn load_checkpoint(varmap: &mut NeuralWeightsMap, path: impl AsRef<Path>) -> RaiseResult<()> {
     match varmap.load(path.as_ref()) {
         Ok(_) => Ok(()),
         Err(e) => raise_error!(
@@ -75,7 +77,6 @@ mod tests {
     use super::*;
     use crate::ai::deep_learning::trainer::Trainer;
     use crate::utils::testing::DbSandbox;
-    use candle_core::Tensor;
 
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
@@ -90,8 +91,8 @@ mod tests {
         let path = temp_dir.path().join("model.safetensors");
 
         // 2. Création et entraînement d'un modèle source
-        let varmap_source = VarMap::new();
-        let vb_source = VarBuilder::from_varmap(&varmap_source, DType::F32, device);
+        let varmap_source = NeuralWeightsMap::new();
+        let vb_source = NeuralWeightsBuilder::from_varmap(&varmap_source, ComputeType::F32, device);
         let model_source = SequenceNet::new(
             config.input_size,
             config.hidden_size,
@@ -100,8 +101,8 @@ mod tests {
         )?;
 
         let mut trainer = Trainer::new(&varmap_source, config.learning_rate)?;
-        let input = Tensor::randn(0f32, 1.0, (1, 5, config.input_size), device)?;
-        let target = Tensor::zeros((1, 5), DType::U32, device)?;
+        let input = NeuralTensor::randn(0f32, 1.0, (1, 5, config.input_size), device)?;
+        let target = NeuralTensor::zeros((1, 5), ComputeType::U32, device)?;
         trainer.train_step(&model_source, &input, &target)?;
 
         let output_source = model_source.forward(&input)?;
@@ -155,17 +156,17 @@ mod tests {
         let path = temp_dir.path().join("checkpoint.safetensors");
 
         // 1. On sauve un état initial
-        let varmap = VarMap::new();
+        let varmap = NeuralWeightsMap::new();
         let _ = SequenceNet::new(
             config.input_size,
             config.hidden_size,
             config.output_size,
-            VarBuilder::from_varmap(&varmap, DType::F32, device),
+            NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device),
         )?;
         save_model(&varmap, &path)?;
 
         // 2. On prépare un nouveau varmap
-        let mut new_varmap = VarMap::new();
+        let mut new_varmap = NeuralWeightsMap::new();
 
         // 🎯 FIX : On déclare la structure AVANT le chargement
         // Cela enregistre les clés attendues dans new_varmap
@@ -173,7 +174,7 @@ mod tests {
             config.input_size,
             config.hidden_size,
             config.output_size,
-            VarBuilder::from_varmap(&new_varmap, DType::F32, device),
+            NeuralWeightsBuilder::from_varmap(&new_varmap, ComputeType::F32, device),
         )?;
 
         // 3. Maintenant le chargement peut mapper les poids sur les clés existantes

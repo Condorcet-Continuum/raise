@@ -17,23 +17,30 @@ pub enum EntityCategory {
     ArcadiaType,   // Fonction, Composant, Acteur (Dynamique via Ontologie)
 }
 
+// Compilation statique unique des Regex
+fn get_quotes_regex() -> &'static TextRegex {
+    static RE_QUOTES: StaticCell<TextRegex> = StaticCell::new();
+    RE_QUOTES.get_or_init(|| {
+        // Le expect est justifié ici : si une regex statique est mal formée,
+        // c'est une erreur de code qui doit empêcher le démarrage, pas une erreur métier.
+        TextRegex::new(r#"["']([^"']+)["']"#).expect("FATAL: Regex 'quotes' invalide")
+    })
+}
+
+fn get_proper_noun_regex() -> &'static TextRegex {
+    static RE_PROPER: StaticCell<TextRegex> = StaticCell::new();
+    RE_PROPER.get_or_init(|| {
+        TextRegex::new(r"\b[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+\b(?:\s+[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+\b)*")
+            .expect("FATAL: Regex 'proper noun' invalide")
+    })
+}
+
 /// Extrait les entités potentielles d'une phrase en s'appuyant sur le Graphe de Connaissance.
 pub async fn extract_entities(manager: &CollectionsManager<'_>, text: &str) -> Vec<Entity> {
     let mut entities = Vec::new();
 
-    // 1. Extraction des textes entre guillemets (Priorité Haute)
-    // 🎯 Rigueur : Pattern matching sur la compilation Regex
-    let re_quotes = match TextRegex::new(r#"["']([^"']+)["']"#) {
-        Ok(re) => re,
-        Err(e) => {
-            user_error!(
-                "ERR_NLP_REGEX_FAIL",
-                json_value!({ "error": e.to_string(), "pattern": "quotes" })
-            );
-            return entities;
-        }
-    };
-
+    // 1. Extraction des textes entre guillemets (O(1) pour la récupération de la Regex)
+    let re_quotes = get_quotes_regex();
     for cap in re_quotes.captures_iter(text) {
         if let Some(matched) = cap.get(1) {
             entities.push(Entity {
@@ -43,7 +50,7 @@ pub async fn extract_entities(manager: &CollectionsManager<'_>, text: &str) -> V
         }
     }
 
-    // 2. 🎯 Extraction Dynamique via l'Ontologie (Respect des Mount Points)
+    // 2. Extraction Dynamique via l'Ontologie (Respect des Mount Points)
     let mut domain_concepts = vec![
         "fonction".to_string(),
         "composant".to_string(),
@@ -52,8 +59,6 @@ pub async fn extract_entities(manager: &CollectionsManager<'_>, text: &str) -> V
         "échange".to_string(),
     ];
 
-    // Tente de récupérer le mapping ontologique depuis la partition système
-    // 🎯 Rigueur : On ne panique jamais sur une absence de doc, on fallback
     match manager.get_document("configs", "ontological_mapping").await {
         Ok(Some(onto_doc)) => {
             if let Some(mapping) = onto_doc
@@ -74,7 +79,6 @@ pub async fn extract_entities(manager: &CollectionsManager<'_>, text: &str) -> V
 
     let lower_text = text.to_lowercase();
     for concept in &domain_concepts {
-        // Fusion des deux conditions avec '&&'
         if lower_text.contains(concept)
             && !entities
                 .iter()
@@ -86,21 +90,15 @@ pub async fn extract_entities(manager: &CollectionsManager<'_>, text: &str) -> V
             });
         }
     }
-    // 3. Extraction heuristique des Noms Propres (Capitalized words)
-    let re_proper =
-        match TextRegex::new(r"\b[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+\b(?:\s+[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+\b)*")
-        {
-            Ok(re) => re,
-            Err(_) => return entities,
-        };
 
+    // 3. Extraction heuristique des Noms Propres
+    let re_proper = get_proper_noun_regex();
     let determinants = ["Le ", "La ", "Les ", "Un ", "Une ", "Des ", "L'"];
 
     for cap in re_proper.captures_iter(text) {
         if let Some(matched) = cap.get(0) {
             let mut val = matched.as_str().to_string();
 
-            // Nettoyage des déterminants capturés par erreur
             for det in determinants {
                 if val.starts_with(det) {
                     val = val[det.len()..].to_string();
@@ -108,7 +106,6 @@ pub async fn extract_entities(manager: &CollectionsManager<'_>, text: &str) -> V
                 }
             }
 
-            // Évite d'ajouter un nom propre si un concept plus précis (ArcadiaType) a déjà été trouvé
             if !val.is_empty() && !entities.iter().any(|e| e.text.contains(&val)) {
                 entities.push(Entity {
                     text: val,

@@ -2,9 +2,6 @@
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique
-use candle_core::Tensor;
-use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarMap};
-use tokenizers::Tokenizer;
 
 pub mod dataset;
 pub mod lora;
@@ -48,13 +45,13 @@ pub async fn ai_train_domain_native(
         raise_error!(
             "ERR_AI_TOKENIZER_FILE_NOT_FOUND",
             error = format!(
-                "Fichier Tokenizer introuvable dans le point de montage : {:?}",
+                "Fichier TextTokenizer introuvable dans le point de montage : {:?}",
                 tokenizer_path
             )
         );
     }
 
-    let tokenizer = match Tokenizer::from_file(&tokenizer_path) {
+    let tokenizer = match TextTokenizer::from_file(&tokenizer_path) {
         Ok(t) => t,
         Err(e) => raise_error!("ERR_AI_TOKENIZER_LOAD", error = e.to_string()),
     };
@@ -78,10 +75,10 @@ pub async fn ai_train_domain_native(
     // ---------------------------------------------------------
     // 3. INITIALISATION DU MOTEUR TENSORIEL (ADAMW)
     // ---------------------------------------------------------
-    let varmap = VarMap::new();
-    let mut opt = match AdamW::new(
+    let varmap = NeuralWeightsMap::new();
+    let mut opt = match NeuralOptimizerAdamW::new(
         varmap.all_vars(),
-        ParamsAdamW {
+        OptimizerConfigAdamW {
             lr,
             ..Default::default()
         },
@@ -110,22 +107,19 @@ pub async fn ai_train_domain_native(
             let tokens = encoding.get_ids();
             let seq_len = tokens.len();
 
-            let labels = match Tensor::new(tokens, &device).and_then(|t| t.unsqueeze(0)) {
+            let labels = match NeuralTensor::new(tokens, &device).and_then(|t| t.unsqueeze(0)) {
                 Ok(t) => t,
                 Err(e) => raise_error!("ERR_TENSOR_LABELS_FAIL", error = e.to_string()),
             };
 
             // Simulation de logits pour le calcul de loss (Pattern LoRA Adaptateur)
             let vocab_size = 151936;
-            let logits = match Tensor::randn(0f32, 1f32, (1, seq_len, vocab_size), &device) {
+            let logits = match NeuralTensor::randn(0f32, 1f32, (1, seq_len, vocab_size), &device) {
                 Ok(t) => t,
                 Err(e) => raise_error!("ERR_TENSOR_LOGITS_FAIL", error = e.to_string()),
             };
 
-            let loss = match candle_nn::loss::cross_entropy(
-                &logits.flatten_to(1)?,
-                &labels.flatten_to(1)?,
-            ) {
+            let loss = match compute_cross_entropy(&logits.flatten_to(1)?, &labels.flatten_to(1)?) {
                 Ok(l) => l,
                 Err(e) => raise_error!("ERR_MODEL_LOSS_FAIL", error = e.to_string()),
             };
@@ -208,7 +202,7 @@ mod tests {
 
         fs::ensure_dir_async(&models_dir).await?;
 
-        // Mock Tokenizer minimal pour éviter le crash du parser Candle
+        // Mock TextTokenizer minimal pour éviter le crash du parser Native
         let mock_tokenizer = r#"{"version":"1.0","model":{"type":"BPE","vocab":{},"merges":[]}}"#;
         fs::write_async(models_dir.join("tokenizer.json"), mock_tokenizer.as_bytes()).await?;
 
@@ -225,7 +219,7 @@ mod tests {
         }
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience face au matériel (Device Check)
+    /// 🎯 NOUVEAU TEST : Résilience face au matériel (ComputeHardware Check)
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]

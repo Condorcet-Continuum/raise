@@ -38,6 +38,6 @@ mod data_agent_tests;
 #[path = "ai_suite/transverse_agent_tests.rs"]
 mod transverse_agent_tests;
 
-// DEEP LEARNING : Entraînement local, Inférence & Sérialisation Candle
+// DEEP LEARNING : Entraînement local, Inférence & Sérialisation Native
 #[path = "ai_suite/deep_learning_tests.rs"]
 mod deep_learning_tests;

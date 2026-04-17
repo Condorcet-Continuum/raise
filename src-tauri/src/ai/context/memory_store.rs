@@ -22,9 +22,15 @@ impl MemoryStore {
         );
 
         // Tentative de création de la collection (ignorée si elle existe déjà)
-        let _ = manager
+        if let Err(e) = manager
             .create_collection(&collection_name, &schema_uri)
-            .await;
+            .await
+        {
+            user_warn!(
+                "WRN_SESSION_COLLECTION_INIT",
+                json_value!({ "collection": collection_name, "technical_error": e.to_string(), "hint": "Ignoré si la collection existe déjà" })
+            );
+        }
 
         Ok(Self { collection_name })
     }
@@ -35,15 +41,29 @@ impl MemoryStore {
         manager: &CollectionsManager<'_>,
         session: &ConversationSession,
     ) -> RaiseResult<()> {
-        let mut doc = json::serialize_to_value(session)?;
+        let mut doc = match json::serialize_to_value(session) {
+            Ok(d) => d,
+            Err(e) => raise_error!(
+                "ERR_SESSION_SERIALIZE",
+                error = e,
+                context = json_value!({"session_id": session.id})
+            ),
+        };
 
         // 🎯 Zéro Dette : On s'assure que _id est bien défini pour l'upsert
         if let Some(obj) = doc.as_object_mut() {
             obj.insert("_id".to_string(), json_value!(session.id.clone()));
         }
 
-        manager.upsert_document(&self.collection_name, doc).await?;
-        Ok(())
+        match manager.upsert_document(&self.collection_name, doc).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!(
+                "ERR_SESSION_UPSERT",
+                error = e,
+                context =
+                    json_value!({"collection": self.collection_name, "session_id": session.id})
+            ),
+        }
     }
 
     /// Charge une session existante ou en crée une nouvelle si absente
@@ -77,7 +97,16 @@ impl MemoryStore {
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<Vec<String>> {
         let mut sessions = Vec::new();
-        let docs = manager.list_all(&self.collection_name).await?;
+
+        // 🎯 FIX : Interception propre
+        let docs = match manager.list_all(&self.collection_name).await {
+            Ok(d) => d,
+            Err(e) => raise_error!(
+                "ERR_SESSION_LIST",
+                error = e,
+                context = json_value!({"collection": self.collection_name})
+            ),
+        };
 
         for doc in docs {
             if let Some(id) = doc.get("_id").and_then(|v| v.as_str()) {

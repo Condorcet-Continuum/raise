@@ -3,17 +3,12 @@
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
-use candle_core::{Device, Tensor};
-use candle_nn::VarBuilder;
-use candle_transformers::models::whisper::{self as whisper_model, audio, Config};
-use tokenizers::Tokenizer;
-
 pub struct WhisperEngine {
-    model: whisper_model::model::Whisper,
-    tokenizer: Tokenizer,
-    device: Device,
+    model: WhisperModel::model::Whisper,
+    tokenizer: TextTokenizer,
+    device: ComputeHardware,
     mel_filters: Vec<f32>,
-    config: Config,
+    config: WhisperConfig,
 }
 
 impl WhisperEngine {
@@ -79,27 +74,27 @@ impl WhisperEngine {
             json_value!({ "device": format!("{:?}", device), "model": model_filename })
         );
 
-        // 4. Chargement Config & Tokenizer
+        // 4. Chargement WhisperConfig & TextTokenizer
         let config_str = match fs::read_to_string_sync(&config_path) {
             Ok(c) => c,
             Err(e) => raise_error!("ERR_WHISPER_CONFIG_READ", error = e.to_string()),
         };
 
-        let whisper_config: Config = match json::deserialize_from_str(&config_str) {
+        let whisper_config: WhisperConfig = match json::deserialize_from_str(&config_str) {
             Ok(c) => c,
             Err(e) => raise_error!("ERR_WHISPER_CONFIG_PARSE", error = e.to_string()),
         };
 
-        let tokenizer = match Tokenizer::from_file(&tokenizer_path) {
+        let tokenizer = match TextTokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_WHISPER_TOKENIZER_LOAD", error = e.to_string()),
         };
 
         // 5. Chargement des Poids via Memory Mapping (Zéro Dette performance)
         let vb = unsafe {
-            match VarBuilder::from_mmaped_safetensors(
+            match NeuralWeightsBuilder::from_mmaped_safetensors(
                 &[&model_path],
-                candle_core::DType::F32,
+                ComputeType::F32,
                 &device,
             ) {
                 Ok(v) => v,
@@ -107,7 +102,7 @@ impl WhisperEngine {
             }
         };
 
-        let model = match whisper_model::model::Whisper::load(&vb, whisper_config.clone()) {
+        let model = match WhisperModel::model::Whisper::load(&vb, whisper_config.clone()) {
             Ok(m) => m,
             Err(e) => raise_error!("ERR_WHISPER_MODEL_INIT", error = e.to_string()),
         };
@@ -136,17 +131,17 @@ impl WhisperEngine {
         })
     }
 
-    /// Transcrit un signal audio PCM vers du texte normalisé Arcadia.
+    /// Transcrit un signal WhisperAudio PCM vers du texte normalisé Arcadia.
     pub fn transcribe(&mut self, audio_pcm: &[f32]) -> RaiseResult<String> {
         if audio_pcm.is_empty() {
             return Ok(String::new());
         }
 
         // ÉTAPE 1 : Mel Spectrogram avec protection
-        let mel = audio::pcm_to_mel(&self.config, audio_pcm, &self.mel_filters);
+        let mel = WhisperAudio::pcm_to_mel(&self.config, audio_pcm, &self.mel_filters);
         let mel_len = mel.len();
 
-        let mel_tensor = match Tensor::from_vec(
+        let mel_tensor = match NeuralTensor::from_vec(
             mel,
             (
                 1,
@@ -186,7 +181,7 @@ impl WhisperEngine {
 
         // ÉTAPE 4 : Boucle de Génération résiliente
         for i in 0..150 {
-            let tokens_tensor = match Tensor::new(tokens.as_slice(), &self.device) {
+            let tokens_tensor = match NeuralTensor::new(tokens.as_slice(), &self.device) {
                 Ok(t) => match t.unsqueeze(0) {
                     Ok(u) => u,
                     Err(e) => raise_error!("ERR_WHISPER_UNSQUEEZE", error = e.to_string()),
@@ -278,7 +273,7 @@ mod tests {
         }
     }
 
-    /// Test existant : Robustesse sur audio vide
+    /// Test existant : Robustesse sur WhisperAudio vide
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
@@ -326,7 +321,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_whisper_device_fallback_logic() -> RaiseResult<()> {
         let device = AppConfig::device();
-        // Vérification que la façade SSOT retourne un device valide pour Candle
+        // Vérification que la façade SSOT retourne un device valide pour Native
         assert!(device.is_cpu() || device.is_cuda() || device.is_metal());
         Ok(())
     }

@@ -3,7 +3,7 @@
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 // Import des moteurs lourds
-use crate::ai::llm::candle_engine::CandleLlmEngine;
+use crate::ai::llm::native_engine::NativeTensorEngine;
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::code_generator::CodeGeneratorService;
 
@@ -16,7 +16,7 @@ use crate::model_engine::types::ProjectModel;
 #[derive(Clone)]
 pub struct RaiseKernelState {
     pub orchestrator: Option<SharedRef<AsyncMutex<AiOrchestrator>>>,
-    pub native_llm: Option<SharedRef<AsyncMutex<CandleLlmEngine>>>,
+    pub native_llm: Option<SharedRef<AsyncMutex<NativeTensorEngine>>>,
     pub code_generator: Option<SharedRef<AsyncMutex<CodeGeneratorService>>>,
 }
 
@@ -38,8 +38,8 @@ impl RaiseKernelState {
             json_value!({"action": "loading_heavy_engines"})
         );
 
-        // 2. Initialisation du Native LLM (Candle)
-        let native_llm_engine = match CandleLlmEngine::new(&sys_manager).await {
+        // 2. Initialisation du Native LLM
+        let native_llm_engine = match NativeTensorEngine::new(&sys_manager).await {
             Ok(engine) => {
                 user_success!("SUC_KERNEL_LLM_NATIVE_READY");
                 Some(SharedRef::new(AsyncMutex::new(engine)))

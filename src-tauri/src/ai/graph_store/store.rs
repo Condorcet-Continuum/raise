@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/ai/graph_store/store.rs
 
-use crate::ai::memory::candle_store::CandleLocalStore;
+use crate::ai::memory::native_store::NativeLocalStore;
 use crate::ai::memory::{MemoryRecord, VectorStore};
 use crate::ai::nlp::embeddings::EmbeddingEngine;
 use crate::json_db::collections::manager::CollectionsManager;
@@ -10,7 +10,7 @@ use crate::utils::prelude::*; // 🎯 Façade Unique
 #[derive(Clone)]
 pub struct GraphStore {
     pub storage_path: PathBuf,
-    pub vector_store: Option<SharedRef<CandleLocalStore>>,
+    pub vector_store: Option<SharedRef<NativeLocalStore>>,
     pub embedder: Option<SharedRef<AsyncMutex<EmbeddingEngine>>>,
     pub embedding_dim: usize,
     pub processor: JsonLdProcessor,
@@ -38,7 +38,7 @@ impl GraphStore {
                 Ok(engine) => {
                     let device = AppConfig::device();
                     let v_dir = storage_path.join("vectors");
-                    let v_store = CandleLocalStore::new(&v_dir, device);
+                    let v_store = NativeLocalStore::new(&v_dir, device);
 
                     // Chargement résilient : si le store est absent, on continue à vide
                     if let Err(e) = v_store.load().await {

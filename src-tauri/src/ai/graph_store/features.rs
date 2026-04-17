@@ -3,11 +3,10 @@
 use crate::ai::nlp::embeddings::EmbeddingEngine;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique
-use candle_core::{Device, Tensor};
 
 pub struct GraphFeatures {
     /// Le tenseur des caractéristiques [N, D] (H-Matrix)
-    pub matrix: Tensor,
+    pub matrix: NeuralTensor,
 }
 
 impl GraphFeatures {
@@ -17,7 +16,7 @@ impl GraphFeatures {
         manager: &CollectionsManager<'_>, // 🎯 SSOT: Manager pour accès aux documents
         index_to_uri: &[String],
         embedding_engine: &mut EmbeddingEngine,
-        device: &Device,
+        device: &ComputeHardware,
     ) -> RaiseResult<Self> {
         let n_nodes = index_to_uri.len();
         if n_nodes == 0 {
@@ -103,7 +102,11 @@ impl GraphFeatures {
         }
 
         // 3. Création du Tenseur final [N, D] sur le matériel configuré
-        let matrix = match Tensor::from_vec(all_embeddings_data, (n_nodes, expected_dim), device) {
+        let matrix = match NeuralTensor::from_vec(
+            all_embeddings_data,
+            (n_nodes, expected_dim),
+            device,
+        ) {
             Ok(t) => t,
             Err(e) => {
                 raise_error!(
@@ -189,7 +192,8 @@ mod tests {
         ];
 
         let feat =
-            GraphFeatures::build_from_store(&manager, &uris, &mut engine, &Device::Cpu).await?;
+            GraphFeatures::build_from_store(&manager, &uris, &mut engine, &ComputeHardware::Cpu)
+                .await?;
 
         assert_eq!(
             feat.matrix.dims(),
@@ -214,7 +218,9 @@ mod tests {
         inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
         let mut engine = EmbeddingEngine::new(&manager).await?;
 
-        let res = GraphFeatures::build_from_store(&manager, &[], &mut engine, &Device::Cpu).await;
+        let res =
+            GraphFeatures::build_from_store(&manager, &[], &mut engine, &ComputeHardware::Cpu)
+                .await;
 
         match res {
             Err(AppError::Structured(err)) => assert_eq!(err.code, "ERR_GNN_EMPTY_FEATURES"),
@@ -243,7 +249,8 @@ mod tests {
         let uris = vec!["ghost:entity_01".to_string()];
 
         let feat =
-            GraphFeatures::build_from_store(&manager, &uris, &mut engine, &Device::Cpu).await?;
+            GraphFeatures::build_from_store(&manager, &uris, &mut engine, &ComputeHardware::Cpu)
+                .await?;
 
         // Le build doit réussir via le fallback textuel (URI formatée)
         assert_eq!(feat.matrix.dims(), &[1, 384]);

@@ -72,11 +72,10 @@ async fn test_hardware_agent_handles_both_electronics_and_infra() -> RaiseResult
     // --- 🎯 3. CONTEXTE & EXÉCUTION ---
     let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_pa");
 
-    use candle_nn::VarMap;
     let world_engine = SharedRef::new(
         raise::ai::world_model::NeuroSymbolicEngine::new(
             raise::utils::data::config::WorldModelConfig::default(),
-            VarMap::new(),
+            NeuralWeightsMap::new(),
         )
         .expect("WM Engine fail"),
     );
@@ -199,10 +198,12 @@ mod resilience_tests {
             )
             .await?;
 
-        use candle_nn::VarMap;
         let world_engine = SharedRef::new(
-            raise::ai::world_model::NeuroSymbolicEngine::new(Default::default(), VarMap::new())
-                .unwrap(),
+            raise::ai::world_model::NeuroSymbolicEngine::new(
+                Default::default(),
+                NeuralWeightsMap::new(),
+            )
+            .unwrap(),
         );
 
         let llm_client = match env.client.clone() {

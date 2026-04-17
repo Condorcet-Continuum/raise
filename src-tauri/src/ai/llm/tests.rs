@@ -1,4 +1,5 @@
 use super::response_parser;
+use crate::utils::prelude::*;
 
 // ==========================================
 // 1. TESTS UNITAIRES (LOGIQUE INTERNE)
@@ -6,7 +7,7 @@ use super::response_parser;
 
 /// Vérifie que le parser nettoie correctement les balises Markdown des LLM.
 #[test]
-fn test_response_parser_cleaning() {
+fn test_response_parser_cleaning() -> RaiseResult<()> {
     // Cas 1 : Réponse "bavarde" avec Markdown
     let raw_markdown = r#"
     Bien sûr, voici le JSON :
@@ -19,8 +20,10 @@ fn test_response_parser_cleaning() {
     J'espère que cela aide.
     "#;
 
-    let json = response_parser::extract_json(raw_markdown)
-        .expect("Le parser aurait dû extraire le JSON du Markdown");
+    let json = match response_parser::extract_json(raw_markdown) {
+        Ok(j) => j,
+        Err(e) => return Err(e),
+    };
 
     assert_eq!(json["intent"], "CREATE_ELEMENT");
     assert_eq!(json["confidence"], 0.98);
@@ -30,11 +33,12 @@ fn test_response_parser_cleaning() {
     let json2 =
         response_parser::extract_json(raw_clean).expect("Le parser aurait dû lire le JSON brut");
     assert_eq!(json2["key"], "value");
+    Ok(())
 }
 
 /// Vérifie que le parser rejette proprement un JSON invalide.
 #[test]
-fn test_parser_resilience_bad_json() {
+fn test_parser_resilience_bad_json() -> RaiseResult<()> {
     let bad_response = r#"
     ```json
     {
@@ -47,4 +51,5 @@ fn test_parser_resilience_bad_json() {
         result.is_err(),
         "Le parser doit renvoyer une erreur sur un JSON malformé"
     );
+    Ok(())
 }

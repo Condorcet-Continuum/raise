@@ -69,11 +69,10 @@ async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
     // --- 🎯 3. CONTEXTE & EXÉCUTION ---
     let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_data");
 
-    use candle_nn::VarMap;
     let world_engine = SharedRef::new(
         raise::ai::world_model::NeuroSymbolicEngine::new(
             raise::utils::data::config::WorldModelConfig::default(),
-            VarMap::new(),
+            NeuralWeightsMap::new(),
         )
         .expect("WM Engine fail"),
     );
@@ -193,11 +192,10 @@ mod resilience_tests {
             .await?;
 
         // 2. Préparation du contexte d'exécution
-        use candle_nn::VarMap;
         let world_engine = SharedRef::new(
             raise::ai::world_model::NeuroSymbolicEngine::new(
                 raise::utils::data::config::WorldModelConfig::default(),
-                VarMap::new(),
+                NeuralWeightsMap::new(),
             )
             .expect("WM Engine fail"),
         );

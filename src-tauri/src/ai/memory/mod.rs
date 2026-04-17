@@ -3,7 +3,7 @@
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique
 
-pub mod candle_store;
+pub mod native_store;
 
 #[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct MemoryRecord {
@@ -49,17 +49,16 @@ pub trait VectorStore: Send + Sync {
 #[cfg(test)]
 mod integration_tests {
     use super::{MemoryRecord, VectorStore};
-    use crate::ai::memory::candle_store::CandleLocalStore;
+    use crate::ai::memory::native_store::NativeLocalStore;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::prelude::*;
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
-    use candle_core::Device;
 
     /// Test existant : Cycle de vie complet via Sandbox
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_candle_lifecycle() -> RaiseResult<()> {
+    async fn test_native_lifecycle() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
@@ -71,9 +70,9 @@ mod integration_tests {
         );
         DbSandbox::mock_db(&manager).await?;
 
-        let device = Device::Cpu;
+        let device = ComputeHardware::Cpu;
         let store_dir = sandbox.domain_root.join("vector_store");
-        let store = CandleLocalStore::new(&store_dir, &device);
+        let store = NativeLocalStore::new(&store_dir, &device);
 
         let col = "integ_test_collection";
 
@@ -121,7 +120,7 @@ mod integration_tests {
 
         // On crée un manager pointant vers un domaine non initialisé
         let manager = CollectionsManager::new(&sandbox.db, "ghost_domain", "ghost_db");
-        let store = CandleLocalStore::new(&sandbox.domain_root.join("fail"), &Device::Cpu);
+        let store = NativeLocalStore::new(&sandbox.domain_root.join("fail"), &ComputeHardware::Cpu);
 
         // 1. L'initialisation est "Lazy/Résiliente" et ne crashera pas
         let _ = store.init_collection(&manager, "any", 384).await;
@@ -168,7 +167,7 @@ mod integration_tests {
         );
         DbSandbox::mock_db(&manager).await?;
 
-        let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
+        let store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
 
         // Init deux collections distinctes
         store.init_collection(&manager, "col_a", 2).await?;

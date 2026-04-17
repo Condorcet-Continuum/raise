@@ -2,10 +2,9 @@
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 pub struct FastEmbedEngine {
-    model: TextEmbedding,
+    model: LightweightTextEmbedding,
 }
 
 impl FastEmbedEngine {
@@ -23,14 +22,14 @@ impl FastEmbedEngine {
 
         // 2. Déduction dynamique du modèle ONNX
         let embed_model = match model_name_str {
-            "AllMiniLML6V2" => EmbeddingModel::AllMiniLML6V2,
-            _ => EmbeddingModel::BGESmallENV15,
+            "AllMiniLML6V2" => LightweightEmbeddingModel::AllMiniLML6V2,
+            _ => LightweightEmbeddingModel::BGESmallENV15,
         };
 
-        let options = InitOptions::new(embed_model).with_show_download_progress(true);
+        let options = LightweightInitOptions::new(embed_model).with_show_download_progress(true);
 
         // 3. Initialisation sécurisée via Match
-        let model = match TextEmbedding::try_new(options) {
+        let model = match LightweightTextEmbedding::try_new(options) {
             Ok(m) => m,
             Err(e) => raise_error!(
                 "ERR_AI_FASTEMBED_INIT",

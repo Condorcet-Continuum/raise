@@ -1,7 +1,5 @@
 // FICHIER : src-tauri/src/ai/deep_learning/models/gnn_model.rs
 use crate::utils::prelude::*;
-use candle_core::Tensor;
-use candle_nn::VarBuilder;
 
 use crate::ai::deep_learning::layers::gnn_layer::GcnLayer;
 use crate::ai::graph_store::adjacency::GraphAdjacency;
@@ -19,7 +17,7 @@ impl ArcadiaGnnModel {
         in_dim: usize,
         hidden_dim: usize,
         out_dim: usize,
-        vb: VarBuilder<'_>,
+        vb: NeuralWeightsBuilder<'_>,
     ) -> RaiseResult<Self> {
         // Initialisation de la Couche 1 (Agrégation locale)
         let layer1 = GcnLayer::new(in_dim, hidden_dim, vb.pp("layer1")).await?;
@@ -36,10 +34,10 @@ impl ArcadiaGnnModel {
     /// Utilise les indices des arêtes (edges) plutôt qu'une matrice dense [N, N].
     pub async fn forward(
         &self,
-        edge_src: &Tensor,
-        edge_dst: &Tensor,
-        features: &Tensor,
-    ) -> RaiseResult<Tensor> {
+        edge_src: &NeuralTensor,
+        edge_dst: &NeuralTensor,
+        features: &NeuralTensor,
+    ) -> RaiseResult<NeuralTensor> {
         // Passe 1 : Agrégation des voisins directs via les arêtes
         let hidden = self.layer1.forward(edge_src, edge_dst, features).await?;
 
@@ -53,7 +51,7 @@ impl ArcadiaGnnModel {
     /// Calcule la similarité cosinus entre deux composants Arcadia après transformation GNN.
     pub async fn compute_similarity(
         &self,
-        embeddings: &Tensor,
+        embeddings: &NeuralTensor,
         adj_data: &GraphAdjacency,
         uri_a: &str,
         uri_b: &str,
@@ -152,24 +150,22 @@ impl ArcadiaGnnModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{DType, Device};
-    use candle_nn::VarMap;
 
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gnn_model_sparse_flow() {
-        let device = Device::Cpu;
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let device = ComputeHardware::Cpu;
+        let varmap = NeuralWeightsMap::new();
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &device);
 
         // Modèle : In=4, Hidden=8, Out=2
         let model = ArcadiaGnnModel::new(4, 8, 2, vb).await.unwrap();
 
         // Nœuds et Edges factices (3 nœuds liés en chaîne + self-loops)
-        let edge_src = Tensor::new(&[0u32, 1, 0, 1, 2], &device).unwrap();
-        let edge_dst = Tensor::new(&[1u32, 2, 0, 1, 2], &device).unwrap();
-        let feat = Tensor::zeros((3, 4), DType::F32, &device).unwrap();
+        let edge_src = NeuralTensor::new(&[0u32, 1, 0, 1, 2], &device).unwrap();
+        let edge_dst = NeuralTensor::new(&[1u32, 2, 0, 1, 2], &device).unwrap();
+        let feat = NeuralTensor::zeros((3, 4), ComputeType::F32, &device).unwrap();
 
         let output = model.forward(&edge_src, &edge_dst, &feat).await;
 
@@ -181,9 +177,9 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_similarity_logic_with_epsilon() {
-        let device = Device::Cpu;
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let device = ComputeHardware::Cpu;
+        let varmap = NeuralWeightsMap::new();
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &device);
         let model = ArcadiaGnnModel::new(2, 2, 2, vb).await.unwrap();
 
         let mut uri_map = UnorderedMap::new();
@@ -193,11 +189,11 @@ mod tests {
         let adj_mock = GraphAdjacency {
             uri_to_index: uri_map,
             index_to_uri: vec!["la:Function".to_string(), "sa:Component".to_string()],
-            matrix: Tensor::eye(2, DType::F32, &device).unwrap(),
+            matrix: NeuralTensor::eye(2, ComputeType::F32, &device).unwrap(),
         };
 
         // Deux vecteurs "Zéro" -> Testera l'Epsilon
-        let embeddings_zero = Tensor::zeros((2, 2), DType::F32, &device).unwrap();
+        let embeddings_zero = NeuralTensor::zeros((2, 2), ComputeType::F32, &device).unwrap();
         let sim_zero = model
             .compute_similarity(&embeddings_zero, &adj_mock, "la:Function", "sa:Component")
             .await
@@ -210,7 +206,8 @@ mod tests {
 
         // 🎯 FIX : On force le type en f32 avec le suffixe `_f32`
         let embeddings =
-            Tensor::from_vec(vec![1.0_f32, 0.0_f32, 1.0_f32, 0.0_f32], (2, 2), &device).unwrap();
+            NeuralTensor::from_vec(vec![1.0_f32, 0.0_f32, 1.0_f32, 0.0_f32], (2, 2), &device)
+                .unwrap();
         let sim = model
             .compute_similarity(&embeddings, &adj_mock, "la:Function", "sa:Component")
             .await
@@ -226,7 +223,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gnn_message_passing_convergence_mbse() {
-        let device = Device::Cpu;
+        let device = ComputeHardware::Cpu;
 
         // 1. MOCK DE LA TOPOLOGIE MBSE (4 Nœuds)
         let mut uri_map = UnorderedMap::new();
@@ -243,7 +240,7 @@ mod tests {
                 "sa:S1".to_string(),
                 "pa:P1".to_string(),
             ],
-            matrix: Tensor::eye(4, DType::F32, &device).unwrap(),
+            matrix: NeuralTensor::eye(4, ComputeType::F32, &device).unwrap(),
         };
 
         // 2. LISTE DES ARÊTES (Sparse)
@@ -254,11 +251,11 @@ mod tests {
         src.extend_from_slice(&[0, 2, 0, 1]);
         dst.extend_from_slice(&[2, 0, 1, 0]);
 
-        let edge_src = Tensor::new(src.as_slice(), &device).unwrap();
-        let edge_dst = Tensor::new(dst.as_slice(), &device).unwrap();
+        let edge_src = NeuralTensor::new(src.as_slice(), &device).unwrap();
+        let edge_dst = NeuralTensor::new(dst.as_slice(), &device).unwrap();
 
         // 3. VECTEURS SÉMANTIQUES INITIAUX
-        let features = Tensor::eye(4, DType::F32, &device).unwrap();
+        let features = NeuralTensor::eye(4, ComputeType::F32, &device).unwrap();
 
         // 🎯 FIX : Boucle de résilience pour l'initialisation aléatoire des poids
         let mut success = false;
@@ -266,8 +263,8 @@ mod tests {
         let mut last_sim_isolated = 0.0;
 
         for _ in 0..10 {
-            let varmap = VarMap::new();
-            let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+            let varmap = NeuralWeightsMap::new();
+            let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &device);
             let model = ArcadiaGnnModel::new(4, 8, 4, vb).await.unwrap();
 
             let sim_init = model

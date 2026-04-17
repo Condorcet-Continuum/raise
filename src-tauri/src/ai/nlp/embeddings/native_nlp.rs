@@ -1,26 +1,21 @@
-// FICHIER : src-tauri/src/ai/nlp/embeddings/candle.rs
+// FICHIER : src-tauri/src/ai/nlp/embeddings/native_nlp.rs
 
 use crate::utils::prelude::*; // 🎯 Façade Unique
 
-use candle_core::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
-use candle_transformers::models::bert::{BertModel, Config};
-use tokenizers::Tokenizer;
-
-pub struct CandleEngine {
-    model: BertModel,
-    tokenizer: Tokenizer,
-    device: Device,
+pub struct NativeNlpEngine {
+    model: NeuralBertModel,
+    tokenizer: TextTokenizer,
+    device: ComputeHardware,
 }
 
-impl CandleEngine {
+impl NativeNlpEngine {
     /// Initialise le moteur d'embeddings BERT en respectant les points de montage.
     pub async fn new(
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
         let device = AppConfig::device().clone();
         user_info!(
-            "MSG_NLP_CANDLE_INIT",
+            "MSG_NLP_NATIVE_INIT",
             json_value!({ "device": format!("{:?}", device), "backend": "BERT" })
         );
 
@@ -77,26 +72,30 @@ impl CandleEngine {
             Err(e) => raise_error!("ERR_NLP_CONFIG_READ", error = e.to_string()),
         };
 
-        let bert_config: Config = match json::deserialize_from_str(&config_str) {
+        let bert_config: NeuralBertConfig = match json::deserialize_from_str(&config_str) {
             Ok(c) => c,
             Err(e) => raise_error!("ERR_NLP_CONFIG_PARSE", error = e.to_string()),
         };
 
-        // 5. Chargement du Tokenizer
-        let tokenizer = match Tokenizer::from_file(&tokenizer_path) {
+        // 5. Chargement du TextTokenizer
+        let tokenizer = match TextTokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_NLP_TOKENIZER_LOAD", error = e.to_string()),
         };
 
         // 6. Chargement des poids via Memory Mapping
         let vb = unsafe {
-            match VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device) {
+            match NeuralWeightsBuilder::from_mmaped_safetensors(
+                &[&weights_path],
+                ComputeType::F32,
+                &device,
+            ) {
                 Ok(builder) => builder,
                 Err(e) => raise_error!("ERR_NLP_WEIGHTS_LOAD", error = e.to_string()),
             }
         };
 
-        let model = match BertModel::load(vb, &bert_config) {
+        let model = match NeuralBertModel::load(vb, &bert_config) {
             Ok(m) => m,
             Err(e) => raise_error!("ERR_NLP_MODEL_INSTANTIATION", error = e.to_string()),
         };
@@ -134,13 +133,14 @@ impl CandleEngine {
             batch_ids.resize(batch_ids.len() + (max_len - ids.len()), 0);
         }
 
-        let token_ids = match Tensor::from_vec(batch_ids, (batch_size, max_len), &self.device) {
+        let token_ids = match NeuralTensor::from_vec(batch_ids, (batch_size, max_len), &self.device)
+        {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_NLP_TENSOR_IDS", error = e.to_string()),
         };
 
         let token_type_ids =
-            match Tensor::from_vec(batch_type_ids, (batch_size, max_len), &self.device) {
+            match NeuralTensor::from_vec(batch_type_ids, (batch_size, max_len), &self.device) {
                 Ok(t) => t,
                 Err(e) => raise_error!("ERR_NLP_TENSOR_TYPES", error = e.to_string()),
             };
@@ -173,9 +173,9 @@ impl CandleEngine {
     }
 }
 
-fn normalize_l2(v: &Tensor) -> RaiseResult<Tensor> {
+fn normalize_l2(v: &NeuralTensor) -> RaiseResult<NeuralTensor> {
     let sum_sq = v.sqr()?.sum_keepdim(1)?;
-    let epsilon = Tensor::new(&[1e-8f32], v.device())?;
+    let epsilon = NeuralTensor::new(&[1e-8f32], v.device())?;
     let norm = sum_sq.broadcast_add(&epsilon)?.sqrt()?;
 
     match v.broadcast_div(&norm) {
@@ -234,7 +234,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_candle_mini_lm_loading() -> RaiseResult<()> {
+    async fn test_native_mini_lm_loading() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         provide_assets_to_sandbox("minilm").await;
 
@@ -246,7 +246,7 @@ mod tests {
         );
         inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
 
-        let engine = CandleEngine::new(&manager).await?;
+        let engine = NativeNlpEngine::new(&manager).await?;
         assert!(engine.tokenizer.get_vocab_size(true) > 0);
         Ok(())
     }
@@ -254,7 +254,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_candle_dimensions_and_norm() -> RaiseResult<()> {
+    async fn test_native_dimensions_and_norm() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         provide_assets_to_sandbox("minilm").await;
 
@@ -265,7 +265,7 @@ mod tests {
         );
         inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
 
-        let mut engine = CandleEngine::new(&manager).await?;
+        let mut engine = NativeNlpEngine::new(&manager).await?;
         let vec = engine.embed_query("Test NLP")?;
 
         assert_eq!(vec.len(), 384);
@@ -286,7 +286,7 @@ mod tests {
 
         inject_mock_component(&manager, "nlp", json_value!({"model_name": "ghost_model"})).await;
 
-        let result = CandleEngine::new(&manager).await;
+        let result = NativeNlpEngine::new(&manager).await;
         match result {
             Err(AppError::Structured(err)) => {
                 assert_eq!(err.code, "ERR_AI_EMBEDDING_ASSETS_MISSING");

@@ -75,7 +75,8 @@ pub use fs::{
 };
 
 pub use os::{
-    exec_command_async, exec_command_sync, flush_stdout, pipe_through, prompt, read_stdin_line,
+    exec_command_async, exec_command_sync, execute_native_inference, flush_stdout, pipe_through,
+    prompt, read_stdin_line,
 };
 // --- Flux Standards (Alias de Fonctions) ---
 /// 🤖 IA NOTE : Point d'entrée pour le flux d'erreur standard.

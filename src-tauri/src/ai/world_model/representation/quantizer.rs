@@ -1,21 +1,19 @@
 // FICHIER : src-tauri/src/ai/world_model/representation/quantizer.rs
 
 use crate::utils::prelude::*;
-use candle_core::{Module, Tensor};
-use candle_nn::{Embedding, VarBuilder};
 
 /// Module de Quantification Vectorielle (VQ-VAE style).
 /// Il mappe un vecteur continu vers l'index du vecteur le plus proche dans le codebook.
 pub struct VectorQuantizer {
     /// Le dictionnaire des concepts (Codebook)
     /// Shape: [num_embeddings, embedding_dim]
-    embedding: Embedding,
+    embedding: NeuralEmbeddingLayer,
 }
 
 impl VectorQuantizer {
     /// Initialise un nouveau Quantizer via la configuration globale
-    pub fn new(config: &WorldModelConfig, vb: VarBuilder) -> RaiseResult<Self> {
-        let embedding = match candle_nn::embedding(config.vocab_size, config.embedding_dim, vb) {
+    pub fn new(config: &WorldModelConfig, vb: NeuralWeightsBuilder) -> RaiseResult<Self> {
+        let embedding = match init_embedding_layer(config.vocab_size, config.embedding_dim, vb) {
             Ok(emb) => emb,
             Err(e) => {
                 raise_error!(
@@ -36,7 +34,7 @@ impl VectorQuantizer {
     /// Fonction principale : Transforme un vecteur d'entrée en Token (Index)
     /// Input: [Batch, Dim]
     /// Output: [Batch] (Indices des concepts les plus proches)
-    pub fn tokenize(&self, z: &Tensor) -> RaiseResult<Tensor> {
+    pub fn tokenize(&self, z: &NeuralTensor) -> RaiseResult<NeuralTensor> {
         // 1. Norme de l'entrée ||z||^2
         let z_sq = match z.sqr().and_then(|s| s.sum_keepdim(1)) {
             Ok(t) => t,
@@ -91,7 +89,7 @@ impl VectorQuantizer {
     /// Décode un Token pour retrouver son vecteur prototype
     /// Input: [Batch] (Indices)
     /// Output: [Batch, Dim]
-    pub fn decode(&self, indices: &Tensor) -> RaiseResult<Tensor> {
+    pub fn decode(&self, indices: &NeuralTensor) -> RaiseResult<NeuralTensor> {
         // La méthode .forward() sur une couche d'Embedding fait le lookup des index
         match self.embedding.forward(indices) {
             Ok(vectors) => Ok(vectors),
@@ -111,8 +109,6 @@ impl VectorQuantizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{DType, Device};
-    use candle_nn::VarMap;
 
     // Helper pour générer une config de test rapide
     fn get_test_config() -> WorldModelConfig {
@@ -128,14 +124,15 @@ mod tests {
     #[test]
     fn test_quantizer_logic() {
         // 1. Setup : Un petit Codebook de 2 vecteurs en 2D
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+        let varmap = NeuralWeightsMap::new();
+        let vb =
+            NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &ComputeHardware::Cpu);
         let config = get_test_config();
 
         let vq = VectorQuantizer::new(&config, vb.pp("vq")).unwrap();
 
         // --- Test de Dimensions ---
-        let input = Tensor::randn(0f32, 1f32, (1, 2), &Device::Cpu).unwrap();
+        let input = NeuralTensor::randn(0f32, 1f32, (1, 2), &ComputeHardware::Cpu).unwrap();
         let token = vq.tokenize(&input).unwrap();
 
         assert_eq!(token.dims(), &[1]);
@@ -146,9 +143,9 @@ mod tests {
 
     #[test]
     fn test_nearest_neighbor_math() {
-        let dev = Device::Cpu;
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &dev);
+        let dev = ComputeHardware::Cpu;
+        let varmap = NeuralWeightsMap::new();
+        let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &dev);
         let config = get_test_config();
 
         let vq = VectorQuantizer::new(&config, vb.pp("vq")).unwrap();
@@ -158,7 +155,7 @@ mod tests {
         let target_vec = codebook.get(0).unwrap().unsqueeze(0).unwrap();
 
         // On crée une entrée très proche
-        let noise = Tensor::new(&[[0.001f32, 0.001]], &dev).unwrap();
+        let noise = NeuralTensor::new(&[[0.001f32, 0.001]], &dev).unwrap();
         let input = (target_vec + noise).unwrap();
 
         // Tokenize

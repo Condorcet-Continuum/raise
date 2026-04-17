@@ -23,15 +23,6 @@ pub fn normalize(text: &str) -> String {
         .join(" ")
 }
 
-/// Supprime les mots vides (Stop Words) français.
-pub fn remove_stopwords(text: &str) -> String {
-    let stopwords = get_french_stopwords();
-    text.split_whitespace()
-        .filter(|word| !stopwords.contains(*word))
-        .collect::<Vec<&str>>()
-        .join(" ")
-}
-
 /// Gestion manuelle des accents.
 fn remove_accents(s: &str) -> String {
     s.chars()
@@ -48,18 +39,32 @@ fn remove_accents(s: &str) -> String {
         .collect()
 }
 
-fn get_french_stopwords() -> UniqueSet<&'static str> {
-    let mut set = UniqueSet::new();
-    let list = [
-        "le", "la", "les", "l", "un", "une", "des", "du", "de", "d", "ce", "cet", "cette", "ces",
-        "mon", "ton", "son", "et", "ou", "mais", "donc", "car", "ni", "à", "en", "dans", "par",
-        "pour", "sur", "avec", "sans", "qui", "que", "quoi", "dont", "où", "est", "sont", "avoir",
-        "être", "je", "tu", "il", "nous", "vous", "veut", "voudrais",
-    ];
-    for word in list {
-        set.insert(word);
-    }
-    set
+/// Supprime les mots vides (Stop Words) français.
+pub fn remove_stopwords(text: &str) -> String {
+    let stopwords = get_french_stopwords();
+    text.split_whitespace()
+        .filter(|word| !stopwords.contains(*word))
+        .collect::<Vec<&str>>()
+        .join(" ")
+}
+
+/// Dictionnaire statique chargé une seule fois en mémoire (O(1) allocation)
+fn get_french_stopwords() -> &'static UniqueSet<&'static str> {
+    static STOPWORDS: StaticCell<UniqueSet<&'static str>> = StaticCell::new();
+
+    STOPWORDS.get_or_init(|| {
+        let mut set = UniqueSet::new();
+        let list = [
+            "le", "la", "les", "l", "un", "une", "des", "du", "de", "d", "ce", "cet", "cette",
+            "ces", "mon", "ton", "son", "et", "ou", "mais", "donc", "car", "ni", "à", "en", "dans",
+            "par", "pour", "sur", "avec", "sans", "qui", "que", "quoi", "dont", "où", "est",
+            "sont", "avoir", "être", "je", "tu", "il", "nous", "vous", "veut", "voudrais",
+        ];
+        for word in list {
+            set.insert(word);
+        }
+        set
+    })
 }
 
 #[cfg(test)]

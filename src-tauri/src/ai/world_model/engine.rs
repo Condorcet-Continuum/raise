@@ -1,8 +1,5 @@
 // FICHIER : src-tauri/src/ai/world_model/engine.rs
 
-use candle_core::{DType, Device, Tensor, Var};
-use candle_nn::{VarBuilder, VarMap};
-
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
@@ -18,7 +15,7 @@ pub struct WorldAction {
 
 impl WorldAction {
     /// Convertit une intention sémantique en tenseur "One-Hot" pour le prédicteur.
-    pub fn to_tensor(&self, dim: usize) -> RaiseResult<Tensor> {
+    pub fn to_tensor(&self, dim: usize) -> RaiseResult<NeuralTensor> {
         let mut data = vec![0f32; dim];
         let idx = match self.intent {
             CommandType::Create => 0,
@@ -33,7 +30,7 @@ impl WorldAction {
         }
 
         // 🎯 Pattern Match strict pour la création tensorielle
-        match Tensor::from_vec(data, (1, dim), &Device::Cpu) {
+        match NeuralTensor::from_vec(data, (1, dim), &ComputeHardware::Cpu) {
             Ok(t) => Ok(t),
             Err(e) => raise_error!(
                 "ERR_TENSOR_FROM_VEC",
@@ -45,7 +42,7 @@ impl WorldAction {
 }
 
 pub struct NeuroSymbolicEngine {
-    pub varmap: VarMap,
+    pub varmap: NeuralWeightsMap,
     pub quantizer: VectorQuantizer,
     pub predictor: WorldModelPredictor,
     pub config: WorldModelConfig,
@@ -53,8 +50,9 @@ pub struct NeuroSymbolicEngine {
 
 impl NeuroSymbolicEngine {
     /// Initialise le moteur Neuro-Symbolique Arcadia.
-    pub fn new(config: WorldModelConfig, varmap: VarMap) -> RaiseResult<Self> {
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+    pub fn new(config: WorldModelConfig, varmap: NeuralWeightsMap) -> RaiseResult<Self> {
+        let vb =
+            NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &ComputeHardware::Cpu);
 
         let quantizer = match VectorQuantizer::new(&config, vb.pp("quantizer")) {
             Ok(q) => q,
@@ -75,12 +73,16 @@ impl NeuroSymbolicEngine {
     }
 
     pub fn new_empty(config: WorldModelConfig) -> RaiseResult<Self> {
-        let varmap = candle_nn::VarMap::new();
+        let varmap = NeuralWeightsMap::new();
         Self::new(config, varmap)
     }
 
     /// Simule l'évolution de l'état du monde Arcadia face à une action.
-    pub fn simulate(&self, element: &ArcadiaElement, action: WorldAction) -> RaiseResult<Tensor> {
+    pub fn simulate(
+        &self,
+        element: &ArcadiaElement,
+        action: WorldAction,
+    ) -> RaiseResult<NeuralTensor> {
         let raw_perception = ArcadiaEncoder::encode_element(element)?;
         let token = self.quantizer.tokenize(&raw_perception)?;
         let state_quantized = self.quantizer.decode(&token)?;
@@ -92,7 +94,7 @@ impl NeuroSymbolicEngine {
         }
     }
 
-    fn extract_tensors_sync(&self) -> RaiseResult<UnorderedMap<String, Tensor>> {
+    fn extract_tensors_sync(&self) -> RaiseResult<UnorderedMap<String, NeuralTensor>> {
         let data_guard = match self.varmap.data().lock() {
             Ok(guard) => guard,
             Err(_) => raise_error!("ERR_LOCK_PANIC", error = "Varmap lock poisoned"),
@@ -125,15 +127,14 @@ impl NeuroSymbolicEngine {
         let path_display = path.to_string_lossy().to_string();
 
         // 🎯 Pattern Match strict sur le spawn (Zéro Dette)
-        let spawn_result =
-            match spawn_cpu_task(move || candle_core::safetensors::save(&tensors, path)).await {
-                Ok(res) => res,
-                Err(e) => raise_error!(
-                    "ERR_ASYNC_SPAWN_FAILURE",
-                    error = e.to_string(),
-                    context = json_value!({ "path": path_display })
-                ),
-            };
+        let spawn_result = match spawn_cpu_task(move || SafeTensorsIO::save(&tensors, path)).await {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_ASYNC_SPAWN_FAILURE",
+                error = e.to_string(),
+                context = json_value!({ "path": path_display })
+            ),
+        };
 
         match spawn_result {
             Ok(_) => Ok(()),
@@ -163,7 +164,7 @@ impl NeuroSymbolicEngine {
 
         let buffer = fs::read_async(path).await?;
 
-        let tensors = match candle_core::safetensors::load_buffer(&buffer, &Device::Cpu) {
+        let tensors = match SafeTensorsIO::load_buffer(&buffer, &ComputeHardware::Cpu) {
             Ok(t) => t,
             Err(e) => raise_error!(
                 "ERR_MODEL_LOAD_BUFFER",
@@ -172,14 +173,14 @@ impl NeuroSymbolicEngine {
             ),
         };
 
-        let varmap = VarMap::new();
+        let varmap = NeuralWeightsMap::new();
         {
             let mut data = match varmap.data().lock() {
                 Ok(guard) => guard,
                 Err(_) => raise_error!("ERR_LOCK_POISONED", error = "Varmap load lock error"),
             };
             for (name, tensor) in tensors {
-                let var = match Var::from_tensor(&tensor) {
+                let var = match NeuralVar::from_tensor(&tensor) {
                     Ok(v) => v,
                     Err(e) => raise_error!(
                         "ERR_MODEL_VAR_CONVERSION",
@@ -224,7 +225,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_engine_simulation_flow() -> RaiseResult<()> {
-        let varmap = VarMap::new();
+        let varmap = NeuralWeightsMap::new();
         let config = get_test_config();
         let engine = NeuroSymbolicEngine::new(config, varmap)?;
 
@@ -253,7 +254,7 @@ mod tests {
             &config_app.mount_points.system.db,
         );
 
-        let varmap = VarMap::new();
+        let varmap = NeuralWeightsMap::new();
         let config = get_test_config();
 
         let engine1 = NeuroSymbolicEngine::new(config.clone(), varmap)?;

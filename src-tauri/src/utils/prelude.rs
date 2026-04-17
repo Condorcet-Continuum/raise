@@ -81,7 +81,7 @@ pub use crate::utils::data::compute::{execute_compute_plan, ComputeOperatorFn, C
 pub use crate::utils::data::config::{
     AppConfig,
     CoreConfig,
-    DeepLearningConfig, // 🎯 L'élément manquant pour ton agent DL
+    DeepLearningConfig, // 🎯 Config DL
     WorldModelConfig,
 };
 pub use crate::utils::data::json::{self, json_value, JsonObject, JsonValue};
@@ -94,33 +94,72 @@ pub use crate::utils::data::{
     UnorderedMap, // 🎯 HashMap sémantique
 };
 
-// --- 5. INFÉRENCE & MACHINE LEARNING (Forteresse RAISE) ---
-// Ces exports masquent totalement l'écosystème ML (Candle, FastEmbed, Rayon)
+// --- 4. INFÉRENCE & MACHINE LEARNING (Forteresse RAISE) ---
+// Ces exports masquent totalement l'écosystème ML (Candle, FastEmbed, Tokenizers)
 // au reste du projet pour garantir un couplage faible et une haute résilience.
 pub use crate::utils::inference::{
-    configure_parallel_pool, // Limiteur de ressources pour éviter d'étouffer l'OS
-    // ⚡ 5. Parallélisme CPU (Multi-threading)
-    execute_parallel_map, // Itération parallèle ultra-rapide et thread-safe
-    load_neural_weights,  // Charge les fichiers .safetensors sans risque de crash (mmap)
+    compute_cross_entropy, // Fonction de coût (Loss)
 
-    // 🛡️ 3. Fonctions d'Initialisation Sécurisées (Fail-Fast)
+    configure_parallel_pool, // Limiteur de ressources CPU multi-threads
+    execute_parallel_map,    // Itération parallèle ultra-rapide
+    init_embedding_layer,    // Constructeur de couche d'embedding
+
+    init_linear_layer,   // Constructeur de couche linéaire
+    init_lstm_layer,     // Constructeur de couche LSTM
+    load_neural_weights, // Charge les fichiers .safetensors sans risque de crash (mmap)
+
     resolve_compute_device, // Alloue le meilleur GPU disponible avec fallback CPU
-    ComputeHardware,        // Matériel physique cible (CUDA, Metal, CPU)
     // 🧬 1. Types Fondamentaux (Calcul Matriciel)
-    ComputeType, // Précision mathématique requise (ex: F32, F16)
-    DimIndex,    // Outil d'indexation pour manipuler les dimensions (D)
+    ComputeHardware,           // Matériel physique cible (CUDA, Metal, CPU)
+    ComputeType,               // Précision mathématique requise (ex: F32, F16)
+    DimIndex,                  // Outil d'indexation pour manipuler les dimensions (D)
+    GgufFileFormat,            // Module I/O pour modèles quantifiés
+    LightweightEmbeddingModel, // Modèles CPU supportés (BGE, MiniLM)
+    LightweightInitOptions,    // Paramètres d'exécution légers
 
-    NeuralShape,  // Dimensions des matrices/tenseurs
-    NeuralTensor, // Structure de données cœur pour les calculs d'IA
+    // ⚡ 8. Moteur d'Embeddings Léger (ONNX / CPU)
+    LightweightTextEmbedding, // Moteur d'inférence léger (FastEmbed)
+    NeuralActivation,         // Fonctions d'activation (ReLU, etc.)
+    NeuralBertConfig,         // Configuration du modèle BERT
+
+    NeuralBertModel, // Moteur natif de vectorisation (BERT)
+    NeuralCoreError, // Erreur native du moteur Tensoriel
+
+    NeuralEmbeddingLayer, // Couche de plongement (Embedding)
+    NeuralInitStrategy,   // Stratégies d'initialisation (Xavier, etc.)
+    NeuralLinearLayer,    // Couche Dense / Linéaire
+    NeuralLstmLayer,      // Couche Récurrente LSTM
+    // 🏗️ 3. Architecture et Couches Neuronales
+    NeuralModule,         // Trait de Forward Pass
+    NeuralOptimizerAdamW, // Optimiseur AdamW
+    // 🎓 4. Apprentissage et Optimisation
+    NeuralOptimizerTrait, // Trait de base pour l'optimisation
+    NeuralRnnTrait,       // Trait spécifique aux RNN (ex: LSTM)
+    NeuralShape,          // Dimensions des matrices/tenseurs
+    NeuralTensor,         // Structure de données cœur pour les calculs d'IA
+    NeuralVar,            // Variable mutable pour l'optimiseur
     // ⚖️ 2. Gestion des Modèles et Poids (NN)
     NeuralWeightsBuilder, // Constructeur pour charger les paramètres d'un modèle
     NeuralWeightsMap,     // Espace mémoire hébergeant les poids du réseau
+    OptimizerConfigAdamW, // Hyperparamètres de l'optimiseur
+    Qwen2QuantizedModel,  // Moteur LLM natif (ex: Qwen2)
 
-    // 🧠 4. Moteurs Sémantiques
-    TextEmbedder, // Générateur de vecteurs pour la recherche RAG
+    SafeTensorsIO, // Module I/O pour poids natifs
+    // ⚙️ Utilitaires d'Inférence & Infrastructure
+    TextEmbedder, // Pipeline RAG complet
+    // 📝 5. Tokenisation et Traitement du Texte (NLP)
+    TextTokenizer, // Moteur de tokenisation universel
+    // 🤖 6. Génération Textuelle & LLM (Transformers)
+    TokenLogitsProcessor, // Gestionnaire de température / Top-P / Top-K
+    WhisperAudio,         // Traitement du signal (Mel, MFCC)
+    WhisperConfig,        // Paramétrage audio
+
+    // 👁️ 7. Multimodalité : Audio & Vision
+    WhisperModel,        // Architecture de transcription audio
+    DEFAULT_EMBED_MODEL, // Modèle par défaut
 };
 
-// --- 4. RÉSEAU & CONNECTIVITÉ ---
+// --- 5. RÉSEAU & CONNECTIVITÉ ---
 pub use crate::utils::network::http_types::{
     run_http_server, HttpClient, HttpClientBuilder, HttpJsonPayload, HttpRouter, HttpStatusCode,
 };
@@ -134,7 +173,7 @@ pub use crate::utils::network::{
     start_local_api_async,
 };
 
-// --- 5. MACROS & OBSERVABILITÉ (Exports Racine) ---
+// --- 6. MACROS & OBSERVABILITÉ (Exports Racine) ---
 pub use crate::{
     build_error, raise_error, require_session, user_debug, user_error, user_info, user_success,
     user_trace, user_warn,

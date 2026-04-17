@@ -2,21 +2,20 @@
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
-use candle_core::{Device, Tensor};
 
 /// Traduit l'ontologie Arcadia en structure mathématique (Matrice A) pour le GNN.
 /// Gère la correspondance entre les URI sémantiques et les indices de tenseurs.
 pub struct GraphAdjacency {
     pub uri_to_index: UnorderedMap<String, usize>,
     pub index_to_uri: Vec<String>,
-    pub matrix: Tensor,
+    pub matrix: NeuralTensor,
 }
 
 impl GraphAdjacency {
     /// Construit la matrice d'adjacence de manière asynchrone via le CollectionsManager.
     pub async fn build_from_store(
         manager: &CollectionsManager<'_>,
-        device: &Device,
+        device: &ComputeHardware,
     ) -> RaiseResult<Self> {
         let mut uri_map = UnorderedMap::new();
         let mut uri_vec = Vec::new();
@@ -87,8 +86,8 @@ impl GraphAdjacency {
             }
         }
 
-        // 3. TRANSFERT HARDWARE : Conversion vers Tenseur Candle
-        let matrix = match Tensor::from_vec(data, (n, n), device) {
+        // 3. TRANSFERT HARDWARE : Conversion vers Tenseur NativeEngine
+        let matrix = match NeuralTensor::from_vec(data, (n, n), device) {
             Ok(m) => m,
             Err(e) => raise_error!(
                 "ERR_GNN_TENSOR_ADJ_FAILED",
@@ -143,7 +142,7 @@ mod tests {
         manager.insert_raw("la", &f1_doc).await?;
         manager.insert_raw("sa", &s1_doc).await?;
 
-        let device = Device::Cpu;
+        let device = ComputeHardware::Cpu;
         let adj = GraphAdjacency::build_from_store(&manager, &device).await?;
 
         assert_eq!(adj.index_to_uri.len(), 2);
@@ -187,7 +186,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        let result = GraphAdjacency::build_from_store(&manager, &Device::Cpu).await;
+        let result = GraphAdjacency::build_from_store(&manager, &ComputeHardware::Cpu).await;
 
         match result {
             Err(AppError::Structured(data)) => {
@@ -207,7 +206,7 @@ mod tests {
         // Manager pointant sur une partition fantôme
         let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
 
-        let result = GraphAdjacency::build_from_store(&manager, &Device::Cpu).await;
+        let result = GraphAdjacency::build_from_store(&manager, &ComputeHardware::Cpu).await;
 
         match result {
             Err(AppError::Structured(err)) => {
@@ -241,7 +240,7 @@ mod tests {
         let doc = json_value!({ "_id": "F2", "@id": "la:F2", "realizes": [{ "@id": "sa:GHOST" }] });
         manager.insert_raw("la", &doc).await?;
 
-        let adj = GraphAdjacency::build_from_store(&manager, &Device::Cpu).await?;
+        let adj = GraphAdjacency::build_from_store(&manager, &ComputeHardware::Cpu).await?;
 
         // Doit réussir mais ignorer GHOST
         assert_eq!(adj.index_to_uri.len(), 1);

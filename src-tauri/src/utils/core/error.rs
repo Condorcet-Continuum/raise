@@ -27,7 +27,7 @@ pub struct StructuredData {
     pub component: String,
     pub code: String,
     pub message: String,
-    pub context: JsonValue, // 🎯 Remplacé par notre type sémantique AI-Ready
+    pub context: JsonValue,
 }
 
 impl std::fmt::Display for StructuredData {

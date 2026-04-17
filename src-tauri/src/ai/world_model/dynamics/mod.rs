@@ -8,15 +8,14 @@ pub use predictor::WorldModelPredictor;
 mod tests {
     use super::*;
     use crate::utils::prelude::*;
-    use candle_core::{DType, Device};
-    use candle_nn::{VarBuilder, VarMap};
 
     #[test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     fn test_predictor_instantiation() {
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+        let varmap = NeuralWeightsMap::new();
+        let vb =
+            NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &ComputeHardware::Cpu);
 
         // 🎯 On crée la config
         let config = WorldModelConfig {

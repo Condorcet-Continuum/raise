@@ -1,15 +1,14 @@
-// FICHIER : src-tauri/src/ai/memory/candle_store.rs
+// FICHIER : src-tauri/src/ai/memory/native_store.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::utils::prelude::*; // 🎯 Façade Unique
 
 use super::{MemoryRecord, VectorStore};
-use candle_core::{Device, Tensor};
 
 /// Store vectoriel local RAISE agissant comme un index "Deep Learning"
 /// pour les collections de données gérées par JSON-DB.
-pub struct CandleLocalStore {
-    device: Device,
+pub struct NativeLocalStore {
+    device: ComputeHardware,
     /// Gestion isolée par Collection (Map) pour garantir l'étanchéité des domaines
     state: AsyncRwLock<UnorderedMap<String, CollectionState>>,
 }
@@ -18,12 +17,12 @@ pub struct CandleLocalStore {
 struct CollectionState {
     /// Lien direct : Ligne de la matrice -> `_id` du document dans JSON-DB
     index_to_id: Vec<String>,
-    vector_matrix: Option<Tensor>,
+    vector_matrix: Option<NeuralTensor>,
 }
 
-impl CandleLocalStore {
+impl NativeLocalStore {
     /// Initialise le store vectoriel avec le périphérique spécifié.
-    pub fn new(_path: &Path, device: &Device) -> Self {
+    pub fn new(_path: &Path, device: &ComputeHardware) -> Self {
         Self {
             device: device.clone(),
             state: AsyncRwLock::new(UnorderedMap::new()),
@@ -40,7 +39,7 @@ impl CandleLocalStore {
             .join(col)
     }
 
-    /// 🎯 LAZY LOADING : Charge les tenseurs depuis le SSD vers le Device uniquement sur demande.
+    /// 🎯 LAZY LOADING : Charge les tenseurs depuis le SSD vers le ComputeHardware uniquement sur demande.
     async fn ensure_loaded(&self, manager: &CollectionsManager<'_>, col: &str) -> RaiseResult<()> {
         {
             let state = self.state.read().await;
@@ -64,7 +63,7 @@ impl CandleLocalStore {
             index_to_id = fs::read_json_async(&index_path).await.unwrap_or_default();
 
             if !index_to_id.is_empty() {
-                match candle_core::safetensors::load(&tensor_path, &self.device) {
+                match SafeTensorsIO::load(&tensor_path, &self.device) {
                     Ok(mut tensors) => matrix = tensors.remove("vectors"),
                     Err(e) => {
                         user_warn!(
@@ -107,7 +106,7 @@ impl CandleLocalStore {
             let join_handle = spawn_cpu_task(move || {
                 let mut map = UnorderedMap::new();
                 map.insert("vectors".to_string(), matrix_clone);
-                candle_core::safetensors::save(&map, tensor_path)
+                SafeTensorsIO::save(&map, tensor_path)
             })
             .await;
 
@@ -132,7 +131,7 @@ impl CandleLocalStore {
 }
 
 #[async_interface]
-impl VectorStore for CandleLocalStore {
+impl VectorStore for NativeLocalStore {
     async fn init_collection(
         &self,
         manager: &CollectionsManager<'_>,
@@ -201,13 +200,13 @@ impl VectorStore for CandleLocalStore {
         let d = valid_vectors[0].len();
         let flat_new: Vec<f32> = valid_vectors.into_iter().flatten().collect();
 
-        let new_tensor = match Tensor::from_vec(flat_new, (n_new, d), &self.device) {
+        let new_tensor = match NeuralTensor::from_vec(flat_new, (n_new, d), &self.device) {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_VECTOR_CREATION_FAILED", error = e.to_string()),
         };
 
         col_state.vector_matrix = match &col_state.vector_matrix {
-            Some(existing) => match Tensor::cat(&[existing, &new_tensor], 0) {
+            Some(existing) => match NeuralTensor::cat(&[existing, &new_tensor], 0) {
                 Ok(t) => Some(t),
                 Err(e) => raise_error!("ERR_VECTOR_CONCAT_FAILED", error = e.to_string()),
             },
@@ -243,7 +242,7 @@ impl VectorStore for CandleLocalStore {
             None => return Ok(vec![]),
         };
 
-        let q = match Tensor::from_slice(query_vec, (1, query_vec.len()), &self.device) {
+        let q = match NeuralTensor::from_slice(query_vec, (1, query_vec.len()), &self.device) {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_VECTOR_QUERY_INIT", error = e.to_string()),
         };
@@ -344,7 +343,7 @@ mod tests {
         );
         DbSandbox::mock_db(&manager).await?;
 
-        let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
+        let store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
         let col = "tech_resilient";
         store.init_collection(&manager, col, 2).await?;
 
@@ -382,7 +381,7 @@ mod tests {
 
         let col = "persistence_test";
         {
-            let store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
+            let store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
             store.init_collection(&manager, col, 2).await?;
             let rec = MemoryRecord {
                 id: "P1".into(),
@@ -393,7 +392,7 @@ mod tests {
             store.add_documents(&manager, col, vec![rec]).await?;
         }
 
-        let new_store = CandleLocalStore::new(&sandbox.domain_root, &Device::Cpu);
+        let new_store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
         let res = new_store
             .search_similarity(&manager, col, &[1.0, 0.0], 1, 0.9, None)
             .await?;
