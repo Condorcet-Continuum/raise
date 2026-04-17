@@ -73,9 +73,9 @@ impl RaiseHealthEngine {
             Ok(Some(doc)) => {
                 doc["resource_constraints"]["require_vram_mb"]
                     .as_u64()
-                    .unwrap_or(4000) // 4Go par défaut
+                    .unwrap_or(5500) // 4Go par défaut
             }
-            Ok(None) => 4000,
+            Ok(None) => 5500,
             Err(e) => raise_error!("ERR_HEALTH_CONFIG_READ", error = e.to_string()),
         };
 

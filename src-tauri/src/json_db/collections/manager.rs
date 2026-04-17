@@ -810,6 +810,17 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
+        // ====================================================================
+        // Auto-découverte du schéma pour les nouvelles collections
+        // ====================================================================
+        if resolved_uri.is_none() {
+            if let Some(doc_schema) = doc.get("$schema").and_then(|v| v.as_str()) {
+                if !doc_schema.is_empty() {
+                    resolved_uri = Some(doc_schema.to_string());
+                }
+            }
+        }
+
         if let Some(uri) = &resolved_uri {
             if let Some(obj) = doc.as_object_mut() {
                 obj.insert("$schema".to_string(), JsonValue::String(uri.clone()));

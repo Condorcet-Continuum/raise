@@ -227,7 +227,11 @@ mod resilience_tests {
             Err(AppError::Structured(data)) => {
                 // Le moteur doit lever une erreur structurée car 'ghost_prompt' n'existe pas en DB
                 // Note : L'erreur sera levée par le PromptEngine appelé dans DynamicAgent::process
-                assert!(data.code.contains("ERR_PROMPT") || data.code.contains("ERR_DB"));
+                assert!(
+                    data.code.contains("ERR_AGENT_PROMPT_COMPILE")
+                        || data.code.contains("ERR_PROMPT")
+                        || data.code.contains("ERR_DB")
+                );
                 Ok(())
             }
             _ => panic!("Le moteur aurait dû diverger sur une erreur de résolution de prompt"),

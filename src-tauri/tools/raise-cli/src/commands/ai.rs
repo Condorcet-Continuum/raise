@@ -186,7 +186,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         ),
     };
 
-    let orch_ref = match &ctx.orchestrator {
+    let orch_ref = match &ctx.kernel.orchestrator {
         Some(o) => o,
         None => raise_error!(
             "ERR_AI_OFFLINE",

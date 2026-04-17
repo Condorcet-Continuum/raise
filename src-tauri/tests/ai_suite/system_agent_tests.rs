@@ -209,7 +209,11 @@ mod resilience_tests {
         match res {
             Err(AppError::Structured(data)) => {
                 // Doit diverger sur une erreur de résolution de prompt
-                assert!(data.code.contains("ERR_PROMPT") || data.code.contains("ERR_DB"));
+                assert!(
+                    data.code.contains("ERR_AGENT_PROMPT_COMPILE")
+                        || data.code.contains("ERR_PROMPT")
+                        || data.code.contains("ERR_DB")
+                );
                 Ok(())
             }
             _ => panic!("Le moteur aurait dû diverger sur une erreur structurée"),

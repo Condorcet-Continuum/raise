@@ -16,10 +16,6 @@ use raise::commands::{
     training_commands, utils_commands, workflow_commands,
 };
 
-// --- IMPORT IA NATIF ---
-use raise::ai::llm::candle_engine::CandleLlmEngine;
-use raise::ai::llm::NativeLlmState;
-
 use raise::json_db::collections::manager::CollectionsManager;
 use raise::json_db::jsonld::VocabularyRegistry;
 use raise::json_db::migrations::migrator::Migrator;
@@ -28,8 +24,10 @@ use raise::json_db::storage::{JsonDbConfig, StorageEngine};
 
 use raise::plugins::manager::PluginManager;
 
+// --- NOUVEAU : IMPORT DU KERNEL ---
+use raise::kernel::state::RaiseKernelState;
+
 // Structures d'état
-use raise::commands::ai_commands::AiState;
 use raise::commands::workflow_commands::WorkflowStore;
 use raise::workflow_engine::executor::WorkflowExecutor;
 use raise::workflow_engine::scheduler::WorkflowScheduler;
@@ -38,9 +36,6 @@ pub use raise::model_engine::types::ProjectModel;
 use raise::AppState;
 
 use raise::ai::graph_store::GraphStore;
-use raise::ai::orchestrator::AiOrchestrator;
-use raise::model_engine::loader::ModelLoader;
-
 use raise::commands::dl_commands::DlState;
 use raise::spatial_engine;
 
@@ -53,10 +48,10 @@ fn main() {
     }
 
     context::init_logging();
-    user_info!("INF_RAISE_BOOT_START"); // Utilisation de la façade sémantique
+    user_info!("INF_RAISE_BOOT_START");
 
     tauri::Builder::default()
-        .manage(NativeLlmState(SyncMutex::new(None::<CandleLlmEngine>)))
+        // On ne manage plus le NativeLlmState ou le AiState isolés ici !
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
@@ -86,10 +81,8 @@ fn main() {
             let config = JsonDbConfig::new(db_root.clone());
             let storage = StorageEngine::new(config.clone());
 
-            // Utilisation des mount_points pour la partition système
             let system_domain = &app_config.mount_points.system.domain;
             let system_db = &app_config.mount_points.system.db;
-
 
             // ---------------------------------------------------------
             // 🛡️ MOTEUR DE RÉSILIENCE (WAL Crash Recovery)
@@ -105,94 +98,76 @@ fn main() {
                     &wal_domain,
                     &wal_db,
                     &wal_storage,
-                ).await {
+                )
+                .await
+                {
                     Ok(count) if count > 0 => {
                         user_warn!(
-                            "WRN_DB_CRASH_RECOVERED", 
-                            json_value!({"recovered_transactions": count, "action": "rollback_applied"})
+                            "WRN_DB_CRASH_RECOVERED",
+                            json_value!({"recovered_transactions": count})
                         );
                     }
                     Err(e) => {
                         user_error!(
-                            "ERR_DB_RECOVERY_FAIL", 
+                            "ERR_DB_RECOVERY_FAIL",
                             json_value!({"error": e.to_string()})
                         );
                     }
-                    _ => {} // Tout va bien, aucun crash détecté
+                    _ => {}
                 }
             });
+
             // ---------------------------------------------------------
             // 🎯 BOOTSTRAP DU MOTEUR DE RÈGLES
             // ---------------------------------------------------------
-            let storage_rules = storage.clone();
-            let domain_rules = system_domain.clone();
-            let db_rules = system_db.clone();
-
-            // On utilise block_on car l'existence de _system_rules est un prérequis critique
-            tauri::async_runtime::block_on(async move {
-                let manager = CollectionsManager::new(&storage_rules, &domain_rules, &db_rules);
-                match raise::rules_engine::initialize_rules_engine(&manager).await {
-                    Ok(_) => user_success!("SUC_RULES_ENGINE_READY"),
-                    Err(e) => user_error!(
-                        "ERR_RULES_ENGINE_BOOT_FAIL", 
+            tauri::async_runtime::block_on(async {
+                let manager = CollectionsManager::new(&storage, system_domain, system_db);
+                if let Err(e) = raise::rules_engine::initialize_rules_engine(&manager).await {
+                    user_error!(
+                        "ERR_RULES_ENGINE_BOOT_FAIL",
                         json_value!({"error": e.to_string()})
-                    ),
+                    );
                 }
             });
 
             // ---------------------------------------------------------
             // 3. INITIALISATION SÉMANTIQUE (Bootstrapping "In-Index")
             // ---------------------------------------------------------
-            let storage_reg = storage.clone();
-            let domain_reg = system_domain.clone();
-            let db_reg = system_db.clone();
-
-            tauri::async_runtime::spawn(async move {
-                let db_manager = CollectionsManager::new(&storage_reg, &domain_reg, &db_reg);
-                user_info!("INF_ONTOLOGY_BOOTSTRAP");
-
-                // 🎯 FIX : Utilisation du bootstrapping basé sur la DB (In-Index)
-                match VocabularyRegistry::init_from_db(&db_manager).await {
-                    Ok(_) => user_success!("SUC_ONTOLOGY_READY"),
-                    Err(e) => user_error!(
-                        "ERR_ONTOLOGY_BOOTSTRAP_FAIL", 
-                        json_value!({"error": e.to_string()})
-                    ),
+            tauri::async_runtime::spawn({
+                let storage_reg = storage.clone();
+                let domain_reg = system_domain.clone();
+                let db_reg = system_db.clone();
+                async move {
+                    let db_manager = CollectionsManager::new(&storage_reg, &domain_reg, &db_reg);
+                    if let Err(e) = VocabularyRegistry::init_from_db(&db_manager).await {
+                        user_error!(
+                            "ERR_ONTOLOGY_BOOTSTRAP_FAIL",
+                            json_value!({"error": e.to_string()})
+                        );
+                    }
                 }
             });
 
             // 4. GRAPH STORE
             let graph_path = db_root.join("graph_store");
-            let storage_for_graph = storage.clone();
-            let domain_for_graph = system_domain.clone();
-            let db_for_graph = system_db.clone();
-
             let graph_store_result = tauri::async_runtime::block_on(async {
-                let manager =
-                    CollectionsManager::new(&storage_for_graph, &domain_for_graph, &db_for_graph);
+                let manager = CollectionsManager::new(&storage, system_domain, system_db);
                 GraphStore::new(graph_path, &manager).await
             });
 
-            match graph_store_result {
-                Ok(store) => {
-                    app.manage(store);
-                    user_success!("SUC_GRAPH_STORE_READY");
-                }
-                Err(e) => user_error!(
-                    "ERR_GRAPH_STORE_FAIL",
-                    json_value!({"error": e.to_string()})
-                ),
+            if let Ok(store) = graph_store_result {
+                app.manage(store);
             }
 
-            // 5. MIGRATIONS & ÉTATS
+            // 5. MIGRATIONS
             let _ = tauri::async_runtime::block_on(run_app_migrations(
                 &storage,
                 system_domain,
                 system_db,
             ));
 
+            // 6. INJECTION DES ÉTATS DE BASE
             let plugin_mgr = SharedRef::new(PluginManager::new(&storage, None));
-
             app.manage(config);
             app.manage(storage.clone());
             app.manage(plugin_mgr.clone());
@@ -200,18 +175,14 @@ fn main() {
                 storage.clone(),
             )));
 
-            let app_state = SharedRef::new(AppState {
+            app.manage(SharedRef::new(AppState {
                 model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
-            });
-            app.manage(app_state.clone());
+            }));
             app.manage(AsyncMutex::new(WorkflowStore::default()));
-            app.manage(AiState::new(None));
             app.manage(DlState::new());
 
-            // 6. BLOCKCHAIN & RÉSEAU ARCADIA
-            let app_handle = app.handle();
-            raise::blockchain::ensure_innernet_state(app_handle, "default");
-
+            // BLOCKCHAIN
+            raise::blockchain::ensure_innernet_state(app.handle(), "default");
             let default_fabric_profile = ConnectionProfile {
                 name: "pending".into(),
                 version: "1.0.0".into(),
@@ -228,77 +199,30 @@ fn main() {
             ))));
             raise::blockchain::p2p::service::init_arcadia_network(app.handle().clone());
 
-            // 7. BACKGROUND: IA NATIF & ORCHESTRATEUR
-            let native_handle = app.handle().clone();
-            let storage_for_ia = storage.clone();
-            let domain_for_ia = system_domain.clone();
-            let db_for_ia = system_db.clone();
+            // ====================================================================
+            // 7. 🧠 LE NOYAU (KERNEL) : SÉQUENCE DE BOOT STRICTE ET UNIFIÉE
+            // ====================================================================
+            // On bloque le thread principal de Tauri pour garantir que l'application
+            // ne s'ouvre que lorsque la VRAM est allouée et sécurisée.
+            let kernel = tauri::async_runtime::block_on(async {
+                RaiseKernelState::boot(SharedRef::new(storage.clone())).await
+            })
+            .expect("❌ Erreur fatale : Le Kernel n'a pas pu démarrer.");
 
-            tauri::async_runtime::spawn(async move {
-                let manager = CollectionsManager::new(&storage_for_ia, &domain_for_ia, &db_for_ia);
+            // Injection du Singleton dans le registre Tauri
+            app.manage(kernel.clone());
 
-                match CandleLlmEngine::new(&manager).await {
-                    Ok(engine) => {
-                        // 🎯 FIX : On accède à l'état directement pour éviter les problèmes de durée de vie
-                        // On utilise un bloc ou une instruction directe pour que le temporaire soit drop proprement.
-                        if let Ok(mut guard) = native_handle.state::<NativeLlmState>().0.lock() {
-                            *guard = Some(engine);
-                            user_success!("SUC_LLM_NATIVE_READY");
-                        }
-                    }
-                    Err(e) => {
-                        user_error!("ERR_LLM_NATIVE_FAIL", json_value!({"error": e.to_string()}))
-                    }
-                }
-            });
-
-            let app_handle_wf = app.handle().clone();
-            let plugin_mgr_wf = plugin_mgr.clone();
-
-            tauri::async_runtime::spawn(async move {
-                let cfg = AppConfig::get();
-                let storage_state = app_handle_wf.state::<StorageEngine>();
-
-                // Loader utilisant la partition MBSE dédiée si configurée
-                let loader = ModelLoader::from_engine(storage_state.inner(), "mbse2", "_system");
-
-                match loader.load_full_model().await {
-                    Ok(model) => {
-                        let manager = CollectionsManager::new(
-                            storage_state.inner(),
-                            &cfg.mount_points.system.domain,
-                            &cfg.mount_points.system.db,
-                        );
-                        match AiOrchestrator::new(
-                            model,
-                            &manager,
-                            SharedRef::new(storage_state.inner().clone()),
-                        )
-                        .await
-                        {
-                            Ok(orchestrator) => {
-                                let shared_orch = SharedRef::new(AsyncMutex::new(orchestrator));
-                                let ai_state = app_handle_wf.state::<AiState>();
-                                *ai_state.0.lock().await = Some(shared_orch.clone());
-
-                                let executor =
-                                    WorkflowExecutor::new(shared_orch.clone(), plugin_mgr_wf);
-                                let wf_state = app_handle_wf.state::<AsyncMutex<WorkflowStore>>();
-                                let mut wf_store = wf_state.lock().await;
-                                wf_store.scheduler = Some(WorkflowScheduler::new(executor));
-                                user_success!("SUC_WORKFLOW_ENGINE_READY");
-                            }
-                            Err(e) => user_error!(
-                                "ERR_ORCHESTRATOR_FAIL",
-                                json_value!({"error": e.to_string()})
-                            ),
-                        }
-                    }
-                    Err(e) => {
-                        user_warn!("WRN_MODEL_LOAD_FAIL", json_value!({"error": e.to_string()}))
-                    }
-                }
-            });
+            // ====================================================================
+            // 8. WORKFLOW ENGINE (Dépend du Kernel)
+            // ====================================================================
+            if let Some(orch_ref) = kernel.orchestrator {
+                let executor = WorkflowExecutor::new(orch_ref, plugin_mgr);
+                tauri::async_runtime::block_on(async {
+                    let wf_state = app.handle().state::<AsyncMutex<WorkflowStore>>();
+                    let mut wf_store = wf_state.lock().await;
+                    wf_store.scheduler = Some(WorkflowScheduler::new(executor));
+                });
+            }
 
             Ok(())
         })

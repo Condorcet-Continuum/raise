@@ -5,8 +5,9 @@ use clap::{Parser, Subcommand};
 // On garde le module local des commandes
 mod commands;
 use raise::ai::agents::AgentContext;
-use raise::ai::orchestrator::AiOrchestrator;
-use raise::model_engine::types::ProjectModel;
+use raise::ai::assurance::health::RaiseHealthEngine;
+
+use raise::kernel::state::RaiseKernelState;
 use raise::{
     json_db::{
         collections::manager::CollectionsManager,
@@ -24,7 +25,7 @@ pub struct CliContext {
     pub config: &'static AppConfig,
     pub session_mgr: context::SessionManager,
     pub storage: SharedRef<StorageEngine>,
-    pub orchestrator: Option<SharedRef<AsyncMutex<AiOrchestrator>>>,
+    pub kernel: RaiseKernelState,
     pub active_user: String,
     pub active_domain: String,
     pub active_db: String,
@@ -190,23 +191,59 @@ async fn main() -> RaiseResult<()> {
     let sim_domain = cli.sim_domain.unwrap_or_else(|| "sim_mbse2".to_string());
     let sim_db = cli.sim_db.unwrap_or_else(|| "sim_raise".to_string());
 
-    // 🧠 INITIALISATION DE L'ORCHESTRATEUR IA
-    // On utilise le manager système pour résoudre les configurations des moteurs
-    let orchestrator = match AiOrchestrator::new(
-        ProjectModel::default(),
-        &system_mgr,
-        storage.clone(),
-    )
-    .await
-    {
-        Ok(orch) => Some(SharedRef::new(AsyncMutex::new(orch))),
+    // =========================================================
+    // 🔍 PRE-FLIGHT CHECK : TRACAGE MÉMOIRE AVANT CHARGEMENT IA
+    // =========================================================
+    user_debug!(
+        "CLI_PRE_FLIGHT_START",
+        json_value!({"action": "check_vram"})
+    );
+
+    match RaiseHealthEngine::check_engine_health(&system_mgr).await {
+        Ok(report) => {
+            // Extraction sécurisée des valeurs pour le log
+            let vram_free = report
+                .diagnostic_details
+                .get("vram_free_mb")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            let vram_req = report
+                .diagnostic_details
+                .get("vram_required_mb")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+
+            user_info!(
+                "CLI_HARDWARE_TRACE",
+                json_value!({
+                    "device_type": report.device_type,
+                    "vram_free_mb": vram_free,
+                    "vram_required_mb": vram_req,
+                    "acceleration": report.acceleration_active
+                })
+            );
+        }
         Err(e) => {
             user_warn!(
-                "CLI_AI_OFFLINE",
-                json_value!({"error": e.to_string(), "hint": "Le CLI fonctionnera en mode dégradé (Sans IA)."})
+                "CLI_HARDWARE_WARNING",
+                json_value!({
+                    "error": e.to_string(),
+                    "hint": "Mémoire insuffisante ou GPU inaccessible. L'Orchestrateur risque d'échouer."
+                })
             );
-            None // 🎯 FIX : Pas de crash, on continue sans IA
         }
+    }
+
+    // 🧠 INITIALISATION DE L'ORCHESTRATEUR IA
+    // On utilise le manager système pour résoudre les configurations des moteurs
+    let kernel_state = match raise::kernel::state::RaiseKernelState::boot(storage.clone()).await {
+        Ok(state) => state,
+        Err(e) => raise_error!(
+            "ERR_CLI_KERNEL_BOOT_FAILED",
+            error = e.to_string(),
+            context =
+                json_value!({"hint": "Échec critique lors du montage de la partition système."})
+        ),
     };
 
     // 6. CRÉATION DU CONTEXTE UNIFIÉ
@@ -214,7 +251,7 @@ async fn main() -> RaiseResult<()> {
         config,
         session_mgr,
         storage,
-        orchestrator,
+        kernel: kernel_state,
         active_user,
         active_domain,
         active_db,
@@ -399,7 +436,7 @@ impl CliContext {
     /// Cette méthode résout les chemins physiques et la session active pour l'IA.
     pub async fn to_agent_context(&self, agent_id: &str) -> RaiseResult<AgentContext> {
         // Extraction sécurisée de l'orchestrateur
-        let orch_ref = self.orchestrator.as_ref().ok_or_else(|| {
+        let orch_ref = self.kernel.orchestrator.as_ref().ok_or_else(|| {
             build_error!(
                 "ERR_AI_OFFLINE",
                 error = "L'orchestrateur IA n'est pas initialisé."
@@ -435,12 +472,37 @@ impl CliContext {
         )
         .await)
     }
+
+    #[cfg(test)]
+    pub fn mock(
+        config: &'static AppConfig,
+        session_mgr: context::SessionManager,
+        storage: SharedRef<StorageEngine>,
+    ) -> Self {
+        Self {
+            config,
+            session_mgr,
+            storage,
+            kernel: RaiseKernelState {
+                orchestrator: None,
+                native_llm: None,
+                code_generator: None,
+            },
+            active_user: "mock_user".to_string(),
+            active_domain: "mock_domain".to_string(),
+            active_db: "mock_db".to_string(),
+            is_test_mode: true,
+            is_simulation: false,
+            sim_domain: "mock_sim_domain".to_string(),
+            sim_db: "mock_sim_db".to_string(),
+        }
+    }
 }
 
 // =========================================================================
 // TESTS UNITAIRES (Conformité « Zéro Dette »)
 // =========================================================================
-
+/*
 #[cfg(test)]
 impl CliContext {
     pub fn mock(
@@ -463,6 +525,7 @@ impl CliContext {
         }
     }
 }
+ */
 
 #[cfg(test)]
 mod tests {

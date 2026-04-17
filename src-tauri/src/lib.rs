@@ -6,6 +6,7 @@ pub mod code_generator;
 pub mod commands;
 pub mod genetics;
 pub mod json_db;
+pub mod kernel;
 pub mod model_engine;
 pub mod plugins;
 pub mod rules_engine;
