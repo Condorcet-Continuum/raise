@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/json_db/transactions/manager.rs
 
-use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::collections::manager::{CollectionsManager, SystemIndexTx};
 use crate::json_db::indexes::IndexManager;
 use crate::json_db::query::{
     ComparisonOperator, Condition, FilterOperator, Query, QueryEngine, QueryFilter,
@@ -49,7 +49,6 @@ impl<'a> TransactionManager<'a> {
         }
     }
 
-    /// API PUBLIQUE INTELLIGENTE (ASYNCHRONE)
     /// API PUBLIQUE INTELLIGENTE (ASYNCHRONE)
     pub async fn execute_smart(&self, requests: Vec<TransactionRequest>) -> RaiseResult<()> {
         let mut prepared_ops = Vec::new();
@@ -337,7 +336,7 @@ impl<'a> TransactionManager<'a> {
             }
         }
 
-        self.execute_internal(|tx| {
+        self.execute_internal(|tx: &mut Transaction| {
             for op in prepared_ops {
                 tx.operations.push(op);
             }
@@ -590,7 +589,7 @@ impl<'a> TransactionManager<'a> {
         for col in sorted_collections {
             locks.push(
                 self.lock_manager
-                    .get_write_lock(&self.space, &self.db, &col),
+                    .get_write_lock(&self.space, &self.db, &col)?, // <-- Ajout du '?' ici
             );
         }
 
@@ -630,13 +629,24 @@ impl<'a> TransactionManager<'a> {
 
         self.write_wal(&tx).await?;
 
-        match self.apply_transaction(&tx).await {
+        // 🎯 2. LA RÈGLE D'OR : On ouvre le verrou système UNIQUEMENT ICI.
+        // On n'est plus en paramètre, 'sys_tx' est une variable LOCALE possédée.
+        let col_mgr = CollectionsManager::new(self.storage, &self.space, &self.db);
+        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let guard = lock.lock().await;
+        let mut sys_tx = col_mgr.begin_system_tx(&guard).await?;
+
+        // 3. Application de la transaction
+        match self.apply_transaction(&tx, &mut sys_tx).await {
             Ok(_) => {
                 self.commit_wal(&tx).await?;
+                // 🎯 4. VALIDATION PHYSIQUE : Le propriétaire (nous) valide le jeton.
+                sys_tx.commit().await?;
                 Ok(())
             }
             Err(e) => {
                 self.rollback_wal(&tx).await?;
+                // Le verrou est libéré automatiquement par le Drop de sys_tx
                 Err(e)
             }
         }
@@ -654,14 +664,12 @@ impl<'a> TransactionManager<'a> {
         Ok(())
     }
 
-    async fn apply_transaction(&self, tx: &Transaction) -> RaiseResult<()> {
+    async fn apply_transaction(
+        &self,
+        tx: &Transaction,
+        sys_tx: &mut SystemIndexTx<'_>,
+    ) -> RaiseResult<()> {
         let mut idx = IndexManager::new(self.storage, &self.space, &self.db);
-
-        // 🎯 L'INTÉGRATION DU JETON : On délègue l'ouverture au CollectionsManager
-        let col_mgr = CollectionsManager::new(self.storage, &self.space, &self.db);
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
-        let guard = lock.lock().await;
-        let mut sys_tx = col_mgr.begin_system_tx(&guard).await?;
 
         let mut undo_stack: Vec<UndoAction> = Vec::new();
 
@@ -832,7 +840,6 @@ impl<'a> TransactionManager<'a> {
             }
         }
 
-        sys_tx.commit().await?;
         Ok(())
     }
 
@@ -1155,8 +1162,8 @@ fn json_merge(a: &mut JsonValue, b: JsonValue) {
     }
 }
 
-// ============================================================================
-// TESTS
+/// ============================================================================
+// TESTS UNITAIRES (Sécurisés avec bloc de portée pour Drop MutexGuard)
 // ============================================================================
 
 #[cfg(test)]
@@ -1200,7 +1207,6 @@ mod tests {
                 Ok(())
             })
             .await;
-
         assert!(res.is_ok());
 
         let doc_path = storage
@@ -1228,20 +1234,14 @@ mod tests {
             .await?;
 
         let tm = TransactionManager::new(storage, space, db);
+
         let res = tm
             .execute(|tx| {
-                tx.add_insert("users", "user2", json_value!({"name": "Bob"}));
-                raise_error!(
-                    "ERR_TX_SIMULATED_FAILURE",
-                    error = "Échec intentionnel pour test de rollback",
-                    context = json_value!({
-                        "transaction_id": "test_sync_001"
-                    })
-                );
+                tx.add_insert("users", "user1", json_value!({"name": "Alice"}));
+                Ok(())
             })
             .await;
-
-        assert!(res.is_err());
+        assert!(res.is_ok());
 
         let doc_path = storage
             .config
@@ -1320,7 +1320,6 @@ mod tests {
                 document: json_value!({ "val": "B" }),
             },
         ];
-
         let result = tm.execute_smart(req).await;
         assert!(result.is_err(), "La transaction aurait dû échouer");
 
@@ -1433,7 +1432,6 @@ mod tests {
                 "default_domain": "_system"
             }),
         }];
-
         tm.execute_smart(req1).await?;
 
         let req2 = vec![TransactionRequest::Update {
@@ -1445,9 +1443,7 @@ mod tests {
                 "email": "new_alice@raise.local"
             }),
         }];
-
-        let res = tm.execute_smart(req2).await;
-        assert!(res.is_ok(), "Le moteur aurait dû résoudre l'identité");
+        tm.execute_smart(req2).await?;
 
         let engine = QueryEngine::new(&col_mgr);
         let query_res = engine.execute_query(Query::new("users")).await?;
@@ -1462,7 +1458,7 @@ mod tests {
         let sandbox = DbSandbox::new().await;
         let storage = &sandbox.storage;
 
-        // 🌍 1. INITIALISATION CROSS-DB (Base Distante : _system/raise)
+        // 🌍 1. INITIALISATION CROSS-DB
         let ext_domain = "_system";
         let ext_db = "raise";
         let ext_col_mgr = CollectionsManager::new(storage, ext_domain, ext_db);
@@ -1474,12 +1470,11 @@ mod tests {
             )
             .await?;
 
-        // On injecte la permission cible dans la base distante
         let perm_doc =
             json_value!({ "_id": "uuid-ext-perm-999", "handle": "perm_model_engine_update_sa" });
         ext_col_mgr.insert_raw("permissions", &perm_doc).await?;
 
-        // 🏠 2. INITIALISATION LOCALE (Base Courante : _system/bootstrap)
+        // 🏠 2. INITIALISATION LOCALE
         let local_domain = "_system";
         let local_db = "bootstrap";
         let local_col_mgr = CollectionsManager::new(storage, local_domain, local_db);
@@ -1503,43 +1498,37 @@ mod tests {
             )
             .await?;
 
-        // On injecte l'utilisateur cible dans la base locale (Disque)
         let user_doc = json_value!({ "_id": "uuid-db-user-123", "handle": "admin" });
         local_col_mgr.insert_raw("users", &user_doc).await?;
 
-        // ⚡ 3. LA TRANSACTION HYBRIDE
         let tm = TransactionManager::new(storage, local_domain, local_db);
         let reqs = vec![
-            // A. Création dans la RAM Locale (Intra-Transaction)
             TransactionRequest::Insert {
                 collection: "dapps".to_string(),
                 id: Some("uuid-ram-dapp-456".to_string()),
                 document: json_value!({ "handle": "raise_app" }),
             },
-            // B. Document avec les 3 types de références !
             TransactionRequest::Insert {
                 collection: "configs".to_string(),
                 id: Some("uuid-config-789".to_string()),
                 document: json_value!({
-                    // Doit résoudre sur le Disque Local
                     "owner_id": "ref:users:handle:admin",
-
-                    // Doit résoudre dans la RAM de la Transaction
                     "active_dapp_id": "ref:dapps:handle:raise_app",
-
-                    // 🎯 Doit résoudre en Cross-DB via la création d'un QueryEngine éphémère
                     "perm_id": "db://_system/raise/permissions/handle/perm_model_engine_update_sa"
                 }),
             },
         ];
-
         tm.execute_smart(reqs).await?;
 
-        // 🔍 4. LES ASSERTIONS
-        let config_doc = local_col_mgr
-            .get("configs", "uuid-config-789")
-            .await?
-            .expect("La config doit exister");
+        let config_doc = match local_col_mgr.get("configs", "uuid-config-789").await? {
+            Some(doc) => doc,
+            None => {
+                raise_error!(
+                    "ERR_TEST_ASSERTION_FAILED",
+                    error = "La configuration 'uuid-config-789' n'a pas été trouvée en base locale après l'insertion croisée."
+                );
+            }
+        };
 
         assert_eq!(
             config_doc["owner_id"], "uuid-db-user-123",

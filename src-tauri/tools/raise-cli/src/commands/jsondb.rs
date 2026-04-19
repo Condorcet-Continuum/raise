@@ -470,7 +470,9 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
                     error = "Format transaction invalide."
                 );
             };
+
             tx_mgr.execute_smart(reqs).await?;
+
             user_success!("JSONDB_TX_SUCCESS", json_value!({}));
         }
         _ => {}

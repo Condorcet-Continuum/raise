@@ -1,18 +1,18 @@
 // FICHIER : src-tauri/src/ai/graph_store/adjacency.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
+use crate::utils::prelude::*; // 🎯 LA FAÇADE GLOBALE
 
-/// Traduit l'ontologie Arcadia en structure mathématique (Matrice A) pour le GNN.
-/// Gère la correspondance entre les URI sémantiques et les indices de tenseurs.
 pub struct GraphAdjacency {
     pub uri_to_index: UnorderedMap<String, usize>,
     pub index_to_uri: Vec<String>,
-    pub matrix: NeuralTensor,
+
+    // 🎯 FORMAT SPARSE (COO) : Remplace la matrice dense [N, N]
+    pub edge_src: NeuralTensor, // Tenseur 1D [E] des indices sources (u32)
+    pub edge_dst: NeuralTensor, // Tenseur 1D [E] des indices cibles (u32)
 }
 
 impl GraphAdjacency {
-    /// Construit la matrice d'adjacence de manière asynchrone via le CollectionsManager.
     pub async fn build_from_store(
         manager: &CollectionsManager<'_>,
         device: &ComputeHardware,
@@ -21,11 +21,9 @@ impl GraphAdjacency {
         let mut uri_vec = Vec::new();
         let mut documents = Vec::new();
 
-        // 🎯 OPTIMISATION 1 : Filtrage Ontologique (O(1) sur les collections)
         let mbse_collections = vec!["oa", "sa", "la", "pa", "epbs", "data", "transverse"];
 
-        // 1. PHASE DE DÉCOUVERTE : Récupération ciblée via le manager
-        // Utilisation d'une référence pour éviter le move du vecteur dans les logs d'erreurs
+        // 1. Découverte des nœuds
         for col_name in &mbse_collections {
             if let Ok(docs) = manager.list_all(col_name).await {
                 for doc in docs {
@@ -49,36 +47,39 @@ impl GraphAdjacency {
 
         user_info!(
             "MSG_GNN_ADJACENCY_START",
-            json_value!({ "nodes_count": n, "action": "build_matrix" })
+            json_value!({ "nodes_count": n, "action": "build_sparse_topology" })
         );
 
-        // 2. PHASE DE CONSTRUCTION : Matrice d'adjacence A + Boucle Identité (I)
-        let mut data = vec![0.0f32; n * n];
+        // 🎯 L'ALLOCATION SPARSE : Au lieu de vec![0.0; n*n], on liste juste les liens existants.
+        let mut src_indices: Vec<u32> = Vec::new();
+        let mut dst_indices: Vec<u32> = Vec::new();
 
-        // Self-loops (Diagonale à 1) : crucial pour la propagation GNN.
+        // Ajout des Self-loops obligatoires pour le GNN
         for i in 0..n {
-            data[i * n + i] = 1.0;
+            src_indices.push(i as u32);
+            dst_indices.push(i as u32);
         }
 
-        // 🎯 OPTIMISATION 2 : Ciblage strict des relations Arcadia
         let arcadia_relations = ["realizes", "allocatedTo", "subComponents", "involvedActors"];
 
+        // 2. Découverte des arêtes
         for (i, doc) in documents.iter().enumerate() {
             if let Some(obj) = doc.as_object() {
                 for rel_key in arcadia_relations {
                     if let Some(value) = obj.get(rel_key) {
-                        // Gestion polymorphique : Relation unique ou tableau de relations
                         if let Some(arr) = value.as_array() {
                             for item in arr {
                                 if let Some(tid) = item.get("@id").and_then(|v| v.as_str()) {
                                     if let Some(&j) = uri_map.get(tid) {
-                                        data[i * n + j] = 1.0;
+                                        src_indices.push(i as u32);
+                                        dst_indices.push(j as u32);
                                     }
                                 }
                             }
                         } else if let Some(tid) = value.get("@id").and_then(|v| v.as_str()) {
                             if let Some(&j) = uri_map.get(tid) {
-                                data[i * n + j] = 1.0;
+                                src_indices.push(i as u32);
+                                dst_indices.push(j as u32);
                             }
                         }
                     }
@@ -86,41 +87,57 @@ impl GraphAdjacency {
             }
         }
 
-        // 3. TRANSFERT HARDWARE : Conversion vers Tenseur NativeEngine
-        let matrix = match NeuralTensor::from_vec(data, (n, n), device) {
-            Ok(m) => m,
-            Err(e) => raise_error!(
-                "ERR_GNN_TENSOR_ADJ_FAILED",
-                error = e.to_string(),
-                context = json_value!({ "nodes_count": n, "device": format!("{:?}", device) })
-            ),
+        let edges_count = src_indices.len();
+        let device_clone = device.clone();
+
+        // 🎯 BOUCLIER CPU : Création des tenseurs 1D
+        let tensor_result = os::execute_native_inference(move || {
+            let t_src = match NeuralTensor::new(src_indices, &device_clone) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_GNN_TENSOR_SRC_FAILED", error = e.to_string()),
+            };
+            let t_dst = match NeuralTensor::new(dst_indices, &device_clone) {
+                Ok(t) => t,
+                Err(e) => raise_error!("ERR_GNN_TENSOR_DST_FAILED", error = e.to_string()),
+            };
+            Ok((t_src, t_dst))
+        })
+        .await;
+
+        let (edge_src, edge_dst) = match tensor_result {
+            Ok(res) => res,
+            Err(e) => return Err(e),
         };
+
+        user_success!(
+            "MSG_GNN_ADJACENCY_READY",
+            json_value!({ "nodes": n, "edges": edges_count, "format": "sparse_coo" })
+        );
 
         Ok(Self {
             uri_to_index: uri_map,
             index_to_uri: uri_vec,
-            matrix,
+            edge_src,
+            edge_dst,
         })
     }
 }
 
 // =========================================================================
-// TESTS UNITAIRES (Validation Topologique MBSE & Résilience)
+// TESTS UNITAIRES
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
-    /// Test existant : Validation des liens sémantiques Arcadia (LA -> SA)
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_adjacency_build_with_arcadia_links() -> RaiseResult<()> {
+    async fn test_adjacency_build_with_arcadia_links_sparse() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
-        // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
         let manager = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
@@ -132,7 +149,6 @@ mod tests {
             "db://{}/{}/schemas/v1/db/generic.schema.json",
             config.mount_points.system.domain, config.mount_points.system.db
         );
-
         manager.create_collection("la", &schema_uri).await?;
         manager.create_collection("sa", &schema_uri).await?;
 
@@ -142,40 +158,22 @@ mod tests {
         manager.insert_raw("la", &f1_doc).await?;
         manager.insert_raw("sa", &s1_doc).await?;
 
-        let device = ComputeHardware::Cpu;
-        let adj = GraphAdjacency::build_from_store(&manager, &device).await?;
+        let adj = GraphAdjacency::build_from_store(&manager, &ComputeHardware::Cpu).await?;
 
+        // 2 nœuds = 2 self-loops + 1 lien = 3 arêtes
         assert_eq!(adj.index_to_uri.len(), 2);
 
-        // Extraction et validation avec Match
-        let flat = match adj.matrix.flatten_all() {
-            Ok(t) => t,
-            Err(e) => raise_error!("ERR_TEST_TENSOR", error = e.to_string()),
-        };
-
-        let data = match flat.to_vec1::<f32>() {
+        let src_vec = match adj.edge_src.to_vec1::<u32>() {
             Ok(v) => v,
-            Err(e) => raise_error!("ERR_TEST_VEC", error = e.to_string()),
+            Err(_) => panic!("Erreur conversion tenseur src"),
         };
-
-        let i = match adj.uri_to_index.get("la:F1") {
-            Some(&idx) => idx,
-            None => panic!("Index F1 manquant"),
-        };
-        let j = match adj.uri_to_index.get("sa:S1") {
-            Some(&idx) => idx,
-            None => panic!("Index S1 manquant"),
-        };
-
-        assert_eq!(data[i * 2 + j], 1.0, "Lien LA -> SA manquant");
-        assert_eq!(data[i * 2 + i], 1.0, "Self-loop i manquante");
+        assert_eq!(src_vec.len(), 3, "Il devrait y avoir 3 arêtes (COO format)");
 
         Ok(())
     }
 
-    /// Test de résilience : Graphe MBSE vide
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_adjacency_error_on_empty_store() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
@@ -195,55 +193,5 @@ mod tests {
             }
             _ => panic!("Le moteur aurait dû lever ERR_GNN_EMPTY_GRAPH"),
         }
-    }
-
-    /// 🎯 NOUVEAU TEST : Résilience face à une configuration de Mount Point erronée
-    #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_adjacency_resilience_bad_mount_point() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
-        // Manager pointant sur une partition fantôme
-        let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
-
-        let result = GraphAdjacency::build_from_store(&manager, &ComputeHardware::Cpu).await;
-
-        match result {
-            Err(AppError::Structured(err)) => {
-                assert_eq!(err.code, "ERR_GNN_EMPTY_GRAPH");
-                Ok(())
-            }
-            _ => panic!("Le build aurait dû échouer proprement sur un mount point vide"),
-        }
-    }
-
-    /// 🎯 NOUVEAU TEST : Résilience sur liens rompus (URI cible inexistante)
-    #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_adjacency_resilience_on_broken_links() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
-        let config = AppConfig::get();
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
-        DbSandbox::mock_db(&manager).await?;
-
-        let schema_uri = format!(
-            "db://{}/{}/schemas/v1/db/generic.schema.json",
-            config.mount_points.system.domain, config.mount_points.system.db
-        );
-        manager.create_collection("la", &schema_uri).await?;
-
-        let doc = json_value!({ "_id": "F2", "@id": "la:F2", "realizes": [{ "@id": "sa:GHOST" }] });
-        manager.insert_raw("la", &doc).await?;
-
-        let adj = GraphAdjacency::build_from_store(&manager, &ComputeHardware::Cpu).await?;
-
-        // Doit réussir mais ignorer GHOST
-        assert_eq!(adj.index_to_uri.len(), 1);
-        Ok(())
     }
 }

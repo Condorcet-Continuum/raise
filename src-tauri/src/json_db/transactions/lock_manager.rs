@@ -25,20 +25,38 @@ impl LockManager {
         space: &str,
         db: &str,
         collection: &str,
-    ) -> SharedRef<AsyncRwLock<()>> {
+    ) -> RaiseResult<SharedRef<AsyncRwLock<()>>> {
         let key = format!("{}/{}/{}", space, db, collection);
 
-        // 1. On verrouille la map juste le temps de récupérer/créer l'entrée
-        let mut map = self.locks.write().unwrap();
+        // 1. On verrouille la map avec gestion d'erreur stricte (Zéro Dette)
+        let mut map = match self.locks.write() {
+            Ok(guard) => guard,
+            Err(e) => {
+                raise_error!(
+                    "ERR_LOCK_POISONED",
+                    error = format!(
+                        "Le verrou synchrone des collections a été empoisonné : {}",
+                        e
+                    ),
+                    context = json_value!({
+                        "space": space,
+                        "db": db,
+                        "collection": collection,
+                        "action": "acquire_write_lock"
+                    })
+                );
+            }
+        };
 
-        map.entry(key)
+        Ok(map
+            .entry(key)
             .or_insert_with(|| SharedRef::new(AsyncRwLock::new(())))
-            .clone()
+            .clone())
     }
 }
 
 // ============================================================================
-// TESTS UNITAIRES (ASYNC)
+// TESTS UNITAIRES (ASYNC) - ZÉRO DETTE / ZÉRO UNWRAP
 // ============================================================================
 
 #[cfg(test)]
@@ -46,38 +64,61 @@ mod tests {
     use super::*;
 
     #[async_test]
-    async fn test_lock_concurrency() {
+    async fn test_lock_concurrency() -> RaiseResult<()> {
         let manager = LockManager::new();
-        let lock1 = manager.get_write_lock("s", "d", "users");
-        let lock2 = manager.get_write_lock("s", "d", "users");
+
+        // 🎯 L'opérateur '?' est désormais géré gracieusement par le retour RaiseResult
+        let lock1 = manager.get_write_lock("s", "d", "users")?;
+        let lock2 = manager.get_write_lock("s", "d", "users")?;
 
         // Canal pour signaler que la tâche 1 a bien acquis le verrou
         let (tx, mut rx) = AsyncChannel::channel::<()>(1);
 
         // Simulation : Tâche 1 prend le verrou
         let handle = spawn_async_task(async move {
-            // Ici on utilise .write().await
             let _guard = lock1.write().await;
 
-            // On signale qu'on a le verrou
-            tx.send(()).await.unwrap();
+            // On signale qu'on a le verrou (sans unwrap)
+            if let Err(e) = tx.send(()).await {
+                tracing::error!("Erreur d'envoi dans le canal de test : {}", e);
+            }
 
             // On garde le verrou 50ms
             sleep_async(TimeDuration::from_millis(50)).await;
         });
 
-        // Le main thread attend que la tâche 1 ait le verrou
-        rx.recv().await.unwrap();
+        // Le main thread attend que la tâche 1 ait le verrou (sans unwrap)
+        match rx.recv().await {
+            Some(_) => {}
+            None => {
+                raise_error!(
+                    "ERR_TEST_CHANNEL",
+                    error = "Le canal de test asynchrone a été fermé prématurément"
+                );
+            }
+        }
 
         // Tâche 2 essaie de prendre le verrou (doit attendre)
         let start = TimeInstant::now();
-        // Ceci va bloquer (await) tant que lock1 n'est pas lâché
         let _guard = lock2.write().await;
         let duration = start.elapsed();
 
-        handle.await.unwrap();
+        // Attente de la fin de la tâche (sans unwrap)
+        if let Err(e) = handle.await {
+            raise_error!(
+                "ERR_TEST_TASK_PANIC",
+                error = format!("La tâche asynchrone a paniqué : {}", e)
+            );
+        }
 
         // Le verrou fonctionne si on a dû attendre au moins ~50ms
-        assert!(duration >= TimeDuration::from_millis(50));
+        if duration < TimeDuration::from_millis(50) {
+            raise_error!(
+                "ERR_TEST_ASSERTION_FAILED",
+                error = "Le verrou n'a pas bloqué le second thread assez longtemps"
+            );
+        }
+
+        Ok(())
     }
 }

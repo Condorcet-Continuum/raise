@@ -261,45 +261,34 @@ pub async fn validate_arcadia_gnn(
         &config.mount_points.system.db,
     );
 
+    // Initialisation
     let adjacency = GraphAdjacency::build_from_store(&manager, device).await?;
     let mut engine = EmbeddingEngine::new(&manager).await?;
 
-    let features =
-        GraphFeatures::build_from_store(&manager, &adjacency.index_to_uri, &mut engine, device)
-            .await?;
+    // =========================================================================
+    // 🎯 ÉTAPE 1 & 2 : L'Orchestration "Zéro Dette" pour les Features
+    // =========================================================================
+    let texts = GraphFeatures::extract_texts(&manager, &adjacency.index_to_uri).await?;
 
-    let n = adjacency.index_to_uri.len();
-    let flattened = match adjacency.matrix.flatten_all() {
-        Ok(matrix) => matrix,
-        Err(e) => raise_error!("ERR_GNN_MATRIX_FLATTEN", error = e.to_string()),
+    let inference_result = crate::utils::io::os::execute_native_inference(move || {
+        let vectors = match engine.embed_batch(texts) {
+            Ok(v) => v,
+            Err(e) => raise_error!("ERR_GNN_EMBEDDING_FAILED", error = e.to_string()),
+        };
+        Ok(vectors)
+    })
+    .await;
+
+    let vectors = match inference_result {
+        Ok(v) => v,
+        Err(e) => return Err(e),
     };
 
-    let adj_data = match flattened.to_vec1::<f32>() {
-        Ok(data) => data,
-        Err(e) => raise_error!("ERR_GNN_VEC_CONVERSION", error = e.to_string()),
-    };
+    let features = GraphFeatures::build_from_vectors(vectors, device).await?;
 
-    let mut src_indices = Vec::new();
-    let mut dst_indices = Vec::new();
-    for i in 0..n {
-        for j in 0..n {
-            if adj_data[i * n + j] > 0.5 {
-                src_indices.push(i as u32);
-                dst_indices.push(j as u32);
-            }
-        }
-    }
-
-    let edge_src = match NeuralTensor::new(src_indices, device) {
-        Ok(tensor) => tensor,
-        Err(e) => raise_error!("ERR_GNN_TENSOR_SRC", error = e.to_string()),
-    };
-
-    let edge_dst = match NeuralTensor::new(dst_indices, device) {
-        Ok(tensor) => tensor,
-        Err(e) => raise_error!("ERR_GNN_TENSOR_DST", error = e.to_string()),
-    };
-
+    // =========================================================================
+    // 🎯 ÉTAPE 3 : Le modèle GNN et l'inférence (Sparse COO !!)
+    // =========================================================================
     let varmap = NeuralWeightsMap::new();
     let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, device);
 
@@ -314,8 +303,9 @@ pub async fn validate_arcadia_gnn(
         .compute_similarity(&features.matrix, &adjacency, &uri_a, &uri_b)
         .await?;
 
+    // 🚀 L'APPEL SPARSE MAGIQUE : Adieu la boucle de conversion de 40 Go !
     let final_embeddings = model
-        .forward(&edge_src, &edge_dst, &features.matrix)
+        .forward(&adjacency.edge_src, &adjacency.edge_dst, &features.matrix)
         .await?;
 
     let sim_final = model

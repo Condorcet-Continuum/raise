@@ -1,8 +1,7 @@
 // FICHIER : src-tauri/src/ai/graph_store/features.rs
 
-use crate::ai::nlp::embeddings::EmbeddingEngine;
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::utils::prelude::*; // 🎯 Façade Unique
+use crate::utils::prelude::*; // 🎯 LA FAÇADE GLOBALE
 
 pub struct GraphFeatures {
     /// Le tenseur des caractéristiques [N, D] (H-Matrix)
@@ -10,14 +9,12 @@ pub struct GraphFeatures {
 }
 
 impl GraphFeatures {
-    /// Construit la matrice H en vectorisant chaque nœud par lots (Batching) pour
-    /// maximiser les performances GPU/CPU. Extraction sémantique profonde via JSON-DB.
-    pub async fn build_from_store(
-        manager: &CollectionsManager<'_>, // 🎯 SSOT: Manager pour accès aux documents
+    /// 🎯 ÉTAPE 1 : Extraction pure (E/S Asynchrone)
+    /// Lit la base de données et prépare les textes sémantiques.
+    pub async fn extract_texts(
+        manager: &CollectionsManager<'_>,
         index_to_uri: &[String],
-        embedding_engine: &mut EmbeddingEngine,
-        device: &ComputeHardware,
-    ) -> RaiseResult<Self> {
+    ) -> RaiseResult<Vec<String>> {
         let n_nodes = index_to_uri.len();
         if n_nodes == 0 {
             raise_error!(
@@ -28,93 +25,85 @@ impl GraphFeatures {
         }
 
         user_info!(
-            "MSG_GNN_FEATURES_BATCH_START",
-            json_value!({ "nodes_count": n_nodes, "action": "deep_semantic_extraction" })
+            "MSG_GNN_FEATURES_EXTRACTION_START",
+            json_value!({ "nodes_count": n_nodes })
         );
 
-        let mut texts_to_embed: Vec<String> = Vec::with_capacity(n_nodes);
+        let mut texts: Vec<String> = Vec::with_capacity(n_nodes);
 
-        // 🎯 OPTIMISATION 1 : Récupération du contexte métier réel via Match
         for uri in index_to_uri {
             let mut semantic_text = String::new();
-
-            // L'URI suit le pattern "collection:id" (ex: "la:F1")
             let parts: Vec<&str> = uri.split(':').collect();
+
             if parts.len() >= 2 {
                 let col = parts[0];
                 let id = parts[1];
 
-                // Tentative de récupération sémantique via le manager
                 if let Ok(Some(doc)) = manager.get_document(col, id).await {
                     semantic_text =
                         crate::ai::graph_store::store::extract_rich_semantic_content(&doc);
                 } else if let Ok(Some(doc)) = manager.get_document(col, uri).await {
-                    // Fallback si l'identifiant inclut le préfixe dans la DB
                     semantic_text =
                         crate::ai::graph_store::store::extract_rich_semantic_content(&doc);
                 }
             }
 
-            // Fallback ultime : on utilise l'URI formatée si le document est manquant
             if semantic_text.trim().is_empty() {
                 semantic_text = uri.replace([':', '_'], " ");
             }
 
-            texts_to_embed.push(semantic_text);
+            texts.push(semantic_text);
         }
 
-        // 🎯 OPTIMISATION 2 : Inférence par lot (Batch Inference) avec gestion d'erreur
-        let batch_vectors = match embedding_engine.embed_batch(texts_to_embed) {
-            Ok(v) => v,
-            Err(e) => {
-                raise_error!(
-                    "ERR_GNN_EMBEDDING_BATCH_GEN",
-                    error = e.to_string(),
-                    context = json_value!({ "batch_size": n_nodes })
-                );
-            }
-        };
+        Ok(texts)
+    }
 
-        // 🎯 OPTIMISATION 3 : Validation des dimensions et pré-allocation
-        let expected_dim = match batch_vectors.first() {
-            Some(v) => v.len(),
-            None => raise_error!(
-                "ERR_GNN_EMBEDDING_EMPTY",
-                error = "Le moteur NLP a renvoyé un lot vide."
-            ),
-        };
+    /// 🎯 ÉTAPE 2 : Compilation du Tenseur (Calcul CPU/GPU isolé)
+    /// Prend les vecteurs générés par l'orchestrateur et construit la matrice H.
+    pub async fn build_from_vectors(
+        vectors: Vec<Vec<f32>>,
+        device: &ComputeHardware,
+    ) -> RaiseResult<Self> {
+        let n_nodes = vectors.len();
+        if n_nodes == 0 {
+            raise_error!("ERR_GNN_EMPTY_VECTORS", error = "Aucun vecteur fourni.");
+        }
 
-        let mut all_embeddings_data: Vec<f32> = Vec::with_capacity(n_nodes * expected_dim);
+        let expected_dim = vectors[0].len();
+        let mut flat_data: Vec<f32> = Vec::with_capacity(n_nodes * expected_dim);
 
-        for (i, vector) in batch_vectors.into_iter().enumerate() {
+        for (i, vector) in vectors.into_iter().enumerate() {
             if vector.len() != expected_dim {
                 raise_error!(
                     "ERR_GNN_DIMENSION_MISMATCH",
-                    error = "Incohérence des dimensions d'embedding dans le lot.",
-                    context = json_value!({
-                        "expected": expected_dim,
-                        "got": vector.len(),
-                        "uri": index_to_uri[i]
-                    })
+                    error = "Incohérence des dimensions d'embedding.",
+                    context =
+                        json_value!({ "expected": expected_dim, "got": vector.len(), "index": i })
                 );
             }
-            all_embeddings_data.extend(vector);
+            flat_data.extend(vector);
         }
 
-        // 3. Création du Tenseur final [N, D] sur le matériel configuré
-        let matrix = match NeuralTensor::from_vec(
-            all_embeddings_data,
-            (n_nodes, expected_dim),
-            device,
-        ) {
-            Ok(t) => t,
-            Err(e) => {
-                raise_error!(
+        let device_clone = device.clone();
+
+        // 🎯 BOUCLIER CPU (Façade Raise pure, Zéro map_err)
+        let tensor_result = os::execute_native_inference(move || {
+            let t = match NeuralTensor::from_vec(flat_data, (n_nodes, expected_dim), &device_clone)
+            {
+                Ok(t_val) => t_val,
+                Err(e) => raise_error!(
                     "ERR_GNN_FEATURES_TENSOR_FAILED",
                     error = e.to_string(),
-                    context = json_value!({ "nodes": n_nodes, "dim": expected_dim, "device": format!("{:?}", device) })
-                );
-            }
+                    context = json_value!({ "nodes": n_nodes, "dim": expected_dim })
+                ),
+            };
+            Ok(t)
+        })
+        .await;
+
+        let matrix = match tensor_result {
+            Ok(m) => m,
+            Err(e) => return Err(e),
         };
 
         user_success!(
@@ -127,21 +116,21 @@ impl GraphFeatures {
 }
 
 // =========================================================================
-// TESTS UNITAIRES (Validation Sémantique Batch & Résilience)
+// TESTS UNITAIRES (Le Test joue le rôle de l'Orchestrateur)
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::nlp::embeddings::EmbeddingEngine;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_graph_features_generation_batch_mode() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
 
-        // 🎯 FIX MOUNT POINTS : Utilisation du point de montage système configuré
         let manager = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
@@ -149,7 +138,6 @@ mod tests {
         );
         DbSandbox::mock_db(&manager).await?;
 
-        // Initialisation des collections MBSE
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
             config.mount_points.system.domain, config.mount_points.system.db
@@ -191,20 +179,35 @@ mod tests {
             "pa:H1".to_string(),
         ];
 
-        let feat =
-            GraphFeatures::build_from_store(&manager, &uris, &mut engine, &ComputeHardware::Cpu)
-                .await?;
+        // 🎯 L'ORCHESTRATION "ZÉRO DETTE" COMMENCE ICI
 
-        assert_eq!(
-            feat.matrix.dims(),
-            &[3, 384],
-            "La matrice H devrait être [3, 384] (MiniLM)"
-        );
+        // 1. Extraction des textes
+        let texts = GraphFeatures::extract_texts(&manager, &uris).await?;
+
+        // 2. Inférence isolée (Transfert de propriété temporaire du moteur)
+        let inference_result = os::execute_native_inference(move || {
+            let vectors = match engine.embed_batch(texts) {
+                Ok(v) => v,
+                Err(e) => raise_error!("ERR_NLP_BATCH", error = e.to_string()),
+            };
+            Ok((vectors, engine)) // On renvoie les vecteurs ET le moteur !
+        })
+        .await;
+
+        let (vectors, _engine_returned) = match inference_result {
+            Ok(res) => res,
+            Err(e) => return Err(e),
+        };
+
+        // 3. Construction du Tenseur
+        let feat = GraphFeatures::build_from_vectors(vectors, &ComputeHardware::Cpu).await?;
+
+        assert_eq!(feat.matrix.dims(), &[3, 384]);
         Ok(())
     }
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_features_empty_list_fails() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
@@ -215,12 +218,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
-        let mut engine = EmbeddingEngine::new(&manager).await?;
-
-        let res =
-            GraphFeatures::build_from_store(&manager, &[], &mut engine, &ComputeHardware::Cpu)
-                .await;
+        let res = GraphFeatures::extract_texts(&manager, &[]).await;
 
         match res {
             Err(AppError::Structured(err)) => assert_eq!(err.code, "ERR_GNN_EMPTY_FEATURES"),
@@ -229,9 +227,8 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience sur documents manquants (Fallback)
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_features_fallback_on_missing_docs() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
@@ -245,14 +242,29 @@ mod tests {
         inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
         let mut engine = EmbeddingEngine::new(&manager).await?;
 
-        // URI pointant vers un document inexistant
         let uris = vec!["ghost:entity_01".to_string()];
 
-        let feat =
-            GraphFeatures::build_from_store(&manager, &uris, &mut engine, &ComputeHardware::Cpu)
-                .await?;
+        // 1. Extraction
+        let texts = GraphFeatures::extract_texts(&manager, &uris).await?;
 
-        // Le build doit réussir via le fallback textuel (URI formatée)
+        // 2. Inférence
+        let inference_result = os::execute_native_inference(move || {
+            let vectors = match engine.embed_batch(texts) {
+                Ok(v) => v,
+                Err(e) => raise_error!("ERR_NLP_BATCH", error = e.to_string()),
+            };
+            Ok(vectors)
+        })
+        .await;
+
+        let vectors = match inference_result {
+            Ok(v) => v,
+            Err(e) => return Err(e),
+        };
+
+        // 3. Tenseur
+        let feat = GraphFeatures::build_from_vectors(vectors, &ComputeHardware::Cpu).await?;
+
         assert_eq!(feat.matrix.dims(), &[1, 384]);
         Ok(())
     }

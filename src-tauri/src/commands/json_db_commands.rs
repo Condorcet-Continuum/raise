@@ -531,7 +531,7 @@ pub async fn jsondb_execute_sql(
                     error = e,
                     context = json_value!({
                         "action": "execute_sql_write",
-                        "hint": "L'écriture SQL a échoué. Vérifiez les contraintes de schéma ou les verrous de base de données."
+                        "hint": "L'écriture SQL a échoué. Vérifiez les contraintes de schéma."
                     })
                 );
             }

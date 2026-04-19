@@ -189,7 +189,8 @@ mod tests {
         let adj_mock = GraphAdjacency {
             uri_to_index: uri_map,
             index_to_uri: vec!["la:Function".to_string(), "sa:Component".to_string()],
-            matrix: NeuralTensor::eye(2, ComputeType::F32, &device).unwrap(),
+            edge_src: NeuralTensor::new(&[0u32, 1], &device).unwrap(),
+            edge_dst: NeuralTensor::new(&[0u32, 1], &device).unwrap(),
         };
 
         // Deux vecteurs "Zéro" -> Testera l'Epsilon
@@ -232,6 +233,14 @@ mod tests {
         uri_map.insert("sa:S1".to_string(), 2);
         uri_map.insert("pa:P1".to_string(), 3);
 
+        // 2. LISTE DES ARÊTES (Sparse)
+        let mut src = vec![0u32, 1, 2, 3];
+        let mut dst = vec![0u32, 1, 2, 3];
+
+        // Liens bidirectionnels de réalisation (F1 <-> S1) et (F1 <-> F2)
+        src.extend_from_slice(&[0, 2, 0, 1]);
+        dst.extend_from_slice(&[2, 0, 1, 0]);
+
         let adj_mock = GraphAdjacency {
             uri_to_index: uri_map,
             index_to_uri: vec![
@@ -240,7 +249,8 @@ mod tests {
                 "sa:S1".to_string(),
                 "pa:P1".to_string(),
             ],
-            matrix: NeuralTensor::eye(4, ComputeType::F32, &device).unwrap(),
+            edge_src: NeuralTensor::new(src.as_slice(), &device).unwrap(),
+            edge_dst: NeuralTensor::new(dst.as_slice(), &device).unwrap(),
         };
 
         // 2. LISTE DES ARÊTES (Sparse)

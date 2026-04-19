@@ -114,7 +114,15 @@ pub async fn recover_pending_transactions(
                     match op {
                         Operation::Insert { collection, id, .. } => {
                             // On supprime le fichier qui a potentiellement été écrit
-                            let _ = storage.delete_document(space, db, &collection, &id).await;
+                            if let Err(e) =
+                                storage.delete_document(space, db, &collection, &id).await
+                            {
+                                raise_error!(
+                                    "ERR_WAL_RECOVERY_IO",
+                                    error = format!("Impossible d'annuler l'insertion : {}", e),
+                                    context = json_value!({"collection": collection, "id": id, "tx_id": tx_id})
+                                );
+                            }
                         }
                         Operation::Update {
                             collection,
@@ -155,176 +163,158 @@ pub async fn recover_pending_transactions(
 }
 
 // ============================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES (Pattern Wrapper : Zéro Unwrap, Retour Unitaire)
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::storage::StorageEngine;
-    use crate::json_db::transactions::manager::TransactionManager;
+    use crate::utils::testing::DbSandbox;
 
     #[async_test]
     async fn test_wal_persistence() {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig {
-            data_root: dir.path().to_path_buf(),
-        };
+        // 🎯 L'encapsulation permet de conserver '?' sans contredire la macro #[async_test]
+        async fn run() -> RaiseResult<()> {
+            let sandbox = DbSandbox::new().await;
+            let config = sandbox.storage.config.clone();
+            let space = "s";
+            let db = "d";
 
-        // ✅ MODIFICATION : On crée le StorageEngine pour le test
-        let storage = StorageEngine::new(config.clone());
-        let tm = TransactionManager::new(&storage, "s", "d");
+            let tx = Transaction::new();
+            write_entry(&config, space, db, &tx).await?;
 
-        // Transaction vide qui réussit
-        let _ = tm.execute(|_| Ok(())).await; // <-- Ajout du .await
+            let pending = list_pending(&config, space, db).await?;
 
-        // Le dossier WAL doit avoir été créé (même si vide après commit)
-        let wal_path = config.db_root("s", "d").join("wal");
-        if !fs::exists_async(&wal_path).await {
-            fs::ensure_dir_async(&wal_path).await.unwrap();
+            if !pending.contains(&tx.id) {
+                raise_error!(
+                    "ERR_TEST_ASSERTION_FAILED",
+                    error = "La transaction n'a pas été trouvée dans le WAL après écriture."
+                );
+            }
+
+            Ok(())
         }
 
-        // Test écriture directe
-        let tx = Transaction::new();
-        write_entry(&config, "s", "d", &tx)
-            .await
-            .expect("Échec write_entry");
-
-        let pending = list_pending(&config, "s", "d")
-            .await
-            .expect("Échec list_pending");
-        assert!(pending.contains(&tx.id));
+        // Exécution et interception au niveau du Test Runner
+        if let Err(e) = run().await {
+            panic!("❌ Échec du test 'test_wal_persistence' : {}", e);
+        }
     }
 
     #[async_test]
     async fn test_wal_recovery_engine() {
-        let dir = tempdir().unwrap();
-        let config = JsonDbConfig {
-            data_root: dir.path().to_path_buf(),
-        };
-        let storage = StorageEngine::new(config.clone());
-        let space = "sys";
-        let db = "core";
+        async fn run() -> RaiseResult<()> {
+            let sandbox = DbSandbox::new().await;
+            let storage = &sandbox.storage;
+            let config = storage.config.clone();
+            let space = "sys";
+            let db = "core";
 
-        // ---------------------------------------------------------
-        // 1. ÉTAT INITIAL (Avant le crash)
-        // ---------------------------------------------------------
-        let old_doc = json_value!({"name": "Ancien", "val": 1});
-        let deleted_doc = json_value!({"name": "A effacer", "val": 2});
+            // 1. ÉTAT INITIAL (Avant le crash)
+            let old_doc = json_value!({"name": "Ancien", "val": 1});
+            let deleted_doc = json_value!({"name": "A effacer", "val": 2});
 
-        // On écrit la vérité initiale sur le disque
-        storage
-            .write_document(space, db, "test_col", "doc_update", &old_doc)
-            .await
-            .unwrap();
-        storage
-            .write_document(space, db, "test_col", "doc_delete", &deleted_doc)
-            .await
-            .unwrap();
+            storage
+                .write_document(space, db, "test_col", "doc_update", &old_doc)
+                .await?;
+            storage
+                .write_document(space, db, "test_col", "doc_delete", &deleted_doc)
+                .await?;
 
-        // ---------------------------------------------------------
-        // 2. SIMULATION DU CRASH
-        // ---------------------------------------------------------
-        // On simule un fichier WAL qui est resté "Pending" car le commit n'a pas eu lieu
-        let tx = Transaction {
-            id: "tx-crash-123".to_string(),
-            operations: vec![
-                Operation::Insert {
-                    collection: "test_col".to_string(),
-                    id: "doc_insert".to_string(),
-                    document: json_value!({"name": "Nouveau"}),
-                },
-                Operation::Update {
-                    collection: "test_col".to_string(),
-                    id: "doc_update".to_string(),
-                    previous_document: Some(old_doc.clone()), // Capture de l'ancien état !
-                    document: json_value!({"name": "Corrompu", "val": 99}),
-                },
-                Operation::Delete {
-                    collection: "test_col".to_string(),
-                    id: "doc_delete".to_string(),
-                    previous_document: Some(deleted_doc.clone()), // Capture de ce qui a été effacé !
-                },
-            ],
-        };
+            // 2. SIMULATION DU CRASH
+            let tx = Transaction {
+                id: "tx-crash-123".to_string(),
+                operations: vec![
+                    Operation::Insert {
+                        collection: "test_col".to_string(),
+                        id: "doc_insert".to_string(),
+                        document: json_value!({"name": "Nouveau"}),
+                    },
+                    Operation::Update {
+                        collection: "test_col".to_string(),
+                        id: "doc_update".to_string(),
+                        previous_document: Some(old_doc.clone()),
+                        document: json_value!({"name": "Corrompu", "val": 99}),
+                    },
+                    Operation::Delete {
+                        collection: "test_col".to_string(),
+                        id: "doc_delete".to_string(),
+                        previous_document: Some(deleted_doc.clone()),
+                    },
+                ],
+            };
 
-        // On écrit l'intention dans le WAL
-        write_entry(&config, space, db, &tx).await.unwrap();
+            write_entry(&config, space, db, &tx).await?;
 
-        // On corrompt manuellement le disque pour simuler que le moteur a planté *pendant* l'écriture
-        storage
-            .write_document(
-                space,
-                db,
-                "test_col",
-                "doc_insert",
-                &json_value!({"name": "Nouveau"}),
-            )
-            .await
-            .unwrap();
-        storage
-            .write_document(
-                space,
-                db,
-                "test_col",
-                "doc_update",
-                &json_value!({"name": "Corrompu", "val": 99}),
-            )
-            .await
-            .unwrap();
-        storage
-            .delete_document(space, db, "test_col", "doc_delete")
-            .await
-            .unwrap();
+            // Corruption manuelle simulant le crash I/O
+            storage
+                .write_document(
+                    space,
+                    db,
+                    "test_col",
+                    "doc_insert",
+                    &json_value!({"name": "Nouveau"}),
+                )
+                .await?;
+            storage
+                .write_document(
+                    space,
+                    db,
+                    "test_col",
+                    "doc_update",
+                    &json_value!({"name": "Corrompu", "val": 99}),
+                )
+                .await?;
+            storage
+                .delete_document(space, db, "test_col", "doc_delete")
+                .await?;
 
-        // ---------------------------------------------------------
-        // 3. LA RÉSURRECTION (Au redémarrage de l'app)
-        // ---------------------------------------------------------
-        let recovered = recover_pending_transactions(&config, space, db, &storage)
-            .await
-            .unwrap();
-        assert_eq!(recovered, 1, "Une transaction aurait dû être récupérée");
+            // 3. LA RÉSURRECTION
+            let recovered = recover_pending_transactions(&config, space, db, storage).await?;
 
-        // ---------------------------------------------------------
-        // 4. ASSERTIONS : Preuve de l'ACIDité
-        // ---------------------------------------------------------
-        // A. L'insert a été annulé (supprimé)
-        let res_insert = storage
-            .read_document(space, db, "test_col", "doc_insert")
-            .await
-            .unwrap();
-        assert!(
-            res_insert.is_none(),
-            "UNDO INSERT FAILED: Le document inséré aurait dû être supprimé"
-        );
+            if recovered != 1 {
+                raise_error!(
+                    "ERR_TEST_ASSERTION_FAILED",
+                    error = "Une transaction aurait dû être récupérée"
+                );
+            }
 
-        // B. L'update a été annulé (restauré à l'état initial)
-        let res_update = storage
-            .read_document(space, db, "test_col", "doc_update")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            res_update["val"], 1,
-            "UNDO UPDATE FAILED: Le document mis à jour aurait dû être restauré"
-        );
+            // 4. ASSERTIONS : Preuve de l'ACIDité
+            let res_insert = storage
+                .read_document(space, db, "test_col", "doc_insert")
+                .await?;
+            if res_insert.is_some() {
+                raise_error!("ERR_TEST_ASSERTION_FAILED", error = "UNDO INSERT FAILED");
+            }
 
-        // C. Le delete a été annulé (ressuscité)
-        let res_delete = storage
-            .read_document(space, db, "test_col", "doc_delete")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            res_delete["name"], "A effacer",
-            "UNDO DELETE FAILED: Le document supprimé aurait dû être ressuscité"
-        );
+            let res_update = storage
+                .read_document(space, db, "test_col", "doc_update")
+                .await?;
+            if res_update.map_or(true, |d| d["val"] != 1) {
+                raise_error!("ERR_TEST_ASSERTION_FAILED", error = "UNDO UPDATE FAILED");
+            }
 
-        // D. Le WAL a été nettoyé
-        let pending = list_pending(&config, space, db).await.unwrap();
-        assert!(
-            pending.is_empty(),
-            "Le fichier WAL devrait être supprimé après récupération"
-        );
+            let res_delete = storage
+                .read_document(space, db, "test_col", "doc_delete")
+                .await?;
+            if res_delete.map_or(true, |d| d["name"] != "A effacer") {
+                raise_error!("ERR_TEST_ASSERTION_FAILED", error = "UNDO DELETE FAILED");
+            }
+
+            let pending = list_pending(&config, space, db).await?;
+            if !pending.is_empty() {
+                raise_error!(
+                    "ERR_TEST_ASSERTION_FAILED",
+                    error = "Le fichier WAL devrait être supprimé après récupération"
+                );
+            }
+
+            Ok(())
+        }
+
+        // Exécution et interception au niveau du Test Runner
+        if let Err(e) = run().await {
+            panic!("❌ Échec du test 'test_wal_recovery_engine' : {}", e);
+        }
     }
 }
