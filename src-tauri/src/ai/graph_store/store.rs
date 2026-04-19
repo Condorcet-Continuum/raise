@@ -41,7 +41,7 @@ impl GraphStore {
                     let v_store = NativeLocalStore::new(&v_dir, device);
 
                     // Chargement résilient : si le store est absent, on continue à vide
-                    if let Err(e) = v_store.load().await {
+                    if let Err(e) = v_store.load(manager).await {
                         user_trace!(
                             "INF_GRAPH_STORE_NEW",
                             json_value!({"path": v_dir, "status": "initialized_empty", "reason": e.to_string()})
@@ -106,7 +106,7 @@ impl GraphStore {
                     let _ = v_store
                         .add_documents(manager, collection, vec![record])
                         .await;
-                    let _ = v_store.save().await;
+                    let _ = v_store.save(manager).await;
                 }
             }
         }

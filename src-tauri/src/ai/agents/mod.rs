@@ -61,7 +61,7 @@ pub struct AgentTask {
 
 impl FmtDisplay for AgentTask {
     fn fmt(&self, f: &mut FmtCursor<'_>) -> FmtResult {
-        write!(f, "AgentTask(id: {}, type: {:?})", self.id, self.task_type)
+        write!(f, "AgentTask(id: {}, type: {})", self.id, self.task_type)
     }
 }
 
@@ -123,8 +123,9 @@ pub trait Agent: Send + Sync {
         intent: &EngineeringIntent,
     ) -> RaiseResult<Option<AgentResult>>;
 }
+
 // =========================================================================
-// TESTS UNITAIRES
+// TESTS UNITAIRES (Standard Zéro Dette)
 // =========================================================================
 
 #[cfg(test)]
@@ -132,24 +133,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_session_struct() {
+    fn test_session_struct() -> RaiseResult<()> {
         let mut session = AgentSession::new("sess_1", "agent_1");
         session.add_message("user", "Hello");
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].role, "user");
+        Ok(())
     }
 
     #[test]
-    fn test_agent_result_acl_support() {
+    fn test_agent_result_acl_support() -> RaiseResult<()> {
         use crate::ai::protocols::acl::{AclMessage, Performative};
 
         let res_text = AgentResult::text("Hello".to_string());
         assert!(res_text.outgoing_message.is_none());
 
-        let msg = AclMessage::new(Performative::Request, "sender", "receiver", "content");
+        // 🎯 FIX : Ajout du 5ème argument (Ontology) positionné à None pour ce test
+        let msg = AclMessage::new(Performative::Request, "sender", "receiver", "content", None);
         let res_acl = AgentResult::communicate(msg);
 
         assert!(res_acl.outgoing_message.is_some());
-        assert_eq!(res_acl.outgoing_message.unwrap().receiver, "receiver");
+
+        // 🎯 FIX ZÉRO DETTE : Pas de .unwrap()
+        if let Some(msg) = res_acl.outgoing_message {
+            assert_eq!(msg.receiver, "receiver");
+        } else {
+            raise_error!(
+                "ERR_TEST_ACL_INCONSISTENCY",
+                error = "Le message sortant devrait être présent."
+            );
+        }
+
+        Ok(())
     }
 }

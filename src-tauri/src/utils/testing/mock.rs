@@ -586,7 +586,8 @@ pub async fn inject_mock_component(
     }
 
     let ref_id = format!("ref:components:handle:{}", real_handle);
-    let service_id = "ref:services:handle:svc_ai";
+    let service_id_semantic = "ref:services:handle:svc_ai";
+    let service_id_physical = "phys-uuid-svc-ai"; // 🎯 UUID Déterministe pour le test
 
     let schema_uri = format!(
         "db://{}/{}/schemas/v1/db/generic.schema.json",
@@ -594,15 +595,33 @@ pub async fn inject_mock_component(
         crate::utils::data::config::BOOTSTRAP_DB
     );
 
+    // 🎯 ÉTAPE A : Création du service parent (État Physique Exact)
+    manager.create_collection("services", &schema_uri).await?;
+
+    // On force l'état physique (ID + Handle) sans passer par le compute dynamique
+    let _ = manager
+        .insert_raw(
+            "services",
+            &json_value!({
+                "_id": service_id_physical,
+                "handle": "svc_ai"
+            }),
+        )
+        .await;
+
+    // 🎯 ÉTAPE B : Collection de configs
     manager
         .create_collection("service_configs", &schema_uri)
         .await?;
 
-    // 🎯 ÉTAPE A : Fusion (Merge) cumulative manuelle
+    // 🎯 ÉTAPE C : Fusion (Merge) cumulative manuelle des composants
     let mut service_settings = crate::utils::data::json::JsonObject::new();
-    let config_id = "cfg_ai_default".to_string();
+    let mut config_id = "cfg_ai_default".to_string();
 
     if let Ok(Some(doc)) = manager.get_document("service_configs", &config_id).await {
+        if let Some(id) = doc.get("_id").and_then(|v| v.as_str()) {
+            config_id = id.to_string();
+        }
         if let Some(existing) = doc.get("service_settings").and_then(|v| v.as_object()) {
             service_settings = existing.clone();
         }
@@ -610,24 +629,22 @@ pub async fn inject_mock_component(
 
     service_settings.insert(ref_id, settings);
 
-    // 🎯 ÉTAPE B : Création du document
+    // 🎯 ÉTAPE D : Insertion consolidée
     let final_doc = json_value!({
         "_id": config_id.clone(),
         "handle": config_id,
-        "service_id": service_id, // 👈 Reste une String, ne sera pas mutée !
+        "service_id": service_id_physical, // 👈 Lien physique direct, comme ce que ferait upsert_document en prod !
         "environment": "test",
         "service_settings": service_settings
     });
 
-    // 🎯 ÉTAPE C : Insertion via INSERT_RAW
-    // C'est le secret : insert_raw écrase le fichier physique sans déclencher
-    // la résolution des Smart Links, gardant ainsi la config compatible avec AppConfig.
+    // On utilise insert_raw pour geler l'état et garantir la lecture par AppConfig
     match manager.insert_raw("service_configs", &final_doc).await {
         Ok(_) => Ok(()),
         Err(e) => raise_error!(
             "ERR_TEST_MOCK_INJECTION_FAILED",
             error = e.to_string(),
-            context = json_value!({ "comp": real_handle, "service": service_id })
+            context = json_value!({ "comp": real_handle, "service": service_id_semantic })
         ),
     }
 }

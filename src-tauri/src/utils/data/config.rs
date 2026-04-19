@@ -390,28 +390,23 @@ impl AppConfig {
 
     pub async fn get_service_settings(
         manager: &CollectionsManager<'_>,
-        target_service_id: &str, // ex: "ref:services:blueprint:google_gemini"
+        target_service_ref: &str, // ex: "ref:services:blueprint:google_gemini"
     ) -> RaiseResult<JsonValue> {
-        // 1. Construction stricte de la requête via l'API QueryEngine
+        let physical_uuid = manager.resolve_single_reference(target_service_ref).await?;
+
+        // 🎯 2. On requête sur l'UUID, car c'est ce que 'upsert_document' a stocké !
         let mut query = Query::new("service_configs");
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
             conditions: vec![Condition::eq(
                 "service_id",
-                crate::utils::prelude::json_value!(target_service_id),
+                crate::utils::prelude::json_value!(physical_uuid), // 👈 Requête sur l'UUID
             )],
         });
+
         query.limit = Some(1);
 
-        // 2. Exécution via le CollectionsManager
-        let result = match QueryEngine::new(manager).execute_query(query).await {
-            Ok(res) => res,
-            Err(e) => raise_error!(
-                "ERR_CONFIG_DB_QUERY",
-                error = e,
-                context = json_value!({ "requested_service": target_service_id })
-            ),
-        };
+        let result = QueryEngine::new(manager).execute_query(query).await?;
 
         // 3. Extraction sécurisée
         if let Some(doc) = result.documents.into_iter().next() {
@@ -423,7 +418,7 @@ impl AppConfig {
         raise_error!(
             "ERR_CONFIG_SERVICE_MISSING",
             error = "Configuration du service introuvable ou propriété 'service_settings' absente.",
-            context = json_value!({ "requested_service": target_service_id })
+            context = json_value!({ "requested_service": target_service_ref })
         );
     }
 
@@ -684,19 +679,35 @@ mod tests {
 
         DbSandbox::mock_db(&manager).await?;
 
-        // 2. Création de la collection requise
+        // 🎯 FIX ZÉRO DETTE : Création du service parent physique pour satisfaire la résolution
+        let generic_schema = "db://_system/bootstrap/schemas/v1/db/generic.schema.json";
         manager
-            .create_collection(
-                "service_configs",
-                "db://_system/bootstrap/schemas/v2/dapps/services/service_config.schema.json",
+            .create_collection("services", generic_schema)
+            .await?;
+
+        // On insère le service avec un UUID physique et le critère de recherche (blueprint)
+        let expected_uuid = "phys-uuid-gemini";
+        manager
+            .insert_raw(
+                "services",
+                &json_value!({
+                    "_id": expected_uuid,
+                    "blueprint": "google_gemini"
+                }),
             )
+            .await?;
+
+        // 2. Création de la collection requise pour les configs
+        // 🎯 FIX : On utilise le schéma générique pour satisfaire la Sandbox
+        manager
+            .create_collection("service_configs", generic_schema)
             .await?;
 
         // 3. Injection d'une fausse configuration Gemini
         let mock_service_id = "ref:services:blueprint:google_gemini";
         let mock_doc = json_value!({
             "_id": "cfg_test_gemini",
-            "service_id": mock_service_id,
+            "service_id": mock_service_id, // 👈 C'est un Smart Link !
             "environment": "test",
             "service_settings": {
                 "api_key": "TEST_KEY_123",
@@ -704,9 +715,12 @@ mod tests {
             }
         });
 
-        manager.insert_raw("service_configs", &mock_doc).await?;
+        // 🎯 TEST E2E : On utilise `upsert_document`.
+        // Il va lire le Smart Link, trouver l'UUID "phys-uuid-gemini" et le stocker à la place.
+        manager.upsert_document("service_configs", mock_doc).await?;
 
         // 4. Test de la fonction métier Zéro Dette
+        // `get_service_settings` va résoudre le Smart Link, trouver l'UUID, et requêter la DB.
         let settings = AppConfig::get_service_settings(&manager, mock_service_id).await?;
 
         assert_eq!(settings["api_key"], "TEST_KEY_123");

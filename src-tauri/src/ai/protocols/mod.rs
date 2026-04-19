@@ -2,7 +2,9 @@
 
 pub mod acl;
 pub mod mcp;
+pub mod ontology;
 
 // On réexporte les types principaux pour faciliter l'usage dans le reste de l'app
 pub use acl::{AclMessage, Performative};
 pub use mcp::{McpToolCall, McpToolResult};
+pub use ontology::RaiseOntology;

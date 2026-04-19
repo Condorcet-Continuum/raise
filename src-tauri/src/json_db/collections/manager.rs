@@ -204,6 +204,19 @@ impl<'a> CollectionsManager<'a> {
     // ============================================================================
     // MÉTHODES DE LECTURE
     // ============================================================================
+    pub async fn resolve_single_reference(&self, smart_link: &str) -> RaiseResult<String> {
+        // On réutilise ta logique interne de parse_smart_link
+        let json_val = JsonValue::String(smart_link.to_string());
+        let resolved_json = resolve_refs_recursive(json_val, self).await?;
+
+        match resolved_json.as_str() {
+            Some(uuid) => Ok(uuid.to_string()),
+            None => raise_error!(
+                "ERR_DB_REF_RESOLUTION",
+                error = "Le lien n'a pas pu être résolu en UUID"
+            ),
+        }
+    }
 
     #[async_recursive]
     pub async fn get_document(
@@ -1676,6 +1689,46 @@ mod tests {
             "La collection devrait avoir disparu de l'index"
         );
 
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_manager_resolve_single_reference() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
+        DbSandbox::mock_db(&manager).await?;
+
+        // 1. Création de la collection cible
+        manager
+            .create_collection(
+                "services",
+                "db://_system/bootstrap/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+
+        // 2. Insertion d'un document avec un UUID fixe
+        let expected_uuid = "uuid-physique-1234";
+        let handle = "svc_test_ref";
+        manager
+            .insert_raw(
+                "services",
+                &json_value!({
+                    "_id": expected_uuid,
+                    "handle": handle,
+                    "name": "Service de Test"
+                }),
+            )
+            .await?;
+
+        // 3. Test de résolution
+        let smart_link = format!("ref:services:handle:{}", handle);
+        let resolved = manager.resolve_single_reference(&smart_link).await?;
+
+        assert_eq!(
+            resolved, expected_uuid,
+            "Le lien sémantique doit pointer vers l'UUID physique"
+        );
         Ok(())
     }
 }

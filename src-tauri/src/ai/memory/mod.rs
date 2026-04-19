@@ -41,6 +41,8 @@ pub trait VectorStore: Send + Sync {
         score_threshold: f32,
         filter: Option<UnorderedMap<String, String>>,
     ) -> RaiseResult<Vec<MemoryRecord>>;
+
+    async fn unload_collection(&self, collection_name: &str) -> RaiseResult<()>;
 }
 
 // =========================================================================

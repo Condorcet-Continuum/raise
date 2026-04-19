@@ -48,7 +48,7 @@ impl RagRetriever {
             .await?;
 
         // Chargement sécurisé de l'index
-        match memory.load().await {
+        match memory.load(manager).await {
             Ok(_) => user_trace!("INF_RAG_LOADED", json_value!({"path": store_dir})),
             Err(e) => user_warn!("WRN_RAG_EMPTY", json_value!({"error": e.to_string()})),
         }
@@ -109,7 +109,7 @@ impl RagRetriever {
                 context = json_value!({"collection": self.collection_name, "source": source})
             );
         }
-        if let Err(e) = self.backend.save().await {
+        if let Err(e) = self.backend.save(manager).await {
             raise_error!(
                 "ERR_RAG_SAVE_BACKEND",
                 error = e,

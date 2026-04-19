@@ -1,5 +1,6 @@
 // src-tauri/src/ai/protocols/acl.rs
 
+use super::ontology::RaiseOntology;
 use crate::utils::prelude::*;
 
 /// Les types d'actes communicatifs (Performatifs)
@@ -54,11 +55,17 @@ pub struct AclMessage {
 
     /// Ontologie de référence (Optionnel)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ontology: Option<String>,
+    pub ontology: Option<RaiseOntology>,
 }
 
 impl AclMessage {
-    pub fn new(performative: Performative, sender: &str, receiver: &str, content: &str) -> Self {
+    pub fn new(
+        performative: Performative,
+        sender: &str,
+        receiver: &str,
+        content: &str,
+        ontology: Option<RaiseOntology>,
+    ) -> Self {
         Self {
             id: UniqueId::new_v4(),
             timestamp: UtcClock::now(),
@@ -68,7 +75,7 @@ impl AclMessage {
             content: content.to_string(),
             conversation_id: None,
             reply_to: None,
-            ontology: None,
+            ontology,
         }
     }
 
@@ -92,18 +99,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_acl_creation() {
-        let msg = AclMessage::new(Performative::Request, "A", "B", "Test");
+    fn test_acl_creation() -> RaiseResult<()> {
+        let msg = AclMessage::new(
+            Performative::Request,
+            "agent_alpha",
+            "agent_beta",
+            "Analyses-moi ce composant",
+            Some(RaiseOntology::ArcadiaLA),
+        );
+
         assert_eq!(msg.performative, Performative::Request);
+        assert_eq!(msg.ontology, Some(RaiseOntology::ArcadiaLA));
         assert!(!msg.id.is_nil());
+        Ok(())
     }
 
     #[test]
-    fn test_acl_serialization() {
-        let msg = AclMessage::new(Performative::Inform, "A", "B", "Data");
-        let json = json::serialize_to_string(&msg).unwrap();
-        // Vérifie que le champ s'appelle bien "_id" et pas "id"
-        assert!(json.contains("_id"));
-        assert!(json.contains("performative"));
+    fn test_acl_serialization_cycle() -> RaiseResult<()> {
+        let msg = AclMessage::new(
+            Performative::Inform,
+            "A",
+            "B",
+            "Done",
+            Some(RaiseOntology::RaiseAgents),
+        );
+
+        let json_str = json::serialize_to_string(&msg)?;
+
+        assert!(json_str.contains("_id"));
+        assert!(json_str.contains("https://raise.ai/ontology/raise/agents"));
+
+        let back: AclMessage = json::deserialize_from_str(&json_str)?;
+        assert_eq!(back.performative, Performative::Inform);
+        assert_eq!(back.ontology, Some(RaiseOntology::RaiseAgents));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_acl_reply_integrity() -> RaiseResult<()> {
+        let original = AclMessage::new(
+            Performative::Propose,
+            "architect",
+            "validator",
+            "New Layout",
+            Some(RaiseOntology::ArcadiaPA),
+        );
+
+        let response = AclMessage::reply(&original, Performative::Agree, "Looks good");
+
+        assert_eq!(response.sender, "validator");
+        assert_eq!(response.receiver, "architect");
+        assert_eq!(response.reply_to, Some(original.id));
+        assert_eq!(response.ontology, Some(RaiseOntology::ArcadiaPA));
+
+        Ok(())
     }
 }
