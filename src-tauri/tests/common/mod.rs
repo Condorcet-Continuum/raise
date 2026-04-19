@@ -98,8 +98,11 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
         }
     }
 
+    // =========================================================================
     // 5. INJECTION DE LA CONFIGURATION (Data-Driven)
-    inject_mock_component(
+    // =========================================================================
+    // 🎯 VRAIE SUPPRESSION DU '?' ICI :
+    let _ = inject_mock_component(
         &mgr,
         "ai_agents",
         json_value!({
@@ -117,7 +120,6 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
             json_value!({
                 "_id": "ref:configs:handle:ontological_mapping",
                 "handle": "ontological_mapping",
-                // 🎯 FIX : Ajout des search_spaces requis par le ModelLoader
                 "search_spaces": [
                     { "layer": "oa", "collection": "capabilities" },
                     { "layer": "oa", "collection": "actors" },
@@ -140,15 +142,25 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
         )
         .await;
 
+    // =========================================================================
     // 6. INITIALISATION LLM
-    inject_mock_component(&mgr, "llm", json_value!({})).await;
+    // =========================================================================
+    // 🎯 VRAIE SUPPRESSION DU '?' ICI :
+    let _ = inject_mock_component(&mgr, "llm", json_value!({})).await;
 
     let client = match llm_mode {
         LlmMode::Enabled => {
             let mock_model_file = domain_path.join("_system/ai-assets/models/mock.gguf");
             let _ = fs::ensure_dir_sync(mock_model_file.parent().unwrap());
             let _ = fs::write_sync(&mock_model_file, b"dummy");
-            LlmClient::new(&mgr).await.ok()
+            Some(
+                LlmClient::new(&mgr)
+                    .await
+                    .map_err(|e| {
+                        panic!("❌ Échec critique initialisation LlmClient : {:?}", e);
+                    })
+                    .unwrap(),
+            )
         }
         LlmMode::Disabled => None,
     };

@@ -170,7 +170,7 @@ mod tests {
                 "rust_safetensors_file": "model.safetensors"
             }),
         )
-        .await;
+        .await?;
 
         let mut engine = EmbeddingEngine::new(&manager).await?;
         let uris = vec![
@@ -239,7 +239,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
         let mut engine = EmbeddingEngine::new(&manager).await?;
 
         let uris = vec!["ghost:entity_01".to_string()];

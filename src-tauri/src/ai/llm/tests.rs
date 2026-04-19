@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/ai/llm/tests.rs
+
 use super::response_parser;
 use crate::utils::prelude::*;
 
@@ -30,9 +32,11 @@ fn test_response_parser_cleaning() -> RaiseResult<()> {
 
     // Cas 2 : Réponse propre sans Markdown
     let raw_clean = r#"{ "key": "value" }"#;
-    let json2 =
-        response_parser::extract_json(raw_clean).expect("Le parser aurait dû lire le JSON brut");
+
+    // Zéro Dette : Propagation propre au lieu de expect()
+    let json2 = response_parser::extract_json(raw_clean)?;
     assert_eq!(json2["key"], "value");
+
     Ok(())
 }
 

@@ -123,7 +123,7 @@ mod tests {
                 "rust_tokenizer_file": "ghost_tok.json"
             }),
         )
-        .await;
+        .await?;
 
         // 🎯 FIX : Utilisation directe de sandbox.db qui est déjà un SharedRef<StorageEngine>
         let storage_ref = sandbox.db.clone();

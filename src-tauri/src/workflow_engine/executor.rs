@@ -146,23 +146,21 @@ mod tests {
     async fn create_test_executor_with_tools(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &AppConfig,
-    ) -> WorkflowExecutor {
+    ) -> RaiseResult<WorkflowExecutor> {
         let manager = CollectionsManager::new(
             &storage,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
 
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
-            .await
-            .expect("Orchestrateur mock échoué");
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone()).await?;
         let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
 
         let mut exec = WorkflowExecutor::new(SharedRef::new(AsyncMutex::new(orch)), plugin_manager);
         exec.register_tool(Box::new(SystemMonitorTool));
-        exec
+        Ok(exec)
     }
 
     #[async_test]
@@ -171,7 +169,7 @@ mod tests {
     async fn test_gate_pause() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
-        let executor = create_test_executor_with_tools(sandbox.db.clone(), &config).await;
+        let executor = create_test_executor_with_tools(sandbox.db.clone(), &config).await?;
         let manager = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
@@ -256,7 +254,7 @@ mod tests {
         let config = AppConfig::get();
 
         // 🎯 FIX : Utiliser ta fonction d'aide qui injecte les mocks LLM et RAG en base de données
-        let mut exec_mut = create_test_executor_with_tools(sandbox.db.clone(), config).await;
+        let mut exec_mut = create_test_executor_with_tools(sandbox.db.clone(), config).await?;
 
         let manager = CollectionsManager::new(
             &sandbox.db,

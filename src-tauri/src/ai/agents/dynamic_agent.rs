@@ -216,7 +216,7 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        inject_mock_component(&manager, "llm", json_value!({})).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await?;
 
         let llm = match LlmClient::new(&manager).await {
             Ok(c) => c,

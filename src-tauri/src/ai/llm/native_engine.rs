@@ -11,21 +11,58 @@ pub struct NativeTensorEngine {
 
 impl NativeTensorEngine {
     /// Initialise le moteur LLM local en respectant les points de montage et la config dynamique.
+    /// Initialise le moteur LLM local en respectant les points de montage et la config dynamique.
     pub async fn new(
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
-        // 1. Récupération stricte de la configuration via le point de montage Système
-        let (model_filename, tokenizer_filename) = match AppConfig::get_llm_settings(manager).await
+        // 1. Récupération stricte de la configuration via la requête V2 (Zéro Dette)
+        let svc_settings = match AppConfig::get_service_settings(
+            manager,
+            "ref:services:handle:svc_ai",
+        )
+        .await
         {
-            Ok(settings) => settings,
+            Ok(s) => s,
             Err(e) => raise_error!(
                 "ERR_AI_ENGINE_CONFIG_FAILED",
                 error = e.to_string(),
-                context = json_value!({"action": "fetch_llm_settings"})
+                context = json_value!({"action": "fetch_service_settings", "service_id": "ref:services:handle:svc_ai"})
             ),
         };
 
-        // 2. Construction des chemins via les Mount Points (Zéro Dette)
+        // 2. Extraction du composant spécifique LLM
+        let comp_settings = match svc_settings.get("ref:components:handle:ai_llm") {
+            Some(s) => s,
+            None => raise_error!(
+                "ERR_AI_LLM_COMPONENT_MISSING",
+                error = "La configuration du composant 'ai_llm' est absente des service_settings.",
+                context = json_value!({"service_id": "ref:services:handle:svc_ai"})
+            ),
+        };
+
+        let model_filename = match comp_settings
+            .get("rust_model_file")
+            .and_then(|v| v.as_str())
+        {
+            Some(m) => m.to_string(),
+            None => raise_error!(
+                "ERR_AI_LLM_MODEL_MISSING",
+                error = "La clé 'rust_model_file' est introuvable."
+            ),
+        };
+
+        let tokenizer_filename = match comp_settings
+            .get("rust_tokenizer_file")
+            .and_then(|v| v.as_str())
+        {
+            Some(t) => t.to_string(),
+            None => raise_error!(
+                "ERR_AI_LLM_TOKENIZER_MISSING",
+                error = "La clé 'rust_tokenizer_file' est introuvable."
+            ),
+        };
+
+        // 3. Construction des chemins via les Mount Points (Zéro Dette)
         let config = AppConfig::get();
         let base_path = match config.get_path("PATH_RAISE_DOMAIN") {
             Some(p) => p
@@ -41,7 +78,7 @@ impl NativeTensorEngine {
         let model_path = base_path.join(&model_filename);
         let tokenizer_path = base_path.join(&tokenizer_filename);
 
-        // 3. Vérifications de résilience physique via Match
+        // 4. Vérifications de résilience physique via Match
         if !model_path.exists() {
             raise_error!(
                 "ERR_AI_MODEL_FILE_NOT_FOUND",
@@ -58,14 +95,14 @@ impl NativeTensorEngine {
             );
         }
 
-        // 4. Résolution Hardware (SSOT: AppConfig)
+        // 5. Résolution Hardware (SSOT: AppConfig)
         let device = AppConfig::device().clone();
         user_info!(
             "MSG_AI_ENGINE_LOAD_START",
             json_value!({ "model": model_filename, "device": format!("{:?}", device) })
         );
 
-        // 5. Chargement sécurisé du TextTokenizer
+        // 6. Chargement sécurisé du TextTokenizer
         let tokenizer = match TextTokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,
             Err(e) => raise_error!(
@@ -75,7 +112,7 @@ impl NativeTensorEngine {
             ),
         };
 
-        // 6. Ouverture et lecture du fichier GGUF
+        // 7. Ouverture et lecture du fichier GGUF
         let mut file = match fs::open_sync(&model_path) {
             Ok(f) => f,
             Err(e) => raise_error!(
@@ -90,7 +127,7 @@ impl NativeTensorEngine {
             Err(e) => raise_error!("ERR_AI_MODEL_READ_CONTENT", error = e.to_string()),
         };
 
-        // 7. Instanciation des poids neuronaux
+        // 8. Instanciation des poids neuronaux
         let weights =
             match Qwen2QuantizedModel::ModelWeights::from_gguf(model_content, &mut file, &device) {
                 Ok(w) => w,
@@ -138,10 +175,7 @@ impl NativeTensorEngine {
             ),
         };
 
-        let stop_token_id = self
-            .tokenizer
-            .token_to_id("<|endoftext|>")
-            .unwrap_or_default();
+        let stop_token_id = self.tokenizer.token_to_id("<|endoftext|>");
 
         for _i in 0..max_tokens {
             let context_size = if index_pos == 0 { tokens.len() } else { 1 };
@@ -177,7 +211,7 @@ impl NativeTensorEngine {
                 Err(e) => raise_error!("ERR_AI_SAMPLING_FAILED", error = e.to_string()),
             };
 
-            if next_token == eos_token_id || next_token == stop_token_id {
+            if next_token == eos_token_id || Some(next_token) == stop_token_id {
                 break;
             }
 
@@ -223,7 +257,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await?;
 
         let mut engine = NativeTensorEngine::new(&manager).await?;
         let response = engine.generate("Réponds 'OK'.", "Test", 5)?;
@@ -253,7 +287,7 @@ mod tests {
                 "rust_tokenizer_file": "ghost_tok.json"
             }),
         )
-        .await;
+        .await?;
 
         let result = NativeTensorEngine::new(&manager).await;
 

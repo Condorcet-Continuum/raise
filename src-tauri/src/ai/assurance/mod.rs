@@ -207,7 +207,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&sys_mgr, "llm", json_value!({})).await;
+        inject_mock_component(&sys_mgr, "llm", json_value!({})).await?;
 
         let llm = LlmClient::new(&sys_mgr).await?;
         let world = SharedRef::new(NeuroSymbolicEngine::new_empty(Default::default())?);

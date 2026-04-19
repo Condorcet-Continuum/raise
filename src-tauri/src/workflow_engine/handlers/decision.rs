@@ -125,13 +125,13 @@ mod tests {
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &'a AppConfig,
         sandbox_db: &'a crate::json_db::storage::StorageEngine,
-    ) -> (
+    ) -> RaiseResult<(
         SharedRef<AsyncMutex<AiOrchestrator>>,
         SharedRef<PluginManager>,
         WorkflowCritic,
         UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
         CollectionsManager<'a>,
-    ) {
+    )> {
         // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config système
         let manager = CollectionsManager::new(
             sandbox_db,
@@ -139,8 +139,8 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
 
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
@@ -150,13 +150,13 @@ mod tests {
         let critic = WorkflowCritic::default();
         let tools = UnorderedMap::new();
 
-        (
+        Ok((
             SharedRef::new(AsyncMutex::new(orch)),
             plugin_manager,
             critic,
             tools,
             manager,
-        )
+        ))
     }
 
     #[async_test]
@@ -166,7 +166,7 @@ mod tests {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
-            setup_dummy_context(sandbox.db.clone(), &config, &sandbox.db).await;
+            setup_dummy_context(sandbox.db.clone(), &config, &sandbox.db).await?;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
@@ -204,7 +204,7 @@ mod tests {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
-            setup_dummy_context(sandbox.db.clone(), &config, &sandbox.db).await;
+            setup_dummy_context(sandbox.db.clone(), &config, &sandbox.db).await?;
 
         let ctx = HandlerContext {
             orchestrator: &orch,

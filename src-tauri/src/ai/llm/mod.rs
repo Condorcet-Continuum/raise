@@ -3,6 +3,7 @@ use crate::utils::prelude::*;
 use self::native_engine::NativeTensorEngine;
 pub mod client;
 pub mod native_engine;
+pub mod providers;
 pub mod response_parser;
 
 #[cfg(test)]

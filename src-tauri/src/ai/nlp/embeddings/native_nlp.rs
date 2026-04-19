@@ -244,7 +244,7 @@ mod tests {
             &sandbox.config.mount_points.system.domain,
             &sandbox.config.mount_points.system.db,
         );
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
 
         let engine = NativeNlpEngine::new(&manager).await?;
         assert!(engine.tokenizer.get_vocab_size(true) > 0);
@@ -263,7 +263,7 @@ mod tests {
             &sandbox.config.mount_points.system.domain,
             &sandbox.config.mount_points.system.db,
         );
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
 
         let mut engine = NativeNlpEngine::new(&manager).await?;
         let vec = engine.embed_query("Test NLP")?;
@@ -284,7 +284,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "ghost_model"})).await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "ghost_model"})).await?;
 
         let result = NativeNlpEngine::new(&manager).await;
         match result {

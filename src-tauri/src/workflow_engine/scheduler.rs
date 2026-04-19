@@ -252,7 +252,7 @@ mod tests {
     async fn setup_test_environment(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &AppConfig,
-    ) -> WorkflowScheduler {
+    ) -> RaiseResult<WorkflowScheduler> {
         let manager = CollectionsManager::new(
             &storage,
             &config.mount_points.system.domain,
@@ -268,8 +268,8 @@ mod tests {
             .await
             .unwrap();
 
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
 
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
@@ -277,7 +277,7 @@ mod tests {
         let pm = SharedRef::new(PluginManager::new(&storage, None));
         let executor = WorkflowExecutor::new(SharedRef::new(AsyncMutex::new(orch)), pm);
 
-        WorkflowScheduler::new(executor)
+        Ok(WorkflowScheduler::new(executor))
     }
 
     #[async_test]
@@ -285,7 +285,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_create_instance_persistence() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
-        let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await?;
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.mount_points.system.domain,
@@ -333,7 +333,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_orphan_instance_match() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
-        let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await;
+        let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await?;
         let manager = CollectionsManager::new(&sandbox.db, "a", "b");
 
         let mut instance = WorkflowInstance {

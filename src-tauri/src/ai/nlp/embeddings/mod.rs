@@ -143,7 +143,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
 
         let mut engine = EmbeddingEngine::new(&manager).await?;
         assert!(engine.embed_query("Hello").is_ok());
@@ -163,7 +163,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await;
+        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
 
         // Test Lightweight
         let mut fast_engine =
@@ -216,7 +216,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({})).await;
+        inject_mock_component(&manager, "nlp", json_value!({})).await?;
         let mut engine = EmbeddingEngine::new_with_type(EngineType::Lightweight, &manager).await?;
 
         let result = engine.embed_query("");

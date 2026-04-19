@@ -320,7 +320,7 @@ mod tests {
         }
     }
 
-    async fn setup_mock_orchestrator_env() -> AgentDbSandbox {
+    async fn setup_mock_orchestrator_env() -> RaiseResult<AgentDbSandbox> {
         let sandbox = AgentDbSandbox::new().await;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
@@ -352,7 +352,7 @@ mod tests {
                 "rust_tokenizer_file": light_tokenizer_path
             }),
         )
-        .await;
+        .await?;
 
         inject_mock_component(
             &manager,
@@ -364,9 +364,9 @@ mod tests {
                 "rust_safetensors_file": "model.safetensors"
             }),
         )
-        .await;
+        .await?;
 
-        sandbox
+        Ok(sandbox)
     }
 
     #[async_test]
@@ -374,7 +374,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_lifecycle() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
-        let sandbox = setup_mock_orchestrator_env().await;
+        let sandbox = setup_mock_orchestrator_env().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -411,7 +411,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_wm_resilience() -> RaiseResult<()> {
-        let sandbox = setup_mock_orchestrator_env().await;
+        let sandbox = setup_mock_orchestrator_env().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

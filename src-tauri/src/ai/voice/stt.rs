@@ -257,7 +257,7 @@ mod tests {
                 "rust_model_file": "inexistant.safetensors"
             }),
         )
-        .await;
+        .await?;
 
         let result = WhisperEngine::new(&manager).await;
 

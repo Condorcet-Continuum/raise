@@ -114,13 +114,13 @@ mod tests {
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &'a AppConfig,
         sandbox_db: &'a crate::json_db::storage::StorageEngine,
-    ) -> (
+    ) -> RaiseResult<(
         SharedRef<AsyncMutex<AiOrchestrator>>,
         SharedRef<PluginManager>,
         WorkflowCritic,
         UnorderedMap<String, Box<dyn crate::workflow_engine::tools::AgentTool>>,
         CollectionsManager<'a>,
-    ) {
+    )> {
         // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config système
         let manager = CollectionsManager::new(
             sandbox_db,
@@ -128,20 +128,20 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
 
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .expect("Orchestrator setup failed");
 
-        (
+        Ok((
             SharedRef::new(AsyncMutex::new(orch)),
             SharedRef::new(PluginManager::new(&storage, None)),
             WorkflowCritic::default(),
             UnorderedMap::new(),
             manager,
-        )
+        ))
     }
 
     #[async_test]
@@ -150,7 +150,7 @@ mod tests {
     async fn test_policy_handler_valid_ast_pass() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let (orch, pm, critic, tools, manager) =
-            setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
+            setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await?;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
@@ -183,7 +183,7 @@ mod tests {
     async fn test_policy_handler_valid_ast_trigger() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let (orch, pm, critic, tools, manager) =
-            setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
+            setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await?;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
@@ -216,7 +216,7 @@ mod tests {
     async fn test_policy_handler_fails_safe_without_ast() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let (orch, pm, critic, tools, manager) =
-            setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
+            setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await?;
 
         let ctx = HandlerContext {
             orchestrator: &orch,
@@ -248,7 +248,7 @@ mod tests {
     async fn test_policy_handler_fails_safe_with_malformed_ast() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await;
         let (orch, pm, critic, tools, manager) =
-            setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await;
+            setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await?;
 
         let ctx = HandlerContext {
             orchestrator: &orch,

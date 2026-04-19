@@ -192,7 +192,7 @@ mod tests {
             "llm",
             json_value!({ "rust_tokenizer_file": "tokenizer.json" }),
         )
-        .await;
+        .await?;
 
         let domain_path = config.get_path("PATH_RAISE_DOMAIN").unwrap();
         let models_dir = domain_path

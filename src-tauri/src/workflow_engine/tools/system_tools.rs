@@ -133,8 +133,8 @@ mod tests {
         );
 
         // Setup des composants IA factices
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
+        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
 
         // Préparation du Jumeau Numérique
         let schema_uri = format!(
@@ -196,7 +196,7 @@ mod tests {
             .await?;
 
         // Injection du mock LLM pour permettre à l'orchestrateur de s'initialiser
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await;
+        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
 
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
             .await

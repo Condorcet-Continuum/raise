@@ -2,8 +2,7 @@
 
 // 1. Base de données (AI-Ready Queries)
 use crate::json_db::collections::manager::CollectionsManager;
-use crate::json_db::query::{Query, QueryEngine};
-
+use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 // 2. Core : Environnement, Concurrence et Erreurs
 use crate::raise_error;
 use crate::utils::core::error::RaiseResult;
@@ -337,8 +336,9 @@ impl AppConfig {
         };
 
         for doc in result.documents {
-            if let Some(comp_settings) = doc.get("component_settings").and_then(|v| v.as_object()) {
-                if let Some(settings) = comp_settings.get(&ref_id) {
+            // 🎯 FIX ABSOLU : On aligne la lecture sur le schéma V2 "service_settings"
+            if let Some(svc_settings) = doc.get("service_settings").and_then(|v| v.as_object()) {
+                if let Some(settings) = svc_settings.get(&ref_id) {
                     return Ok(settings.clone());
                 }
             }
@@ -386,6 +386,45 @@ impl AppConfig {
         };
 
         Ok((model, tokenizer))
+    }
+
+    pub async fn get_service_settings(
+        manager: &CollectionsManager<'_>,
+        target_service_id: &str, // ex: "ref:services:blueprint:google_gemini"
+    ) -> RaiseResult<JsonValue> {
+        // 1. Construction stricte de la requête via l'API QueryEngine
+        let mut query = Query::new("service_configs");
+        query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq(
+                "service_id",
+                crate::utils::prelude::json_value!(target_service_id),
+            )],
+        });
+        query.limit = Some(1);
+
+        // 2. Exécution via le CollectionsManager
+        let result = match QueryEngine::new(manager).execute_query(query).await {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_CONFIG_DB_QUERY",
+                error = e,
+                context = json_value!({ "requested_service": target_service_id })
+            ),
+        };
+
+        // 3. Extraction sécurisée
+        if let Some(doc) = result.documents.into_iter().next() {
+            if let Some(settings) = doc.get("service_settings") {
+                return Ok(settings.clone());
+            }
+        }
+
+        raise_error!(
+            "ERR_CONFIG_SERVICE_MISSING",
+            error = "Configuration du service introuvable ou propriété 'service_settings' absente.",
+            context = json_value!({ "requested_service": target_service_id })
+        );
     }
 
     fn load_production_config(env: &str) -> RaiseResult<Self> {
@@ -576,6 +615,7 @@ impl Default for SimulationContextConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::core::async_test;
 
     #[test]
     fn test_scope_config_structure() {
@@ -627,5 +667,51 @@ mod tests {
         // 💡 Note : config.workstation sera None ici car il est marqué #[serde(skip)].
         // C'est normal, il est peuplé plus tard par load_production_config().
         assert!(config.workstation.is_none());
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_get_service_settings_resolves_correctly() -> RaiseResult<()> {
+        use crate::utils::testing::mock::DbSandbox;
+
+        // 1. Initialisation de la Sandbox sécurisée
+        let sandbox = DbSandbox::new().await;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
+        );
+
+        DbSandbox::mock_db(&manager).await?;
+
+        // 2. Création de la collection requise
+        manager
+            .create_collection(
+                "service_configs",
+                "db://_system/bootstrap/schemas/v2/dapps/services/service_config.schema.json",
+            )
+            .await?;
+
+        // 3. Injection d'une fausse configuration Gemini
+        let mock_service_id = "ref:services:blueprint:google_gemini";
+        let mock_doc = json_value!({
+            "_id": "cfg_test_gemini",
+            "service_id": mock_service_id,
+            "environment": "test",
+            "service_settings": {
+                "api_key": "TEST_KEY_123",
+                "model": "gemini-test-model"
+            }
+        });
+
+        manager.insert_raw("service_configs", &mock_doc).await?;
+
+        // 4. Test de la fonction métier Zéro Dette
+        let settings = AppConfig::get_service_settings(&manager, mock_service_id).await?;
+
+        assert_eq!(settings["api_key"], "TEST_KEY_123");
+        assert_eq!(settings["model"], "gemini-test-model");
+
+        Ok(())
     }
 }

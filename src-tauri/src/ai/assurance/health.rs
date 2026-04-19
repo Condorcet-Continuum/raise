@@ -199,7 +199,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await?;
 
         let report = RaiseHealthEngine::check_engine_health(&manager).await?;
 
@@ -224,7 +224,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await?;
 
         let report = RaiseHealthEngine::check_engine_health(&manager).await?;
 

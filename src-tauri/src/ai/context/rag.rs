@@ -205,7 +205,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await;
+        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await?;
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
 
@@ -249,7 +249,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await;
+        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await?;
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
         rag.index_document(&manager, "Ceci parle de cuisine.", "chef.txt")
@@ -273,7 +273,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await;
+        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await?;
 
         {
             let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
@@ -303,7 +303,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await;
+        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await?;
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
         let long_text = "Data ".repeat(1000);

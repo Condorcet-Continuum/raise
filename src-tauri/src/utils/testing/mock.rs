@@ -558,7 +558,7 @@ pub async fn inject_mock_component(
     manager: &CollectionsManager<'_>,
     comp_id: &str,
     mut settings: JsonValue,
-) {
+) -> RaiseResult<()> {
     let real_handle = match comp_id {
         "llm" => "ai_llm",
         "voice" => "ai_voice",
@@ -566,11 +566,11 @@ pub async fn inject_mock_component(
         other => other,
     };
 
+    // 1. Résolution des chemins de modèles
     if real_handle == "ai_llm" {
         let models_dir = dirs::home_dir()
             .unwrap_or_default()
             .join("raise_domain/_system/ai-assets/models");
-
         if settings["rust_model_file"].is_null() {
             settings["rust_model_file"] = json_value!(models_dir
                 .join(MOCK_LLM_MODEL)
@@ -586,26 +586,48 @@ pub async fn inject_mock_component(
     }
 
     let ref_id = format!("ref:components:handle:{}", real_handle);
+    let service_id = "ref:services:handle:svc_ai";
 
-    let _ = manager
-        .create_collection("service_configs", "/v1/db/generic.schema.json")
-        .await;
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/db/generic.schema.json",
+        crate::utils::data::config::BOOTSTRAP_DOMAIN,
+        crate::utils::data::config::BOOTSTRAP_DB
+    );
 
-    let doc = json_value!({
-        "_id": format!("mock_config_{}", real_handle),
-        "handle": format!("mock_config_{}", real_handle),
-        "service_id": "ref:services:handle:ai",
-        "environment": "test",
-        "component_settings": {
-            ref_id: settings
+    manager
+        .create_collection("service_configs", &schema_uri)
+        .await?;
+
+    // 🎯 ÉTAPE A : Fusion (Merge) cumulative manuelle
+    let mut service_settings = crate::utils::data::json::JsonObject::new();
+    let config_id = "cfg_ai_default".to_string();
+
+    if let Ok(Some(doc)) = manager.get_document("service_configs", &config_id).await {
+        if let Some(existing) = doc.get("service_settings").and_then(|v| v.as_object()) {
+            service_settings = existing.clone();
         }
+    }
+
+    service_settings.insert(ref_id, settings);
+
+    // 🎯 ÉTAPE B : Création du document
+    let final_doc = json_value!({
+        "_id": config_id.clone(),
+        "handle": config_id,
+        "service_id": service_id, // 👈 Reste une String, ne sera pas mutée !
+        "environment": "test",
+        "service_settings": service_settings
     });
 
-    match manager.insert_raw("service_configs", &doc).await {
-        Ok(_) => {}
-        Err(e) => panic!(
-            "❌ Échec critique lors de l'injection de la configuration Mock pour {} : {:?}",
-            real_handle, e
+    // 🎯 ÉTAPE C : Insertion via INSERT_RAW
+    // C'est le secret : insert_raw écrase le fichier physique sans déclencher
+    // la résolution des Smart Links, gardant ainsi la config compatible avec AppConfig.
+    match manager.insert_raw("service_configs", &final_doc).await {
+        Ok(_) => Ok(()),
+        Err(e) => raise_error!(
+            "ERR_TEST_MOCK_INJECTION_FAILED",
+            error = e.to_string(),
+            context = json_value!({ "comp": real_handle, "service": service_id })
         ),
     }
 }

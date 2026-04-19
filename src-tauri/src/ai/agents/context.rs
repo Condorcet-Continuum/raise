@@ -78,7 +78,7 @@ mod tests {
             &sandbox.config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await?;
 
         // 🎯 Rigueur : Match sur la création du client LLM
         let llm = match LlmClient::new(&manager).await {
@@ -127,7 +127,7 @@ mod tests {
             &sandbox.config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await;
+        inject_mock_component(&manager, "llm", json_value!({})).await?;
 
         let llm = match LlmClient::new(&manager).await {
             Ok(client) => client,
