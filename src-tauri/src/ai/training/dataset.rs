@@ -99,6 +99,9 @@ mod tests {
             &config.mount_points.system.db,
         );
 
+        // 🎯 ZÉRO DETTE : On compte dynamiquement les documents initiaux de la Sandbox (ex: dapps, migrations)
+        let initial_count = extract_domain_data(&manager, "all").await?.len();
+
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
             config.mount_points.system.domain, config.mount_points.system.db
@@ -127,8 +130,8 @@ mod tests {
         let all_results = extract_domain_data(&manager, "all").await?;
         assert_eq!(
             all_results.len(),
-            3,
-            "Devrait trouver toutes les collections"
+            initial_count + 2,
+            "Devrait trouver les collections initiales + les 2 ajoutées"
         );
 
         Ok(())

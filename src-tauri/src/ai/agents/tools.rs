@@ -26,7 +26,7 @@ pub fn extract_json_from_llm(response: &str) -> String {
     }
 }
 
-/// 🎯 NOUVEAU : Sauvegarde en lot des artefacts via `insert_with_schema` pour garantir la validation
+///  Sauvegarde en lot des artefacts via `insert_with_schema` pour garantir la validation
 pub async fn save_artifacts_batch(
     ctx: &AgentContext,
     docs: Vec<JsonValue>,
@@ -55,10 +55,11 @@ pub async fn save_artifacts_batch(
         &config.mount_points.system.db,
     );
 
-    let settings = match AppConfig::get_component_settings(&sys_mgr, "ai_agents").await {
-        Ok(s) => s,
-        Err(_) => json_value!({}),
-    };
+    let settings =
+        match AppConfig::get_runtime_settings(&sys_mgr, "ref:components:handle:ai_agents").await {
+            Ok(s) => s,
+            Err(_) => json_value!({}),
+        };
 
     // 2. Détermination du Workspace de destination
     let active_domain = settings["target_domain"]

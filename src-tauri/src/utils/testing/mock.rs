@@ -8,7 +8,6 @@ use crate::utils::core::{RuntimeEnv, SharedRef, UniqueId, UtcClock};
 use crate::utils::io::fs::{self, tempdir, Path, PathBuf, TempDir};
 
 // 2. Data : Configuration, JSON et Traits
-// 🎯 FIX : On importe BOOTSTRAP_DB et BOOTSTRAP_DOMAIN au lieu de SYSTEM_...
 use crate::utils::data::config::{
     AppConfig, CoreConfig, DbPointer, DeepLearningConfig, IntegrationsConfig, MountPointsConfig,
     SimulationContextConfig, WorldModelConfig, BOOTSTRAP_DB, BOOTSTRAP_DOMAIN, CONFIG,
@@ -24,8 +23,6 @@ pub const MOCK_LLM_MODEL: &str = "Qwen2.5-7B-Instruct-Q4_K_M.gguf";
 pub const MOCK_LLM_TOKENIZER: &str = "tokenizer.json";
 
 // --- DÉFINITION DES SCHÉMAS STANDARDS POUR TESTS ---
-
-// Dans mock.rs
 
 pub const SESSION_SCHEMA_MOCK: &str = r#"{
     "type": "object",
@@ -131,7 +128,6 @@ pub async fn bootstrap_system_index(
 ) -> RaiseResult<()> {
     let sys_path = db_cfg.db_root(space, db).join("_system.json");
 
-    // Idempotence : On ne recrée pas l'index s'il existe déjà
     if fs::exists_async(&sys_path).await {
         return Ok(());
     }
@@ -153,10 +149,7 @@ pub async fn bootstrap_system_index(
         "schemas": { "v1": {}, "v2": {} }
     });
 
-    // --- 1. Mocks Core ---
     inject_core_schemas_to_index(db_cfg, &mut initial_system_doc).await;
-
-    // --- 2. Mocks V1 ---
     inject_mock_schema_to_index(
         db_cfg,
         &mut initial_system_doc,
@@ -194,7 +187,6 @@ pub async fn bootstrap_system_index(
     )
     .await;
 
-    // --- 3. Mocks V2 ---
     inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/quality_report").await;
     inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/xai_frame").await;
     inject_v2_schema_mock(db_cfg, &mut initial_system_doc, "assurance/rules/rule").await;
@@ -212,7 +204,6 @@ pub async fn bootstrap_system_index(
     )
     .await;
 
-    // Écriture atomique
     fs::write_json_atomic_async(&sys_path, &initial_system_doc)
         .await
         .unwrap();
@@ -241,7 +232,6 @@ pub fn create_default_test_config() -> AppConfig {
             "en".to_string(),
             "Default Test Config".to_string(),
         )])),
-        // 🎯 FIX : Utilisation stricte de BOOTSTRAP_DOMAIN et BOOTSTRAP_DB
         mount_points: MountPointsConfig {
             system: DbPointer {
                 domain: BOOTSTRAP_DOMAIN.to_string(),
@@ -288,10 +278,23 @@ pub fn create_default_test_config() -> AppConfig {
         world_model: WorldModelConfig::default(),
         deep_learning: DeepLearningConfig::default(),
         paths,
-        active_dapp_id: "mock-dapp-id".to_string(),
-        workstation_id: "mock-workstation-id".to_string(),
-        active_services: vec!["mock-service-id".to_string()],
-        active_components: vec!["mock-comp-id".to_string()],
+        active_dapp_id: "ref:dapps:handle:raise_core".to_string(),
+        workstation_id: "ref:workstations:handle:test_ws".to_string(),
+
+        //  On autorise explicitement les services et composants utilisés dans les tests IA
+        active_services: vec![
+            "ref:services:handle:svc_ai".to_string(),
+            "ref:services:blueprint:google_gemini".to_string(),
+            "ref:services:blueprint:anthropic_claude".to_string(),
+            "ref:services:blueprint:mistral_ai".to_string(),
+        ],
+        active_components: vec![
+            "ref:components:handle:ai_llm".to_string(),
+            "ref:components:handle:ai_voice".to_string(),
+            "ref:components:handle:ai_nlp".to_string(),
+            "ref:components:handle:ai_agents".to_string(),
+        ],
+
         integrations: IntegrationsConfig::default(),
         simulation_context: SimulationContextConfig::default(),
     }
@@ -349,14 +352,21 @@ pub fn load_test_sandbox() -> RaiseResult<AppConfig> {
         }
     }
 
-    // 🎯 FIX : Sécurisation du Mount Point système de la Sandbox avec BOOTSTRAP_*
     config.mount_points.system.domain = BOOTSTRAP_DOMAIN.to_string();
     config.mount_points.system.db = BOOTSTRAP_DB.to_string();
 
+    // 🎯 FIX GATEKEEPER : Si un test charge le JSON, on s'assure d'activer au moins l'IA
+    if !config
+        .active_components
+        .contains(&"ref:components:handle:ai_llm".to_string())
+    {
+        config
+            .active_components
+            .push("ref:components:handle:ai_llm".to_string());
+    }
+
     Ok(config)
 }
-
-// --- FONCTIONS MOCKS ---
 
 pub async fn inject_core_schemas_to_index(db_cfg: &JsonDbConfig, sys_doc: &mut JsonValue) {
     let base_uri = format!("db://{}/{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB);
@@ -370,7 +380,6 @@ pub async fn inject_core_schemas_to_index(db_cfg: &JsonDbConfig, sys_doc: &mut J
     }
     let schemas_v1 = sys_doc["schemas"]["v1"].as_object_mut().unwrap();
 
-    // 1. Migration
     let migration_schema = json_value!({
         "$id": format!("{}/schemas/v2/system/db/migration.schema.json", base_uri),
         "type": "object",
@@ -395,7 +404,6 @@ pub async fn inject_core_schemas_to_index(db_cfg: &JsonDbConfig, sys_doc: &mut J
         json_value!({ "file": "v1/db/migration.schema.json" }),
     );
 
-    // 2. Index (Core)
     let core_schema = json_value!({
         "$id": format!("{}/schemas/v1/db/index.schema.json", base_uri),
         "type": "object",
@@ -426,7 +434,6 @@ pub async fn inject_core_schemas_to_index(db_cfg: &JsonDbConfig, sys_doc: &mut J
         json_value!({ "file": "v1/db/index.schema.json" }),
     );
 
-    // 3. Generic
     let generic_schema = json_value!({
         "$id": format!("{}/schemas/v1/db/generic.schema.json", base_uri),
         "type": "object",
@@ -494,7 +501,6 @@ pub async fn inject_v2_schema_mock(
     }
     let schemas_v2 = sys_doc["schemas"]["v2"].as_object_mut().unwrap();
 
-    // 1. Détermination des chemins virtuels
     let file_name = format!(
         "{}.schema.json",
         Path::new(logical_path)
@@ -511,7 +517,6 @@ pub async fn inject_v2_schema_mock(
 
     let _ = fs::create_dir_all_async(&schemas_dir).await;
 
-    // 2. Création d'un schéma fantôme (Valide mais vide)
     let schema_uri = format!(
         "db://{}/{}/schemas/v2/{}.schema.json",
         BOOTSTRAP_DOMAIN, BOOTSTRAP_DB, logical_path
@@ -529,10 +534,8 @@ pub async fn inject_v2_schema_mock(
         "additionalProperties": true
     });
 
-    // 3. Écriture sur le disque de la Sandbox
     let _ = fs::write_json_atomic_async(&schemas_dir.join(&file_name), &schema_mock).await;
 
-    // 4. Inscription officielle dans l'index de test
     schemas_v2.insert(
         format!("{}.schema.json", logical_path),
         json_value!({ "file": format!("v2/{}.schema.json", logical_path) }),
@@ -566,7 +569,6 @@ pub async fn inject_mock_component(
         other => other,
     };
 
-    // 1. Résolution des chemins de modèles
     if real_handle == "ai_llm" {
         let models_dir = dirs::home_dir()
             .unwrap_or_default()
@@ -587,7 +589,7 @@ pub async fn inject_mock_component(
 
     let ref_id = format!("ref:components:handle:{}", real_handle);
     let service_id_semantic = "ref:services:handle:svc_ai";
-    let service_id_physical = "phys-uuid-svc-ai"; // 🎯 UUID Déterministe pour le test
+    let service_id_physical = "phys-uuid-svc-ai";
 
     let schema_uri = format!(
         "db://{}/{}/schemas/v1/db/generic.schema.json",
@@ -595,10 +597,7 @@ pub async fn inject_mock_component(
         crate::utils::data::config::BOOTSTRAP_DB
     );
 
-    // 🎯 ÉTAPE A : Création du service parent (État Physique Exact)
     manager.create_collection("services", &schema_uri).await?;
-
-    // On force l'état physique (ID + Handle) sans passer par le compute dynamique
     let _ = manager
         .insert_raw(
             "services",
@@ -609,36 +608,24 @@ pub async fn inject_mock_component(
         )
         .await;
 
-    // 🎯 ÉTAPE B : Collection de configs
     manager
         .create_collection("service_configs", &schema_uri)
         .await?;
 
-    // 🎯 ÉTAPE C : Fusion (Merge) cumulative manuelle des composants
-    let mut service_settings = crate::utils::data::json::JsonObject::new();
-    let mut config_id = "cfg_ai_default".to_string();
+    let config_id = format!("cfg_{}_test", real_handle);
 
-    if let Ok(Some(doc)) = manager.get_document("service_configs", &config_id).await {
-        if let Some(id) = doc.get("_id").and_then(|v| v.as_str()) {
-            config_id = id.to_string();
-        }
-        if let Some(existing) = doc.get("service_settings").and_then(|v| v.as_object()) {
-            service_settings = existing.clone();
-        }
-    }
-
-    service_settings.insert(ref_id, settings);
-
-    // 🎯 ÉTAPE D : Insertion consolidée
     let final_doc = json_value!({
         "_id": config_id.clone(),
         "handle": config_id,
-        "service_id": service_id_physical, // 👈 Lien physique direct, comme ce que ferait upsert_document en prod !
+        "service_id": service_id_physical,
+        "component_id": ref_id,
+        "owner_user_id": "ref:users:handle:admin",
+        "target_workstation_id": "ref:workstations:handle:test",
+        "authorizing_mandator_id": "ref:mandators:handle:test",
         "environment": "test",
-        "service_settings": service_settings
+        "service_settings": settings
     });
 
-    // On utilise insert_raw pour geler l'état et garantir la lecture par AppConfig
     match manager.insert_raw("service_configs", &final_doc).await {
         Ok(_) => Ok(()),
         Err(e) => raise_error!(
@@ -650,7 +637,6 @@ pub async fn inject_mock_component(
 }
 
 pub async fn inject_schema_to_path(db_cfg: &JsonDbConfig) {
-    // 🎯 Dynamique selon la config
     let schema_dir = db_cfg
         .db_schemas_root(BOOTSTRAP_DOMAIN, BOOTSTRAP_DB)
         .join("v1/db");
@@ -861,7 +847,6 @@ impl DbSandbox {
 
         let base_uri = format!("db://{}/{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB);
 
-        // Ceci fonctionnera car la DB existe et contient les schémas DDL
         let _ = mgr
             .init_db_with_schema(&format!("{}/schemas/v1/db/index.schema.json", base_uri))
             .await;
@@ -879,11 +864,25 @@ impl DbSandbox {
             )
             .await;
 
+        // 🎯 FIX ZÉRO DETTE : On injecte la collection et la dApp 'raise_core'
+        // pour que TransactionManager::resolve_all_refs ne panique pas !
+        let _ = mgr
+            .create_collection(
+                "dapps",
+                &format!("{}/schemas/v1/db/generic.schema.json", base_uri),
+            )
+            .await;
+        let _ = mgr
+            .insert_raw(
+                "dapps",
+                &json_value!({"_id": "mock-dapp-raise-core", "handle": "raise_core"}),
+            )
+            .await;
+
         sandbox
     }
 
     pub async fn mock_db(manager: &CollectionsManager<'_>) -> RaiseResult<bool> {
-        // Pré-injection vitale pour les tests ciblés sur d'autres espaces (space_test, db_test)
         bootstrap_system_index(&manager.storage.config, &manager.space, &manager.db)
             .await
             .unwrap();
@@ -892,7 +891,24 @@ impl DbSandbox {
             "db://{}/{}/schemas/v1/db/index.schema.json",
             BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
         );
-        manager.init_db_with_schema(&uri).await
+        let res = manager.init_db_with_schema(&uri).await;
+
+        //  Injection de la dApp dans les tests qui appellent mock_db manuellement
+        let base_uri = format!("db://{}/{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB);
+        let _ = manager
+            .create_collection(
+                "dapps",
+                &format!("{}/schemas/v1/db/generic.schema.json", base_uri),
+            )
+            .await;
+        let _ = manager
+            .insert_raw(
+                "dapps",
+                &json_value!({"_id": "mock-dapp-raise-core", "handle": "raise_core"}),
+            )
+            .await;
+
+        res
     }
 }
 

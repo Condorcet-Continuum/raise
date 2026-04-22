@@ -146,9 +146,20 @@ impl RaiseHealthEngine {
             }
         };
 
-        let (model_filename, _) = match AppConfig::get_llm_settings(manager).await {
-            Ok(res) => res,
-            Err(e) => raise_error!("ERR_HEALTH_LLM_CONFIG", error = e.to_string()),
+        // 🎯 FIX ZÉRO DETTE : Utilisation du Gatekeeper au lieu de get_llm_settings
+        let settings =
+            match AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_llm").await {
+                Ok(s) => s,
+                Err(e) => raise_error!("ERR_HEALTH_LLM_CONFIG", error = e.to_string()),
+            };
+
+        // Extraction stricte
+        let model_filename = match settings.get("rust_model_file").and_then(|v| v.as_str()) {
+            Some(m) => m.to_string(),
+            None => raise_error!(
+                "ERR_HEALTH_LLM_MODEL_MISSING",
+                error = "La clé 'rust_model_file' est introuvable dans la configuration."
+            ),
         };
 
         let critical_files = vec![

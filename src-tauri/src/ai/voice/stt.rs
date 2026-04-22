@@ -14,10 +14,19 @@ pub struct WhisperEngine {
 impl WhisperEngine {
     /// Initialise le moteur de reconnaissance vocale Whisper en respectant les points de montage.
     pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
-        // 1. Récupération de la configuration globale via le manager
-        let settings = match AppConfig::get_component_settings(manager, "ai_voice").await {
+        // 1. Appel du Gatekeeper (Routage + Vérification d'Activation)
+        let settings = match AppConfig::get_runtime_settings(
+            manager,
+            "ref:components:handle:ai_voice",
+        )
+        .await
+        {
             Ok(s) => s,
-            Err(e) => raise_error!("ERR_AI_VOICE_CONFIG_LOAD", error = e.to_string()),
+            Err(e) => raise_error!(
+                "ERR_AI_VOICE_CONFIG_LOAD",
+                error = e.to_string(),
+                context = json_value!({"hint": "Vérifiez que 'ref:components:handle:ai_voice' est actif dans la configuration système."})
+            ),
         };
 
         let model_filename = settings
@@ -307,7 +316,7 @@ mod tests {
 
         match result {
             Err(AppError::Structured(err)) => {
-                // Doit échouer car get_component_settings ne trouvera rien dans la partition fantôme
+                // Doit échouer car get_runtime_settings ne trouvera rien dans la partition fantôme
                 assert_eq!(err.code, "ERR_AI_VOICE_CONFIG_LOAD");
                 Ok(())
             }

@@ -78,25 +78,26 @@ pub async fn ask(
     system_prompt: &str,
     user_prompt: &str,
 ) -> RaiseResult<String> {
-    // 1. Récupération de la configuration globale
-    let settings =
-        AppConfig::get_service_settings(manager, "ref:services:blueprint:mistral_ai").await?;
-
-    // 2. Extraction stricte de la clé API
-    let api_key_json = match settings.get("api_key") {
-        Some(v) => v,
-        None => raise_error!(
-            "ERR_MISTRAL_MISSING_API_KEY",
-            error = "La clé 'api_key' est absente des réglages du service.",
-            context = json_value!({"provider": "MistralAI"})
+    // 1. Appel du Gatekeeper (Routage + Vérification d'Activation)
+    let settings = match AppConfig::get_runtime_settings(
+        manager,
+        "ref:services:blueprint:mistral_ai",
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => raise_error!(
+            "ERR_MISTRAL_CONFIG_REJECTED",
+            error = e.to_string(),
+            context = json_value!({"provider": "MistralAI", "hint": "Vérifiez que 'ref:services:blueprint:mistral_ai' est dans active_services."})
         ),
     };
 
-    let api_key = match api_key_json.as_str() {
+    let api_key = match settings.get("api_key").and_then(|v| v.as_str()) {
         Some(k) => k,
         None => raise_error!(
-            "ERR_MISTRAL_INVALID_API_KEY",
-            error = "La clé 'api_key' n'est pas une chaîne de caractères valide.",
+            "ERR_MISTRAL_MISSING_API_KEY",
+            error = "La clé 'api_key' est absente ou n'est pas une chaîne valide.",
             context = json_value!({"provider": "MistralAI"})
         ),
     };

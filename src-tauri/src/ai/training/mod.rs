@@ -20,18 +20,28 @@ pub async fn ai_train_domain_native(
     // ---------------------------------------------------------
     // 1. RÉCUPÉRATION DES ASSETS VIA MOUNT POINTS
     // ---------------------------------------------------------
-    let settings = AppConfig::get_component_settings(manager, "ai_llm").await?;
+    let settings =
+        match AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_llm").await {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_TRAINING_CONFIG_LOAD",
+                error = e.to_string(),
+                context = json_value!({"hint": "L'entraînement requiert que ai_llm soit actif."})
+            ),
+        };
+
     let tokenizer_filename = settings
         .get("rust_tokenizer_file")
         .and_then(|v| v.as_str())
         .unwrap_or("tokenizer.json");
 
-    let domain_path = config_app.get_path("PATH_RAISE_DOMAIN").ok_or_else(|| {
-        build_error!(
+    let domain_path = match config_app.get_path("PATH_RAISE_DOMAIN") {
+        Some(p) => p,
+        None => raise_error!(
             "ERR_CONFIG_PATH_MISSING",
             error = "PATH_RAISE_DOMAIN non défini"
-        )
-    })?;
+        ),
+    };
 
     // Résolution déterministe via la partition système
     let base_assets_path = domain_path

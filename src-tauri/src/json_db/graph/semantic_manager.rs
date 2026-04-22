@@ -141,18 +141,40 @@ impl<'a> SemanticManager<'a> {
         collection: &str,
         mut node: JsonValue,
     ) -> RaiseResult<JsonValue> {
-        if let Err(e) = self
-            .processor
-            .validate_required_fields(&node, &["@id", "@type"])
-        {
+        // 1. Résolution automatique du contexte (Ma proposition précédente)
+        // On détecte la couche via le nom de la collection (ex: pa_components -> pa)
+        let layer_prefix = collection.split('_').next().unwrap_or("data");
+        self.apply_mbse_context(&mut node, layer_prefix)?;
+
+        // 🎯 2. Création du processeur SYNCHRONISÉ avec le contexte
+        let processor = JsonLdProcessor::new().with_doc_context(&node)?;
+
+        // 3. Contrat de base JSON-LD
+        if let Err(e) = processor.validate_required_fields(&node, &["@id", "@type"]) {
             raise_error!(
                 "ERR_SEMANTIC_VALIDATION_FAIL",
-                error = "Le document ne respecte pas l'ontologie de base (manque @id ou @type)",
-                context = json_value!({"details": e.to_string(), "collection": collection})
+                error = e,
+                context = json_value!({"collection": collection})
             );
         }
 
-        self.processor.expand_in_place(&mut node);
+        // 4. Validation Ontologique Stricte
+        // On étend en RAM uniquement pour vérifier que l'élément est légal
+        if let Some(type_uri) = processor.get_primary_type(&node) {
+            let expanded_type = processor.context_manager().expand_term(&type_uri);
+            if !VocabularyRegistry::global().has_class(&expanded_type) {
+                raise_error!(
+                    "ERR_SEMANTIC_UNKNOWN_TYPE",
+                    error = format!(
+                        "Le type '{}' n'appartient pas à l'ontologie.",
+                        expanded_type
+                    ),
+                    context = json_value!({"collection": collection, "provided_type": type_uri})
+                );
+            }
+        }
+
+        // 5. Persistance via le Muscle
         self.db_manager.insert_with_schema(collection, node).await
     }
 
@@ -164,18 +186,33 @@ impl<'a> SemanticManager<'a> {
     ) -> RaiseResult<Option<JsonValue>> {
         match self.db_manager.get_document(collection, id).await {
             Ok(Some(mut d)) => {
-                self.processor.compact_in_place(&mut d);
+                // On synchronise le processeur avec le document lu pour réussir la compaction
+                let processor = JsonLdProcessor::new().with_doc_context(&d)?;
+                processor.compact_in_place(&mut d);
                 Ok(Some(d))
             }
             Ok(None) => Ok(None),
-            Err(e) => raise_error!(
-                "ERR_DB_READ_FAIL",
-                error = e,
-                context = json_value!({"collection": collection, "id": id})
-            ),
+            Err(e) => raise_error!("ERR_DB_READ_FAIL", error = e),
         }
     }
+
+    /// Helper privé pour injecter les métadonnées MBSE sans effort pour l'IA.
+    fn apply_mbse_context(&self, node: &mut JsonValue, layer: &str) -> RaiseResult<()> {
+        if let Some(obj) = node.as_object_mut() {
+            if !obj.contains_key("@context") {
+                let registry = VocabularyRegistry::global();
+                if let Some(ctx) = registry.get_context_for_layer(layer) {
+                    obj.insert("@context".to_string(), ctx);
+                }
+            }
+        }
+        Ok(())
+    }
 }
+
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 // =========================================================================
 // TESTS UNITAIRES
@@ -184,98 +221,181 @@ impl<'a> SemanticManager<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::DbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
+    const GENERIC_SCHEMA: &str = "db://_system/_system/schemas/v1/db/generic.schema.json";
 
-    /// 💎 TEST 1 : Cycle de vie complet d'une ontologie in-index.
+    /// 🎯 HELPER : Charge les ontologies de base en RAM pour permettre la validation des nœuds.
+    async fn bootstrap_test_ontologies(semantic_mgr: &SemanticManager<'_>) -> RaiseResult<()> {
+        let _ = semantic_mgr
+            .db_manager
+            .create_collection("_ontologies", GENERIC_SCHEMA)
+            .await;
+
+        let pa_ontology = json_value!({
+            "@context": { "pa": "https://raise.io/pa#", "owl": "http://www.w3.org/2002/07/owl#" },
+            "@graph": [ { "@id": "pa:PhysicalComponent", "@type": "owl:Class" } ]
+        });
+        let la_ontology = json_value!({
+            "@context": { "la": "https://raise.io/la#", "owl": "http://www.w3.org/2002/07/owl#" },
+            "@graph": [
+                { "@id": "la:LogicalComponent", "@type": "owl:Class" },
+                { "@id": "la:LogicalFunction", "@type": "owl:Class" }
+            ]
+        });
+
+        semantic_mgr
+            .create_ontology("pa", "1.0", &pa_ontology)
+            .await?;
+        semantic_mgr
+            .create_ontology("la", "1.0", &la_ontology)
+            .await?;
+        Ok(())
+    }
+
     #[async_test]
     #[serial_test::serial]
     async fn test_semantic_manager_ontology_lifecycle_in_index() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         VocabularyRegistry::init_mock_for_tests();
 
-        let db_mgr = CollectionsManager::new(
-            &sandbox.storage,
-            &sandbox.config.mount_points.simulation.domain,
-            &sandbox.config.mount_points.simulation.db,
-        );
+        let db_mgr = CollectionsManager::new(&sandbox.storage, "sim", "db");
         DbSandbox::mock_db(&db_mgr).await?;
-
         db_mgr
-            .create_collection(
-                "_ontologies",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
+            .create_collection("_ontologies", GENERIC_SCHEMA)
             .await?;
 
         let semantic_mgr = SemanticManager::new(&db_mgr);
         let mock_ontology = json_value!({
-            "@context": { "aero": "https://raise.io/aero#" },
+            "@context": { "aero": "https://raise.io/aero#", "owl": "http://www.w3.org/2002/07/owl#" },
             "@graph": [ { "@id": "aero:Spacecraft", "@type": "owl:Class" } ]
         });
 
-        // 🎯 FIX DEADLOCK : Le test n'a plus besoin de verrouiller l'index avant l'appel !
         semantic_mgr
             .create_ontology("aero", "1.1", &mock_ontology)
             .await?;
 
-        // 2. VÉRIFICATION PHYSIQUE
         let fetched = db_mgr.get_document("_ontologies", "ontology_aero").await?;
-        assert!(
-            fetched.is_some(),
-            "L'ontologie n'est pas présente en base !"
-        );
+        assert!(fetched.is_some());
 
-        // 3. VÉRIFICATION SÉMANTIQUE (Hot-Reload RCU)
         let registry = VocabularyRegistry::global();
-        assert!(
-            registry.has_class("https://raise.io/aero#Spacecraft"),
-            "Le hot-reload en RAM a échoué."
-        );
-
+        assert!(registry.has_class("https://raise.io/aero#Spacecraft"));
         Ok(())
     }
 
-    /// 💎 TEST 2 : Validation sémantique et expansion in-place.
     #[async_test]
     #[serial_test::serial]
     async fn test_semantic_manager_insert_node_validation() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await;
         VocabularyRegistry::init_mock_for_tests();
 
-        let db_mgr = CollectionsManager::new(
-            &sandbox.storage,
-            &sandbox.config.mount_points.system.domain,
-            &sandbox.config.mount_points.system.db,
-        );
+        let db_mgr = CollectionsManager::new(&sandbox.storage, "system", "db");
         DbSandbox::mock_db(&db_mgr).await?;
         db_mgr
-            .create_collection(
-                "la_components",
-                "db://_system/_system/schemas/v1/db/generic.schema.json",
-            )
+            .create_collection("la_components", GENERIC_SCHEMA)
             .await?;
 
         let semantic_mgr = SemanticManager::new(&db_mgr);
+        bootstrap_test_ontologies(&semantic_mgr).await?; // 🎯 FIX
 
         let node = json_value!({
             "@id": "urn:uuid:456",
-            "@type": ["la:LogicalComponent"],
+            "@type": "la:LogicalComponent",
             "name": "Component"
         });
 
         let saved = semantic_mgr
             .insert_semantic_node("la_components", node)
             .await?;
+        assert_eq!(saved["@id"], "urn:uuid:456");
+        Ok(())
+    }
 
-        let saved_type = saved
-            .get("@type")
-            .and_then(|t| t.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|val| val.as_str())
-            .ok_or_else(|| build_error!("TEST_FAIL", error = "Expansion @type échouée"))?;
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_auto_alignment_physical_layer() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        VocabularyRegistry::init_mock_for_tests();
 
-        assert_eq!(saved_type, "https://raise.io/la#LogicalComponent");
+        let db_mgr = CollectionsManager::new(&sandbox.db, "simu", "db");
+        DbSandbox::mock_db(&db_mgr).await?;
+        db_mgr
+            .create_collection("pa_components", GENERIC_SCHEMA)
+            .await?;
 
+        let semantic_mgr = SemanticManager::new(&db_mgr);
+        bootstrap_test_ontologies(&semantic_mgr).await?; // 🎯 FIX
+
+        let raw_node = json_value!({
+            "@id": "sensor-789",
+            "@type": "pa:PhysicalComponent",
+            "name": "Lidar_Front"
+        });
+
+        let saved_node = semantic_mgr
+            .insert_semantic_node("pa_components", raw_node)
+            .await?;
+        assert!(saved_node.get("@context").is_some());
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_semantic_reference_resolution() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        let db_mgr = CollectionsManager::new(&sandbox.db, "domain", "db");
+        DbSandbox::mock_db(&db_mgr).await?;
+
+        db_mgr
+            .create_collection("la_functions", GENERIC_SCHEMA)
+            .await?;
+        db_mgr
+            .create_collection("la_components", GENERIC_SCHEMA)
+            .await?;
+
+        let semantic_mgr = SemanticManager::new(&db_mgr);
+        bootstrap_test_ontologies(&semantic_mgr).await?; // 🎯 FIX
+
+        db_mgr
+            .insert_raw(
+                "la_functions",
+                &json_value!({
+                    "_id": "uuid-logic-calc-001",
+                    "handle": "calc_logic",
+                    "@type": "la:LogicalFunction"
+                }),
+            )
+            .await?;
+
+        let component = json_value!({
+            "@id": "processor-01",
+            "@type": "la:LogicalComponent",
+            "executes": "ref:la_functions:handle:calc_logic"
+        });
+
+        let result = semantic_mgr
+            .insert_semantic_node("la_components", component)
+            .await?;
+        assert_eq!(result["executes"], "uuid-logic-calc-001");
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_semantic_validation_rejection() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await;
+        let db_mgr = CollectionsManager::new(&sandbox.db, "test", "db");
+        let semantic_mgr = SemanticManager::new(&db_mgr);
+
+        let ghost_node = json_value!({ "name": "Anonymous" });
+        let result = semantic_mgr
+            .insert_semantic_node("generic", ghost_node)
+            .await;
+
+        assert!(result.is_err());
+        match result {
+            Err(AppError::Structured(err)) => assert_eq!(err.code, "ERR_SEMANTIC_VALIDATION_FAIL"),
+            _ => panic!("Type d'erreur incorrect"),
+        }
         Ok(())
     }
 }

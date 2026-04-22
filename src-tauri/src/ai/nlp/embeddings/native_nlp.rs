@@ -19,9 +19,22 @@ impl NativeNlpEngine {
             json_value!({ "device": format!("{:?}", device), "backend": "BERT" })
         );
 
-        // 1. Récupération des paramètres via le point de montage Système
-        let settings = AppConfig::get_component_settings(manager, "ai_nlp").await?;
+        // 1. Appel du Gatekeeper (Routage + Vérification d'Activation + Standard Raise)
+        let settings = match AppConfig::get_runtime_settings(
+            manager,
+            "ref:components:handle:ai_nlp",
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_NLP_NATIVE_CONFIG",
+                error = e.to_string(),
+                context = json_value!({"hint": "Vérifiez que ai_nlp est actif dans la configuration système."})
+            ),
+        };
 
+        // 2. Extraction des valeurs avec fallback
         let model_dir = settings
             .get("model_name")
             .and_then(|v| v.as_str())
@@ -43,7 +56,7 @@ impl NativeNlpEngine {
         let config_global = AppConfig::get();
         let base_path = match config_global.get_path("PATH_RAISE_DOMAIN") {
             Some(p) => p
-                .join(&config_global.mount_points.system.domain) // 🎯 FIX: Usage des mount_points
+                .join(&config_global.mount_points.system.domain)
                 .join(&config_global.mount_points.system.db)
                 .join("ai-assets/embeddings")
                 .join(model_dir),

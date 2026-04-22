@@ -12,7 +12,7 @@ struct CacheEntry<V> {
 
 #[derive(Debug, Clone)]
 pub struct Cache<K: Hashable + Eq, V> {
-    // 🎯 FIX : On utilise un SyncMutex (std::sync::Mutex) car les opérations RAM
+    // 🎯 FIX : On utilise un SyncMutex car les opérations RAM
     // prennent des nanosecondes et ne doivent pas suspendre le runtime asynchrone !
     store: SharedRef<SyncMutex<MemoryCache<K, CacheEntry<V>>>>,
     default_ttl: Option<TimeDuration>,

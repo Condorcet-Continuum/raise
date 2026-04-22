@@ -4,9 +4,9 @@
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 // 2. Core : Environnement, Concurrence et Erreurs
-use crate::raise_error;
 use crate::utils::core::error::RaiseResult;
 use crate::utils::core::{RuntimeEnv, StaticCell, UniqueId, UtcClock};
+use crate::{build_error, raise_error, user_debug, user_warn};
 
 // 3. I/O : Système de fichiers
 use crate::utils::io::fs::{self, PathBuf};
@@ -59,7 +59,7 @@ pub struct AppConfig {
     pub paths: UnorderedMap<String, String>,
 
     // 🎯 Pointeurs Sémantiques (Doivent stocker des valeurs du type "ref:dapps:handle:...")
-    pub active_dapp_id: String, // 👈 Renommé (était active_dapp)
+    pub active_dapp_id: String,
     pub workstation_id: String,
 
     #[serde(default = "fallback_empty_services")]
@@ -122,7 +122,7 @@ fn fallback_mount_points() -> MountPointsConfig {
     MountPointsConfig {
         system: DbPointer {
             domain: "_system".into(),
-            db: "_system".into(),
+            db: "bootstrap".into(),
         },
         raise: DbPointer {
             domain: "_system".into(),
@@ -319,96 +319,59 @@ impl AppConfig {
         self.paths.get(id).map(PathBuf::from)
     }
 
-    pub async fn get_component_settings(
+    pub async fn get_runtime_settings(
         manager: &CollectionsManager<'_>,
-        component_handle: &str,
+        target_ref: &str, // ex: "ref:components:handle:ai_llm" ou "ref:services:handle:svc_ai"
     ) -> RaiseResult<JsonValue> {
-        let ref_id = format!("ref:components:handle:{}", component_handle);
-        let query = Query::new("service_configs");
+        let config = AppConfig::get();
 
-        let result = match QueryEngine::new(manager).execute_query(query).await {
-            Ok(res) => res,
-            Err(e) => raise_error!(
-                "ERR_CONFIG_DB_QUERY",
-                error = e,
-                context = json_value!({ "requested_handle": component_handle })
-            ),
-        };
+        // 🛡️ 1. LE GATEKEEPER : Vérification du statut d'activation
+        // Basé sur config.schema.json (active_services & active_components)
+        let is_active = config.active_services.contains(&target_ref.to_string())
+            || config.active_components.contains(&target_ref.to_string());
 
-        for doc in result.documents {
-            // 🎯 FIX ABSOLU : On aligne la lecture sur le schéma V2 "service_settings"
-            if let Some(svc_settings) = doc.get("service_settings").and_then(|v| v.as_object()) {
-                if let Some(settings) = svc_settings.get(&ref_id) {
-                    return Ok(settings.clone());
-                }
-            }
+        if !is_active {
+            user_warn!(
+                "WRN_MODULE_INACTIVE",
+                json_value!({
+                    "target": target_ref,
+                    "hint": "Ce module a demandé à démarrer, mais il n'est pas déclaré dans les listes 'active_services' ou 'active_components' du système."
+                })
+            );
+            return Err(build_error!(
+                "ERR_CONFIG_INACTIVE",
+                error = format!("Démarrage avorté : {} est désactivé.", target_ref)
+            ));
         }
 
-        raise_error!(
-            "ERR_CONFIG_COMPONENT_MISSING",
-            error = "Configuration du composant introuvable dans les 'service_configs'",
-            context = json_value!({
-                "requested_handle": component_handle,
-                "expected_ref": ref_id
-            })
-        );
-    }
-
-    pub async fn get_llm_settings(
-        manager: &CollectionsManager<'_>,
-    ) -> RaiseResult<(String, String)> {
-        let settings = match Self::get_component_settings(manager, "ai_llm").await {
-            Ok(s) => s,
-            Err(e) => raise_error!(
-                "ERR_CONFIG_LLM_FETCH_FAILED",
-                error = e,
-                context =
-                    json_value!({ "action": "get_component_settings", "component": "ai_llm" })
-            ),
+        // 🔍 2. RÉSOLUTION SÉMANTIQUE (Smart Link -> UUID)
+        let id_to_query = match manager.resolve_single_reference(target_ref).await {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                user_debug!("CFG_SEMANTIC_FALLBACK", json_value!({"handle": target_ref}));
+                target_ref.to_string()
+            }
         };
 
-        let model = match settings["rust_model_file"].as_str() {
-            Some(m) => m.to_string(),
-            None => raise_error!(
-                "ERR_CONFIG_LLM_MODEL_MISSING",
-                error = "La clé 'rust_model_file' est introuvable.",
-                context = json_value!({ "component": "ai_llm", "settings_dump": settings })
-            ),
+        // 🛤️ 3. DÉTERMINATION DU CHAMP DE RECHERCHE
+        // Si c'est un composant, on cherche par 'component_id', sinon par 'service_id'
+        let join_field = if target_ref.contains("components:") {
+            "component_id"
+        } else {
+            "service_id"
         };
 
-        let tokenizer = match settings["rust_tokenizer_file"].as_str() {
-            Some(t) => t.to_string(),
-            None => raise_error!(
-                "ERR_CONFIG_LLM_TOKENIZER_MISSING",
-                error = "La clé 'rust_tokenizer_file' est introuvable.",
-                context = json_value!({ "component": "ai_llm", "settings_dump": settings })
-            ),
-        };
-
-        Ok((model, tokenizer))
-    }
-
-    pub async fn get_service_settings(
-        manager: &CollectionsManager<'_>,
-        target_service_ref: &str, // ex: "ref:services:blueprint:google_gemini"
-    ) -> RaiseResult<JsonValue> {
-        let physical_uuid = manager.resolve_single_reference(target_service_ref).await?;
-
-        // 🎯 2. On requête sur l'UUID, car c'est ce que 'upsert_document' a stocké !
+        // 💾 4. REQUÊTE SUR LA BASE DE DONNÉES (service_configs)
         let mut query = Query::new("service_configs");
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
-            conditions: vec![Condition::eq(
-                "service_id",
-                crate::utils::prelude::json_value!(physical_uuid), // 👈 Requête sur l'UUID
-            )],
+            conditions: vec![Condition::eq(join_field, json_value!(id_to_query.clone()))],
         });
-
         query.limit = Some(1);
 
         let result = QueryEngine::new(manager).execute_query(query).await?;
 
-        // 3. Extraction sécurisée
+        // 📦 5. EXTRACTION DU DICTIONNAIRE
         if let Some(doc) = result.documents.into_iter().next() {
             if let Some(settings) = doc.get("service_settings") {
                 return Ok(settings.clone());
@@ -416,9 +379,9 @@ impl AppConfig {
         }
 
         raise_error!(
-            "ERR_CONFIG_SERVICE_MISSING",
-            error = "Configuration du service introuvable ou propriété 'service_settings' absente.",
-            context = json_value!({ "requested_service": target_service_ref })
+            "ERR_CONFIG_MISSING_SETTINGS",
+            error = "Le document service_config a été trouvé, mais le dictionnaire 'service_settings' est absent.",
+            context = json_value!({ "target": target_ref, "queried_id": id_to_query })
         );
     }
 
@@ -666,10 +629,9 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
-    async fn test_get_service_settings_resolves_correctly() -> RaiseResult<()> {
+    async fn test_get_runtime_settings_resolves_correctly() -> RaiseResult<()> {
         use crate::utils::testing::mock::DbSandbox;
 
-        // 1. Initialisation de la Sandbox sécurisée
         let sandbox = DbSandbox::new().await;
         let manager = CollectionsManager::new(
             &sandbox.storage,
@@ -679,35 +641,29 @@ mod tests {
 
         DbSandbox::mock_db(&manager).await?;
 
-        // 🎯 FIX ZÉRO DETTE : Création du service parent physique pour satisfaire la résolution
         let generic_schema = "db://_system/bootstrap/schemas/v1/db/generic.schema.json";
         manager
             .create_collection("services", generic_schema)
             .await?;
 
-        // On insère le service avec un UUID physique et le critère de recherche (blueprint)
         let expected_uuid = "phys-uuid-gemini";
         manager
             .insert_raw(
                 "services",
-                &json_value!({
-                    "_id": expected_uuid,
-                    "blueprint": "google_gemini"
-                }),
+                &json_value!({ "_id": expected_uuid, "blueprint": "google_gemini" }),
             )
             .await?;
 
-        // 2. Création de la collection requise pour les configs
-        // 🎯 FIX : On utilise le schéma générique pour satisfaire la Sandbox
         manager
             .create_collection("service_configs", generic_schema)
             .await?;
 
-        // 3. Injection d'une fausse configuration Gemini
         let mock_service_id = "ref:services:blueprint:google_gemini";
+
         let mock_doc = json_value!({
             "_id": "cfg_test_gemini",
-            "service_id": mock_service_id, // 👈 C'est un Smart Link !
+            "handle": "cfg_test_gemini",
+            "service_id": mock_service_id,
             "environment": "test",
             "service_settings": {
                 "api_key": "TEST_KEY_123",
@@ -715,13 +671,10 @@ mod tests {
             }
         });
 
-        // 🎯 TEST E2E : On utilise `upsert_document`.
-        // Il va lire le Smart Link, trouver l'UUID "phys-uuid-gemini" et le stocker à la place.
         manager.upsert_document("service_configs", mock_doc).await?;
 
-        // 4. Test de la fonction métier Zéro Dette
-        // `get_service_settings` va résoudre le Smart Link, trouver l'UUID, et requêter la DB.
-        let settings = AppConfig::get_service_settings(&manager, mock_service_id).await?;
+        // 🎯 ON TESTE LE GATEKEEPER (get_runtime_settings)
+        let settings = AppConfig::get_runtime_settings(&manager, mock_service_id).await?;
 
         assert_eq!(settings["api_key"], "TEST_KEY_123");
         assert_eq!(settings["model"], "gemini-test-model");

@@ -106,7 +106,8 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_write_file_simple() {
+    #[serial_test::serial]
+    async fn test_write_file_simple() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
         let call = make_call("hello.txt", "Hello World");
@@ -116,10 +117,11 @@ mod tests {
         assert!(file_path.exists());
         let saved_content = fs::read_to_string_async(&file_path).await.unwrap();
         assert_eq!(saved_content, "Hello World");
+        Ok(())
     }
 
     #[async_test]
-    async fn test_write_nested_directories() {
+    async fn test_write_nested_directories() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
         let call = make_call("src/components/button.rs", "struct Button;");
@@ -127,32 +129,36 @@ mod tests {
         assert!(!result.is_error);
         let file_path = dir.path().join("src/components/button.rs");
         assert!(file_path.exists());
+        Ok(())
     }
 
     #[async_test]
-    async fn test_security_prevent_path_traversal() {
+    async fn test_security_prevent_path_traversal() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
         let call = make_call("../secret.txt", "hacked");
         let result = tool.execute(call).await;
         assert!(result.is_error);
+        Ok(())
     }
 
     #[async_test]
-    async fn test_security_prevent_absolute_path() {
+    async fn test_security_prevent_absolute_path() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
         let call = make_call("/etc/passwd", "hacked");
         let result = tool.execute(call).await;
         assert!(result.is_error);
+        Ok(())
     }
 
     #[async_test]
-    async fn test_missing_arguments() {
+    async fn test_missing_arguments() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let tool = FileWriteTool::new(dir.path().to_path_buf());
         let call = McpToolCall::new("fs_write", json_value!({ "path": "test.txt" }));
         let result = tool.execute(call).await;
         assert!(result.is_error);
+        Ok(())
     }
 }

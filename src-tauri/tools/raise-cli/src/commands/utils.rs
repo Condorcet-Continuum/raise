@@ -79,7 +79,9 @@ pub async fn handle(args: UtilsArgs, ctx: CliContext) -> RaiseResult<()> {
 
             // Vérification du moteur LLM
             let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
-            if let Ok(settings) = AppConfig::get_component_settings(&manager, "llm").await {
+            if let Ok(settings) =
+                AppConfig::get_runtime_settings(&manager, "ref:components:handle:ai_llm").await
+            {
                 user_info!(
                     "LLM_ENGINE_STATUS",
                     json_value!({

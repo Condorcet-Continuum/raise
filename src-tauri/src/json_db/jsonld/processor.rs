@@ -96,6 +96,9 @@ impl JsonLdProcessor {
                 let mut keys_to_replace = Vec::new();
 
                 for (k, v) in map.iter_mut() {
+                    if k == "@context" {
+                        continue;
+                    }
                     let expanded_key = self.context_manager.expand_term(k);
 
                     if expanded_key != *k {

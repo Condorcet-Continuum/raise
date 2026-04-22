@@ -11,54 +11,41 @@ pub struct NativeTensorEngine {
 
 impl NativeTensorEngine {
     /// Initialise le moteur LLM local en respectant les points de montage et la config dynamique.
-    /// Initialise le moteur LLM local en respectant les points de montage et la config dynamique.
     pub async fn new(
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
-        // 1. Récupération stricte de la configuration via la requête V2 (Zéro Dette)
-        let svc_settings = match AppConfig::get_service_settings(
+        // 1. Appel du Gatekeeper (Routage + Vérification Activation)
+        let settings = match AppConfig::get_runtime_settings(
             manager,
-            "ref:services:handle:svc_ai",
+            "ref:components:handle:ai_llm",
         )
         .await
         {
             Ok(s) => s,
             Err(e) => raise_error!(
-                "ERR_AI_ENGINE_CONFIG_FAILED",
+                "ERR_AI_ENGINE_INIT_REJECTED",
                 error = e.to_string(),
-                context = json_value!({"action": "fetch_service_settings", "service_id": "ref:services:handle:svc_ai"})
+                context = json_value!({"action": "native_engine_init", "hint": "Le composant ai_llm est-il actif ?"})
             ),
         };
 
-        // 2. Extraction du composant spécifique LLM
-        let comp_settings = match svc_settings.get("ref:components:handle:ai_llm") {
-            Some(s) => s,
-            None => raise_error!(
-                "ERR_AI_LLM_COMPONENT_MISSING",
-                error = "La configuration du composant 'ai_llm' est absente des service_settings.",
-                context = json_value!({"service_id": "ref:services:handle:svc_ai"})
-            ),
-        };
-
-        let model_filename = match comp_settings
-            .get("rust_model_file")
-            .and_then(|v| v.as_str())
-        {
+        // 2. Parsing local avec Match Explicite (Zéro Dette)
+        let model_filename = match settings.get("rust_model_file").and_then(|v| v.as_str()) {
             Some(m) => m.to_string(),
             None => raise_error!(
-                "ERR_AI_LLM_MODEL_MISSING",
-                error = "La clé 'rust_model_file' est introuvable."
+                "ERR_AI_MISSING_VAR",
+                error = "La variable 'rust_model_file' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_llm"})
             ),
         };
 
-        let tokenizer_filename = match comp_settings
-            .get("rust_tokenizer_file")
-            .and_then(|v| v.as_str())
+        let tokenizer_filename = match settings.get("rust_tokenizer_file").and_then(|v| v.as_str())
         {
             Some(t) => t.to_string(),
             None => raise_error!(
-                "ERR_AI_LLM_TOKENIZER_MISSING",
-                error = "La clé 'rust_tokenizer_file' est introuvable."
+                "ERR_AI_MISSING_VAR",
+                error = "La variable 'rust_tokenizer_file' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_llm"})
             ),
         };
 

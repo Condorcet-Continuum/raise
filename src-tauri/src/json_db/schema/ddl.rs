@@ -68,8 +68,6 @@ impl<'a> DdlHandler<'a> {
             use crate::json_db::schema::bootstrapper::SchemaBootstrapper;
             let bootstrapper = SchemaBootstrapper::new(mgr);
 
-            // NOTE : Cela va lever une erreur dans ton éditeur pour le moment car le Bootstrapper
-            // n'est pas encore mis à jour pour accepter `&mut tx`. C'est normal !
             bootstrapper
                 .bootstrap_new_database(&mut tx, "v1.0.0")
                 .await?;

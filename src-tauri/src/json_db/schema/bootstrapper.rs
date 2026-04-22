@@ -1,7 +1,6 @@
 // FICHIER : src-tauri/src/json_db/schema/bootstrapper.rs
 
 use async_recursion::async_recursion;
-use std::path::Path;
 
 use crate::json_db::collections::manager::{CollectionsManager, SystemIndexTx};
 use crate::json_db::schema::ddl::DdlHandler;
@@ -56,7 +55,7 @@ impl<'a> SchemaBootstrapper<'a> {
         )
         .await?;
 
-        let mut schemas_to_clone = std::collections::HashSet::new();
+        let mut schemas_to_clone = UniqueSet::new();
 
         // 🎯 On lit les collections DIRECTEMENT depuis le jeton (plus d'appel au disque)
         if let Some(cols) = tx.document.get("collections").and_then(|c| c.as_object()) {

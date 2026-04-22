@@ -78,9 +78,20 @@ pub async fn ask(
     system_prompt: &str,
     user_prompt: &str,
 ) -> RaiseResult<String> {
-    // 1. Récupération de la configuration globale
-    let settings =
-        AppConfig::get_service_settings(manager, "ref:services:blueprint:anthropic_claude").await?;
+    // 1. Appel du Gatekeeper (Routage + Vérification d'Activation)
+    let settings = match AppConfig::get_runtime_settings(
+        manager,
+        "ref:services:blueprint:anthropic_claude",
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => raise_error!(
+            "ERR_CLAUDE_CONFIG_REJECTED",
+            error = e.to_string(),
+            context = json_value!({"provider": "AnthropicClaude", "hint": "Vérifiez que 'ref:services:blueprint:anthropic_claude' est dans active_services."})
+        ),
+    };
 
     // 2. Extraction stricte de la clé API
     let api_key_json = match settings.get("api_key") {

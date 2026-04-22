@@ -10,17 +10,24 @@ pub struct FastEmbedEngine {
 impl FastEmbedEngine {
     /// Initialise le moteur FastEmbed en respectant les points de montage système.
     pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
-        // 1. Récupération des paramètres via le point de montage Système
-        let settings = AppConfig::get_component_settings(manager, "ai_nlp")
-            .await
-            .unwrap_or(json_value!({}));
+        // 1. Appel du Gatekeeper (Tolérance aux pannes pour le moteur par défaut)
+        let settings =
+            match AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_nlp").await {
+                Ok(s) => s,
+                Err(_) => {
+                    // FastEmbed est le moteur léger de secours (Fallback absolu).
+                    // Si la config DB est absente ou désactivée, on fallback silencieusement.
+                    json_value!({})
+                }
+            };
 
+        // 2. Extraction de la valeur (avec fallback par défaut)
         let model_name_str = settings
             .get("fastembed_model")
             .and_then(|v| v.as_str())
             .unwrap_or("BGESmallENV15");
 
-        // 2. Déduction dynamique du modèle ONNX
+        // 3. Déduction dynamique du modèle ONNX
         let embed_model = match model_name_str {
             "AllMiniLML6V2" => LightweightEmbeddingModel::AllMiniLML6V2,
             _ => LightweightEmbeddingModel::BGESmallENV15,
@@ -28,7 +35,7 @@ impl FastEmbedEngine {
 
         let options = LightweightInitOptions::new(embed_model).with_show_download_progress(true);
 
-        // 3. Initialisation sécurisée via Match
+        // 4. Initialisation sécurisée via Match
         let model = match LightweightTextEmbedding::try_new(options) {
             Ok(m) => m,
             Err(e) => raise_error!(
@@ -152,7 +159,7 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience face à un domaine Système vide (Default Fallback)
+    /// Résilience face à un domaine Système vide (Default Fallback)
     #[async_test]
     #[serial_test::serial]
     async fn test_fast_embed_resilience_empty_config() -> RaiseResult<()> {

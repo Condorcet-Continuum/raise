@@ -27,7 +27,12 @@ async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
         Err(e) => raise_error!("ERR_TEST_SETUP_FAIL", error = e.to_string()),
     }
 
-    let generic_schema = "v1/db/generic.schema.json";
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/db/generic.schema.json",
+        system_domain, system_db
+    );
+    let generic_schema = schema_uri.as_str();
+
     let collections = vec!["prompts", "agents", "session_agents", "configs"];
 
     for coll in collections {
