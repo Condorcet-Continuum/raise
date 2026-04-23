@@ -65,7 +65,7 @@ impl GraphStore {
             vector_store,
             embedder,
             embedding_dim,
-            processor: JsonLdProcessor::new(),
+            processor: JsonLdProcessor::new()?,
         })
     }
 
@@ -236,7 +236,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_store_lifecycle_with_sandbox() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
@@ -281,7 +281,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_store_resilience_missing_source() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -308,7 +308,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_store_initialization_no_vectors() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

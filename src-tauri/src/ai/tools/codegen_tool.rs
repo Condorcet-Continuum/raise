@@ -184,7 +184,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_codegen_tool_execution_flow() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -244,7 +244,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_determine_language_logic() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let tool = CodeGenTool::new(PathBuf::from("/tmp"), sandbox.db.clone(), "test", "test");
 
         let doc_rust = json_value!({ "implementation": { "technology": "rust" } });
@@ -260,7 +260,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_codegen_unsupported_technology() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let tool = CodeGenTool::new(PathBuf::from("/tmp"), sandbox.db.clone(), "test", "test");
         let doc_fortran = json_value!({ "implementation": { "technology": "fortran" } });
 
@@ -278,7 +278,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_fetch_component_error_handling() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let tool = CodeGenTool::new(
             sandbox.domain_root.clone(),
             sandbox.db.clone(),

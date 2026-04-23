@@ -235,7 +235,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_quick_inference() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let manager = CollectionsManager::new(
@@ -257,7 +257,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_missing_model_path() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

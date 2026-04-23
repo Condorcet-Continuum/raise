@@ -83,7 +83,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_save_and_load_consistency() -> RaiseResult<()> {
         // 1. Initialisation via Sandbox (SSOT)
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = &sandbox.config.deep_learning;
         let device = AppConfig::device();
 
@@ -128,7 +128,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_missing_file() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = &sandbox.config.deep_learning;
         let fake_path = PathBuf::from("/tmp/non_existent_model_123.safetensors");
 
@@ -148,7 +148,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_checkpoint_fine_tuning_logic() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let device = AppConfig::device();
         let config = &sandbox.config.deep_learning;
 

@@ -158,10 +158,10 @@ mod tests {
     }
 
     #[test]
-    fn test_mandate_injection_and_signals() {
+    fn test_mandate_injection_and_signals() -> RaiseResult<()> {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
+        let storage = StorageEngine::new(config)?;
         let wasm = create_dummy_wasm();
 
         let mut plugin = CognitivePlugin::new(&wasm, &storage, "space", "db", None).unwrap();
@@ -174,5 +174,7 @@ mod tests {
         // 2. Test Signaux (Vérification de l'initialisation vide)
         let signals = plugin.get_signals();
         assert!(signals.is_empty());
+
+        Ok(())
     }
 }

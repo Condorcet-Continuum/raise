@@ -101,7 +101,7 @@ mod tests {
     #[serial_test::serial]
     async fn test_schema_uri_generation() -> RaiseResult<()> {
         // Initialisation de la sandbox pour avoir un AppConfig valide
-        let _sandbox = DbSandbox::new().await;
+        let _sandbox = DbSandbox::new().await?;
 
         let ont = RaiseOntology::RaiseAgents;
         let uri = ont.get_schema_uri();

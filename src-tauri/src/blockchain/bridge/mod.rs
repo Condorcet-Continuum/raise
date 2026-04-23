@@ -72,7 +72,7 @@ mod tests {
     /// Test existant : Cycle complet Blockchain -> DB -> Mémoire
     #[async_test]
     async fn test_bridge_full_cycle_logic() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
@@ -154,7 +154,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience face à un domaine système invalide (Mount Point Error)
     #[async_test]
     async fn test_bridge_resilience_on_invalid_mount_point() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let app_state = AppState {
             model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
         };
@@ -181,7 +181,7 @@ mod tests {
 
     #[async_test]
     async fn test_bridge_is_ready() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let app_state = AppState {
             model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
         };

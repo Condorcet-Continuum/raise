@@ -8,6 +8,7 @@
 //! - Validation
 
 use super::context::ContextManager;
+use super::vocabulary::VocabularyRegistry;
 use crate::utils::prelude::*;
 
 /// Représentation simple d'un nœud RDF pour l'export
@@ -51,17 +52,11 @@ pub struct JsonLdProcessor {
     context_manager: ContextManager,
 }
 
-impl Default for JsonLdProcessor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl JsonLdProcessor {
-    pub fn new() -> Self {
-        Self {
-            context_manager: ContextManager::new(),
-        }
+    pub fn new() -> RaiseResult<Self> {
+        Ok(Self {
+            context_manager: ContextManager::new()?,
+        })
     }
     pub fn get_primary_type(&self, doc: &JsonValue) -> Option<String> {
         self.get_types(doc).into_iter().next()
@@ -206,26 +201,20 @@ impl JsonLdProcessor {
 
     pub fn get_types(&self, doc: &JsonValue) -> Vec<String> {
         let mut types = Vec::new();
+        let type_iri = self.context_manager.expand_term("@type"); // Normalisation
 
-        let extract_types = |val: &JsonValue, out: &mut Vec<String>| {
-            if let Some(s) = val.as_str() {
-                out.push(s.to_string());
-            } else if let Some(arr) = val.as_array() {
-                for item in arr {
-                    if let Some(s) = item.as_str() {
-                        out.push(s.to_string());
+        if let Some(obj) = doc.as_object() {
+            for (key, val) in obj {
+                // On vérifie si la clé (compacte ou étendue) correspond à @type
+                if key == "@type" || self.context_manager.expand_term(key) == type_iri {
+                    if let Some(s) = val.as_str() {
+                        types.push(s.to_string());
+                    } else if let Some(arr) = val.as_array() {
+                        types.extend(arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())));
                     }
                 }
             }
-        };
-
-        if let Some(t) = doc.get("@type") {
-            extract_types(t, &mut types);
         }
-        if let Some(t) = doc.get("http://www.w3.org/1999/02/22-rdf-syntax-ns#type") {
-            extract_types(t, &mut types);
-        }
-
         types
     }
 
@@ -260,50 +249,59 @@ impl JsonLdProcessor {
     }
 
     pub fn to_ntriples(&self, doc: &mut JsonValue) -> RaiseResult<String> {
+        // 1. Normalisation sémantique : On s'assure que toutes les clés sont des IRIs.
         self.expand_in_place(doc);
 
-        let id = match self.get_id(doc) {
-            Some(id_str) => id_str,
-            None => raise_error!(
-                "ERR_SEMANTIC_ID_MISSING",
-                error = "Identifiant sémantique '@id' introuvable après expansion.",
-                context = json_value!({
-                    "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
-                })
-            ),
-        };
+        // 2. Identification du sujet : Support des "Blank Nodes" si @id est absent.
+        // Contrairement à la version précédente, on ne lève plus d'erreur si l'ID manque.
+        let subject = self
+            .get_id(doc)
+            .map(|id| format!("<{}>", id))
+            .unwrap_or_else(|| "_:b0".to_string());
 
         let mut lines = Vec::new();
 
         if let Some(obj) = doc.as_object() {
             for (pred, val) in obj {
+                // On ignore les mots-clés système (@id, @context, etc.) pour le prédicat.
                 if pred.starts_with('@') {
                     continue;
                 }
 
-                let objects = if let JsonValue::Array(arr) = val {
-                    arr.iter().collect()
+                // Normalisation du prédicat : Après expansion, il doit être wrappé en <IRI>.
+                let pred_iri = if pred.starts_with("http") || pred.contains(':') {
+                    format!("<{}>", pred)
                 } else {
-                    vec![val]
+                    format!("<{}>", self.context_manager.expand_term(pred))
+                };
+
+                // Gestion de l'atomicité : on traite les valeurs simples et les tableaux.
+                let objects = match val {
+                    JsonValue::Array(arr) => arr.iter().collect::<Vec<_>>(),
+                    _ => vec![val],
                 };
 
                 for o in objects {
                     let obj_str = match o {
-                        JsonValue::String(s)
-                            if self.context_manager.expand_term(s).starts_with("http") =>
-                        {
-                            format!("<{}>", self.context_manager.expand_term(s))
+                        // Cas 1 : La valeur est une IRI (Ressource liée).
+                        JsonValue::String(s) if VocabularyRegistry::is_iri(s) => {
+                            format!("<{}>", s)
                         }
-                        JsonValue::String(s) => format!("\"{}\"", s),
+                        // Cas 2 : Littéral simple avec échappement des guillemets.
+                        JsonValue::String(s) => format!("\"{}\"", s.replace('\"', "\\\"")),
+                        // Cas 3 : Types Primitifs avec correspondance XSD stricte.
                         JsonValue::Bool(b) => {
                             format!("\"{}\"^^<http://www.w3.org/2001/XMLSchema#boolean>", b)
                         }
                         JsonValue::Number(n) => {
-                            format!("\"{}\"^^<http://www.w3.org/2001/XMLSchema#double>", n)
+                            let xsd_type = if n.is_f64() { "double" } else { "integer" };
+                            format!("\"{}\"^^<http://www.w3.org/2001/XMLSchema#{}>", n, xsd_type)
                         }
-                        _ => format!("\"{}\"", o.to_string().replace("\"", "\\\"")),
+                        // Cas 4 : Repli pour les types complexes (Objets/Arrays) sérialisés en littéraux.
+                        _ => format!("\"{}\"", o.to_string().replace('\"', "\\\"")),
                     };
-                    lines.push(format!("<{}> <{}> {} .", id, pred, obj_str));
+
+                    lines.push(format!("{} {} {} .", subject, pred_iri, obj_str));
                 }
             }
         }
@@ -323,7 +321,7 @@ mod tests {
 
     fn setup_test_processor() -> RaiseResult<JsonLdProcessor> {
         VocabularyRegistry::init_mock_for_tests();
-        Ok(JsonLdProcessor::new())
+        JsonLdProcessor::new()
     }
 
     #[test]
@@ -355,10 +353,19 @@ mod tests {
 
         processor.expand_in_place(&mut doc);
 
-        let obj = doc.as_object().unwrap();
-        let type_val = obj.get("@type").and_then(|v| v.as_str()).unwrap();
+        let Some(obj) = doc.as_object() else {
+            raise_error!(
+                "TEST_FAIL",
+                error = "Le document après expansion n'est pas un objet."
+            );
+        };
+        let Some(type_val) = obj.get("@type").and_then(|v| v.as_str()) else {
+            raise_error!(
+                "TEST_FAIL",
+                error = "Champ @type manquant ou n'est pas une chaîne."
+            );
+        };
 
-        // 🎯 FIX : Validation contre URI simplifiée
         if type_val != "https://raise.io/oa#OperationalActivity" {
             raise_error!(
                 "TEST_FAIL",
@@ -373,21 +380,31 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn test_compact_in_place_zero_allocation() -> RaiseResult<()> {
+    fn test_to_ntriples_robustness() -> RaiseResult<()> {
         let processor = setup_test_processor()?;
+
+        // Cas 1 : Document complet avec Types Numériques
         let mut doc = json_value!({
-            "@id": "urn:uuid:123",
-            "@type": "https://raise.io/oa#OperationalActivity",
-            "https://raise.io/oa#name": "Surveiller Zone"
+            "@id": "urn:uuid:456",
+            "oa:name": "Alpha",
+            "oa:count": 10
         });
 
-        processor.compact_in_place(&mut doc);
+        let nt = processor.to_ntriples(&mut doc)?;
+        assert!(nt.contains("<urn:uuid:456> <https://raise.io/oa#name> \"Alpha\" ."));
+        // Vérification du type XSD integer
+        assert!(nt.contains("\"10\"^^<http://www.w3.org/2001/XMLSchema#integer>"));
 
-        let obj = doc.as_object().unwrap();
-        let type_val = obj.get("@type").and_then(|v| v.as_str()).unwrap();
+        // Cas 2 : Document sans @id (Support des Blank Nodes)
+        let mut doc_anon = json_value!({
+            "oa:name": "Anonyme"
+        });
+        let nt_anon = processor.to_ntriples(&mut doc_anon)?;
+        assert!(
+            nt_anon.starts_with("_:b0"),
+            "Devrait générer un Blank Node pour un doc sans ID."
+        );
 
-        assert_eq!(type_val, "oa:OperationalActivity");
-        assert!(obj.contains_key("oa:name"));
         Ok(())
     }
 }

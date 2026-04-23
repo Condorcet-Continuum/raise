@@ -42,8 +42,8 @@ impl ModelValidator for OntologicalValidator {
         &self,
         element: &ArcadiaElement,
         _loader: &ModelLoader<'_>,
-    ) -> Vec<ValidationIssue> {
-        self.check_semantics(element)
+    ) -> RaiseResult<Vec<ValidationIssue>> {
+        Ok(self.check_semantics(element))
     }
 }
 
@@ -53,7 +53,7 @@ mod tests {
     use crate::model_engine::types::NameType;
 
     #[test]
-    fn test_ontological_validation() {
+    fn test_ontological_validation() -> RaiseResult<()> {
         let validator = OntologicalValidator::new();
 
         // 🎯 On teste avec l'état "Unknown" (Brouillon en cours de modélisation)
@@ -87,5 +87,7 @@ mod tests {
             "Une erreur doit être levée pour un type inexistant"
         );
         assert_eq!(issues_err[0].rule_id, "ONTO-001");
+
+        Ok(())
     }
 }

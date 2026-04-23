@@ -102,7 +102,7 @@ mod tests {
     /// 🎯 TEST ROBUSTE : Validation de la séquence complète de démarrage
     #[async_test]
     async fn test_bootstrap_core_full_flow() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
 
         let manager = CollectionsManager::new(
@@ -131,7 +131,9 @@ mod tests {
 
         // 🎯 SEEDING ONTOLOGIE : Simulation d'une ontologie minimale
         {
-            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let lock = manager
+                .storage
+                .get_index_lock(&manager.space, &manager.db)?;
             let guard = lock.lock().await;
             let mut tx = manager.begin_system_tx(&guard).await?;
             tx.document["ontologies"]["raise"] = json_value!({

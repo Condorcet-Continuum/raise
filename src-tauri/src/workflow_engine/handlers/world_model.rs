@@ -167,7 +167,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_world_model_handler_execution() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config système
@@ -220,7 +220,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Inférence des partitions système via Mount Points
     #[async_test]
     async fn test_wm_mount_point_resolution() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         assert!(!config.mount_points.system.domain.is_empty());
         assert!(!config.mount_points.system.db.is_empty());

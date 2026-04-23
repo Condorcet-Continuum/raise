@@ -61,7 +61,7 @@ mod integration_tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_native_lifecycle() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
@@ -118,7 +118,7 @@ mod integration_tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_memory_resilience_invalid_domain() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         // On crée un manager pointant vers un domaine non initialisé
         let manager = CollectionsManager::new(&sandbox.db, "ghost_domain", "ghost_db");
@@ -160,7 +160,7 @@ mod integration_tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_memory_collection_isolation() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

@@ -284,7 +284,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_create_instance_persistence() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await?;
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -320,7 +320,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_mount_point_resilience() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         assert!(!config.mount_points.system.domain.is_empty());
         assert!(!config.mount_points.system.db.is_empty());
@@ -332,7 +332,7 @@ mod tests {
     #[serial_test::serial] // 🎯 FIX : Protection CUDA (Bombe à retardement désamorcée)
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_scheduler_orphan_instance_match() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let scheduler = setup_test_environment(sandbox.db.clone(), &sandbox.config).await?;
         let manager = CollectionsManager::new(&sandbox.db, "a", "b");
 

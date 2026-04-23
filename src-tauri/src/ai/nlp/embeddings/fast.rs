@@ -112,7 +112,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_fast_embed_single() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
@@ -138,7 +138,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_fast_embed_batch() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -163,7 +163,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_fast_embed_resilience_empty_config() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         // Manager pointant sur un domaine vierge
         let manager = CollectionsManager::new(&sandbox.db, "void", "void");
 
@@ -180,7 +180,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_fast_embed_empty_string() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

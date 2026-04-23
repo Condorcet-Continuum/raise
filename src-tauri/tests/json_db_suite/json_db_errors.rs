@@ -7,8 +7,8 @@ use raise::json_db::storage::JsonDbConfig;
 // 🎯 AJOUT VITAL pour le 4ème argument
 
 #[async_test]
-async fn open_missing_db_fails() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn open_missing_db_fails() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let cfg = JsonDbConfig {
         data_root: env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
     };
@@ -21,11 +21,13 @@ async fn open_missing_db_fails() {
         "❌ open_db devrait échouer si la base de données '{}' n'existe pas.",
         db_missing
     );
+
+    Ok(())
 }
 
 #[async_test]
-async fn create_db_is_idempotent() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn create_db_is_idempotent() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let cfg = JsonDbConfig {
         data_root: env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
     };
@@ -53,4 +55,6 @@ async fn create_db_is_idempotent() {
         res.err()
     );
     assert!(!res.unwrap(), "Le second appel doit aussi retourner false");
+
+    Ok(())
 }

@@ -12,7 +12,11 @@ impl ComplianceChecker for Iec61508Checker {
     }
 
     /// 🎯 Version robuste : Audit de la certification SIL pour les systèmes industriels
-    fn check(&self, _tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
+    fn check(
+        &self,
+        _tracer: &Tracer,
+        docs: &UnorderedMap<String, JsonValue>,
+    ) -> RaiseResult<ComplianceReport> {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -26,7 +30,13 @@ impl ComplianceChecker for Iec61508Checker {
 
             if is_industrial {
                 checked_count += 1;
-                let name = doc.get("name").and_then(|n| n.as_str()).unwrap_or(id);
+
+                let name = doc.get("name").and_then(|n| n.as_str()).ok_or_else(|| {
+                    build_error!(
+                        "ERR_COMPLIANCE_DATA_INCOMPLETE",
+                        context = json_value!({ "id": id, "field": "name" })
+                    )
+                })?;
 
                 // 🎯 RÈGLE : Présence obligatoire du niveau SIL (Safety Integrity Level)
                 let has_sil = doc.get("sil").is_some();
@@ -45,12 +55,12 @@ impl ComplianceChecker for Iec61508Checker {
             }
         }
 
-        ComplianceReport {
+        Ok(ComplianceReport {
             standard: self.name().to_string(),
             passed: violations.is_empty(),
             rules_checked: checked_count,
             violations,
-        }
+        })
     }
 }
 
@@ -62,7 +72,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_iec61508_sil_validation() {
+    fn test_iec61508_sil_validation() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // 1. Système conforme (Domaine Industriel + SIL défini)
@@ -96,9 +106,9 @@ mod tests {
         );
 
         // 🎯 Injection du graphe via from_json_list (Isolant total pour le test)
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = Iec61508Checker;
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert_eq!(report.rules_checked, 2); // Turbine + Conveyor
         assert_eq!(report.violations.len(), 1); // Conveyor est fautif
@@ -107,17 +117,21 @@ mod tests {
             Some("Conveyor_02".to_string())
         );
         assert!(report.violations[0].description.contains("SIL"));
+
+        Ok(())
     }
 
     #[test]
-    fn test_iec61508_empty_scope() {
+    fn test_iec61508_empty_scope() -> RaiseResult<()> {
         let docs = UnorderedMap::new();
-        let tracer = Tracer::from_json_list(vec![]);
+        let tracer = Tracer::from_json_list(vec![])?;
         let checker = Iec61508Checker;
 
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert!(report.passed);
         assert_eq!(report.rules_checked, 0);
+
+        Ok(())
     }
 }

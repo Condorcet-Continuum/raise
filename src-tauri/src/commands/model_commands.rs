@@ -16,7 +16,7 @@ pub async fn load_project_model(
     space: String,
     db: String,
 ) -> RaiseResult<ProjectModel> {
-    let loader = ModelLoader::from_engine(storage.inner(), &space, &db);
+    let loader = ModelLoader::from_engine(storage.inner(), &space, &db)?;
 
     match loader.load_full_model().await {
         Ok(model) => Ok(model),
@@ -166,7 +166,7 @@ mod tests {
 
     #[async_test]
     async fn test_load_project_model_command() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 RÉSILIENCE : Utilisation des nouveaux Mount Points
@@ -183,7 +183,7 @@ mod tests {
             &sandbox.db,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
-        );
+        )?;
 
         let result = loader.load_full_model().await?;
         assert_eq!(result.meta.element_count, 0);
@@ -192,7 +192,7 @@ mod tests {
 
     #[async_test]
     async fn test_ingest_arcadia_elements_success() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let domain = &config.mount_points.system.domain;
         let sys_db = &config.mount_points.system.db;
@@ -229,7 +229,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience si le mapping ontologique est corrompu
     #[async_test]
     async fn test_resilience_missing_mapping_document() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // On ne crée pas le document configs:ontological_mapping

@@ -8,10 +8,10 @@ use raise::ai::llm::client::LlmBackend;
 #[async_test]
 #[serial_test::serial] // Protection RTX 5060 en local
 #[cfg_attr(not(feature = "cuda"), ignore)]
-async fn test_local_llm_connectivity() {
+async fn test_local_llm_connectivity() -> RaiseResult<()> {
     // CORRECTION : init_ai_test_env() est désormais asynchrone.
     // On doit l'attendre pour accéder au membre 'client'.
-    let env = setup_test_env(LlmMode::Enabled).await;
+    let env = setup_test_env(LlmMode::Enabled).await?;
 
     let response = env
         .client
@@ -28,4 +28,6 @@ async fn test_local_llm_connectivity() {
     let text = response.unwrap();
     println!("Réponse Locale: {}", text);
     assert!(!text.is_empty());
+
+    Ok(())
 }

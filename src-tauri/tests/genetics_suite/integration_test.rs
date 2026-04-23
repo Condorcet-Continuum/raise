@@ -15,8 +15,8 @@ use raise::utils::prelude::*;
 #[async_test]
 #[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
-async fn test_genetics_integration_with_json_db() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_genetics_integration_with_json_db() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
 
     // 🎯 FIX : On utilise la vraie partition métier (MBSE) initialisée par la sandbox
     let la_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "la");
@@ -32,7 +32,7 @@ async fn test_genetics_integration_with_json_db() {
 
     // 🎯 FIX : Le ModelLoader a besoin du manager système pour lire la table 'configs' !
     let sys_mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-    let loader = ModelLoader::new_with_manager(sys_mgr);
+    let loader = ModelLoader::new_with_manager(sys_mgr)?;
     let model = loader.load_full_model().await.expect("Erreur chargement");
 
     let function_ids: Vec<String> = model
@@ -68,4 +68,6 @@ async fn test_genetics_integration_with_json_db() {
 
     let final_pop = engine.run(pop, |_| {});
     assert!(!final_pop.individuals.is_empty());
+
+    Ok(())
 }

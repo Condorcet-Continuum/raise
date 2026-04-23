@@ -41,14 +41,20 @@ pub async fn create_db(
 ) -> RaiseResult<bool> {
     let db_root = config.db_root(space, db);
 
-    // 1. 🎯 OPTIMISATION ABSOLUE : Return Early
-    // Si le dossier de la base existe, on ne fait STRICTEMENT rien.
+    // Idempotence : Return Early si le dossier existe déjà
     if fs::exists_async(&db_root).await {
         return Ok(false);
     }
 
     // 2. Création du dossier racine de la base
-    fs::create_dir_all_async(&db_root).await?;
+    match fs::create_dir_all_async(&db_root).await {
+        Ok(_) => (),
+        Err(e) => raise_error!(
+            "ERR_FS_CREATE_DB_ROOT",
+            error = e,
+            context = json_value!({ "path": db_root })
+        ),
+    }
 
     let app_config = AppConfig::get();
     // 🎯 FIX : Utilisation stricte des points de montage système
@@ -66,18 +72,18 @@ pub async fn create_db(
                         // Heuristique : Un nœud avec un tableau "items" = un dossier physique
                         if node_obj.get("items").is_some_and(|i| i.is_array()) {
                             let path = db_root.join(category).join(name);
-
                             // On crée l'arborescence (ex: /collections/actors)
-                            if let Err(e) = fs::create_dir_all_async(&path).await {
-                                raise_error!(
+                            match fs::create_dir_all_async(&path).await {
+                                Ok(_) => (),
+                                Err(e) => raise_error!(
                                     "ERR_FS_DYNAMIC_DIR_FAILED",
                                     error = e,
                                     context = json_value!({
                                         "category": category,
                                         "name": name,
-                                        "path": path.to_string_lossy().to_string()
+                                        "path": path
                                     })
-                                );
+                                ),
                             }
                         }
                     }
@@ -125,13 +131,28 @@ pub async fn write_document(
     db: &str,
     collection: &str,
     id: &str,
-    doc: &JsonValue,
+    document: &JsonValue,
 ) -> RaiseResult<()> {
     let col_path = config.db_collection_path(space, db, collection);
-    fs::create_dir_all_async(&col_path).await?;
+    // 1. S'assurer que le dossier de la collection existe
+    match fs::create_dir_all_async(&col_path).await {
+        Ok(_) => (),
+        Err(e) => raise_error!(
+            "ERR_FS_COLLECTION_DIR_FAILED",
+            error = e,
+            context = json_value!({ "path": col_path })
+        ),
+    }
     let file_path = col_path.join(format!("{}.json", id));
-    fs::write_json_atomic_async(&file_path, doc).await?;
-    Ok(())
+    // 2. Écriture Atomique (Zéro Corruption)
+    match fs::write_json_atomic_async(&file_path, document).await {
+        Ok(_) => Ok(()),
+        Err(e) => raise_error!(
+            "ERR_FS_WRITE_DOC_FAILED",
+            error = e,
+            context = json_value!({ "file": file_path })
+        ),
+    }
 }
 
 pub async fn read_document(
@@ -149,8 +170,14 @@ pub async fn read_document(
         return Ok(None);
     }
 
-    let doc: JsonValue = fs::read_json_async(&file_path).await?;
-    Ok(Some(doc))
+    match fs::read_json_async(&file_path).await {
+        Ok(doc) => Ok(Some(doc)),
+        Err(e) => raise_error!(
+            "ERR_FS_READ_DOC_FAILED",
+            error = e,
+            context = json_value!({ "file": file_path })
+        ),
+    }
 }
 
 pub async fn delete_document(
@@ -165,14 +192,27 @@ pub async fn delete_document(
         .join(format!("{}.json", id));
 
     if fs::exists_async(&file_path).await {
-        fs::remove_file_async(&file_path).await?;
+        match fs::remove_file_async(&file_path).await {
+            Ok(_) => (),
+            Err(e) => raise_error!(
+                "ERR_FS_DELETE_DOC_FAILED",
+                error = e,
+                context = json_value!({ "file": file_path })
+            ),
+        }
     }
     Ok(())
 }
 
 pub async fn atomic_write<P: AsRef<Path>>(path: P, content: &[u8]) -> RaiseResult<()> {
-    fs::write_atomic_async(path.as_ref(), content).await?;
-    Ok(())
+    match fs::write_atomic_async(path.as_ref(), content).await {
+        Ok(_) => Ok(()),
+        Err(e) => raise_error!(
+            "ERR_FS_WRITE_FAILED",
+            error = e,
+            context = json_value!({ "path": path.as_ref() })
+        ),
+    }
 }
 
 pub async fn atomic_write_binary<P: AsRef<Path>>(path: P, content: &[u8]) -> RaiseResult<()> {
@@ -185,11 +225,16 @@ pub async fn read_system_index(
     db: &str,
 ) -> RaiseResult<Option<JsonValue>> {
     let sys_path = config.db_root(space, db).join("_system.json");
-    if fs::exists_async(&sys_path).await {
-        let doc: JsonValue = fs::read_json_async(&sys_path).await?;
-        Ok(Some(doc))
-    } else {
-        Ok(None)
+    match fs::exists_async(&sys_path).await {
+        true => match fs::read_json_async(&sys_path).await {
+            Ok(index_doc) => Ok(Some(index_doc)),
+            Err(e) => raise_error!(
+                "ERR_FS_READ_INDEX_FAILED",
+                error = e,
+                context = json_value!({ "file": sys_path })
+            ),
+        },
+        false => Ok(None),
     }
 }
 
@@ -197,11 +242,17 @@ pub async fn write_system_index(
     config: &JsonDbConfig,
     space: &str,
     db: &str,
-    doc: &JsonValue,
+    index_doc: &JsonValue,
 ) -> RaiseResult<()> {
     let sys_path = config.db_root(space, db).join("_system.json");
-    fs::write_json_atomic_async(&sys_path, doc).await?;
-    Ok(())
+    match fs::write_json_atomic_async(&sys_path, index_doc).await {
+        Ok(_) => Ok(()),
+        Err(e) => raise_error!(
+            "ERR_FS_WRITE_INDEX_FAILED",
+            error = e,
+            context = json_value!({ "file": sys_path })
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -335,7 +386,7 @@ mod tests {
         Ok(())
     }
 
-    // 🎯 NOUVEAU TEST 3 : Comportement de open_db
+    // Comportement de open_db
     #[async_test]
     async fn test_open_db_validation() -> RaiseResult<()> {
         let dir = match tempdir() {

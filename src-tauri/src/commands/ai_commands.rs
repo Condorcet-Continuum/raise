@@ -252,9 +252,8 @@ pub async fn validate_arcadia_gnn(
     let device = AppConfig::device();
 
     let db_config = JsonDbConfig::new(path_buf.clone());
-    let storage = StorageEngine::new(db_config);
+    let storage = StorageEngine::new(db_config)?;
 
-    // 🎯 MOUNT POINTS : Résolution via la config système
     let manager = CollectionsManager::new(
         &storage,
         &config.mount_points.system.domain,
@@ -348,7 +347,7 @@ mod tests_gnn_cmd {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_validate_arcadia_gnn_not_found_fails() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         let result = validate_arcadia_gnn(
             sandbox.domain_root.to_string_lossy().to_string(),
@@ -366,7 +365,7 @@ mod tests_gnn_cmd {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_commands_mount_point_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // On vérifie que la commande utilise bien les nouveaux points de montage système
@@ -385,7 +384,7 @@ mod tests_gnn_cmd {
     /// 🎯 NOUVEAU TEST : Inférence matériel sécurisée
     #[async_test]
     async fn test_ai_commands_device_ssot() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let device = AppConfig::device();
         // Le périphérique doit être valide pour le moteur natif
         assert!(device.is_cpu() || device.is_cuda() || device.is_metal());

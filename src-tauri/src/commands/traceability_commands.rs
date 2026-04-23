@@ -36,10 +36,10 @@ pub async fn analyze_impact(
     let model = state.model.lock().await;
 
     // Utilisation du constructeur de rétro-compatibilité (qui utilise all_elements désormais)
-    let tracer = Tracer::from_legacy_model(&model);
+    let tracer = Tracer::from_legacy_model(&model)?;
 
     let analyzer = ImpactAnalyzer::new(tracer);
-    let report = analyzer.analyze(&element_id, depth);
+    let report = analyzer.analyze(&element_id, depth)?;
 
     Ok(report)
 }
@@ -50,10 +50,10 @@ pub async fn run_compliance_audit(state: tauri::State<'_, AppState>) -> RaiseRes
 
     // Préparation des données pour le générateur universel
     let docs = get_model_docs(&model);
-    let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+    let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
 
     // AuditGenerator prend désormais 3 arguments
-    let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name);
+    let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name)?;
 
     Ok(report)
 }
@@ -65,10 +65,10 @@ pub async fn get_traceability_matrix(
     let model = state.model.lock().await;
 
     let docs = get_model_docs(&model);
-    let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+    let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
 
     // Utilisation du générateur de couverture universel
-    let matrix = MatrixGenerator::generate_coverage(&tracer, &docs, "Function");
+    let matrix = MatrixGenerator::generate_coverage(&tracer, &docs, "Function")?;
 
     Ok(matrix)
 }
@@ -82,7 +82,7 @@ pub async fn get_element_neighbors(
     let docs = get_model_docs(&model);
 
     // Utilisation du nouveau Tracer
-    let tracer = Tracer::from_legacy_model(&model);
+    let tracer = Tracer::from_legacy_model(&model)?;
 
     // Récupération des IDs
     let upstream_ids = tracer.get_upstream_ids(&element_id);

@@ -632,7 +632,7 @@ mod tests {
     async fn test_get_runtime_settings_resolves_correctly() -> RaiseResult<()> {
         use crate::utils::testing::mock::DbSandbox;
 
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,

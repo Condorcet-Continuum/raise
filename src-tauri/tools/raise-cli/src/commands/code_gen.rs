@@ -174,7 +174,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_codegen_cli_dispatch() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
@@ -192,7 +192,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_cli_ingest_and_weave_full_cycle() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
         let storage = SharedRef::new(sandbox.storage.clone());

@@ -14,8 +14,8 @@ use raise::utils::prelude::*;
 use raise::utils::testing::DbSandbox;
 
 #[async_test]
-async fn test_arcadia_to_genetics_pipeline() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_arcadia_to_genetics_pipeline() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let manager = CollectionsManager::new(&env.sandbox.storage, "test_workspace", "arcadia_db");
     DbSandbox::mock_db(&manager).await.unwrap();
     // Injections de test
@@ -25,8 +25,8 @@ async fn test_arcadia_to_genetics_pipeline() {
     manager.insert_raw("la", &json_value!({ "_id": "F1", "name": "Nav", "type": "LogicalFunction", "properties": {"complexity": 45.0}})).await.unwrap();
     manager.insert_raw("la", &json_value!({ "_id": "C1", "name": "CPU", "type": "LogicalComponent", "properties": {"capacity": 100.0}})).await.unwrap();
 
-    let loader = ModelLoader::new_with_manager(manager);
-    let project_model = loader.load_full_model().await.expect("Erreur chargement");
+    let loader = ModelLoader::new_with_manager(manager)?;
+    let project_model = loader.load_full_model().await?;
 
     // 🎯 PURE GRAPH : Extraction via get_collection
     let function_ids: Vec<String> = project_model
@@ -56,4 +56,6 @@ async fn test_arcadia_to_genetics_pipeline() {
 
     let final_pop = engine.run(pop, |_| {});
     assert!(!final_pop.individuals.is_empty());
+
+    Ok(())
 }

@@ -12,7 +12,7 @@ use raise::utils::testing::DbSandbox;
 #[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_epbs_agent_creates_configuration_item() -> RaiseResult<()> {
-    let env = setup_test_env(LlmMode::Enabled).await;
+    let env = setup_test_env(LlmMode::Enabled).await?;
     let test_root = env.sandbox.storage.config.data_root.clone();
 
     // --- 🎯 1. SETUP SYSTEM (Injection via Mount Points) ---
@@ -143,7 +143,7 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_epbs_mount_point_integrity() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await;
+        let env = setup_test_env(LlmMode::Disabled).await?;
         // Validation SSOT de la partition système
         assert!(!env.sandbox.config.mount_points.system.domain.is_empty());
         assert!(!env.sandbox.config.mount_points.system.db.is_empty());
@@ -155,7 +155,7 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_epbs_agent_missing_prompt_id() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await;
+        let env = setup_test_env(LlmMode::Disabled).await?;
         let test_root = env.sandbox.storage.config.data_root.clone();
 
         let sys_mgr = CollectionsManager::new(

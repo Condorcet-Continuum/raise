@@ -106,10 +106,12 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_text_lifecycle() {
+    async fn test_text_lifecycle() -> RaiseResult<()> {
         let (dir, cfg) = setup_env();
-        // ✅ AJOUT : Création du StorageEngine pour les tests
-        let storage = StorageEngine::new(cfg);
+        let storage = match StorageEngine::new(cfg) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
 
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
         fs::ensure_dir_async(&idx_dir).await.unwrap();
@@ -144,5 +146,6 @@ mod tests {
             .await
             .unwrap();
         assert!(deleted.is_empty());
+        Ok(())
     }
 }

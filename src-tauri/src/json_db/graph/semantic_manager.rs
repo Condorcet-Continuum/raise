@@ -14,13 +14,12 @@ pub struct SemanticManager<'a> {
 
 impl<'a> SemanticManager<'a> {
     /// Initialise le gestionnaire sémantique par-dessus un gestionnaire de collections existant.
-    pub fn new(db_manager: &'a CollectionsManager<'a>) -> Self {
-        Self {
+    pub fn new(db_manager: &'a CollectionsManager<'a>) -> RaiseResult<Self> {
+        Ok(Self {
             db_manager,
-            processor: JsonLdProcessor::new(),
-        }
+            processor: JsonLdProcessor::new()?,
+        })
     }
-
     // =========================================================================
     // OPÉRATIONS DDL : GESTION DU MÉTA-MODÈLE (ONTOLOGIES)
     // =========================================================================
@@ -33,7 +32,7 @@ impl<'a> SemanticManager<'a> {
         content: &JsonValue,
     ) -> RaiseResult<()> {
         // 1. TENTATIVE de validation sémantique (Le Hot Reload RCU)
-        let registry = VocabularyRegistry::global();
+        let registry = VocabularyRegistry::global()?;
         if let Err(e) = registry.load_layer_from_json(namespace, content).await {
             raise_error!(
                 "ERR_ONTOLOGY_LOAD_FAIL",
@@ -67,7 +66,7 @@ impl<'a> SemanticManager<'a> {
         let lock = self
             .db_manager
             .storage
-            .get_index_lock(&self.db_manager.space, &self.db_manager.db);
+            .get_index_lock(&self.db_manager.space, &self.db_manager.db)?;
         let guard = lock.lock().await;
         let mut tx = self.db_manager.begin_system_tx(&guard).await?;
 
@@ -111,7 +110,7 @@ impl<'a> SemanticManager<'a> {
         let lock = self
             .db_manager
             .storage
-            .get_index_lock(&self.db_manager.space, &self.db_manager.db);
+            .get_index_lock(&self.db_manager.space, &self.db_manager.db)?;
         let guard = lock.lock().await;
         let mut tx = self.db_manager.begin_system_tx(&guard).await?;
 
@@ -147,7 +146,7 @@ impl<'a> SemanticManager<'a> {
         self.apply_mbse_context(&mut node, layer_prefix)?;
 
         // 🎯 2. Création du processeur SYNCHRONISÉ avec le contexte
-        let processor = JsonLdProcessor::new().with_doc_context(&node)?;
+        let processor = JsonLdProcessor::new()?.with_doc_context(&node)?;
 
         // 3. Contrat de base JSON-LD
         if let Err(e) = processor.validate_required_fields(&node, &["@id", "@type"]) {
@@ -162,7 +161,7 @@ impl<'a> SemanticManager<'a> {
         // On étend en RAM uniquement pour vérifier que l'élément est légal
         if let Some(type_uri) = processor.get_primary_type(&node) {
             let expanded_type = processor.context_manager().expand_term(&type_uri);
-            if !VocabularyRegistry::global().has_class(&expanded_type) {
+            if !VocabularyRegistry::global()?.has_class(&expanded_type) {
                 raise_error!(
                     "ERR_SEMANTIC_UNKNOWN_TYPE",
                     error = format!(
@@ -187,7 +186,7 @@ impl<'a> SemanticManager<'a> {
         match self.db_manager.get_document(collection, id).await {
             Ok(Some(mut d)) => {
                 // On synchronise le processeur avec le document lu pour réussir la compaction
-                let processor = JsonLdProcessor::new().with_doc_context(&d)?;
+                let processor = JsonLdProcessor::new()?.with_doc_context(&d)?;
                 processor.compact_in_place(&mut d);
                 Ok(Some(d))
             }
@@ -200,7 +199,7 @@ impl<'a> SemanticManager<'a> {
     fn apply_mbse_context(&self, node: &mut JsonValue, layer: &str) -> RaiseResult<()> {
         if let Some(obj) = node.as_object_mut() {
             if !obj.contains_key("@context") {
-                let registry = VocabularyRegistry::global();
+                let registry = VocabularyRegistry::global()?;
                 if let Some(ctx) = registry.get_context_for_layer(layer) {
                     obj.insert("@context".to_string(), ctx);
                 }
@@ -209,10 +208,6 @@ impl<'a> SemanticManager<'a> {
         Ok(())
     }
 }
-
-// =========================================================================
-// TESTS UNITAIRES
-// =========================================================================
 
 // =========================================================================
 // TESTS UNITAIRES
@@ -255,7 +250,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_semantic_manager_ontology_lifecycle_in_index() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         VocabularyRegistry::init_mock_for_tests();
 
         let db_mgr = CollectionsManager::new(&sandbox.storage, "sim", "db");
@@ -264,7 +259,7 @@ mod tests {
             .create_collection("_ontologies", GENERIC_SCHEMA)
             .await?;
 
-        let semantic_mgr = SemanticManager::new(&db_mgr);
+        let semantic_mgr = SemanticManager::new(&db_mgr)?;
         let mock_ontology = json_value!({
             "@context": { "aero": "https://raise.io/aero#", "owl": "http://www.w3.org/2002/07/owl#" },
             "@graph": [ { "@id": "aero:Spacecraft", "@type": "owl:Class" } ]
@@ -277,7 +272,7 @@ mod tests {
         let fetched = db_mgr.get_document("_ontologies", "ontology_aero").await?;
         assert!(fetched.is_some());
 
-        let registry = VocabularyRegistry::global();
+        let registry = VocabularyRegistry::global()?;
         assert!(registry.has_class("https://raise.io/aero#Spacecraft"));
         Ok(())
     }
@@ -285,7 +280,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_semantic_manager_insert_node_validation() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         VocabularyRegistry::init_mock_for_tests();
 
         let db_mgr = CollectionsManager::new(&sandbox.storage, "system", "db");
@@ -294,8 +289,8 @@ mod tests {
             .create_collection("la_components", GENERIC_SCHEMA)
             .await?;
 
-        let semantic_mgr = SemanticManager::new(&db_mgr);
-        bootstrap_test_ontologies(&semantic_mgr).await?; // 🎯 FIX
+        let semantic_mgr = SemanticManager::new(&db_mgr)?;
+        bootstrap_test_ontologies(&semantic_mgr).await?;
 
         let node = json_value!({
             "@id": "urn:uuid:456",
@@ -313,7 +308,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_auto_alignment_physical_layer() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         VocabularyRegistry::init_mock_for_tests();
 
         let db_mgr = CollectionsManager::new(&sandbox.db, "simu", "db");
@@ -322,7 +317,7 @@ mod tests {
             .create_collection("pa_components", GENERIC_SCHEMA)
             .await?;
 
-        let semantic_mgr = SemanticManager::new(&db_mgr);
+        let semantic_mgr = SemanticManager::new(&db_mgr)?;
         bootstrap_test_ontologies(&semantic_mgr).await?; // 🎯 FIX
 
         let raw_node = json_value!({
@@ -341,7 +336,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_semantic_reference_resolution() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let db_mgr = CollectionsManager::new(&sandbox.db, "domain", "db");
         DbSandbox::mock_db(&db_mgr).await?;
 
@@ -352,7 +347,7 @@ mod tests {
             .create_collection("la_components", GENERIC_SCHEMA)
             .await?;
 
-        let semantic_mgr = SemanticManager::new(&db_mgr);
+        let semantic_mgr = SemanticManager::new(&db_mgr)?;
         bootstrap_test_ontologies(&semantic_mgr).await?; // 🎯 FIX
 
         db_mgr
@@ -382,9 +377,9 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_semantic_validation_rejection() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let db_mgr = CollectionsManager::new(&sandbox.db, "test", "db");
-        let semantic_mgr = SemanticManager::new(&db_mgr);
+        let semantic_mgr = SemanticManager::new(&db_mgr)?;
 
         let ghost_node = json_value!({ "name": "Anonymous" });
         let result = semantic_mgr

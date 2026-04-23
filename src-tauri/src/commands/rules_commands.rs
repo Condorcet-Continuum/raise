@@ -63,7 +63,7 @@ pub async fn validate_model(
     };
 
     // 2. Initialisation du Loader
-    let loader = ModelLoader::new(&storage, &space, &db);
+    let loader = ModelLoader::new(&storage, &space, &db)?;
 
     // 3. Indexation résiliente
     match loader.index_project().await {
@@ -77,7 +77,7 @@ pub async fn validate_model(
 
     // 4. Instanciation et exécution du validateur
     let validator = DynamicValidator::new(rules);
-    let issues = validator.validate_full(&loader).await;
+    let issues = validator.validate_full(&loader).await?;
 
     Ok(issues)
 }
@@ -181,7 +181,7 @@ mod tests {
 
     #[async_test]
     async fn test_validate_model_integration() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -189,11 +189,11 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        let loader = ModelLoader::new_with_manager(manager);
+        let loader = ModelLoader::new_with_manager(manager)?;
         let rules = vec![];
         let validator = DynamicValidator::new(rules);
 
-        let result = validator.validate_full(&loader).await;
+        let result = validator.validate_full(&loader).await?;
         assert!(result.is_empty());
         Ok(())
     }

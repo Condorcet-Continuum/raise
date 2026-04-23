@@ -175,7 +175,7 @@ mod tests {
     async fn test_wal_persistence() {
         // 🎯 L'encapsulation permet de conserver '?' sans contredire la macro #[async_test]
         async fn run() -> RaiseResult<()> {
-            let sandbox = DbSandbox::new().await;
+            let sandbox = DbSandbox::new().await?;
             let config = sandbox.storage.config.clone();
             let space = "s";
             let db = "d";
@@ -204,7 +204,7 @@ mod tests {
     #[async_test]
     async fn test_wal_recovery_engine() {
         async fn run() -> RaiseResult<()> {
-            let sandbox = DbSandbox::new().await;
+            let sandbox = DbSandbox::new().await?;
             let storage = &sandbox.storage;
             let config = storage.config.clone();
             let space = "sys";

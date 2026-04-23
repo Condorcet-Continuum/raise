@@ -25,7 +25,7 @@ impl ArcadiaOntology {
     /// Récupère l'URI complète d'un type via le registre dynamique.
     /// Exemple: ("oa", "OperationalActor") -> "https://raise.io/ontology/arcadia/oa#OperationalActor"
     pub fn get_uri(layer_prefix: &str, type_name: &str) -> Option<String> {
-        let reg = VocabularyRegistry::global();
+        let reg = VocabularyRegistry::global().ok()?;
         let default_ctx = reg.get_default_context();
 
         // On résout le préfixe (ex: "oa") via le contexte chargé depuis les fichiers .jsonld
@@ -36,7 +36,9 @@ impl ArcadiaOntology {
 
     /// Vérifie si une URI est reconnue dans les ontologies chargées
     pub fn is_known_type(uri: &str) -> bool {
-        VocabularyRegistry::global().has_class(uri)
+        VocabularyRegistry::global()
+            .map(|reg| reg.has_class(uri))
+            .unwrap_or(false)
     }
 }
 

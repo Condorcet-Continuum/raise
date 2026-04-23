@@ -122,7 +122,7 @@ mod tests {
 
     #[async_test]
     async fn test_persist_model_routes_to_correct_collections() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config système
@@ -177,7 +177,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience face à un point de montage système invalide
     #[async_test]
     async fn test_ingestion_mount_point_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         // Manager pointant sur une partition fantôme
         let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
 

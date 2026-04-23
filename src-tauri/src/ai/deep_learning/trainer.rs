@@ -108,7 +108,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_training_convergence() -> RaiseResult<()> {
         mock::inject_mock_config().await; // 🎯 Alignement config globale
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = &sandbox.config.deep_learning;
         let device = AppConfig::device(); // 🎯 Source unique de vérité pour le matériel
 
@@ -191,7 +191,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mount_point_config_loading() -> RaiseResult<()> {
         mock::inject_mock_config().await;
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = &sandbox.config.deep_learning;
         let device = AppConfig::device();
 

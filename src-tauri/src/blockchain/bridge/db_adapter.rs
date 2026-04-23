@@ -139,7 +139,7 @@ mod tests {
     /// Test existant : Validation de la logique Upsert
     #[async_test]
     async fn test_db_adapter_upsert_logic() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
@@ -187,7 +187,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience face à un payload invalide (non-objet)
     #[async_test]
     async fn test_db_adapter_resilience_invalid_payload() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let adapter = DbAdapter::new(
             &sandbox.db,
@@ -214,7 +214,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Inférence Mount Point (System Domain)
     #[async_test]
     async fn test_db_adapter_mount_point_resolution() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let adapter = DbAdapter::new(

@@ -20,8 +20,14 @@ pub async fn create_collection_if_missing(
     collection: &str,
 ) -> RaiseResult<()> {
     let root = collection_root(cfg, space, db, collection);
-    fs::ensure_dir_async(&root).await?;
-    Ok(())
+    match fs::ensure_dir_async(&root).await {
+        Ok(_) => Ok(()),
+        Err(e) => raise_error!(
+            "ERR_DB_COLLECTION_CREATE_FAILED",
+            error = e,
+            context = json_value!({ "path": root, "collection": collection })
+        ),
+    }
 }
 
 // --- FONCTIONS CRUD (Déléguées au StorageEngine pour utiliser le cache) ---
@@ -35,7 +41,10 @@ pub async fn read_document(
     id: &str,
 ) -> RaiseResult<JsonValue> {
     // On tape dans le cache/disque via le StorageEngine
-    let doc_opt = storage.read_document(space, db, collection, id).await?;
+    let doc_opt = match storage.read_document(space, db, collection, id).await {
+        Ok(opt) => opt,
+        Err(e) => return Err(e),
+    };
 
     match doc_opt {
         Some(doc) => Ok(doc),
@@ -67,8 +76,7 @@ pub async fn create_document(
     create_collection_if_missing(&storage.config, space, db, collection).await?;
     storage
         .write_document(space, db, collection, id, document)
-        .await?;
-    Ok(())
+        .await
 }
 
 pub async fn update_document(
@@ -90,8 +98,7 @@ pub async fn delete_document(
     collection: &str,
     id: &str,
 ) -> RaiseResult<()> {
-    storage.delete_document(space, db, collection, id).await?;
-    Ok(())
+    storage.delete_document(space, db, collection, id).await
 }
 
 // --- GESTION DES DOSSIERS (I/O pur, pas de cache) ---
@@ -103,8 +110,19 @@ pub async fn drop_collection(
     collection: &str,
 ) -> RaiseResult<()> {
     let root = collection_root(cfg, space, db, collection);
-    fs::remove_dir_all_async(&root).await?;
-    Ok(())
+    match fs::remove_dir_all_async(&root).await {
+        Ok(_) => Ok(()),
+        Err(e) => raise_error!(
+            "ERR_DB_COLLECTION_DROP_FAILED",
+            error = e,
+            context = json_value!({
+                "space": space,
+                "db": db,
+                "collection": collection,
+                "path": root
+            })
+        ),
+    }
 }
 
 pub async fn list_document_ids(
@@ -112,16 +130,25 @@ pub async fn list_document_ids(
     space: &str,
     db: &str,
     collection: &str,
-    limit: Option<usize>,  // 🎯 NOUVEAU
-    offset: Option<usize>, // 🎯 NOUVEAU
+    limit: Option<usize>,
+    offset: Option<usize>,
 ) -> RaiseResult<Vec<String>> {
     let root = collection_root(cfg, space, db, collection);
     let mut out = Vec::new();
+
     if !fs::exists_async(&root).await {
         return Ok(out);
     }
 
-    let mut entries = fs::read_dir_async(&root).await?;
+    let mut entries = match fs::read_dir_async(&root).await {
+        Ok(e) => e,
+        Err(err) => raise_error!(
+            "ERR_FS_READ_DIR",
+            error = err,
+            context = json_value!({ "path": root })
+        ),
+    };
+
     while let Some(e) = match entries.next_entry().await {
         Ok(entry) => entry,
         Err(err) => raise_error!("ERR_FS_READ_DIR_ENTRY", error = err),
@@ -139,13 +166,11 @@ pub async fn list_document_ids(
     // On trie d'abord pour garantir un ordre déterministe
     out.sort();
 
-    // 🎯 FIX : Application de la pagination sur les IDs (très léger en RAM)
+    // Application de la pagination sur les IDs (très léger en RAM)
     let skip_val = offset.unwrap_or(0);
     let take_val = limit.unwrap_or(out.len());
 
-    let paginated_ids = out.into_iter().skip(skip_val).take(take_val).collect();
-
-    Ok(paginated_ids)
+    Ok(out.into_iter().skip(skip_val).take(take_val).collect())
 }
 
 pub async fn list_documents(
@@ -212,34 +237,42 @@ mod tests {
     use super::*;
 
     #[async_test]
-    async fn test_collection_crud_async_with_storage() {
-        let dir = tempdir().unwrap();
+    async fn test_collection_crud_async_with_storage() -> RaiseResult<()> {
+        // 1. Initialisation de l'environnement de test
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Échec de création du dossier temporaire : {:?}", e),
+        };
         let config = JsonDbConfig::new(dir.path().to_path_buf());
 
-        // 1. Initialisation du StorageEngine pour les tests
-        let storage = StorageEngine::new(config);
-        let (s, d, c) = ("space", "db", "col");
+        // 2. 🎯 FIX E0308 : Extraction de l'instance du moteur
+        // StorageEngine::new renvoie maintenant un RaiseResult.
+        let storage = match StorageEngine::new(config) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
 
+        let (s, d, c) = ("space", "db", "col");
         let doc = json_value!({"id": "1", "data": "test"});
 
+        // 3. 🎯 FIX : Utilisation du '?' pour la propagation propre des erreurs
         // Create
-        create_document(&storage, s, d, c, "1", &doc).await.unwrap();
+        create_document(&storage, s, d, c, "1", &doc).await?;
 
         // Read
-        let read = read_document(&storage, s, d, c, "1").await.unwrap();
+        let read = read_document(&storage, s, d, c, "1").await?;
         assert_eq!(read["data"], "test");
 
-        // List
-        let ids = list_document_ids(&storage.config, s, d, c, None, None)
-            .await
-            .unwrap();
+        // List (Accès à storage.config désormais valide car storage n'est plus un Result)
+        let ids = list_document_ids(&storage.config, s, d, c, None, None).await?;
         assert_eq!(ids, vec!["1"]);
 
         // Delete
-        delete_document(&storage, s, d, c, "1").await.unwrap();
-        let ids_after = list_document_ids(&storage.config, s, d, c, None, None)
-            .await
-            .unwrap();
+        delete_document(&storage, s, d, c, "1").await?;
+
+        let ids_after = list_document_ids(&storage.config, s, d, c, None, None).await?;
         assert!(ids_after.is_empty());
+
+        Ok(())
     }
 }

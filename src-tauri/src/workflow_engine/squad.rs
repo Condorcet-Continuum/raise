@@ -74,10 +74,10 @@ mod tests {
     use crate::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_fetch_squad_success() {
-        let env = init_test_env().await;
+    async fn test_fetch_squad_success() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         manager
             .create_collection(
@@ -115,13 +115,15 @@ mod tests {
         assert_eq!(squad.lead_agent_id.to_string(), lead_id);
         assert_eq!(squad.agents.len(), 1);
         assert_eq!(squad.capabilities.len(), 2);
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_fetch_squad_not_found() {
-        let env = init_test_env().await;
+    async fn test_fetch_squad_not_found() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         manager
             .create_collection(
@@ -137,13 +139,15 @@ mod tests {
         assert!(result.is_err(), "Devrait retourner une erreur");
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("ERR_WF_SQUAD_NOT_FOUND"));
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_fetch_squad_corrupt() {
-        let env = init_test_env().await;
+    async fn test_fetch_squad_corrupt() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         manager
             .create_collection(
@@ -174,5 +178,7 @@ mod tests {
         );
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("ERR_WF_SQUAD_CORRUPT"));
+
+        Ok(())
     }
 }

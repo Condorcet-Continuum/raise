@@ -195,7 +195,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_engine_end_to_end() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX MOUNT POINTS : Utilisation du domaine système de la sandbox
@@ -241,7 +241,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_engine_empty_results() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -265,7 +265,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_engine_persistence() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -295,7 +295,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_chunking_logic() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -322,7 +322,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_init_failure_handling() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         // On crée un manager pointant vers un domaine inexistant
         let manager = CollectionsManager::new(&sandbox.db, "void_space", "void_db");

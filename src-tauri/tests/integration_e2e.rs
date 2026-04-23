@@ -16,7 +16,7 @@ async fn test_full_stack_integration() -> RaiseResult<()> {
     // =========================================================================
     // ÉTAPE 1 : Infrastructure (JSON-DB & Mount Points)
     // =========================================================================
-    let env = setup_test_env(LlmMode::Disabled).await;
+    let env = setup_test_env(LlmMode::Disabled).await?;
 
     // 🎯 RÉSILIENCE : Utilisation des partitions injectées par la Sandbox
     let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -98,7 +98,7 @@ async fn test_full_stack_integration() -> RaiseResult<()> {
     // =========================================================================
     // ÉTAPE 4 : Chargement & Validation
     // =========================================================================
-    let loader = ModelLoader::new_with_manager(manager);
+    let loader = ModelLoader::new_with_manager(manager)?;
 
     match loader.index_project().await {
         Ok(count) => {
@@ -109,7 +109,7 @@ async fn test_full_stack_integration() -> RaiseResult<()> {
     }
 
     let validator = DynamicValidator::new(vec![rule]);
-    let issues = validator.validate_full(&loader).await;
+    let issues = validator.validate_full(&loader).await?;
 
     // =========================================================================
     // ÉTAPE 5 : Vérification des Résultats
@@ -132,7 +132,7 @@ mod resilience_tests {
     /// 🎯 Test la résilience face à la résolution des partitions via Mount Points
     #[async_test]
     async fn test_e2e_mount_point_integrity() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await;
+        let env = setup_test_env(LlmMode::Disabled).await?;
         // Validation SSOT de la partition système injectée dans la sandbox
         assert!(!env.sandbox.config.mount_points.system.domain.is_empty());
         assert!(!env.sandbox.config.mount_points.system.db.is_empty());
@@ -142,11 +142,11 @@ mod resilience_tests {
     /// 🎯 Test la résilience du loader en cas de partition manquante (Match...raise_error)
     #[async_test]
     async fn test_e2e_loader_missing_partition_resilience() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await;
+        let env = setup_test_env(LlmMode::Disabled).await?;
 
         // On initialise un loader sur une partition qui n'existe pas physiquement
         let ghost_mgr = CollectionsManager::new(&env.sandbox.storage, "ghost_space", "ghost_db");
-        let loader = ModelLoader::new_with_manager(ghost_mgr);
+        let loader = ModelLoader::new_with_manager(ghost_mgr)?;
 
         match loader.index_project().await {
             Ok(count) => {

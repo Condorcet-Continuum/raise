@@ -105,7 +105,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_kernel_boot_graceful_degradation() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
@@ -150,7 +150,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_kernel_memory_pointer_integrity() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         // 🎯 FIX : Utilisation directe de sandbox.db
         let storage_ref = sandbox.db.clone();

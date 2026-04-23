@@ -30,7 +30,7 @@ impl<'a> DdlHandler<'a> {
         let mgr = self.manager;
 
         // 1. On prend le verrou global pour protéger le fichier _system.json
-        let lock = mgr.storage.get_index_lock(&mgr.space, &mgr.db);
+        let lock = mgr.storage.get_index_lock(&mgr.space, &mgr.db)?;
         let guard = lock.lock().await;
 
         // 2. On génère le Jeton (qui contient la preuve du verrou)
@@ -141,6 +141,7 @@ impl<'a> DdlHandler<'a> {
         schema: JsonValue,
     ) -> RaiseResult<()> {
         let uri = self.manager.build_schema_uri(schema_name).await;
+        let (version, rel_key) = self.extract_schema_paths(&uri);
 
         // Détection de la rigueur
         let db_role = tx
@@ -148,12 +149,33 @@ impl<'a> DdlHandler<'a> {
             .get("db_role")
             .and_then(|v| v.as_str())
             .unwrap_or("exploration");
+
         let is_strict_role = matches!(
             db_role,
             "system" | "raise" | "integration" | "production" | "operation"
         );
 
+        let path = self
+            .manager
+            .storage
+            .config
+            .db_schemas_root(&self.manager.space, &self.manager.db)
+            .join(&version)
+            .join(&rel_key);
+
+        if let Some(parent) = path.parent() {
+            fs::ensure_dir_async(parent).await?;
+        }
+
         let ordered_schema = self.prepare_ordered_schema(&uri, schema, is_strict_role);
+        match fs::write_json_atomic_async(&path, &ordered_schema).await {
+            Ok(_) => (),
+            Err(e) => raise_error!(
+                "ERR_DDL_SCHEMA_WRITE_FAILED",
+                error = e,
+                context = json_value!({"path": path})
+            ),
+        }
 
         // Écriture physique du fichier
         let (version, rel_key) = self.extract_schema_paths(&uri);
@@ -165,8 +187,8 @@ impl<'a> DdlHandler<'a> {
             .join(&version)
             .join(&rel_key);
 
-        crate::utils::io::fs::ensure_dir_async(path.parent().unwrap()).await?;
-        crate::utils::io::fs::write_json_atomic_async(&path, &ordered_schema).await?;
+        fs::ensure_dir_async(path.parent().unwrap()).await?;
+        fs::write_json_atomic_async(&path, &ordered_schema).await?;
 
         // Inscription dans le Jeton
         if tx.document.get("schemas").is_none() {
@@ -206,7 +228,7 @@ impl<'a> DdlHandler<'a> {
         let lock = self
             .manager
             .storage
-            .get_index_lock(&self.manager.space, &self.manager.db);
+            .get_index_lock(&self.manager.space, &self.manager.db)?;
         let guard = lock.lock().await;
         let mut tx = self.manager.begin_system_tx(&guard).await?;
 
@@ -337,7 +359,7 @@ impl<'a> DdlHandler<'a> {
         let lock = self
             .manager
             .storage
-            .get_index_lock(&self.manager.space, &self.manager.db);
+            .get_index_lock(&self.manager.space, &self.manager.db)?;
         let guard = lock.lock().await;
         let mut tx = self.manager.begin_system_tx(&guard).await?;
 
@@ -500,7 +522,7 @@ impl<'a> DdlHandler<'a> {
         let lock = self
             .manager
             .storage
-            .get_index_lock(&self.manager.space, &self.manager.db);
+            .get_index_lock(&self.manager.space, &self.manager.db)?;
         let _guard = lock.lock().await;
 
         let mut sys_doc = self.manager.load_index().await?;
@@ -536,7 +558,7 @@ impl<'a> DdlHandler<'a> {
         let mgr = self.manager;
 
         // 1. On prend le verrou global pour protéger le fichier _system.json
-        let lock = mgr.storage.get_index_lock(&mgr.space, &mgr.db);
+        let lock = mgr.storage.get_index_lock(&mgr.space, &mgr.db)?;
         let guard = lock.lock().await;
 
         // 2. On génère le Jeton de Transaction Système
@@ -579,7 +601,7 @@ mod tests {
     /// 🧪 TEST 1 : Création et Suppression d'un Schéma (Disque + Index)
     #[async_test]
     async fn test_ddl_create_and_drop_schema() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,
@@ -595,7 +617,9 @@ mod tests {
 
         // 🎯 FIX : On limite la durée de vie du verrou avec un bloc `{}`
         {
-            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let lock = manager
+                .storage
+                .get_index_lock(&manager.space, &manager.db)?;
             let guard = lock.lock().await;
             let mut tx = manager.begin_system_tx(&guard).await?;
             ddl.create_schema(&mut tx, schema_name, initial_schema)
@@ -636,7 +660,7 @@ mod tests {
     /// 🧪 TEST 2 : Manipulation fine des Propriétés
     #[async_test]
     async fn test_ddl_property_manipulation() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,
@@ -645,9 +669,10 @@ mod tests {
         let ddl = DdlHandler::new(&manager);
         let schema_name = "test_props.schema.json";
 
-        // 🎯 FIX : Portée limitée pour la création
         {
-            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let lock = manager
+                .storage
+                .get_index_lock(&manager.space, &manager.db)?;
             let guard = lock.lock().await;
             let mut tx = manager.begin_system_tx(&guard).await?;
             ddl.create_schema(&mut tx, schema_name, json_value!({ "type": "object" }))
@@ -693,7 +718,7 @@ mod tests {
     /// 🧪 TEST 3 : Gestion du cycle de vie des Collections
     #[async_test]
     async fn test_ddl_collections_lifecycle() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,
@@ -707,7 +732,9 @@ mod tests {
 
         // 🎯 FIX : Création de la collection enfermée dans son scope
         {
-            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let lock = manager
+                .storage
+                .get_index_lock(&manager.space, &manager.db)?;
             let guard = lock.lock().await;
             let mut tx = manager.begin_system_tx(&guard).await?;
 
@@ -748,7 +775,7 @@ mod tests {
     /// 🧪 TEST 4 : Enregistrement d'Ontologies dans l'ADN (DDL)
     #[async_test]
     async fn test_ddl_register_ontology() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,

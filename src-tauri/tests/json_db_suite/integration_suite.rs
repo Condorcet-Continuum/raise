@@ -10,11 +10,11 @@ use raise::json_db::{
 use raise::utils::prelude::*; // SSOT : Apporte json!, SharedRef, JsonValue, RaiseResult, etc.
 
 #[async_test]
-async fn test_json_db_global_scenario() {
+async fn test_json_db_global_scenario() -> RaiseResult<()> {
     // 🎯 PATTERN ZERO DETTE : Fonction interne pour propager les erreurs proprement avec `?`
     async fn run() -> RaiseResult<()> {
         // 1. SETUP ENVIRONNEMENT (Robuste & Isolé)
-        let env = setup_test_env(LlmMode::Disabled).await;
+        let env = setup_test_env(LlmMode::Disabled).await?;
         let col_mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         let mut idx_mgr = IndexManager::new(&env.sandbox.storage, &env.space, &env.db);
         let tx_mgr = TransactionManager::new(&env.sandbox.storage, &env.space, &env.db);
@@ -143,4 +143,6 @@ async fn test_json_db_global_scenario() {
             e
         );
     }
+
+    Ok(())
 }

@@ -197,7 +197,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_execute_certified_full_audit_cycle() -> RaiseResult<()> {
         use crate::json_db::query::{Query, QueryEngine};
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 2. Initialisation des moteurs requis pour le contexte
@@ -265,7 +265,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_save_assurance_artifacts_with_json_db() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let manager = CollectionsManager::new(
@@ -319,7 +319,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_assurance_resilience_mount_points() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let ws_manager = CollectionsManager::new(
@@ -346,7 +346,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_assurance_error_handling_on_invalid_data() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

@@ -458,7 +458,7 @@ mod tests {
 
     #[async_test]
     async fn test_service_sync_flow_strict_ai_master() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.storage,
@@ -502,7 +502,7 @@ mod tests {
 
     #[async_test]
     async fn test_service_ingest_file() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
         let service =
             CodeGeneratorService::new(sandbox.storage.config.data_root.clone()).with_test_mode();
@@ -535,7 +535,7 @@ mod tests {
 
     #[async_test]
     async fn test_service_weave_file() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
         let service =
             CodeGeneratorService::new(sandbox.storage.config.data_root.clone()).with_test_mode();
@@ -577,7 +577,7 @@ mod tests {
 
     #[async_test]
     async fn test_resilience_bad_mount_point() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let service = CodeGeneratorService::new(sandbox.storage.config.data_root.clone());
         let manager = CollectionsManager::new(&sandbox.storage, "ghost_partition", "void_db");
 
@@ -595,7 +595,7 @@ mod tests {
 
     #[async_test]
     async fn test_indexer_mount_point_discovery() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.storage,

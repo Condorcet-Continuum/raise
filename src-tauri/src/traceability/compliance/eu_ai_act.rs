@@ -12,7 +12,11 @@ impl ComplianceChecker for EuAiActChecker {
     }
 
     /// 🎯 Version robuste : Vérification de la classification des risques et de la transparence
-    fn check(&self, _tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
+    fn check(
+        &self,
+        _tracer: &Tracer,
+        docs: &UnorderedMap<String, JsonValue>,
+    ) -> RaiseResult<ComplianceReport> {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -27,7 +31,12 @@ impl ComplianceChecker for EuAiActChecker {
 
             if is_ai {
                 checked_count += 1;
-                let name = doc.get("name").and_then(|n| n.as_str()).unwrap_or(id);
+                let name = doc.get("name").and_then(|n| n.as_str()).ok_or_else(|| {
+                    build_error!(
+                        "ERR_COMPLIANCE_DATA_INCOMPLETE",
+                        context = json_value!({ "id": id, "field": "name" })
+                    )
+                })?;
 
                 // 🎯 RÈGLE 1 : Classification du niveau de risque (Obligatoire EU AI Act)
                 let risk_level = doc.get("risk_level").and_then(|v| v.as_str());
@@ -64,12 +73,12 @@ impl ComplianceChecker for EuAiActChecker {
             }
         }
 
-        ComplianceReport {
+        Ok(ComplianceReport {
             standard: self.name().to_string(),
             passed: violations.is_empty(),
             rules_checked: checked_count,
             violations,
-        }
+        })
     }
 }
 
@@ -81,7 +90,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_eu_ai_act_risk_classification() {
+    fn test_eu_ai_act_risk_classification() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // 1. IA Conforme (Risque défini)
@@ -90,6 +99,7 @@ mod tests {
             json_value!({
                 "_id": "ai_safe",
                 "nature": "AI_Model",
+                "name": "SafeAI Controller",
                 "risk_level": "Low"
             }),
         );
@@ -110,13 +120,14 @@ mod tests {
             json_value!({
                 "_id": "ai_high_risk",
                 "nature": "AI_Model",
+                "name": "HighRisk Predictor",
                 "risk_level": "High"
             }),
         );
 
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = EuAiActChecker;
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert_eq!(report.rules_checked, 3);
         assert_eq!(report.violations.len(), 2); // BlackBox (manque risk) + HighRisk (manque transparence)
@@ -129,10 +140,12 @@ mod tests {
             .violations
             .iter()
             .any(|v| v.element_id == Some("ai_high_risk".to_string())));
+
+        Ok(())
     }
 
     #[test]
-    fn test_eu_ai_act_ignore_non_ai() {
+    fn test_eu_ai_act_ignore_non_ai() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
         docs.insert(
             "hardware_v1".to_string(),
@@ -142,11 +155,13 @@ mod tests {
             }),
         );
 
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = EuAiActChecker;
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert!(report.passed);
         assert_eq!(report.rules_checked, 0);
+
+        Ok(())
     }
 }

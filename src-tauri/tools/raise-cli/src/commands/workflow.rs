@@ -221,7 +221,7 @@ mod tests {
     #[serial_test::serial] // 🎯 FIX : Empêche les conflits de session et de VRAM
     async fn test_cli_set_sensor_writes_to_db() -> RaiseResult<()> {
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         let config = AppConfig::get();
         let storage = sandbox.db.clone();
@@ -266,7 +266,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_workflow_mount_point_integrity() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         assert!(!sandbox.config.mount_points.system.domain.is_empty());
         Ok(())
     }

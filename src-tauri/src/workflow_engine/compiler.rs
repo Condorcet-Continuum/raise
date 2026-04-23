@@ -184,7 +184,7 @@ mod tests {
 
     #[async_test]
     async fn test_compiler_mission_weaving() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config système
@@ -263,7 +263,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience face aux points de montage invalides
     #[async_test]
     async fn test_compiler_mount_point_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         // Manager pointant sur une partition système inexistante
         let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
 
@@ -281,7 +281,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Inférence résiliente des dépendances Tooling
     #[async_test]
     async fn test_resolve_tool_dependency_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.db, "test", "test");
 
         // On teste que la fonction ne panique pas si la collection configs est absente

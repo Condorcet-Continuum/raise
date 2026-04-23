@@ -41,10 +41,24 @@ impl<'a> Migrator<'a> {
     }
 
     /// Exécute les migrations en attente - ASYNC
-    pub async fn run_migrations(&self, declared_migrations: Vec<Migration>) -> RaiseResult<()> {
+    pub async fn run_migrations(&self, mut declared_migrations: Vec<Migration>) -> RaiseResult<()> {
+        // 1. Initialisation de la table de suivi
         self.init().await?;
 
-        // 1. Récupérer les migrations déjà appliquées
+        // 2. Validation préalable de TOUTES les versions déclarées
+        // On évite ainsi de découvrir une erreur de frappe à la moitié du processus.
+        for m in &declared_migrations {
+            MigrationVersion::parse(&m.version)?;
+        }
+
+        // 3. Tri chronologique sécurisé (SemVer)
+        declared_migrations.sort_by(|a, b| {
+            let v_a = MigrationVersion::parse(&a.version).unwrap(); // Garanti par l'étape 2
+            let v_b = MigrationVersion::parse(&b.version).unwrap();
+            v_a.cmp(&v_b)
+        });
+
+        // 4. Identification des migrations déjà appliquées
         let applied_docs = self.manager.list_all("_migrations").await?;
         let applied_ids: UniqueSet<String> = applied_docs
             .iter()
@@ -55,34 +69,15 @@ impl<'a> Migrator<'a> {
             })
             .collect();
 
-        // 2. Trier les migrations déclarées par version
-        let mut sorted_migrations = declared_migrations;
-        sorted_migrations.sort_by(|a, b| {
-            // 🎯 FIX : Utilisation stricte de Ok / Err pour un Result
-            let ver_a = match MigrationVersion::parse(&a.version) {
-                Ok(v) => v,
-                Err(_) => match MigrationVersion::parse("0.0.0") {
-                    Ok(v) => v,
-                    Err(_) => unreachable!("Parse '0.0.0' ne peut pas échouer"),
-                },
-            };
-            let ver_b = match MigrationVersion::parse(&b.version) {
-                Ok(v) => v,
-                Err(_) => match MigrationVersion::parse("0.0.0") {
-                    Ok(v) => v,
-                    Err(_) => unreachable!("Parse '0.0.0' ne peut pas échouer"),
-                },
-            };
-            ver_a.cmp(&ver_b)
-        });
-
-        // 3. Appliquer celles qui manquent
-        for migration in sorted_migrations {
+        // 5. Application séquentielle
+        for migration in declared_migrations {
             if !applied_ids.contains(&migration.id) {
+                #[cfg(debug_assertions)]
                 println!(
-                    "🚀 Application de la migration {} ({})",
+                    "🚀 Migration : {} - {}",
                     migration.version, migration.description
                 );
+
                 self.apply_migration(&migration).await?;
             }
         }
@@ -114,10 +109,10 @@ impl<'a> Migrator<'a> {
 
     async fn execute_step(&self, step: &MigrationStep) -> RaiseResult<()> {
         match step {
+            // 1. Création d'une nouvelle collection
             MigrationStep::CreateCollection { name, schema } => {
                 let schema_str = match schema.as_str() {
                     Some(s) => s,
-                    // 🎯 FIX : Retrait du `return` devant `raise_error!`
                     None => raise_error!(
                         "ERR_MIGRATION_SCHEMA_MISSING",
                         error = format!(
@@ -126,29 +121,23 @@ impl<'a> Migrator<'a> {
                         ),
                         context = json_value!({
                             "collection": name,
-                            "hint": "Remplacez `JsonValue::Null` par `JsonValue::String(\"db://_system/...\")` dans vos scripts de migrations."
+                            "hint": "Le champ 'schema' doit être une URI (chaîne de caractères)."
                         })
                     ),
                 };
                 self.manager.create_collection(name, schema_str).await?;
+                #[cfg(debug_assertions)]
                 println!("   -> Collection créée : {}", name);
             }
+
+            // 2. Suppression d'une collection
             MigrationStep::DropCollection { name } => {
                 self.manager.drop_collection(name).await?;
+                #[cfg(debug_assertions)]
                 println!("   -> Collection supprimée : {}", name);
             }
-            MigrationStep::CreateIndex { collection, fields } => {
-                if let Some(field) = fields.first() {
-                    self.manager
-                        .create_index(collection, field, "btree")
-                        .await?;
-                    println!("   -> Index créé sur {}::{}", collection, field);
-                }
-            }
-            MigrationStep::DropIndex { collection, name } => {
-                self.manager.drop_index(collection, name).await?;
-                println!("   -> Index supprimé sur {}::{}", collection, name);
-            }
+
+            // 3. Ajout d'un champ à tous les documents
             MigrationStep::AddField {
                 collection,
                 field,
@@ -157,10 +146,7 @@ impl<'a> Migrator<'a> {
                 self.transform_all_documents(collection, |doc| {
                     if let Some(obj) = doc.as_object_mut() {
                         if !obj.contains_key(field) {
-                            let default_val = match default {
-                                Some(d) => d.clone(),
-                                None => JsonValue::Null,
-                            };
+                            let default_val = default.clone().unwrap_or(JsonValue::Null);
                             obj.insert(field.clone(), default_val);
                             return true;
                         }
@@ -168,8 +154,11 @@ impl<'a> Migrator<'a> {
                     false
                 })
                 .await?;
+                #[cfg(debug_assertions)]
                 println!("   -> Champ ajouté : {}::{}", collection, field);
             }
+
+            // 4. Suppression d'un champ dans tous les documents
             MigrationStep::RemoveField { collection, field } => {
                 self.transform_all_documents(collection, |doc| {
                     if let Some(obj) = doc.as_object_mut() {
@@ -180,8 +169,11 @@ impl<'a> Migrator<'a> {
                     false
                 })
                 .await?;
+                #[cfg(debug_assertions)]
                 println!("   -> Champ supprimé : {}::{}", collection, field);
             }
+
+            // 5. Renommage d'un champ
             MigrationStep::RenameField {
                 collection,
                 old_name,
@@ -197,10 +189,54 @@ impl<'a> Migrator<'a> {
                     false
                 })
                 .await?;
+                #[cfg(debug_assertions)]
                 println!(
                     "   -> Champ renommé : {}::{} -> {}",
                     collection, old_name, new_name
                 );
+            }
+
+            // 6. Création d'un index
+            MigrationStep::CreateIndex { collection, fields } => {
+                if let Some(field) = fields.first() {
+                    self.manager
+                        .create_index(collection, field, "btree")
+                        .await?;
+                    #[cfg(debug_assertions)]
+                    println!("   -> Index btree créé sur {}::{}", collection, field);
+                } else {
+                    raise_error!(
+                        "ERR_MIGRATION_INDEX_EMPTY",
+                        error = format!(
+                            "Impossible de créer un index sans champs sur '{}'.",
+                            collection
+                        )
+                    );
+                }
+            }
+
+            // 7. Suppression d'un index
+            MigrationStep::DropIndex { collection, name } => {
+                self.manager.drop_index(collection, name).await?;
+                #[cfg(debug_assertions)]
+                println!("   -> Index supprimé : {}::{}", collection, name);
+            }
+
+            // 8. Logique personnalisée (Custom)
+            MigrationStep::Custom { handler, params } => {
+                #[cfg(debug_assertions)]
+                println!("   -> Exécution du handler Custom : '{}'", handler);
+
+                // Pour l'instant, on lève une erreur explicite si le handler n'est pas reconnu.
+                // Cela évite une migration silencieusement ignorée (Dette Technique).
+                match handler.as_str() {
+                    "noop" => Ok::<(), AppError>(()), // Handler de test
+                    _ => raise_error!(
+                        "ERR_MIGRATION_CUSTOM_HANDLER_NOT_FOUND",
+                        error = format!("Le handler de migration '{}' est inconnu.", handler),
+                        context = json_value!({ "params": params })
+                    ),
+                }?;
             }
         }
         Ok(())
@@ -238,7 +274,7 @@ mod tests {
 
     #[async_test]
     async fn test_migration_lifecycle() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
 
         let migrator = Migrator::new(
             &sandbox.storage,
@@ -321,7 +357,7 @@ mod tests {
 
     #[async_test]
     async fn test_rename_field() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
 
         let migrator = Migrator::new(
             &sandbox.storage,

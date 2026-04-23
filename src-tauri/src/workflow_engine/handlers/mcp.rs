@@ -137,7 +137,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mcp_handler_success_and_injection() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
             setup_mcp_test_context(sandbox.db.clone(), &config, &sandbox.db).await?;
@@ -173,7 +173,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_mcp_handler_missing_tool_fails_safely() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
             setup_mcp_test_context(sandbox.db.clone(), &config, &sandbox.db).await?;
@@ -205,7 +205,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_missing_params_match() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
             setup_mcp_test_context(sandbox.db.clone(), &config, &sandbox.db).await?;
@@ -240,7 +240,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Validation de la partition système via Mount Points
     #[async_test]
     async fn test_mcp_mount_point_resolution() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         // On vérifie que le handler peut s'appuyer sur les partitions système SSOT
         assert!(!config.mount_points.system.domain.is_empty());

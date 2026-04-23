@@ -43,13 +43,13 @@ pub trait ModelValidator: Send + Sync {
         &self,
         element: &ArcadiaElement,
         loader: &ModelLoader<'_>,
-    ) -> Vec<ValidationIssue>;
+    ) -> RaiseResult<Vec<ValidationIssue>>;
 
     /// Valide l'ensemble du modèle (Batch).
     /// Utile pour les rapports CI/CD ou les vérifications globales.
     /// Par défaut, retourne vide (à implémenter si nécessaire en itérant sur le loader).
-    async fn validate_full(&self, _loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
-        Vec::new()
+    async fn validate_full(&self, _loader: &ModelLoader<'_>) -> RaiseResult<Vec<ValidationIssue>> {
+        Ok(Vec::new())
     }
 }
 
@@ -68,26 +68,26 @@ mod tests {
             &self,
             element: &ArcadiaElement,
             _loader: &ModelLoader<'_>,
-        ) -> Vec<ValidationIssue> {
+        ) -> RaiseResult<Vec<ValidationIssue>> {
             if element.name.as_str() == "Invalid" {
-                vec![ValidationIssue {
+                Ok(vec![ValidationIssue {
                     severity: Severity::Error,
                     rule_id: "MOCK_RULE".to_string(),
                     element_id: element.id.clone(),
                     message: "Invalid name".to_string(),
-                }]
+                }])
             } else {
-                vec![]
+                Ok(vec![])
             }
         }
     }
 
     #[async_test]
-    async fn test_model_validator_trait_integration() {
+    async fn test_model_validator_trait_integration() -> RaiseResult<()> {
         // 1. Setup minimal du Loader (nécessaire pour la signature)
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
+        let storage = StorageEngine::new(config)?;
         // On utilise new_with_manager pour éviter de dépendre de l'état global Tauri
         let loader = ModelLoader::new_with_manager(
             crate::json_db::collections::manager::CollectionsManager::new(
@@ -95,7 +95,7 @@ mod tests {
                 "test_space",
                 "test_db",
             ),
-        );
+        )?;
 
         // 2. Création élément
         let el = ArcadiaElement {
@@ -107,9 +107,11 @@ mod tests {
 
         // 3. Validation
         let validator = MockValidator;
-        let issues = validator.validate_element(&el, &loader).await;
+        let issues = validator.validate_element(&el, &loader).await?;
 
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].message, "Invalid name");
+
+        Ok(())
     }
 }

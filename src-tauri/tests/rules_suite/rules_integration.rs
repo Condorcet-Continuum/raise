@@ -5,9 +5,9 @@ use crate::common::{setup_test_env, LlmMode};
 use raise::json_db::collections::manager::CollectionsManager;
 
 #[async_test]
-async fn test_end_to_end_rules_execution() {
+async fn test_end_to_end_rules_execution() -> RaiseResult<()> {
     // 1. SETUP ROBUSTE
-    let env = setup_test_env(LlmMode::Disabled).await;
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let storage = &env.sandbox.storage;
     let space = &env.space;
     let db = &env.db;
@@ -84,4 +84,6 @@ async fn test_end_to_end_rules_execution() {
     // 5. VALIDATIONS
     assert_eq!(result["total"], 100.0);
     assert_eq!(result["ref"], "INV-U_DEV-100");
+
+    Ok(())
 }

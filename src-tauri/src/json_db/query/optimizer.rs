@@ -17,6 +17,11 @@ pub struct QueryOptimizer {
 pub struct OptimizerConfig {
     pub reorder_conditions: bool,
     pub simplify_filters: bool,
+    pub max_page_size: usize,
+    pub cost_eq: u32,
+    pub cost_range: u32,
+    pub cost_text: u32,
+    pub cost_expensive: u32,
 }
 
 impl Default for OptimizerConfig {
@@ -24,6 +29,11 @@ impl Default for OptimizerConfig {
         Self {
             reorder_conditions: true,
             simplify_filters: true,
+            max_page_size: 1000,
+            cost_eq: 1,
+            cost_range: 10,
+            cost_text: 20,
+            cost_expensive: 50,
         }
     }
 }
@@ -88,22 +98,22 @@ impl QueryOptimizer {
     fn estimate_selectivity(&self, condition: &Condition) -> u32 {
         match condition.operator {
             // Très sélectif (Egalité stricte)
-            ComparisonOperator::Eq => 1,
+            ComparisonOperator::Eq => self.config.cost_eq,
             ComparisonOperator::In => 2,
 
             // Sélectivité moyenne (Range)
             ComparisonOperator::Gt
             | ComparisonOperator::Gte
             | ComparisonOperator::Lt
-            | ComparisonOperator::Lte => 10,
+            | ComparisonOperator::Lte => self.config.cost_range,
 
             // Sélectivité faible (Texte début/fin)
-            ComparisonOperator::StartsWith | ComparisonOperator::EndsWith => 20,
+            ComparisonOperator::StartsWith | ComparisonOperator::EndsWith => self.config.cost_text,
 
             // Coûteux (Scan complet ou Regex)
             ComparisonOperator::Contains
             | ComparisonOperator::Like
-            | ComparisonOperator::Matches => 50,
+            | ComparisonOperator::Matches => self.config.cost_expensive,
 
             // Le moins sélectif (souvent tout sauf une valeur)
             ComparisonOperator::Ne => 100,
@@ -111,30 +121,23 @@ impl QueryOptimizer {
     }
 
     fn deduplicate_conditions(&self, conditions: &[Condition]) -> Vec<Condition> {
-        let mut seen = Vec::new();
-        let mut unique = Vec::new();
-
-        for condition in conditions {
-            // Clé de déduplication simple (champ + operateur + valeur stringifiée)
-            let key = format!(
-                "{}:{:?}:{}",
-                condition.field, condition.operator, condition.value
-            );
-            if !seen.contains(&key) {
-                seen.push(key);
-                unique.push(condition.clone());
+        let mut unique: Vec<Condition> = Vec::new();
+        for cond in conditions {
+            // ✅ Comparaison structurelle directe sans allocation
+            if !unique.iter().any(|u| u == cond) {
+                unique.push(cond.clone());
             }
         }
         unique
     }
 
     fn optimize_pagination(&self, mut query: Query) -> RaiseResult<Query> {
-        const MAX_REASONABLE_LIMIT: usize = 1000;
+        let max_limit = self.config.max_page_size;
 
         // Plafonner la limite si elle est excessive
         if let Some(limit) = query.limit {
-            if limit > MAX_REASONABLE_LIMIT {
-                query.limit = Some(MAX_REASONABLE_LIMIT);
+            if limit > max_limit {
+                query.limit = Some(max_limit);
             }
         }
 
@@ -157,7 +160,7 @@ mod tests {
     use crate::json_db::query::{Condition, FilterOperator, Query, QueryFilter};
 
     #[test]
-    fn test_optimize_reorder() {
+    fn test_optimize_reorder() -> RaiseResult<()> {
         let optimizer = QueryOptimizer::new();
 
         let mut query = Query::new("users");
@@ -185,10 +188,11 @@ mod tests {
         // L'optimiseur doit avoir mis le Eq ("status") en premier car score 1 < score 50
         assert_eq!(filter.conditions[0].field, "status");
         assert_eq!(filter.conditions[1].field, "bio");
+        Ok(())
     }
 
     #[test]
-    fn test_deduplicate() {
+    fn test_deduplicate() -> RaiseResult<()> {
         let optimizer = QueryOptimizer::new();
         let cond = Condition {
             field: "a".into(),
@@ -199,15 +203,17 @@ mod tests {
 
         let unique = optimizer.deduplicate_conditions(&conditions);
         assert_eq!(unique.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_optimize_pagination() {
+    fn test_optimize_pagination() -> RaiseResult<()> {
         let optimizer = QueryOptimizer::new();
         let mut query = Query::new("users");
         query.limit = Some(10000); // Trop grand
 
         let optimized = optimizer.optimize(query).unwrap();
-        assert_eq!(optimized.limit, Some(1000)); // Plafonné
+        assert_eq!(optimized.limit, Some(1000));
+        Ok(())
     }
 }

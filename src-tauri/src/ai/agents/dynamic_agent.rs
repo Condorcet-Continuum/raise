@@ -257,7 +257,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_err_agent_not_found() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let ctx = setup_test_ctx(&sandbox).await?;
         let agent = DynamicAgent::new("agent_fantome");
 
@@ -277,7 +277,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_err_missing_prompt_id() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let ctx = setup_test_ctx(&sandbox).await?;
         let manager = CollectionsManager::new(
@@ -314,7 +314,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_successful_execution_and_session_init() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let ctx = setup_test_ctx(&sandbox).await?;
 

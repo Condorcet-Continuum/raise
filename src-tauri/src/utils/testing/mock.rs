@@ -811,7 +811,7 @@ pub struct DbSandbox {
 }
 
 impl DbSandbox {
-    pub async fn new() -> Self {
+    pub async fn new() -> RaiseResult<Self> {
         inject_mock_config().await;
         let mut config = AppConfig::get().clone();
 
@@ -832,7 +832,7 @@ impl DbSandbox {
             .await
             .unwrap();
 
-        let storage = StorageEngine::new(db_cfg);
+        let storage = StorageEngine::new(db_cfg)?;
         let sandbox = Self {
             _dir: dir,
             storage,
@@ -879,7 +879,7 @@ impl DbSandbox {
             )
             .await;
 
-        sandbox
+        Ok(sandbox)
     }
 
     pub async fn mock_db(manager: &CollectionsManager<'_>) -> RaiseResult<bool> {
@@ -920,8 +920,8 @@ pub struct AgentDbSandbox {
 }
 
 impl AgentDbSandbox {
-    pub async fn new() -> Self {
-        let base = DbSandbox::new().await;
+    pub async fn new() -> RaiseResult<Self> {
+        let base = DbSandbox::new().await?;
         let db = SharedRef::new(base.storage);
         let domain_root = base.config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
@@ -939,12 +939,12 @@ impl AgentDbSandbox {
             ),
         }
 
-        Self {
+        Ok(Self {
             _dir: base._dir,
             db,
             config: base.config,
             domain_root,
-        }
+        })
     }
 }
 
@@ -955,13 +955,13 @@ pub struct GlobalDbSandbox {
 }
 
 impl GlobalDbSandbox {
-    pub async fn new() -> Self {
+    pub async fn new() -> RaiseResult<Self> {
         inject_mock_config().await;
         let config = AppConfig::get();
         let db_root = config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
         let cfg_db = JsonDbConfig::new(db_root.clone());
-        let storage = StorageEngine::new(cfg_db.clone());
+        let storage = StorageEngine::new(cfg_db.clone())?;
 
         let manager = CollectionsManager::new(
             &storage,
@@ -980,11 +980,11 @@ impl GlobalDbSandbox {
             Err(e) => panic!("Impossible d'initialiser la GlobalDbSandbox : {:?}", e),
         }
 
-        Self {
+        Ok(Self {
             db: SharedRef::new(storage),
             config,
             domain_root: db_root,
-        }
+        })
     }
 }
 
@@ -1033,7 +1033,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_db_sandbox_initializes_and_injects_sessions() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         let session_meta_path = sandbox.domain_root.join(format!(
             "{}/{}/collections/sessions/_meta.json",

@@ -241,7 +241,7 @@ mod tests {
 
     #[async_test]
     async fn test_rule_store_indexing_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let manager = CollectionsManager::new(
@@ -269,7 +269,9 @@ mod tests {
 
         // 🎯 2. Indexation DDL Synchrone avec le Jeton
         {
-            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let lock = manager
+                .storage
+                .get_index_lock(&manager.space, &manager.db)?;
             let guard = lock.lock().await;
             let mut tx = manager.begin_system_tx(&guard).await?;
 
@@ -292,7 +294,7 @@ mod tests {
 
     #[async_test]
     async fn test_rules_engine_mount_point_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
 
         let result = initialize_rules_engine(&manager).await;

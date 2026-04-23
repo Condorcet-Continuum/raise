@@ -12,7 +12,11 @@ impl ComplianceChecker for Do178cChecker {
     }
 
     /// 🎯 Version robuste : Audit de la traçabilité SA -> LA
-    fn check(&self, tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
+    fn check(
+        &self,
+        tracer: &Tracer,
+        docs: &UnorderedMap<String, JsonValue>,
+    ) -> RaiseResult<ComplianceReport> {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -32,7 +36,12 @@ impl ComplianceChecker for Do178cChecker {
                 let downstream_ids = tracer.get_downstream_ids(id);
 
                 if downstream_ids.is_empty() {
-                    let name = doc.get("name").and_then(|n| n.as_str()).unwrap_or(id);
+                    let name = doc.get("name").and_then(|n| n.as_str()).ok_or_else(|| {
+                        build_error!(
+                            "ERR_COMPLIANCE_DATA_INCOMPLETE",
+                            context = json_value!({ "id": id, "field": "name" })
+                        )
+                    })?;
                     violations.push(Violation {
                         element_id: Some(id.clone()),
                         rule_id: "DO178-TRACE-01".to_string(),
@@ -46,12 +55,12 @@ impl ComplianceChecker for Do178cChecker {
             }
         }
 
-        ComplianceReport {
+        Ok(ComplianceReport {
             standard: self.name().to_string(),
             passed: violations.is_empty(),
             rules_checked: checked_count,
             violations,
-        }
+        })
     }
 }
 
@@ -63,7 +72,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_do178_traceability_logic() {
+    fn test_do178_traceability_logic() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // 1. F1 est conforme : allouée à C1 (lien aval)
@@ -72,6 +81,7 @@ mod tests {
             json_value!({
                 "_id": "F1",
                 "kind": "Function",
+                "name": "Engine Controller",
                 "allocatedTo": "C1"
             }),
         );
@@ -81,37 +91,44 @@ mod tests {
             "F2".to_string(),
             json_value!({
                 "_id": "F2",
-                "kind": "Function"
+                "kind": "Function",
+                "name": "Radio Controller"
             }),
         );
 
         // 3. Cible du lien
         docs.insert(
             "C1".to_string(),
-            json_value!({ "_id": "C1", "kind": "Component" }),
+            json_value!({ "_id": "C1", "kind": "Component","name": "ECU" }),
         );
 
         // 🎯 Injection du graphe via from_json_list (Zéro dépendance ProjectModel)
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = Do178cChecker;
 
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert_eq!(report.rules_checked, 2);
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].element_id, Some("F2".to_string()));
-        assert!(report.violations[0].description.contains("F2"));
+        assert!(report.violations[0]
+            .description
+            .contains("Radio Controller"));
+
+        Ok(())
     }
 
     #[test]
-    fn test_do178_empty_model() {
+    fn test_do178_empty_model() -> RaiseResult<()> {
         let docs = UnorderedMap::new();
-        let tracer = Tracer::from_json_list(vec![]);
+        let tracer = Tracer::from_json_list(vec![])?;
         let checker = Do178cChecker;
 
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert!(report.passed);
         assert_eq!(report.rules_checked, 0);
+
+        Ok(())
     }
 }

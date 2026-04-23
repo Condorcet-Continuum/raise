@@ -50,8 +50,8 @@ async fn exec_sql_read(engine: &QueryEngine<'_>, sql: &str) -> raise::json_db::q
 }
 
 #[async_test]
-async fn test_sql_select_by_kind() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_sql_select_by_kind() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_kind";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -65,11 +65,13 @@ async fn test_sql_select_by_kind() {
 
     assert_eq!(result.documents.len(), 1);
     assert_eq!(result.documents[0]["handle"], "bot-build");
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_sql_numeric_comparison_x_props() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_sql_numeric_comparison_x_props() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_age";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -83,11 +85,13 @@ async fn test_sql_numeric_comparison_x_props() {
         4,
         "❌ Devrait trouver 4 acteurs de 30 ans ou plus"
     );
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_sql_logical_and_mixed() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_sql_logical_and_mixed() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_logical";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -107,11 +111,13 @@ async fn test_sql_logical_and_mixed() {
         3,
         "❌ Devrait trouver 3 humains actifs (Alice, Bob, Frank)"
     );
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_sql_like_display_name() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_sql_like_display_name() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_like";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -125,11 +131,13 @@ async fn test_sql_like_display_name() {
 
     assert_eq!(result.documents.len(), 1);
     assert_eq!(result.documents[0]["handle"], "bob");
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_sql_order_by_x_prop() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_sql_order_by_x_prop() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_order";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -156,11 +164,13 @@ async fn test_sql_order_by_x_prop() {
         2,
         "❌ Le QueryEngine doit respecter le LIMIT 2"
     );
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_sql_json_array_contains() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_sql_json_array_contains() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let col = "actors_tags";
     seed_actors(&mgr, col, &env.space, &env.db).await;
@@ -173,4 +183,6 @@ async fn test_sql_json_array_contains() {
     .await;
 
     assert_eq!(result.documents.len(), 2);
+
+    Ok(())
 }

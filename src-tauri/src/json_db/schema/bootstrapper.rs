@@ -125,7 +125,7 @@ impl<'a> SchemaBootstrapper<'a> {
                 &self.manager.db,
                 &col_name,
             );
-            if !col_path.exists() {
+            if !fs::exists_async(&col_path).await {
                 ddl.create_collection(tx, &col_name, &schema_uri).await?;
                 created_count += 1;
             }
@@ -160,7 +160,7 @@ impl<'a> SchemaBootstrapper<'a> {
             .db_collection_path(&mgr.space, &mgr.db, col_name);
         let doc_path = col_path.join(format!("{}.json", version));
 
-        if !doc_path.exists() {
+        if !fs::exists_async(&doc_path).await {
             let migration_doc = json_value!({
                 "_id": version,
                 "$schema": "db://_system/bootstrap/schemas/v2/db/migration.schema.json",
@@ -170,7 +170,7 @@ impl<'a> SchemaBootstrapper<'a> {
             });
 
             // 1. Écriture PHYSIQUE du document (sans passer par insert_raw)
-            crate::utils::io::fs::write_json_atomic_async(&doc_path, &migration_doc).await?;
+            fs::write_json_atomic_async(&doc_path, &migration_doc).await?;
 
             // 2. Inscription LOGIQUE dans le Jeton
             if let Some(col_obj) = tx.document["collections"]
@@ -179,12 +179,7 @@ impl<'a> SchemaBootstrapper<'a> {
             {
                 if let Some(items) = col_obj.get_mut("items").and_then(|i| i.as_array_mut()) {
                     let filename = format!("{}.json", version);
-                    if !items
-                        .iter()
-                        .any(|i| i.get("file").and_then(|f| f.as_str()) == Some(&filename))
-                    {
-                        items.push(json_value!({ "file": filename }));
-                    }
+                    items.push(json_value!({ "file": filename }));
                 }
             }
         }
@@ -203,7 +198,7 @@ impl<'a> SchemaBootstrapper<'a> {
         let lock = self
             .manager
             .storage
-            .get_index_lock(&self.manager.space, &self.manager.db);
+            .get_index_lock(&self.manager.space, &self.manager.db)?;
         let guard = lock.lock().await;
         let mut tx = self.manager.begin_system_tx(&guard).await?;
 
@@ -272,7 +267,7 @@ mod tests {
 
     #[async_test]
     async fn test_bootstrapper_syncs_physical_collections() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_sync", "db_sync");
 
         let index_doc = json_value!({
@@ -284,8 +279,6 @@ mod tests {
             }
         });
 
-        // 🎯 FIX : On bypass `create_db` pour éviter qu'il ne crée les dossiers à notre place.
-        // On crée juste le dossier racine de la base et on y dépose le fichier d'index.
         let db_root = sandbox.storage.config.db_root("space_sync", "db_sync");
         crate::utils::io::fs::ensure_dir_async(&db_root).await?;
         crate::json_db::storage::file_storage::write_system_index(
@@ -299,7 +292,9 @@ mod tests {
         // Maintenant, les dossiers n'existent pas. Le Bootstrapper doit faire son travail.
         let bootstrapper = SchemaBootstrapper::new(&manager);
 
-        let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+        let lock = manager
+            .storage
+            .get_index_lock(&manager.space, &manager.db)?;
         let guard = lock.lock().await;
         let mut tx = manager.begin_system_tx(&guard).await?;
 
@@ -326,7 +321,7 @@ mod tests {
 
     #[async_test]
     async fn test_bootstrapper_init_migration_log() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_mig", "db_mig");
 
         let index_doc = json_value!({
@@ -356,7 +351,9 @@ mod tests {
         let bootstrapper = SchemaBootstrapper::new(&manager);
 
         // 🎯 FIX 2 : On génère le Jeton pour le test
-        let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+        let lock = manager
+            .storage
+            .get_index_lock(&manager.space, &manager.db)?;
         let guard = lock.lock().await;
         let mut tx = manager.begin_system_tx(&guard).await?;
 
@@ -380,7 +377,7 @@ mod tests {
 
     #[async_test]
     async fn test_bootstrapper_legacy_import_zero_debt() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_legacy", "db_legacy");
         DbSandbox::mock_db(&manager).await?;
 

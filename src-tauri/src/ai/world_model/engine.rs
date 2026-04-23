@@ -246,7 +246,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_persistence_async() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config_app = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -281,7 +281,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_missing_mount_point() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         // Manager pointant sur une partition fantôme
         let manager = CollectionsManager::new(&sandbox.db, "void_domain", "void_db");
 

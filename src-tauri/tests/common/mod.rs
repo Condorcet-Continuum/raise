@@ -24,13 +24,13 @@ pub struct UnifiedTestEnv {
 }
 
 /// Initialise un environnement de test robuste et résilien
-pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
+pub async fn setup_test_env(llm_mode: LlmMode) -> RaiseResult<UnifiedTestEnv> {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     });
 
     // 1. ISOLATION : Création de la Sandbox (Config, Storage, TempDir)
-    let sandbox = DbSandbox::new().await;
+    let sandbox = DbSandbox::new().await?;
 
     // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config sandbox
     let system_domain = sandbox.config.mount_points.system.domain.clone();
@@ -165,12 +165,12 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> UnifiedTestEnv {
         LlmMode::Disabled => None,
     };
 
-    UnifiedTestEnv {
+    Ok(UnifiedTestEnv {
         sandbox,
         client,
         space: system_domain,
         db: system_db,
-    }
+    })
 }
 
 /// Génère des jeux de données mock pour les tests de RAG/Traceability
@@ -200,8 +200,8 @@ mod tests {
 
     #[async_test]
     async fn test_env_isolation_resilience() -> RaiseResult<()> {
-        let env1 = setup_test_env(LlmMode::Disabled).await;
-        let env2 = setup_test_env(LlmMode::Disabled).await;
+        let env1 = setup_test_env(LlmMode::Disabled).await?;
+        let env2 = setup_test_env(LlmMode::Disabled).await?;
 
         // On vérifie que les chemins temporaires sont distincts (Isolation physique)
         assert_ne!(
@@ -213,7 +213,7 @@ mod tests {
 
     #[async_test]
     async fn test_mount_point_config_integrity() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await;
+        let env = setup_test_env(LlmMode::Disabled).await?;
         // Vérifie que les mount points système sont bien injectés dans l'env de test
         assert!(!env.sandbox.config.mount_points.system.domain.is_empty());
         Ok(())

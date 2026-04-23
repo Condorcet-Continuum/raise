@@ -16,7 +16,7 @@ impl ConsistencyChecker {
 
     /// Vérifie la logique locale (ID, Nom, Domaine des propriétés)
     /// Respecte strictement la façade sémantique RAISE.
-    pub fn check_local_logic(&self, element: &ArcadiaElement) -> Vec<ValidationIssue> {
+    pub fn check_local_logic(&self, element: &ArcadiaElement) -> RaiseResult<Vec<ValidationIssue>> {
         let mut issues = Vec::new();
         let name = element.name.as_str();
 
@@ -41,7 +41,7 @@ impl ConsistencyChecker {
         }
 
         // 3. Validation sémantique du domaine (Ontologie) via Registry global
-        let registry = VocabularyRegistry::global();
+        let registry = VocabularyRegistry::global()?;
         for prop_key in element.properties.keys() {
             if let Some(prop_def) = registry.get_property(prop_key) {
                 if let Some(domain_iri) = &prop_def.domain {
@@ -70,7 +70,7 @@ impl ConsistencyChecker {
             }
         }
 
-        issues
+        Ok(issues)
     }
 
     /// Vérifie la validité des relations (Range de l'ontologie)
@@ -78,9 +78,9 @@ impl ConsistencyChecker {
         &self,
         element: &ArcadiaElement,
         loader: &ModelLoader<'_>,
-    ) -> Vec<ValidationIssue> {
+    ) -> RaiseResult<Vec<ValidationIssue>> {
         let mut issues = Vec::new();
-        let registry = VocabularyRegistry::global();
+        let registry = VocabularyRegistry::global()?;
 
         for (prop_key, prop_val) in &element.properties {
             if let Some(prop_def) = registry.get_property(prop_key) {
@@ -121,7 +121,7 @@ impl ConsistencyChecker {
             }
         }
 
-        issues
+        Ok(issues)
     }
 }
 
@@ -131,37 +131,31 @@ impl ModelValidator for ConsistencyChecker {
         &self,
         element: &ArcadiaElement,
         loader: &ModelLoader<'_>,
-    ) -> Vec<ValidationIssue> {
-        let mut issues = self.check_local_logic(element);
+    ) -> RaiseResult<Vec<ValidationIssue>> {
+        let mut issues = self.check_local_logic(element)?;
 
         if !element.properties.is_empty() {
-            let rel_issues = self.check_relationships(element, loader).await;
+            let rel_issues = self.check_relationships(element, loader).await?;
             issues.extend(rel_issues);
         }
 
-        issues
+        Ok(issues)
     }
 
     /// 🎯 SCAN UNIVERSEL : Parcourt dynamiquement tout le modèle chargé.
     /// Utilise les points de montage pour la résilience de chargement.
-    async fn validate_full(&self, loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
+    async fn validate_full(&self, loader: &ModelLoader<'_>) -> RaiseResult<Vec<ValidationIssue>> {
         let mut all_issues = Vec::new();
 
-        match loader.load_full_model().await {
-            Ok(model) => {
-                for el in model.all_elements() {
-                    all_issues.extend(self.validate_element(el, loader).await);
-                }
-            }
-            Err(e) => {
-                user_error!(
-                    "ERR_VALIDATOR_SCAN_FAIL",
-                    json_value!({ "error": e.to_string(), "action": "validate_full" })
-                );
-            }
+        let model = loader.load_full_model().await?;
+
+        for el in model.all_elements() {
+            let element_issues = self.validate_element(el, loader).await?;
+            // ✅ extend() sur un Vec aplatit proprement les issues dans all_issues.
+            all_issues.extend(element_issues);
         }
 
-        all_issues
+        Ok(all_issues)
     }
 }
 
@@ -196,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn test_consistency_local_logic() {
+    fn test_consistency_local_logic() -> RaiseResult<()> {
         let checker = ConsistencyChecker::new();
         let el = ArcadiaElement {
             id: "UUID-OK".to_string(),
@@ -204,13 +198,18 @@ mod tests {
             kind: "https://raise.io/ontology/arcadia/la#LogicalComponent".to_string(),
             ..Default::default()
         };
-        let issues = checker.check_local_logic(&el);
-        assert!(issues.is_empty());
+        let issues = checker.check_local_logic(&el)?;
+        assert!(
+            issues.is_empty(),
+            "Un élément valide ne devrait pas générer d'issues."
+        );
+
+        Ok(())
     }
 
     #[async_test]
     async fn test_consistency_full_scan_dynamic() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config système
@@ -240,10 +239,10 @@ mod tests {
             )
             .await?;
 
-        let loader = ModelLoader::new_with_manager(manager);
+        let loader = ModelLoader::new_with_manager(manager)?;
         let checker = ConsistencyChecker::new();
 
-        let issues = checker.validate_full(&loader).await;
+        let issues = checker.validate_full(&loader).await?;
 
         // Vérification de la détection
         let found = issues
@@ -257,17 +256,17 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience face à un loader défaillant (Mount Point corrompu)
+    ///  Résilience face à un loader défaillant (Mount Point corrompu)
     #[async_test]
     async fn test_resilience_loader_failure() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         // Manager pointant sur une partition inexistante
         let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
-        let loader = ModelLoader::new_with_manager(manager);
+        let loader = ModelLoader::new_with_manager(manager)?;
         let checker = ConsistencyChecker::new();
 
         // Le scan ne doit pas paniquer mais renvoyer une liste vide ou loguer une erreur
-        let issues = checker.validate_full(&loader).await;
+        let issues = checker.validate_full(&loader).await?;
         assert!(issues.is_empty());
         Ok(())
     }

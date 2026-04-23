@@ -26,8 +26,15 @@ impl MatrixGenerator {
         tracer: &Tracer,
         docs: &UnorderedMap<String, JsonValue>,
         source_kind: &str,
-    ) -> TraceabilityMatrix {
+    ) -> RaiseResult<TraceabilityMatrix> {
         let mut rows = Vec::new();
+
+        if source_kind.is_empty() {
+            raise_error!(
+                "ERR_REPORT_INVALID_KIND",
+                error = "Le type source (kind) ne peut pas être vide pour une matrice."
+            );
+        }
 
         for (id, doc) in docs {
             // 1. Filtrage sémantique de la source (SA, LA, etc.)
@@ -66,7 +73,7 @@ impl MatrixGenerator {
             }
         }
 
-        TraceabilityMatrix { rows }
+        Ok(TraceabilityMatrix { rows })
     }
 }
 
@@ -78,7 +85,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_matrix_coverage_logic_robustness() {
+    fn test_matrix_coverage_logic_robustness() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // Setup : Une fonction liée et une orpheline
@@ -102,9 +109,9 @@ mod tests {
         );
 
         // 🎯 Injection via from_json_list pour l'isolation
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
 
-        let matrix = MatrixGenerator::generate_coverage(&tracer, &docs, "Function");
+        let matrix = MatrixGenerator::generate_coverage(&tracer, &docs, "Function")?;
 
         assert_eq!(matrix.rows.len(), 2);
 
@@ -117,6 +124,8 @@ mod tests {
         let row_f2 = matrix.rows.iter().find(|r| r.source_id == "F2").unwrap();
         assert_eq!(row_f2.coverage_status, "Uncovered");
         assert!(row_f2.target_ids.is_empty());
+
+        Ok(())
     }
 
     #[test]

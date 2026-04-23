@@ -69,7 +69,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_context_initialization_with_session() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         // 🎯 FIX MOUNT POINTS : Utilisation du point de montage système pour injecter le composant
         let manager = CollectionsManager::new(
@@ -118,7 +118,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_empty_identifiers_validation() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         // 🎯 FIX MOUNT POINTS
         let manager = CollectionsManager::new(

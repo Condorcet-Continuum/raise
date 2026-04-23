@@ -10,8 +10,8 @@ use raise::code_generator::CodeGeneratorService;
 #[async_test]
 #[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
-async fn test_rust_module_synchronization() {
-    let env = setup_test_env(LlmMode::Enabled).await;
+async fn test_rust_module_synchronization() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Enabled).await?;
     let domain_root = env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
     // 1. Initialisation du service AST Weaver
@@ -79,4 +79,6 @@ async fn test_rust_module_synchronization() {
         content.contains("9.81 m/s²"),
         "Le corps de la fonction est manquant"
     );
+
+    Ok(())
 }

@@ -239,7 +239,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_store_idempotency_and_retrieval() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -279,7 +279,9 @@ mod tests {
 
         // 🎯 2. Phase DDL Synchrone (Avec la Preuve de Verrou et le Jeton)
         {
-            let lock = manager.storage.get_index_lock(&manager.space, &manager.db);
+            let lock = manager
+                .storage
+                .get_index_lock(&manager.space, &manager.db)?;
             let guard = lock.lock().await;
             let mut tx = manager.begin_system_tx(&guard).await?;
 
@@ -298,7 +300,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_store_mount_point_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
         let res = crate::rules_engine::initialize_rules_engine(&manager).await;
         match res {
@@ -317,7 +319,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_store_deserialization_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

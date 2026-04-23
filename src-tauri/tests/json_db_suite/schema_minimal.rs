@@ -5,9 +5,9 @@ use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use raise::utils::prelude::*; // Apporte json!, JsonValue, etc.
 
 #[async_test]
-async fn schema_instantiate_validate_minimal() {
+async fn schema_instantiate_validate_minimal() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement (Sandboxing total)
-    let env = setup_test_env(LlmMode::Disabled).await;
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let cfg = &env.sandbox.storage.config;
 
     // 2. Chargement du registre des schémas depuis la DB isolée
@@ -66,4 +66,6 @@ async fn schema_instantiate_validate_minimal() {
     );
 
     println!("✅ SCHEMA MINIMAL INSTANTIATION SUCCESS");
+
+    Ok(())
 }

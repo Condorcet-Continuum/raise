@@ -96,8 +96,8 @@ mod tests {
     use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
-    async fn test_create_logical_component_from_intent() {
-        let sandbox = AgentDbSandbox::new().await;
+    async fn test_create_logical_component_from_intent() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.db, "testing", "db");
 
         let intent = json_value!({
@@ -128,11 +128,13 @@ mod tests {
             el.properties.get("priority").and_then(|v| v.as_str()),
             Some("Critical")
         );
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_create_with_automatic_layer_fallback() {
-        let sandbox = AgentDbSandbox::new().await;
+    async fn test_create_with_automatic_layer_fallback() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.db, "testing", "db");
 
         let intent = json_value!({
@@ -147,5 +149,7 @@ mod tests {
 
         // Le fallback par défaut est la couche SA (System Analysis)
         assert!(el.kind.contains("/sa#PhysicalActor"));
+
+        Ok(())
     }
 }

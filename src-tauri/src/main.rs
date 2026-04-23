@@ -79,7 +79,7 @@ fn main() {
             }
 
             let config = JsonDbConfig::new(db_root.clone());
-            let storage = StorageEngine::new(config.clone());
+            let storage = StorageEngine::new(config.clone())?;
 
             let system_domain = &app_config.mount_points.system.domain;
             let system_db = &app_config.mount_points.system.db;
@@ -355,7 +355,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_vocabulary_registry_db_init_robustness() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let space = "test_space";
         let db = "test_db";
         let manager = CollectionsManager::new(&sandbox.storage, space, db);
@@ -390,7 +390,7 @@ mod tests {
         // 3. Action : Bootstrapping In-Index
         VocabularyRegistry::init_from_db(&manager).await?;
 
-        let registry = VocabularyRegistry::global();
+        let registry = VocabularyRegistry::global()?;
         assert!(
             registry.get_default_context().contains_key("test"),
             "L'ontologie n'a pas été chargée depuis la collection système."
@@ -401,7 +401,7 @@ mod tests {
 
     #[async_test]
     async fn test_migrations_list_integrity() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let space = &sandbox.config.mount_points.system.domain;
         let db = &sandbox.config.mount_points.system.db;
 
@@ -415,7 +415,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience du point de montage système
     #[async_test]
     async fn test_mount_point_resolution_resilience() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         assert!(
             !config.mount_points.system.domain.is_empty(),

@@ -43,7 +43,7 @@ impl ModelValidator for DynamicValidator {
         &self,
         element: &ArcadiaElement,
         loader: &ModelLoader<'_>,
-    ) -> Vec<ValidationIssue> {
+    ) -> RaiseResult<Vec<ValidationIssue>> {
         let mut issues = Vec::new();
         let context = Self::build_context(element);
 
@@ -70,22 +70,21 @@ impl ModelValidator for DynamicValidator {
                 }
             }
         }
-        issues
+        Ok(issues)
     }
 
     /// Scan universel de toutes les règles sur tout le modèle
-    async fn validate_full(&self, loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
+    async fn validate_full(&self, loader: &ModelLoader<'_>) -> RaiseResult<Vec<ValidationIssue>> {
         let mut all_issues = Vec::new();
+        let model = loader.load_full_model().await?;
 
-        if let Ok(model) = loader.load_full_model().await {
-            // 🎯 PURE GRAPH : Itération universelle sans distinction de couches
-            for element in model.all_elements() {
-                let element_issues = self.validate_element(element, loader).await;
-                all_issues.extend(element_issues);
-            }
+        // 🎯 PURE GRAPH : Itération universelle sans distinction de couches
+        for element in model.all_elements() {
+            let element_issues = self.validate_element(element, loader).await?;
+            all_issues.extend(element_issues);
         }
 
-        all_issues
+        Ok(all_issues)
     }
 }
 
@@ -100,9 +99,9 @@ mod tests {
     use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
-    async fn test_dynamic_rule_on_properties() {
-        let sandbox = AgentDbSandbox::new().await;
-        let loader = ModelLoader::from_engine(&sandbox.db, "test", "db");
+    async fn test_dynamic_rule_on_properties() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
+        let loader = ModelLoader::from_engine(&sandbox.db, "test", "db")?;
 
         // Règle : La masse doit être inférieure à 500 (mass < 500)
         let rule = Rule {
@@ -129,7 +128,7 @@ mod tests {
             ..Default::default()
         };
 
-        let issues_ok = validator.validate_element(&el_ok, &loader).await;
+        let issues_ok = validator.validate_element(&el_ok, &loader).await?;
         assert!(issues_ok.is_empty());
 
         // 2. Cas Invalide (masse = 1000)
@@ -141,16 +140,18 @@ mod tests {
             ..Default::default()
         };
 
-        let issues_ko = validator.validate_element(&el_ko, &loader).await;
+        let issues_ko = validator.validate_element(&el_ko, &loader).await?;
         assert_eq!(issues_ko.len(), 1);
         // 🎯 FIX : On vérifie que le validateur a bien remonté l'UUID technique et non le handle
         assert_eq!(issues_ko[0].rule_id, "mock-uuid-mass-1234");
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_rule_target_filtering() {
-        let sandbox = AgentDbSandbox::new().await;
-        let loader = ModelLoader::from_engine(&sandbox.db, "test", "db");
+    async fn test_rule_target_filtering() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
+        let loader = ModelLoader::from_engine(&sandbox.db, "test", "db")?;
 
         // Règle ciblant uniquement les "LogicalFunction"
         let rule = Rule {
@@ -170,7 +171,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            validator.validate_element(&el_match, &loader).await.len(),
+            validator.validate_element(&el_match, &loader).await?.len(),
             1
         );
 
@@ -182,9 +183,10 @@ mod tests {
         assert_eq!(
             validator
                 .validate_element(&el_no_match, &loader)
-                .await
+                .await?
                 .len(),
             0
         );
+        Ok(())
     }
 }

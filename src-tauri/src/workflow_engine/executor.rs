@@ -167,7 +167,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_gate_pause() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let executor = create_test_executor_with_tools(sandbox.db.clone(), &config).await?;
         let manager = CollectionsManager::new(
@@ -193,7 +193,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_bridge_loading_and_compilation() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -250,7 +250,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_missing_handler() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX : Utiliser ta fonction d'aide qui injecte les mocks LLM et RAG en base de données
@@ -288,7 +288,7 @@ mod tests {
     #[async_test]
     async fn test_executor_mount_point_resolution() -> RaiseResult<()> {
         // 🎯 FIX : Initialiser la Sandbox en premier pour charger l'AppConfig en mémoire globale
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
 
         let config = AppConfig::get();
         assert!(!config.mount_points.system.domain.is_empty());

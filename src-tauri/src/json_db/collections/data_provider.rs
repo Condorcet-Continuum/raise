@@ -43,9 +43,19 @@ impl<'a> CachedDataProvider<'a> {
         }
 
         // 2. Cache Miss L1 -> On interroge le StorageEngine (qui a son propre Cache LRU)
-        let doc = collection::read_document(self.storage, self.space, self.db, collection, id)
+        let doc = match collection::read_document(self.storage, self.space, self.db, collection, id)
             .await
-            .ok();
+        {
+            Ok(json) => Some(json),
+            Err(e) => {
+                // En cas d'erreur physique, on logue mais on renvoie None pour ne pas bloquer les règles
+                user_warn!(
+                    "WRN_DATA_PROVIDER_L1_FAIL",
+                    json_value!({ "error": e.to_string(), "id": id, "coll": collection })
+                );
+                None
+            }
+        };
 
         // 3. Mise à jour du cache L1 pour garantir la cohérence des prochains accès
         let mut cache = self.doc_cache.write().await;
@@ -77,57 +87,81 @@ mod tests {
     use crate::json_db::storage::JsonDbConfig;
 
     #[async_test]
-    async fn test_cached_provider_memoization() {
-        let dir = tempdir().unwrap();
+    async fn test_cached_provider_memoization() -> RaiseResult<()> {
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("TempDir fail: {:?}", e),
+        };
         let config = JsonDbConfig::new(dir.path().to_path_buf());
 
-        // Initialisation du StorageEngine pour le test
-        let storage = StorageEngine::new(config);
-        let space = "test_space";
-        let db = "test_db";
+        // 🎯 FIX E0308 : StorageEngine::new renvoie RaiseResult
+        let storage = match StorageEngine::new(config) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
 
-        // Création de la collection via l'API pour être propre
-        collection::create_collection_if_missing(&storage.config, space, db, "users")
-            .await
-            .unwrap();
+        let (space, db, coll, id) = ("test_space", "test_db", "users", "u1");
 
-        // Préparation du document initial via le StorageEngine
-        let id = "u1";
-        let initial_json = json_value!({ "id": id, "score": 100 });
+        // Préparation propre (Propagation via ?)
+        collection::create_collection_if_missing(&storage.config, space, db, coll).await?;
         storage
-            .write_document(space, db, "users", id, &initial_json)
-            .await
-            .unwrap();
+            .write_document(
+                space,
+                db,
+                coll,
+                id,
+                &json_value!({ "id": id, "score": 100 }),
+            )
+            .await?;
 
         let provider = CachedDataProvider::new(&storage, space, db);
 
-        // Première lecture : doit charger depuis le StorageEngine (et peupler le L1)
-        let val = provider.get_value("users", id, "score").await;
+        // Lecture 1 (L1 Empty -> L2 Hit)
+        let val = provider.get_value(coll, id, "score").await;
         assert_eq!(val, Some(json_value!(100)));
 
-        // Altération du document via le StorageEngine (met à jour le L2 et le disque)
-        let altered_json = json_value!({ "id": id, "score": 999 });
+        // Altération directe en L2
         storage
-            .write_document(space, db, "users", id, &altered_json)
-            .await
-            .unwrap();
+            .write_document(
+                space,
+                db,
+                coll,
+                id,
+                &json_value!({ "id": id, "score": 999 }),
+            )
+            .await?;
 
-        // Deuxième lecture via le Provider : doit renvoyer la valeur du cache L1 (100)
-        // et NON 999, prouvant ainsi la "snapshot isolation" durant la vie du Provider !
-        let cached_val = provider.get_value("users", id, "score").await;
+        // Lecture 2 (L1 Hit) : Doit rester à 100 pour la cohérence de la requête
+        let cached_val = provider.get_value(coll, id, "score").await;
         assert_eq!(cached_val, Some(json_value!(100)));
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_cached_provider_missing_doc() {
-        let dir = tempdir().unwrap();
+    async fn test_cached_provider_missing_doc() -> RaiseResult<()> {
+        // 1. Gestion propre du dossier temporaire
+        let dir = match tempdir() {
+            Ok(d) => d,
+            Err(e) => panic!("Échec TempDir : {:?}", e),
+        };
         let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
 
+        // 2. 🎯 FIX E0308 : Extraction de l'instance du StorageEngine
+        // StorageEngine::new(config) renvoie maintenant un RaiseResult.
+        let storage = match StorageEngine::new(config) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
+
+        // 3. Instanciation du Provider avec la référence correcte (&StorageEngine)
         let provider = CachedDataProvider::new(&storage, "s", "d");
 
-        // Test d'un document inexistant
+        // 4. Test d'un document inexistant
+        // get_value renvoie Option<JsonValue>, on vérifie l'absence.
         let val = provider.get_value("ghost", "none", "any").await;
         assert!(val.is_none());
+
+        Ok(())
     }
 }

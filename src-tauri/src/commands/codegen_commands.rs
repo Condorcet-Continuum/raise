@@ -38,7 +38,7 @@ pub async fn generate_source_code(
     let (space, db) = resolve_active_context(&model_guard);
 
     // 3. Initialisation et Indexation du Loader Dynamique
-    let loader = ModelLoader::new(&storage, &space, &db);
+    let loader = ModelLoader::new(&storage, &space, &db)?;
     if let Err(e) = loader.index_project().await {
         raise_error!("ERR_CODEGEN_INDEX_FAILED", error = e.to_string());
     }
@@ -159,7 +159,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_generate_code_logic_pure_graph() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let sys_mgr = CollectionsManager::new(
@@ -183,7 +183,7 @@ mod tests {
             "_id": component_id, "handle": component_id, "name": "RadarSystem", "type": "LogicalComponent"
         })).await?;
 
-        let loader = ModelLoader::new_with_manager(sys_mgr);
+        let loader = ModelLoader::new_with_manager(sys_mgr)?;
         loader.index_project().await?;
 
         let element = loader.get_element(component_id).await?;
@@ -202,7 +202,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_context_resolution_resilience() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let mut model = ProjectModel::default();
         model.meta.name = "workspace_a/db_b".to_string();
 
@@ -216,7 +216,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_context_resolution_fallback() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let model = ProjectModel::default(); // Nom vide
 

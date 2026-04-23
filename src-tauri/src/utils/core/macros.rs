@@ -358,7 +358,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_require_session_guard() {
+    async fn test_require_session_guard() -> RaiseResult<()> {
         use crate::utils::context::session::{Session, SessionManager};
         use crate::utils::testing::mock::AgentDbSandbox;
 
@@ -367,7 +367,7 @@ mod tests {
             Ok(session)
         }
 
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = SessionManager::new(sandbox.db.clone());
 
         // ====================================================================
@@ -412,5 +412,7 @@ mod tests {
         // Assertion directe sur le succès
         let session = success_result.expect("La macro a bloqué l'accès à tort");
         assert_eq!(session.user_handle, test_user);
+
+        Ok(())
     }
 }

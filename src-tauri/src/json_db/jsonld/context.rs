@@ -57,25 +57,19 @@ pub struct ContextManager {
     pub active_mappings: UnorderedMap<String, SharedRef<str>>,
 }
 
-impl Default for ContextManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ContextManager {
-    /// Initialise le manager avec le dictionnaire interné global du registre.
-    pub fn new() -> Self {
-        let registry = VocabularyRegistry::global();
-        Self {
+    /// Initialise le manager avec le dictionnaire global du registre.
+    pub fn new() -> RaiseResult<Self> {
+        let registry = VocabularyRegistry::global()?;
+        Ok(Self {
             contexts: UnorderedMap::new(),
             active_mappings: registry.get_default_context(),
-        }
+        })
     }
 
     /// Charge le contexte d'une couche métier depuis le registre sémantique.
     pub fn load_layer_context(&mut self, layer: &str) -> RaiseResult<()> {
-        let registry = VocabularyRegistry::global();
+        let registry = VocabularyRegistry::global()?;
         if let Some(ctx_json) = registry.get_context_for_layer(layer) {
             self.parse_context_block(&ctx_json)
         } else {
@@ -93,7 +87,7 @@ impl ContextManager {
 
     /// Analyse récursivement les blocs de contexte et interne les URIs.
     fn parse_context_block(&mut self, ctx: &JsonValue) -> RaiseResult<()> {
-        let registry = VocabularyRegistry::global();
+        let registry = VocabularyRegistry::global()?;
         match ctx {
             JsonValue::Object(map) => {
                 for (key, val) in map {
@@ -142,12 +136,14 @@ impl ContextManager {
     }
 
     fn expand_curie(&self, term: &str, depth: u8) -> String {
-        let registry = VocabularyRegistry::global();
+        let registry = match VocabularyRegistry::global() {
+            Ok(r) => r,
+            Err(_) => return term.to_string(), // Fallback sécurisé
+        };
         if let Some((prefix, suffix)) = term.split_once(':') {
             if let Some(base) = self.active_mappings.get(prefix) {
                 // Résolution récursive du préfixe lui-même
                 let base_iri = self.expand_term_recursive(base.as_ref(), depth + 1);
-
                 let full_iri = format!("{}{}", base_iri, suffix);
                 return registry.intern(&full_iri).to_string();
             }
@@ -184,10 +180,10 @@ mod tests {
 
     /// 💎 TEST : Vérification de l'Interning (Ptr equality).
     #[test]
-    fn test_context_interning_ptr_integrity() {
+    fn test_context_interning_ptr_integrity() -> RaiseResult<()> {
         setup_env();
-        let manager = ContextManager::new();
-        let registry = VocabularyRegistry::global();
+        let manager = ContextManager::new()?;
+        let registry = VocabularyRegistry::global()?;
         let term = "oa";
 
         // Récupération explicite pour garantir la durée de vie
@@ -199,14 +195,16 @@ mod tests {
             SharedRef::ptr_eq(r_iri, m_iri),
             "ÉCHEC INTERNING : Allocation mémoire redondante détectée."
         );
+
+        Ok(())
     }
 
     /// 💎 TEST : Protection contre la récursion infinie (Cycles).
     #[test]
     #[serial_test::serial]
-    fn test_infinite_recursion_protection() {
-        VocabularyRegistry::init_mock_for_tests();
-        let mut manager = ContextManager::new();
+    fn test_infinite_recursion_protection() -> RaiseResult<()> {
+        setup_env();
+        let mut manager = ContextManager::new()?;
         // Création d'un cycle vicieux
         manager
             .active_mappings
@@ -217,42 +215,49 @@ mod tests {
 
         let result = manager.expand_term("A");
         assert_eq!(result, "A"); // Doit s'arrêter sur le terme stable
+
+        Ok(())
     }
 
     /// 💎 TEST : Résolution d'alias d'alias (Recursion profonde).
     #[test]
     fn test_deep_alias_resolution() -> RaiseResult<()> {
         setup_env();
-        let mut manager = ContextManager::new();
+        let mut manager = ContextManager::new()?;
         // Alias chain : Acteur -> oa:OperationalActor -> https://raise.io/oa#OperationalActor
         let doc = json_value!({ "@context": { "Acteur": "oa:OperationalActor" } });
         manager.load_from_doc(&doc)?;
 
         let expanded = manager.expand_term("Acteur");
         assert_eq!(expanded, "https://raise.io/oa#OperationalActor");
+
         Ok(())
     }
 
     /// 💎 TEST : Idempotence et Cycle de vie (Expand <-> Compact).
     #[test]
-    fn test_expansion_compaction_roundtrip() {
+    fn test_expansion_compaction_roundtrip() -> RaiseResult<()> {
         setup_env();
-        let manager = ContextManager::new();
+        let manager = ContextManager::new()?;
         let cases = vec!["oa:Activity", "rdfs:label"];
         for term in cases {
             let expanded = manager.expand_term(term);
             assert_eq!(term, manager.compact_iri(&expanded));
         }
+
+        Ok(())
     }
 
     /// 💎 TEST : Résilience face aux injections JSON invalides.
     #[test]
-    fn test_load_malformed_json_resilience() {
+    fn test_load_malformed_json_resilience() -> RaiseResult<()> {
         setup_env();
-        let mut manager = ContextManager::new();
+        let mut manager = ContextManager::new()?;
         let count_before = manager.active_mappings.len();
         let _ = manager.load_from_doc(&json_value!(null));
         let _ = manager.load_from_doc(&json_value!({"@context": [123]}));
         assert_eq!(manager.active_mappings.len(), count_before);
+
+        Ok(())
     }
 }

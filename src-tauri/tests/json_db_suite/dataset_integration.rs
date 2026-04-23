@@ -5,9 +5,9 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::prelude::*; // SSOT : Apporte JsonValue, json, Result, etc.
 
 #[async_test]
-async fn debug_import_exchange_item() {
+async fn debug_import_exchange_item() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement isolé
-    let env = setup_test_env(LlmMode::Disabled).await;
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
     // 2. Création du fichier factice (remplace l'ancienne méthode)
@@ -46,4 +46,6 @@ async fn debug_import_exchange_item() {
         }
         Err(e) => panic!("❌ ÉCHEC INSERTION : {}", e),
     }
+
+    Ok(())
 }

@@ -280,7 +280,7 @@ pub fn register_host_functions(linker: &mut Linker<PluginContext>) -> RaiseResul
                 };
                 let result = block_on(async move {
                     let mgr = CollectionsManager::new(&storage, &space, &db);
-                    let loader = ModelLoader::new_with_manager(mgr);
+                    let loader = ModelLoader::new_with_manager(mgr)?;
                     loader.get_element(&target_id).await
                 });
                 match result {
@@ -425,12 +425,12 @@ mod tests {
     use wasmtime::Engine;
 
     #[test]
-    fn test_register_functions_integrity() {
+    fn test_register_functions_integrity() -> RaiseResult<()> {
         let engine = Engine::default();
         let mut linker = Linker::new(&engine);
         let temp_dir = tempdir().unwrap();
         let config = JsonDbConfig::new(temp_dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
+        let storage = StorageEngine::new(config)?;
 
         let _context = PluginContext {
             storage,
@@ -444,17 +444,21 @@ mod tests {
 
         let result = register_host_functions(&mut linker);
         assert!(result.is_ok());
+
+        Ok(())
     }
 
     /// 🎯 NOUVEAU TEST : Résilience de la résolution des partitions
     #[async_test]
-    async fn test_cognitive_mount_point_integrity() {
-        let _sandbox = AgentDbSandbox::new().await;
+    async fn test_cognitive_mount_point_integrity() -> RaiseResult<()> {
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         // Vérifie que les points de montage système sont accessibles
         assert!(
             !config.mount_points.system.domain.is_empty(),
             "Partition système non résolue"
         );
+
+        Ok(())
     }
 }

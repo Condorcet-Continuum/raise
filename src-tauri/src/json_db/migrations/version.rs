@@ -90,7 +90,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_version_parsing() {
+    fn test_version_parsing() -> RaiseResult<()> {
         let v = MigrationVersion::parse("1.2.3").unwrap();
         assert_eq!(v.major, 1);
         assert_eq!(v.minor, 2);
@@ -98,11 +98,13 @@ mod tests {
         assert_eq!(v.raw, "1.2.3");
 
         assert!(MigrationVersion::parse("invalid").is_err());
-        assert!(MigrationVersion::parse("1.2").is_err()); // Pas assez de parties
+        assert!(MigrationVersion::parse("1.2").is_err());
+
+        Ok(())
     }
 
     #[test]
-    fn test_version_ordering() {
+    fn test_version_ordering() -> RaiseResult<()> {
         let v1 = MigrationVersion::parse("1.0.0").unwrap();
         let v2 = MigrationVersion::parse("1.0.1").unwrap();
         let v3 = MigrationVersion::parse("1.1.0").unwrap();
@@ -112,10 +114,12 @@ mod tests {
         assert!(v2 < v3);
         assert!(v3 < v4);
         assert!(v1 < v4);
+
+        Ok(())
     }
 
     #[test]
-    fn test_version_sorting_list() {
+    fn test_version_sorting_list() -> RaiseResult<()> {
         let mut versions = vec![
             MigrationVersion::parse("2.0.0").unwrap(),
             MigrationVersion::parse("1.0.0").unwrap(),
@@ -126,5 +130,7 @@ mod tests {
         assert_eq!(versions[0].raw, "1.0.0");
         assert_eq!(versions[1].raw, "1.5.0");
         assert_eq!(versions[2].raw, "2.0.0");
+
+        Ok(())
     }
 }

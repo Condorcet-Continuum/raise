@@ -129,7 +129,7 @@ mod tests {
 
     #[async_test]
     async fn test_memory_store_lifecycle() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX MOUNT POINTS : Initialisation via le point de montage système de la sandbox

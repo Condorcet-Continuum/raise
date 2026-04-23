@@ -64,8 +64,8 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
             let model = ProjectModel::default();
             let docs = get_docs(&model);
 
-            let tracer = Tracer::from_legacy_model(&model);
-            let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name);
+            let tracer = Tracer::from_legacy_model(&model)?;
+            let report = AuditGenerator::generate(&tracer, &docs, &model.meta.name)?;
 
             // Affichage structuré du rapport
             println!("{}", json::serialize_to_string_pretty(&report)?);
@@ -86,10 +86,10 @@ pub async fn handle(args: TraceabilityArgs, ctx: CliContext) -> RaiseResult<()> 
             );
 
             let model = ProjectModel::default();
-            let tracer = Tracer::from_legacy_model(&model);
+            let tracer = Tracer::from_legacy_model(&model)?;
             let analyzer = ImpactAnalyzer::new(tracer);
 
-            let report = analyzer.analyze(&component_id, 3); // Analyse sur 3 niveaux de profondeur
+            let report = analyzer.analyze(&component_id, 3)?; // Analyse sur 3 niveaux de profondeur
 
             println!("{}", json::serialize_to_string_pretty(&report)?);
 
@@ -134,7 +134,7 @@ mod tests {
         // 🎯 FIX : Initialisation sémantique obligatoire pour les tests de modèle
         raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = crate::context::SessionManager::new(storage.clone());
 

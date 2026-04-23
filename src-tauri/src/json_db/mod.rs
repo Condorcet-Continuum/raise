@@ -34,7 +34,7 @@ pub mod test_utils {
     }
 
     /// Initialise un environnement de test complet et isolé
-    pub async fn init_test_env() -> TestEnv {
+    pub async fn init_test_env() -> RaiseResult<TestEnv> {
         // 1. Initialisation unique du Logger (plus besoin de thread complexe !)
         TEST_LOGGER_INIT.get_or_init(|| {
             let _ = tracing_subscriber::fmt()
@@ -45,7 +45,7 @@ pub mod test_utils {
         });
 
         // 2. 🎯 LA MAGIE : La Sandbox gère l'isolation, la DB, et le schéma maître (_system)
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
 
         let data_root = sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap();
         let cfg = JsonDbConfig::new(data_root.clone());
@@ -57,12 +57,12 @@ pub mod test_utils {
         // 4. Création des datasets
         create_mock_dataset(&data_root).await;
 
-        TestEnv {
+        Ok(TestEnv {
             sandbox,
             cfg,
             space: TEST_SPACE.to_string(),
             db: TEST_DB.to_string(),
-        }
+        })
     }
 
     async fn create_mock_dataset(data_root: &PathBuf) {
@@ -182,9 +182,10 @@ mod tests {
     use crate::json_db::transactions::Operation;
     use crate::utils::data::config;
     use crate::utils::prelude::*;
+
     #[async_test]
-    async fn test_env_initialization() {
-        let env = init_test_env().await;
+    async fn test_env_initialization() -> RaiseResult<()> {
+        let env = init_test_env().await?;
 
         // 🎯 L'accès au chemin temporaire se fait désormais via la config de la sandbox
         let data_root = env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap();
@@ -207,6 +208,8 @@ mod tests {
             has_index,
             "L'index.schema.json maître doit être présent dans le DDL de l'index système"
         );
+
+        Ok(())
     }
 
     #[test]

@@ -248,7 +248,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_native_mini_lm_loading() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         provide_assets_to_sandbox("minilm").await;
 
         // 🎯 FIX: Utilisation des mount_points pour le manager de test
@@ -268,7 +268,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_native_dimensions_and_norm() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         provide_assets_to_sandbox("minilm").await;
 
         let manager = CollectionsManager::new(
@@ -289,7 +289,7 @@ mod tests {
 
     #[async_test]
     async fn test_resilience_missing_nlp_assets() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

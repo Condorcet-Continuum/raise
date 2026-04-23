@@ -15,10 +15,10 @@ pub struct Migration {
     pub description: String,
     pub up: Vec<MigrationStep>,
     pub down: Vec<MigrationStep>,
-    pub applied_at: Option<i64>,
+    pub applied_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serializable, Deserializable)]
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq)]
 #[serde(tag = "type")] // Utilisation d'un tag pour le polymorphisme JSON
 pub enum MigrationStep {
     CreateCollection {
@@ -50,6 +50,10 @@ pub enum MigrationStep {
         collection: String,
         name: String,
     },
+    Custom {
+        handler: String,
+        params: JsonValue,
+    },
 }
 
 // ============================================================================
@@ -61,16 +65,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_migration_step_serialization() {
+    fn test_migration_step_roundtrip() -> RaiseResult<()> {
         let step = MigrationStep::AddField {
             collection: "users".to_string(),
             field: "active".to_string(),
             default: Some(json_value!(true)),
         };
 
-        let serialized = json::serialize_to_string(&step).unwrap();
-        // Vérifie la présence du tag "type" ajouté par #[serde(tag = "type")]
-        assert!(serialized.contains("\"type\":\"AddField\""));
-        assert!(serialized.contains("\"field\":\"active\""));
+        // 1. Sérialisation
+        let serialized = match json::serialize_to_string(&step) {
+            Ok(s) => s,
+            Err(e) => raise_error!("ERR_TEST_SERIALIZATION", error = e.to_string()),
+        };
+        // 🎯 Vérification du tag "type"
+        assert!(
+            serialized.contains("\"type\":\"AddField\""),
+            "Le tag Serde est manquant."
+        );
+
+        // 2. Désérialisation (Le test ultime)
+        let deserialized: MigrationStep = match json::deserialize_from_str(&serialized) {
+            Ok(d) => d,
+            Err(e) => raise_error!("ERR_TEST_DESERIALIZATION", error = e.to_string()),
+        };
+
+        // 3. Comparaison structurelle (Nécessite PartialEq)
+        assert_eq!(
+            step, deserialized,
+            "L'objet désérialisé diffère de l'original."
+        );
+
+        Ok(())
     }
 }

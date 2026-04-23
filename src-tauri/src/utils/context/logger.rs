@@ -9,6 +9,7 @@ use crate::utils::core::InitGuard;
 use tracing_subscriber::Layer;
 // 3. Core : Moteur de Logs (La salle des machines)
 use crate::user_info;
+
 use crate::utils::core::logs::{
     LogFilter, LogFormatter, LogInitExt, LogLayerExt, LogRegistry, RollingStrategy,
 };
@@ -61,6 +62,7 @@ pub fn init_logging() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::core::error::RaiseResult;
     // 1. Core : Concurrence et types de base
     use crate::utils::core::{RawIoResult, SharedRef, SyncMutex};
     // 2. Core : Outils de tests pour le logger (doivent être exposés par core/mod.rs)
@@ -101,10 +103,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_logger_init_idempotency() {
-        let _sandbox = AgentDbSandbox::new().await;
+    async fn test_logger_init_idempotency() -> RaiseResult<()> {
+        let _sandbox = AgentDbSandbox::new().await?;
         init_logging();
         init_logging();
+
+        Ok(())
     }
 
     #[test]

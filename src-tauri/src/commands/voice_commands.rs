@@ -82,7 +82,7 @@ pub async fn toggle_voice_assistant(
         // Résolution dynamique du stockage via la partition système configurée
         let storage = StorageEngine::new(JsonDbConfig::new(PathBuf::from(
             &config.mount_points.system.db,
-        )));
+        )))?;
         let manager = CollectionsManager::new(
             &storage,
             &config.mount_points.system.domain,

@@ -12,7 +12,11 @@ impl ComplianceChecker for Iso26262Checker {
     }
 
     /// 🎯 Version robuste : Vérification des niveaux ASIL pour les composants critiques
-    fn check(&self, _tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
+    fn check(
+        &self,
+        _tracer: &Tracer,
+        docs: &UnorderedMap<String, JsonValue>,
+    ) -> RaiseResult<ComplianceReport> {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -25,7 +29,12 @@ impl ComplianceChecker for Iso26262Checker {
 
             if is_safety_critical {
                 checked_count += 1;
-                let name = doc.get("name").and_then(|n| n.as_str()).unwrap_or(id);
+                let name = doc.get("name").and_then(|n| n.as_str()).ok_or_else(|| {
+                    build_error!(
+                        "ERR_COMPLIANCE_DATA_INCOMPLETE",
+                        context = json_value!({ "id": id, "field": "name" })
+                    )
+                })?;
 
                 // 🎯 RÈGLE : Présence obligatoire du niveau ASIL (Automotive Safety Integrity Level)
                 let has_asil = doc.get("asil").is_some();
@@ -44,12 +53,12 @@ impl ComplianceChecker for Iso26262Checker {
             }
         }
 
-        ComplianceReport {
+        Ok(ComplianceReport {
             standard: self.name().to_string(),
             passed: violations.is_empty(),
             rules_checked: checked_count,
             violations,
-        }
+        })
     }
 }
 
@@ -61,7 +70,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_iso26262_asil_strict_check() {
+    fn test_iso26262_asil_strict_check() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
 
         // 1. Composant conforme (Critique + ASIL D)
@@ -96,9 +105,9 @@ mod tests {
         );
 
         // 🎯 Injection du graphe via from_json_list (Isolant total pour le test)
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = Iso26262Checker;
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert_eq!(report.rules_checked, 2); // Brakes + Steering
         assert_eq!(report.violations.len(), 1); // Steering est fautif
@@ -107,22 +116,26 @@ mod tests {
             Some("Steering_02".to_string())
         );
         assert!(report.violations[0].description.contains("ASIL"));
+
+        Ok(())
     }
 
     #[test]
-    fn test_iso26262_no_critical_components() {
+    fn test_iso26262_no_critical_components() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
         docs.insert(
             "Lamp".to_string(),
             json_value!({ "_id": "Lamp", "safety_critical": false }),
         );
 
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = Iso26262Checker;
 
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert!(report.passed);
         assert_eq!(report.rules_checked, 0);
+
+        Ok(())
     }
 }

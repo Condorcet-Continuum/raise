@@ -126,7 +126,7 @@ manager.create_index(
     "email",
     IndexType::Hash,
     true // unique
-).expect("Impossible de créer l'index");
+) 
 
 ```
 

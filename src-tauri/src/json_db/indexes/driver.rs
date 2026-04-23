@@ -100,30 +100,34 @@ pub async fn load<T: IndexMap>(path: &Path) -> RaiseResult<T> {
     if !fs::exists_async(path).await {
         return Ok(T::default());
     }
-    let content = match fs::read_async(path).await {
-        Ok(c) => c,
+    let records: Vec<IndexRecord> = match fs::read_json_compressed_async(path).await {
+        Ok(r) => r,
         Err(e) => raise_error!(
-            "ERR_DB_INDEX_READ",
+            "ERR_DB_INDEX_LOAD_FAILED",
             error = e,
             context = json_value!({ "path": path.to_string_lossy() })
         ),
     };
-    if content.is_empty() {
-        return Ok(T::default());
-    }
-
-    let records: Vec<IndexRecord> = fs::read_json_compressed_async(path).await?;
     Ok(T::from_records(records))
 }
 
 pub async fn save<T: IndexMap>(path: &Path, index: &T) -> RaiseResult<()> {
     let records = index.to_records();
-    fs::write_json_compressed_atomic_async(path, &records).await?;
-    Ok(())
+    match fs::write_json_compressed_atomic_async(path, &records).await {
+        Ok(_) => Ok(()),
+        Err(e) => raise_error!(
+            "ERR_DB_INDEX_SAVE_FAILED",
+            error = e,
+            context = json_value!({ "path": path.to_string_lossy() })
+        ),
+    }
 }
 
 pub async fn search<T: IndexMap>(path: &Path, key: &str) -> RaiseResult<Vec<String>> {
-    let index: T = load(path).await?;
+    let index: T = match load(path).await {
+        Ok(idx) => idx,
+        Err(e) => return Err(e),
+    };
     Ok(index.get_doc_ids(key).cloned().unwrap_or_default())
 }
 

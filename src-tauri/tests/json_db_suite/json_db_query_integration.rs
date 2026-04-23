@@ -68,8 +68,8 @@ async fn seed_article(
 }
 
 #[async_test]
-async fn query_get_article_by_id() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn query_get_article_by_id() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
@@ -83,11 +83,13 @@ async fn query_get_article_by_id() {
         .expect("❌ Document non trouvé après insertion");
 
     assert_eq!(loaded["handle"], handle);
+
+    Ok(())
 }
 
 #[async_test]
-async fn query_find_one_article_by_handle() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn query_find_one_article_by_handle() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
@@ -118,11 +120,13 @@ async fn query_find_one_article_by_handle() {
         .expect("❌ Requête find_one échouée");
     assert!(!result.documents.is_empty(), "❌ Aucun document retourné");
     assert_eq!(result.documents[0]["handle"], handle);
+
+    Ok(())
 }
 
 #[async_test]
-async fn query_find_many_with_sort_and_limit() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn query_find_many_with_sort_and_limit() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
@@ -159,4 +163,6 @@ async fn query_find_many_with_sort_and_limit() {
         result.documents[0]["handle"], "sort-9",
         "❌ Le tri descendant a échoué"
     );
+
+    Ok(())
 }

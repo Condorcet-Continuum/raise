@@ -59,12 +59,12 @@ impl ModelValidator for ComplianceValidator {
         &self,
         element: &ArcadiaElement,
         _loader: &ModelLoader<'_>,
-    ) -> Vec<ValidationIssue> {
-        self.check_quality(element)
+    ) -> RaiseResult<Vec<ValidationIssue>> {
+        Ok(self.check_quality(element))
     }
 
     /// Validation complète du modèle chargé
-    async fn validate_full(&self, loader: &ModelLoader<'_>) -> Vec<ValidationIssue> {
+    async fn validate_full(&self, loader: &ModelLoader<'_>) -> RaiseResult<Vec<ValidationIssue>> {
         let mut all_issues = Vec::new();
 
         // On charge le snapshot complet du modèle
@@ -75,7 +75,7 @@ impl ModelValidator for ComplianceValidator {
             }
         }
 
-        all_issues
+        Ok(all_issues)
     }
 }
 
@@ -104,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn test_quality_check_valid_element() {
+    fn test_quality_check_valid_element() -> RaiseResult<()> {
         let validator = ComplianceValidator::new();
         let el = mock_element("1", "Vérifier Pression", Some("Analyse les capteurs"));
 
@@ -113,10 +113,12 @@ mod tests {
             issues.is_empty(),
             "Un élément bien rempli ne doit produire aucune issue"
         );
+
+        Ok(())
     }
 
     #[test]
-    fn test_quality_check_naming_warning() {
+    fn test_quality_check_naming_warning() -> RaiseResult<()> {
         let validator = ComplianceValidator::new();
 
         // Cas : Nom par défaut
@@ -128,10 +130,12 @@ mod tests {
         let el_empty = mock_element("3", "", Some("Desc"));
         let issues_empty = validator.check_quality(&el_empty);
         assert!(issues_empty.iter().any(|i| i.rule_id == "RULE_NAMING"));
+
+        Ok(())
     }
 
     #[test]
-    fn test_quality_check_documentation_info() {
+    fn test_quality_check_documentation_info() -> RaiseResult<()> {
         let validator = ComplianceValidator::new();
 
         // Cas : Description manquante
@@ -139,10 +143,12 @@ mod tests {
         let issues = validator.check_quality(&el_no_doc);
         assert!(issues.iter().any(|i| i.rule_id == "RULE_DOC"));
         assert_eq!(issues[0].severity, Severity::Info);
+
+        Ok(())
     }
 
     #[test]
-    fn test_all_elements_scan_integration() {
+    fn test_all_elements_scan_integration() -> RaiseResult<()> {
         let validator = ComplianceValidator::new();
         let mut model = ProjectModel::default();
 
@@ -160,5 +166,7 @@ mod tests {
             total_issues, 2,
             "Seul l'acteur sans nom et sans doc doit être relevé"
         );
+
+        Ok(())
     }
 }

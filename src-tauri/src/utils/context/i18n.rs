@@ -160,7 +160,7 @@ pub async fn init_i18n(lang: &str) -> RaiseResult<()> {
     };
 
     let db_config = JsonDbConfig::new(db_root);
-    let storage = StorageEngine::new(db_config);
+    let storage = StorageEngine::new(db_config)?;
 
     let mut temp_translator = Translator::new();
     temp_translator.load_from_db(&storage, lang).await?;
@@ -204,9 +204,8 @@ mod tests {
     // 🎯 Modification : Les tests renvoient un RaiseResult pour utiliser l'opérateur '?' au lieu de unwrap()
     #[tokio::test]
     async fn test_translator_full_flow() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
-        // 🎯 FIX : Utilisation des nouveaux mount_points
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.mount_points.system.domain,
@@ -243,7 +242,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_translator_missing_language_error() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
 
         // 🎯 FIX : Utilisation des nouveaux mount_points
         let manager = CollectionsManager::new(

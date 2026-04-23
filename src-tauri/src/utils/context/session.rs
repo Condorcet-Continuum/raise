@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_manager_initial_state() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = SessionManager::new(sandbox.db.clone());
         assert!(manager.get_current_session().await.is_none());
         Ok(())
@@ -513,7 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_session_populates_context_from_config() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = TEST_AGENT;
 
@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_session_persists_to_db() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = TEST_AGENT;
 
@@ -559,7 +559,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_touch_updates_db() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = TEST_AGENT;
 
@@ -584,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_end_session_deletes_from_db() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = TEST_AGENT;
 
@@ -606,7 +606,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_session_reads() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = SessionManager::new(sandbox.db.clone());
         let userhandle = "Bot-Parallel";
 

@@ -141,6 +141,7 @@ pub use std::sync::Arc as SharedRef;
 
 // --- Primitives Synchrones (Bloquantes) ---
 pub use std::sync::Mutex as SyncMutex;
+pub type SyncMutexGuard<'a, T> = std::sync::MutexGuard<'a, T>;
 pub use std::sync::Once as InitGuard;
 pub use std::sync::OnceLock as StaticCell;
 pub use std::sync::RwLock as SyncRwLock;

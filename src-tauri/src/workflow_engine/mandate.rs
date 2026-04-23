@@ -268,15 +268,14 @@ mod tests {
     use crate::utils::testing::DbSandbox;
 
     #[async_test]
-    async fn test_fetch_mandate_success() {
-        let env = init_test_env().await;
+    async fn test_fetch_mandate_success() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         let full_json = json_value!({
             "handle": "mandate-core-v1",
             "name": "Mandat Central",
-            // 🎯 FIX : Utilisation stricte de mandator_id avec un UUID valide
             "meta": { "mandator_id": "00000000-0000-0000-0000-000000000000", "version": "1.0", "status": "ACTIVE" },
             "governance": {
                 "strategy": "SAFETY_FIRST",
@@ -293,25 +292,21 @@ mod tests {
                 "mandates",
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
-            .await
-            .unwrap();
-        manager
-            .upsert_document("mandates", full_json)
-            .await
-            .unwrap();
+            .await?;
+        manager.upsert_document("mandates", full_json).await?;
 
-        let result = Mandate::fetch_from_store(&manager, "mandate-core-v1").await;
-        assert!(result.is_ok());
+        let mandate = Mandate::fetch_from_store(&manager, "mandate-core-v1").await?;
 
-        let mandate = result.unwrap();
         assert_eq!(mandate.handle, "mandate-core-v1");
         assert_eq!(mandate.governance.strategy, Strategy::SafetyFirst);
         assert!(mandate.hard_logic.vetos[0].ast.is_none());
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_fetch_mandate_with_ast() {
-        let env = init_test_env().await;
+    async fn test_fetch_mandate_with_ast() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         DbSandbox::mock_db(&manager).await.unwrap();
 
@@ -322,7 +317,6 @@ mod tests {
         let full_json = json_value!({
             "handle": "mandate-perf-v2",
             "name": "Mandat Performance",
-            // 🎯 FIX : Utilisation stricte de mandator_id avec un UUID valide
             "meta": { "mandator_id": "00000000-0000-0000-0000-000000000000", "version": "2.0", "status": "ACTIVE" },
             "governance": {
                 "strategy": "PERFORMANCE",
@@ -356,11 +350,13 @@ mod tests {
         let mandate = result.unwrap();
 
         assert!(mandate.hard_logic.vetos[0].ast.is_some());
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_fetch_mandate_schema_mismatch() {
-        let env = init_test_env().await;
+    async fn test_fetch_mandate_schema_mismatch() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         DbSandbox::mock_db(&manager).await.unwrap();
 
@@ -381,10 +377,12 @@ mod tests {
 
         let result = Mandate::fetch_from_store(&manager, "broken").await;
         assert!(result.is_err());
+
+        Ok(())
     }
 
     #[test]
-    fn test_analyze_vetos_full_success() {
+    fn test_analyze_vetos_full_success() -> RaiseResult<()> {
         let ast = json_value!({ "gt": [{"var": "pa.brakes.temp"}, {"val": 120.0}] });
 
         let mandate = Mandate {
@@ -414,6 +412,8 @@ mod tests {
 
         let results = mandate.analyze_vetos();
         assert_eq!(results.len(), 1);
+
+        Ok(())
     }
 
     #[test]

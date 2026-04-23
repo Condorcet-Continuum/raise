@@ -61,14 +61,18 @@ impl<'a> CollectionsManager<'a> {
         &'a self,
         _proof_of_lock: &G,
     ) -> RaiseResult<SystemIndexTx<'a>> {
-        let document = self.load_index().await.unwrap_or_else(|_| {
-            json_value!({
-                "collections": {},
-                "schemas": { "v2": {} },
-                "rules": {},
-                "ontologies": {}
-            })
-        });
+        let document = match self.load_index().await {
+            Ok(doc) => doc,
+            Err(_) => {
+                // Initialisation sécurisée si l'index est absent ou illisible
+                json_value!({
+                    "collections": {},
+                    "schemas": { "v2": {} },
+                    "rules": {},
+                    "ontologies": {}
+                })
+            }
+        };
 
         Ok(SystemIndexTx {
             manager: self,
@@ -107,21 +111,22 @@ impl<'a> CollectionsManager<'a> {
             .db_root(&self.space, &self.db)
             .join("_system.json");
 
-        if !sys_path.exists() {
-            return Err(crate::utils::core::error::AppError::silent_not_found(
-                "json_db",
-                "collections",
-                "MANAGER",
-                "L'index _system.json n'existe pas.",
-                json_value!({
-                    "path": sys_path.to_string_lossy().to_string(),
+        if !fs::exists_async(&sys_path).await {
+            raise_error!(
+                "ERR_DB_SYSTEM_INDEX_NOT_FOUND",
+                error = "L'index _system.json est introuvable physiquement.",
+                context = json_value!({
+                    "path": sys_path,
                     "space": self.space,
                     "db": self.db
-                }),
-            ));
+                })
+            );
         }
 
-        fs::read_json_async(&sys_path).await
+        match fs::read_json_async(&sys_path).await {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e),
+        }
     }
 
     // ============================================================================
@@ -138,7 +143,7 @@ impl<'a> CollectionsManager<'a> {
 
     pub async fn create_schema_def(&self, name: &str, schema: JsonValue) -> RaiseResult<()> {
         // 1. On sécurise le coffre
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let lock = self.storage.get_index_lock(&self.space, &self.db)?;
         let guard = lock.lock().await;
 
         // 2. On génère le Jeton
@@ -424,7 +429,7 @@ impl<'a> CollectionsManager<'a> {
                 })
             );
         }
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let lock = self.storage.get_index_lock(&self.space, &self.db)?;
         let guard = lock.lock().await;
 
         // On génère le Jeton
@@ -475,7 +480,7 @@ impl<'a> CollectionsManager<'a> {
             let _ = self.load_index().await?; // Déclenche l'erreur ERR_DB_SYSTEM_INDEX_NOT_FOUND
         }
 
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let lock = self.storage.get_index_lock(&self.space, &self.db)?;
         let guard = lock.lock().await;
 
         let mut tx = self.begin_system_tx(&guard).await?;
@@ -509,7 +514,7 @@ impl<'a> CollectionsManager<'a> {
             let _ = self.load_index().await?;
         }
 
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let lock = self.storage.get_index_lock(&self.space, &self.db)?;
         let guard = lock.lock().await;
 
         let mut tx = self.begin_system_tx(&guard).await?;
@@ -560,7 +565,7 @@ impl<'a> CollectionsManager<'a> {
             let _ = self.load_index().await?;
         }
 
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let lock = self.storage.get_index_lock(&self.space, &self.db)?;
         let guard = lock.lock().await;
 
         let mut tx = self.begin_system_tx(&guard).await?;
@@ -931,7 +936,7 @@ impl<'a> CollectionsManager<'a> {
 
         if let Some(obj) = doc.as_object_mut() {
             if !obj.contains_key("@context") {
-                let registry = VocabularyRegistry::global();
+                let registry = VocabularyRegistry::global()?;
 
                 if let Some(layer) = layer_hint {
                     if let Some(layer_ctx) = registry.get_context_for_layer(layer) {
@@ -957,12 +962,10 @@ impl<'a> CollectionsManager<'a> {
                 .is_some();
 
         if has_type {
-            let processor = JsonLdProcessor::new()
-                .with_doc_context(doc)
-                .unwrap_or_else(|_| JsonLdProcessor::new());
+            let processor = JsonLdProcessor::new()?.with_doc_context(doc)?;
 
             if let Some(type_uri) = processor.get_primary_type(doc) {
-                let registry = VocabularyRegistry::global();
+                let registry = VocabularyRegistry::global()?;
                 let mut expanded_type = processor.context_manager().expand_term(&type_uri);
 
                 if !VocabularyRegistry::is_iri(&expanded_type) && expanded_type.contains(':') {
@@ -1009,32 +1012,30 @@ impl<'a> CollectionsManager<'a> {
                 });
                 let res = qe.execute_query(query).await?;
 
-                // 🎯 FIX : Éradication totale des `.unwrap()`
-                match res.documents.first() {
-                    Some(doc) => match doc.get("_id").and_then(|v| v.as_str()) {
-                        Some(id_str) => id_str.to_string(),
-                        None => raise_error!(
-                            "ERR_DB_MISSING_ID",
-                            error="L'entité a été trouvée, mais elle ne possède pas d'identifiant _id.",
-                            context = json_value!({"name": name, "collection": collection})
-                        ),
-                    },
+                let doc = match res.documents.first() {
+                    Some(d) => d,
                     None => {
                         raise_error!(
                             "ERR_DB_ENTITY_NOT_FOUND",
-                            error = format!(
-                                "Aucun document nommé '{}' dans la collection '{}'",
-                                name, collection
-                            )
+                            error = format!("Document nommé '{}' introuvable.", name),
+                            context = json_value!({ "name": name, "collection": collection })
                         );
+                    }
+                };
+
+                match doc.get("_id").and_then(|v| v.as_str()) {
+                    Some(id_str) => id_str.to_string(),
+                    None => {
+                        raise_error!("ERR_DB_MISSING_ID", context = json_value!({ "name": name }))
                     }
                 }
             }
         };
 
-        self.delete_document(collection, &target_id).await?;
-
-        Ok(())
+        match self.delete_document(collection, &target_id).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn resolve_document_references(
@@ -1265,11 +1266,10 @@ mod tests {
     use super::*;
     use crate::utils::testing::DbSandbox;
 
-    // 🎯 FIX : Passage en RaiseResult<()> pour utiliser ? et supprimer les .unwrap() et .expect()
     #[async_test]
     #[serial_test::serial]
     async fn test_manager_init_db_completeness() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "system_test", "db_test");
 
         // 🎯 FIX : On teste explicitement la mécanique d'initialisation (génération de l'ID et des defaults)
@@ -1325,7 +1325,7 @@ mod tests {
 
     #[async_test]
     async fn test_manager_get_document_integration() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         DbSandbox::mock_db(&manager).await?;
         manager
@@ -1350,7 +1350,7 @@ mod tests {
 
     #[async_test]
     async fn test_read_many_parallel() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         DbSandbox::mock_db(&manager).await?;
         manager
@@ -1385,7 +1385,7 @@ mod tests {
 
     #[async_test]
     async fn test_read_many_strict_integrity() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         DbSandbox::mock_db(&manager).await?;
         manager
@@ -1413,7 +1413,7 @@ mod tests {
 
     #[async_test]
     async fn test_crud_workflow() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let mgr = CollectionsManager::new(&sandbox.storage, "test", "crud");
         DbSandbox::mock_db(&mgr).await?;
 
@@ -1461,7 +1461,7 @@ mod tests {
 
     #[async_test]
     async fn test_upsert_idempotence() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let mgr = CollectionsManager::new(&sandbox.storage, "test", "upsert");
         DbSandbox::mock_db(&mgr).await?;
 
@@ -1542,7 +1542,7 @@ mod tests {
 
     #[async_test]
     async fn test_manager_delete_identity() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         DbSandbox::mock_db(&manager).await?;
 
@@ -1593,7 +1593,7 @@ mod tests {
 
     #[async_test]
     async fn test_manager_fail_fast_on_missing_index() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "ghost_domain", "ghost_db");
 
         DbSandbox::mock_db(&manager).await?;
@@ -1616,8 +1616,8 @@ mod tests {
 
         assert!(res.is_err());
         if let Err(e) = res {
-            // 🎯 FIX : On met à jour le code d'erreur attendu vers notre nouvelle version silencieuse
-            assert!(e.to_string().contains("ERR_NOT_FOUND_SILENT"));
+            // 🎯 FIX : On attend l'erreur critique légitime de l'index système.
+            assert!(e.to_string().contains("ERR_DB_SYSTEM_INDEX_NOT_FOUND"));
         }
 
         Ok(())
@@ -1625,7 +1625,7 @@ mod tests {
 
     #[async_test]
     async fn test_manager_remove_item_from_index() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
 
         DbSandbox::mock_db(&manager).await?;
@@ -1663,7 +1663,7 @@ mod tests {
 
     #[async_test]
     async fn test_manager_remove_collection_from_index() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
 
         DbSandbox::mock_db(&manager).await?;
@@ -1695,7 +1695,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_manager_resolve_single_reference() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
         DbSandbox::mock_db(&manager).await?;
 

@@ -274,7 +274,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_task_handler_squad_delegation() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
             setup_task_test_context(sandbox.db.clone(), &config, &sandbox.db).await?;
@@ -379,7 +379,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_task_handler_missing_mission_resilience() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
             setup_task_test_context(sandbox.db.clone(), &config, &sandbox.db).await?;

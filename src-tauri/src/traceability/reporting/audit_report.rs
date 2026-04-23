@@ -34,7 +34,7 @@ impl AuditGenerator {
         tracer: &Tracer,
         docs: &UnorderedMap<String, JsonValue>,
         project_name: &str,
-    ) -> AuditReport {
+    ) -> RaiseResult<AuditReport> {
         // 1. Enregistrement des Checkers (Extensibilité O(1))
         let checkers: Vec<Box<dyn ComplianceChecker>> = vec![
             Box::new(Do178cChecker),
@@ -45,34 +45,57 @@ impl AuditGenerator {
         ];
 
         // 2. Exécution et sérialisation des résultats
-        let compliance_results = checkers
-            .iter()
-            .map(|c| c.check(tracer, docs))
-            .filter_map(|r| json::serialize_to_value(r).ok())
-            .collect();
+        let mut compliance_results = Vec::new();
+        for checker in checkers {
+            let report = checker.check(tracer, docs)?;
+            compliance_results.push(json::serialize_to_value(report)?);
+        }
 
         // 3. Calcul des statistiques
-        let model_stats = Self::calculate_stats(docs);
+        let model_stats = Self::calculate_stats(docs)?;
 
-        AuditReport {
+        Ok(AuditReport {
             project_name: project_name.to_string(),
             date: UtcClock::now().to_rfc3339(),
             compliance_results,
             model_stats,
-        }
+        })
     }
 
     /// Analyse sémantique des types pour le comptage
-    fn calculate_stats(docs: &UnorderedMap<String, JsonValue>) -> ModelStats {
+    fn calculate_stats(docs: &UnorderedMap<String, JsonValue>) -> RaiseResult<ModelStats> {
         // 🎯 FIX CLIPPY : Initialisation atomique
         let mut stats = ModelStats {
             total_elements: docs.len(),
             ..ModelStats::default()
         };
 
-        for doc in docs.values() {
-            let kind = doc.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            let type_iri = doc.get("@type").and_then(|v| v.as_str()).unwrap_or("");
+        for (id, doc) in docs {
+            let kind = doc
+                .get("kind")
+                .map(|v| {
+                    v.as_str().ok_or_else(|| {
+                        build_error!(
+                            "ERR_DATATYPE_MISMATCH",
+                            context = json_value!({"id": id, "field": "kind"})
+                        )
+                    })
+                })
+                .transpose()?
+                .unwrap_or("");
+
+            let type_iri = doc
+                .get("@type")
+                .map(|v| {
+                    v.as_str().ok_or_else(|| {
+                        build_error!(
+                            "ERR_DATATYPE_MISMATCH",
+                            context = json_value!({"id": id, "field": "@type"})
+                        )
+                    })
+                })
+                .transpose()?
+                .unwrap_or("");
 
             // Matching robuste sur le Kind ou l'IRI JSON-LD
             if kind == "Function" || type_iri.contains("Function") {
@@ -87,7 +110,7 @@ impl AuditGenerator {
                 stats.total_functional_chains += 1;
             }
         }
-        stats
+        Ok(stats)
     }
 }
 
@@ -100,25 +123,27 @@ mod tests {
 
     /// 🎯 TEST 1 : Vérification de l'intégralité du rapport
     #[test]
-    fn test_audit_generate_full_report() {
+    fn test_audit_generate_full_report() -> RaiseResult<()> {
         let mut docs = UnorderedMap::new();
         docs.insert(
             "F1".into(),
-            json_value!({ "_id": "F1", "kind": "Function" }),
+            json_value!({ "_id": "F1", "kind": "Function", "name": "Main Controller" }),
         );
 
-        let tracer = Tracer::from_json_list(vec![]);
-        let report = AuditGenerator::generate(&tracer, &docs, "Test Project");
+        let tracer = Tracer::from_json_list(vec![])?;
+        let report = AuditGenerator::generate(&tracer, &docs, "Test Project")?;
 
         assert_eq!(report.project_name, "Test Project");
         // On attend 5 résultats (un par checker enregistré)
         assert_eq!(report.compliance_results.len(), 5);
         assert_eq!(report.model_stats.total_functions, 1);
+
+        Ok(())
     }
 
     /// 🎯 TEST 2 : Robustesse du comptage sémantique (Stats)
     #[test]
-    fn test_calculate_stats_semantic_mapping() {
+    fn test_calculate_stats_semantic_mapping() -> RaiseResult<()> {
         let mut docs = UnorderedMap::new();
         docs.insert("1".into(), json_value!({ "kind": "Function" }));
         docs.insert(
@@ -131,7 +156,7 @@ mod tests {
         // Élément inconnu (ne doit pas fausser les comptes spécifiques)
         docs.insert("6".into(), json_value!({ "kind": "Unknown" }));
 
-        let stats = AuditGenerator::calculate_stats(&docs);
+        let stats = AuditGenerator::calculate_stats(&docs)?;
 
         assert_eq!(stats.total_elements, 6);
         assert_eq!(stats.total_functions, 1);
@@ -139,31 +164,49 @@ mod tests {
         assert_eq!(stats.total_requirements, 1);
         assert_eq!(stats.total_scenarios, 1);
         assert_eq!(stats.total_functional_chains, 1);
+
+        Ok(())
     }
 
     /// 🎯 TEST 3 : Résilience aux données JSON malformées
     #[test]
-    fn test_robustness_malformed_json() {
-        let mut docs = UnorderedMap::new();
-        // Un document vide ou sans les champs attendus ne doit pas faire paniquer le générateur
-        docs.insert("empty".into(), json_value!({}));
-        docs.insert("null_kind".into(), json_value!({ "kind": null }));
+    fn test_robustness_malformed_json() -> RaiseResult<()> {
+        let mut docs_empty = UnorderedMap::new();
+        // 1. Un document totalement vide ne fait pas planter, il est juste ignoré par les stats.
+        docs_empty.insert("empty".into(), json_value!({}));
 
-        let tracer = Tracer::from_json_list(vec![]);
-        let report = AuditGenerator::generate(&tracer, &docs, "Robustness Test");
+        let tracer = Tracer::from_json_list(vec![])?;
+        let report = AuditGenerator::generate(&tracer, &docs_empty, "Empty Test")?;
 
-        assert_eq!(report.model_stats.total_elements, 2);
+        assert_eq!(report.model_stats.total_elements, 1);
         assert_eq!(report.model_stats.total_functions, 0);
-        assert!(report.compliance_results.len() > 0);
+
+        // 2. Un document avec un type illégal (ex: 'null' au lieu de string) DOIT faire échouer l'audit !
+        let mut docs_corrupt = UnorderedMap::new();
+        docs_corrupt.insert("null_kind".into(), json_value!({ "kind": null }));
+
+        let result = AuditGenerator::generate(&tracer, &docs_corrupt, "Corrupt Test");
+
+        assert!(
+            result.is_err(),
+            "L'audit aurait dû être bloqué par la corruption du champ 'kind'"
+        );
+        if let Err(e) = result {
+            assert!(e.to_string().contains("ERR_DATATYPE_MISMATCH"));
+        }
+
+        Ok(())
     }
 
     /// 🎯 TEST 4 : Intégrité de la date ISO-8601
     #[test]
-    fn test_audit_date_format() {
-        let tracer = Tracer::from_json_list(vec![]);
-        let report = AuditGenerator::generate(&tracer, &UnorderedMap::new(), "Date Test");
+    fn test_audit_date_format() -> RaiseResult<()> {
+        let tracer = Tracer::from_json_list(vec![])?;
+        let report = AuditGenerator::generate(&tracer, &UnorderedMap::new(), "Date Test")?;
 
         // Vérifie que la date est au format rfc3339 (contient 'T' et 'Z' ou offset)
         assert!(report.date.contains('T'));
+
+        Ok(())
     }
 }

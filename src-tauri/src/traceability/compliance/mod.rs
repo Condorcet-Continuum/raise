@@ -22,7 +22,11 @@ pub trait ComplianceChecker {
 
     /// 🎯 Entrée : Un graphe de liens (Tracer) et un index de documents (ID -> JsonValue)
     /// Ce découplage permet de valider des règles complexes en O(1) sur n'importe quelle donnée.
-    fn check(&self, tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport;
+    fn check(
+        &self,
+        tracer: &Tracer,
+        docs: &UnorderedMap<String, JsonValue>,
+    ) -> RaiseResult<ComplianceReport>;
 }
 
 #[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
@@ -82,7 +86,7 @@ mod tests {
             &self,
             tracer: &Tracer,
             docs: &UnorderedMap<String, JsonValue>,
-        ) -> ComplianceReport {
+        ) -> RaiseResult<ComplianceReport> {
             let mut violations = Vec::new();
             // Règle : Chaque élément doit être relié à quelque chose (amont ou aval)
             for id in docs.keys() {
@@ -97,17 +101,17 @@ mod tests {
                     });
                 }
             }
-            ComplianceReport {
+            Ok(ComplianceReport {
                 standard: self.name().to_string(),
                 passed: violations.is_empty(),
                 rules_checked: docs.len(),
                 violations,
-            }
+            })
         }
     }
 
     #[test]
-    fn test_checker_logic_with_injected_graph() {
+    fn test_checker_logic_with_injected_graph() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
         // A est lié à B. C est seul.
         docs.insert(
@@ -118,13 +122,15 @@ mod tests {
         docs.insert("C".to_string(), json_value!({ "_id": "C" }));
 
         // 🎯 On construit le Tracer en mémoire uniquement pour ce test
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = MockOrphanChecker;
 
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert_eq!(report.rules_checked, 3);
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].element_id, Some("C".to_string()));
+
+        Ok(())
     }
 }

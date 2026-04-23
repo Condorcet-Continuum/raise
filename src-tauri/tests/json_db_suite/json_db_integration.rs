@@ -5,9 +5,9 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::prelude::*; // Apporte JsonValue, json!, Result, etc.
 
 #[async_test]
-async fn query_get_article_by_id() {
+async fn query_get_article_by_id() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement isolé
-    let env = setup_test_env(LlmMode::Disabled).await;
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
     // 2. Création de la collection
@@ -52,11 +52,13 @@ async fn query_get_article_by_id() {
         fetched["title"], "Titre Obligatoire",
         "Le titre ne correspond pas"
     );
+
+    Ok(())
 }
 
 #[async_test]
-async fn query_find_one_article_by_handle() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn query_find_one_article_by_handle() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
     mgr.create_collection(
@@ -90,11 +92,13 @@ async fn query_find_one_article_by_handle() {
         "published",
         "Le statut devrait être 'published'"
     );
+
+    Ok(())
 }
 
 #[async_test]
-async fn query_find_many_with_sort_and_limit_simulated() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn query_find_many_with_sort_and_limit_simulated() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
     mgr.create_collection(
@@ -123,4 +127,6 @@ async fn query_find_many_with_sort_and_limit_simulated() {
         .expect("❌ Échec list_all final");
 
     assert_eq!(all.len(), 5, "Le nombre de documents en base est incorrect");
+
+    Ok(())
 }

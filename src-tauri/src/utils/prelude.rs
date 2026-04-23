@@ -53,6 +53,7 @@ pub use crate::utils::core::{
     SharedRef,  // 🎯 Alias de Arc
     StaticCell, // 🎯 Alias de OnceLock
     SyncMutex,
+    SyncMutexGuard,
     SyncRwLock,
     SystemStr, // 🎯 Pour la compatibilité OS native
     TextChars, // 🎯 Pour le découpage atomique du texte

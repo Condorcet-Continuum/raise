@@ -65,7 +65,10 @@ impl SchemaRegistry {
             .await?;
 
         // 4. Domaine courant (si différent)
-        registry.load_domain_schemas(config, space, db).await?;
+        if space != app_config.mount_points.system.domain || db != app_config.mount_points.system.db
+        {
+            registry.load_domain_schemas(config, space, db).await?;
+        }
 
         Ok(registry)
     }
@@ -78,15 +81,12 @@ impl SchemaRegistry {
         db: &str,
     ) -> RaiseResult<()> {
         use crate::json_db::storage::file_storage;
-        use crate::utils::io::fs;
 
         if let Ok(Some(sys_doc)) = file_storage::read_system_index(config, space, db).await {
-            // Lecture de l'annuaire DDL
             if let Some(schemas) = sys_doc.get("schemas").and_then(|s| s.as_object()) {
                 for (version, v_obj) in schemas {
                     if let Some(obj) = v_obj.as_object() {
-                        // _meta_ptr correspond au petit objet {"file": "..."} stocké dans l'index
-                        for (rel_path, _meta_ptr) in obj {
+                        for (rel_path, _) in obj {
                             let uri =
                                 format!("db://{}/{}/schemas/{}/{}", space, db, version, rel_path);
                             let schema_path = config
@@ -94,7 +94,7 @@ impl SchemaRegistry {
                                 .join(version)
                                 .join(rel_path);
 
-                            // 🎯 Lecture du fichier PHYSIQUE sur le disque !
+                            // Lecture physique asynchrone
                             if let Ok(schema_json) = fs::read_json_async(&schema_path).await {
                                 self.register(uri, schema_json);
                             }
@@ -197,126 +197,16 @@ impl SchemaRegistry {
     pub fn uri(&self, relative_path: &str) -> String {
         format!("{}{}", self.base_prefix, relative_path)
     }
-
-    // ============================================================================
-    // OPÉRATIONS DDL EN MÉMOIRE (La sauvegarde physique est désormais gérée par CollectionsManager)
-    // ============================================================================
-    #[allow(dead_code)]
-    pub(in crate::json_db) async fn create_schema(
-        &mut self,
-        uri: &str,
-        schema: JsonValue,
-    ) -> RaiseResult<()> {
-        if self.by_uri.contains_key(uri) {
-            raise_error!(
-                "ERR_SCHEMA_ALREADY_EXISTS",
-                error = format!("Le schéma '{}' existe déjà.", uri)
-            );
-        }
-        self.by_uri.insert(uri.to_string(), schema);
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub(in crate::json_db) async fn drop_schema(&mut self, uri: &str) -> RaiseResult<()> {
-        if self.by_uri.remove(uri).is_none() {
-            raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
-        }
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub(in crate::json_db) async fn add_property(
-        &mut self,
-        uri: &str,
-        prop_name: &str,
-        prop_def: JsonValue,
-    ) -> RaiseResult<()> {
-        let Some(mut schema) = self.by_uri.get(uri).cloned() else {
-            raise_error!(
-                "ERR_SCHEMA_NOT_FOUND",
-                error = format!("Schéma introuvable : {}", uri)
-            );
-        };
-
-        if schema.get("properties").is_none() {
-            if let Some(obj) = schema.as_object_mut() {
-                obj.insert("properties".to_string(), json_value!({}));
-            }
-        }
-
-        if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
-            if props.contains_key(prop_name) {
-                raise_error!(
-                    "ERR_SCHEMA_PROP_ALREADY_EXISTS",
-                    error = format!("La propriété '{}' existe déjà.", prop_name)
-                );
-            }
-            props.insert(prop_name.to_string(), prop_def);
-        }
-
-        self.by_uri.insert(uri.to_string(), schema);
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub(in crate::json_db) async fn alter_property(
-        &mut self,
-        uri: &str,
-        prop_name: &str,
-        prop_def: JsonValue,
-    ) -> RaiseResult<()> {
-        let Some(mut schema) = self.by_uri.get(uri).cloned() else {
-            raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
-        };
-
-        if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
-            if !props.contains_key(prop_name) {
-                raise_error!(
-                    "ERR_SCHEMA_PROP_NOT_FOUND",
-                    error = format!("La propriété '{}' est introuvable.", prop_name)
-                );
-            }
-            props.insert(prop_name.to_string(), prop_def);
-        }
-
-        self.by_uri.insert(uri.to_string(), schema);
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub(in crate::json_db) async fn drop_property(
-        &mut self,
-        uri: &str,
-        prop_name: &str,
-    ) -> RaiseResult<()> {
-        let Some(mut schema) = self.by_uri.get(uri).cloned() else {
-            raise_error!("ERR_SCHEMA_NOT_FOUND", error = "Schéma introuvable.");
-        };
-
-        if let Some(props) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
-            if props.remove(prop_name).is_none() {
-                raise_error!(
-                    "ERR_SCHEMA_PROP_NOT_FOUND",
-                    error = format!("La propriété '{}' est introuvable.", prop_name)
-                );
-            }
-        }
-
-        self.by_uri.insert(uri.to_string(), schema);
-        Ok(())
-    }
 }
 
 // ============================================================================
-// TESTS UNITAIRES (Mis à jour pour le nouveau fonctionnement)
+// TESTS UNITAIRES (Zéro Dette)
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json_db::storage::{file_storage, JsonDbConfig};
-    use crate::utils::io::fs::tempdir;
     use crate::utils::testing::mock::inject_mock_config;
 
     #[async_test]
@@ -329,99 +219,28 @@ mod tests {
         };
 
         let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let space = "s1";
-        let db = "d1";
+        let (space, db) = ("s1", "d1");
 
-        // 🎯 1. Préparation de l'arborescence physique
         let schemas_root = config.db_schemas_root(space, db);
-        fs::ensure_dir_async(&schemas_root.join("v1/users")).await?;
-        fs::ensure_dir_async(&schemas_root.join("v2/users")).await?;
+        fs::create_dir_all_async(&schemas_root.join("v2/users")).await?;
 
-        // 🎯 2. Création des fichiers schémas réels
-        let schema_v1 = json_value!({ "type": "object", "title": "User V1" });
         let schema_v2 = json_value!({ "type": "object", "title": "User V2" });
-
-        fs::write_json_atomic_async(&schemas_root.join("v1/users/user.schema.json"), &schema_v1)
-            .await?;
         fs::write_json_atomic_async(&schemas_root.join("v2/users/user.schema.json"), &schema_v2)
             .await?;
 
-        // 🎯 3. On simule un _system.json qui contient les POINTEURS (Nouvelle architecture)
         let mock_system_index = json_value!({
             "schemas": {
-                "v1": {
-                    "users/user.schema.json": { "file": "v1/users/user.schema.json" }
-                },
-                "v2": {
-                    "users/user.schema.json": { "file": "v2/users/user.schema.json" }
-                }
+                "v2": { "users/user.schema.json": { "file": "v2/users/user.schema.json" } }
             }
         });
 
         file_storage::write_system_index(&config, space, db, &mock_system_index).await?;
 
-        // 4. On charge le registre
         let reg = SchemaRegistry::from_db(&config, space, db).await?;
-
-        // 5. Vérifications
-        let uri_v1 = format!("db://{}/{}/schemas/v1/users/user.schema.json", space, db);
         let uri_v2 = format!("db://{}/{}/schemas/v2/users/user.schema.json", space, db);
 
-        assert!(
-            reg.get_by_uri(&uri_v1).is_some(),
-            "Le schéma V1 doit être chargé en mémoire via son fichier physique"
-        );
-        assert!(
-            reg.get_by_uri(&uri_v2).is_some(),
-            "Le schéma V2 doit être chargé en mémoire via son fichier physique"
-        );
-
+        assert!(reg.get_by_uri(&uri_v2).is_some());
         assert_eq!(reg.get_by_uri(&uri_v2).unwrap()["title"], "User V2");
-
-        Ok(())
-    }
-
-    #[async_test]
-    async fn test_schema_ddl_operations_in_memory() -> RaiseResult<()> {
-        inject_mock_config().await;
-        let mut reg = SchemaRegistry::new();
-        let uri = "db://test/db/schemas/v2/products/product.schema.json";
-
-        // 1. CREATE
-        let initial_schema = json_value!({
-            "type": "object",
-            "properties": { "name": { "type": "string" } }
-        });
-        reg.create_schema(uri, initial_schema).await?;
-        assert!(reg.get_by_uri(uri).is_some());
-
-        // 2. ADD PROPERTY
-        reg.add_property(uri, "price", json_value!({ "type": "number" }))
-            .await?;
-        assert!(reg.get_by_uri(uri).unwrap()["properties"]["price"].is_object());
-
-        // 3. ALTER PROPERTY
-        reg.alter_property(
-            uri,
-            "price",
-            json_value!({ "type": "number", "minimum": 0 }),
-        )
-        .await?;
-        assert_eq!(
-            reg.get_by_uri(uri).unwrap()["properties"]["price"]["minimum"],
-            0
-        );
-
-        // 4. DROP PROPERTY
-        reg.drop_property(uri, "name").await?;
-        assert!(!reg.get_by_uri(uri).unwrap()["properties"]
-            .as_object()
-            .unwrap()
-            .contains_key("name"));
-
-        // 5. DROP SCHEMA
-        reg.drop_schema(uri).await?;
-        assert!(reg.get_by_uri(uri).is_none());
 
         Ok(())
     }

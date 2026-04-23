@@ -141,21 +141,22 @@ mod tests {
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_git_tool_execution_flow() {
-        let sandbox = AgentDbSandbox::new().await;
+    async fn test_git_tool_execution_flow() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
         let root = &sandbox.domain_root;
 
         match GitTool::execute_git(&["--version"], root).await {
             Ok(version) => assert!(version.contains("git version")),
             Err(e) => panic!("Échec innatendu de GitTool: {:?}", e),
         }
+        Ok(())
     }
 
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_git_publish_error_on_invalid_repo() {
-        let sandbox = AgentDbSandbox::new().await;
+    async fn test_git_publish_error_on_invalid_repo() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
         let invalid_path = sandbox.domain_root.join("not_a_repo");
 
         // Création asynchrone via la façade
@@ -171,5 +172,7 @@ mod tests {
                 assert!(err_msg.contains("ERR_GIT_COMMAND_FAILED"));
             }
         }
+
+        Ok(())
     }
 }

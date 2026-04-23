@@ -11,7 +11,11 @@ impl ComplianceChecker for AiGovernanceChecker {
         "RAISE AI Governance"
     }
 
-    fn check(&self, tracer: &Tracer, docs: &UnorderedMap<String, JsonValue>) -> ComplianceReport {
+    fn check(
+        &self,
+        tracer: &Tracer,
+        docs: &UnorderedMap<String, JsonValue>,
+    ) -> RaiseResult<ComplianceReport> {
         let mut violations = Vec::new();
         let mut checked_count = 0;
 
@@ -70,12 +74,12 @@ impl ComplianceChecker for AiGovernanceChecker {
             }
         }
 
-        ComplianceReport {
+        Ok(ComplianceReport {
             standard: self.name().to_string(),
             passed: violations.is_empty(),
             rules_checked: checked_count,
             violations,
-        }
+        })
     }
 }
 
@@ -87,7 +91,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_audit_ai_model_full_compliance() {
+    fn test_audit_ai_model_full_compliance() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new(); // 🎯 FIX : Type explicite
 
         // Setup : Modèle IA + Ses deux preuves
@@ -104,18 +108,20 @@ mod tests {
             json_value!({ "_id": "XAI_1", "kind": "XaiFrame", "model_id": "AI_1" }),
         );
 
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = AiGovernanceChecker;
 
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert!(report.passed);
         assert_eq!(report.rules_checked, 1);
         assert!(report.violations.is_empty());
+
+        Ok(())
     }
 
     #[test]
-    fn test_audit_ai_model_missing_everything() {
+    fn test_audit_ai_model_missing_everything() -> RaiseResult<()> {
         let mut docs: UnorderedMap<String, JsonValue> = UnorderedMap::new();
         // Setup : Modèle IA tout seul
         docs.insert(
@@ -123,10 +129,10 @@ mod tests {
             json_value!({ "_id": "AI_EMPTY", "nature": "AI_Model" }),
         );
 
-        let tracer = Tracer::from_json_list(docs.values().cloned().collect());
+        let tracer = Tracer::from_json_list(docs.values().cloned().collect())?;
         let checker = AiGovernanceChecker;
 
-        let report = checker.check(&tracer, &docs);
+        let report = checker.check(&tracer, &docs)?;
 
         assert!(!report.passed);
         assert_eq!(report.violations.len(), 2); // Doit manquer QR et XAI
@@ -136,5 +142,7 @@ mod tests {
 
         assert!(has_qr_violation);
         assert!(has_xai_violation);
+
+        Ok(())
     }
 }

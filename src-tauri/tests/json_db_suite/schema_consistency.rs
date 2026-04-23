@@ -8,9 +8,9 @@ use raise::json_db::schema::{SchemaRegistry, SchemaValidator};
 use walkdir::WalkDir; // Pour explorer les schémas récursivement
 
 #[async_test]
-async fn test_structural_integrity_json_schema() {
+async fn test_structural_integrity_json_schema() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement isolé (copie les schémas auto)
-    let env = setup_test_env(LlmMode::Disabled).await;
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let cfg = &env.sandbox.storage.config;
 
     let schemas_root = cfg.db_schemas_root(&env.space, &env.db).join("v1");
@@ -57,11 +57,13 @@ async fn test_structural_integrity_json_schema() {
     if error_count > 0 {
         panic!("🚨 {} erreurs de compilation de schéma détectées. Vérifiez la syntaxe et les dépendances ($ref).", error_count);
     }
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_semantic_consistency_json_ld() {
-    let _env = setup_test_env(LlmMode::Disabled).await;
+async fn test_semantic_consistency_json_ld() -> RaiseResult<()> {
+    let _env = setup_test_env(LlmMode::Disabled).await?;
 
     // 1. PUISQU'IL N'Y A PAS DE FICHIERS D'ONTOLOGIE DANS LES TESTS :
     // On configure le processeur avec un contexte simulé pour l'expansion.
@@ -74,9 +76,7 @@ async fn test_semantic_consistency_json_ld() {
         }
     });
 
-    let processor = JsonLdProcessor::new()
-        .with_doc_context(&context_doc)
-        .unwrap();
+    let processor = JsonLdProcessor::new()?.with_doc_context(&context_doc)?;
 
     // 2. On définit en dur les URIs complètes attendues (simulation du registre)
     let expected_uris = [
@@ -137,11 +137,13 @@ async fn test_semantic_consistency_json_ld() {
         }
         panic!("🚨 Incohérences sémantiques détectées lors de l'expansion.");
     }
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_detect_actor_duality() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_detect_actor_duality() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let cfg = &env.sandbox.storage.config;
     let schemas_root = cfg.db_schemas_root(&env.space, &env.db).join("v1");
 
@@ -174,4 +176,6 @@ async fn test_detect_actor_duality() {
     } else {
         println!("ℹ️  Audit de dualité ignoré (fichiers non présents dans le dataset de test).");
     }
+
+    Ok(())
 }

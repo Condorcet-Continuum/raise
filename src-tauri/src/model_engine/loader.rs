@@ -19,26 +19,25 @@ pub struct ModelLoader<'a> {
 }
 
 impl<'a> ModelLoader<'a> {
-    pub fn new(storage: &'a State<'_, StorageEngine>, space: &str, db: &str) -> Self {
+    pub fn new(storage: &'a State<'_, StorageEngine>, space: &str, db: &str) -> RaiseResult<Self> {
         Self::from_engine(storage.inner(), space, db)
     }
 
-    pub fn from_engine(storage: &'a StorageEngine, space: &str, db: &str) -> Self {
-        Self {
+    pub fn from_engine(storage: &'a StorageEngine, space: &str, db: &str) -> RaiseResult<Self> {
+        Ok(Self {
             manager: CollectionsManager::new(storage, space, db),
             index: SharedRef::new(AsyncRwLock::new(UnorderedMap::new())),
-            processor: JsonLdProcessor::new(),
-        }
+            processor: JsonLdProcessor::new()?,
+        })
     }
 
-    pub fn new_with_manager(manager: CollectionsManager<'a>) -> Self {
-        Self {
+    pub fn new_with_manager(manager: CollectionsManager<'a>) -> RaiseResult<Self> {
+        Ok(Self {
             manager,
             index: SharedRef::new(AsyncRwLock::new(UnorderedMap::new())),
-            processor: JsonLdProcessor::new(),
-        }
+            processor: JsonLdProcessor::new()?,
+        })
     }
-
     /// Analyse la structure du projet sur disque via le mapping ontologique.
     /// Utilise les points de montage système pour localiser les configurations.
     pub async fn index_project(&self) -> RaiseResult<usize> {
@@ -264,8 +263,8 @@ mod tests {
 
     #[async_test]
     async fn test_loader_json_to_element_pure_graph() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
-        let loader = ModelLoader::from_engine(&sandbox.db, "space", "db");
+        let sandbox = AgentDbSandbox::new().await?;
+        let loader = ModelLoader::from_engine(&sandbox.db, "space", "db")?;
 
         let doc = json_value!({
             "_id": "el_1",
@@ -289,13 +288,13 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience face à un mapping ontologique manquant
     #[async_test]
     async fn test_loader_resilience_missing_mapping() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let loader = ModelLoader::from_engine(
             &sandbox.db,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
-        );
+        )?;
 
         // Indexation sans document de mapping en base
         let count = loader.index_project().await?;
@@ -309,9 +308,9 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Validation Mount Points System
     #[async_test]
     async fn test_loader_mount_point_resolution() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
-        // On vérifie que la config système n'est pas vide (SSOT)
+
         assert!(!config.mount_points.system.domain.is_empty());
         assert!(!config.mount_points.system.db.is_empty());
         Ok(())

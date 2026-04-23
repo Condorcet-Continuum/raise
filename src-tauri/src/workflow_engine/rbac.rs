@@ -246,9 +246,9 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_rbac_verify_access_success_no_conditions() {
+    async fn test_rbac_verify_access_success_no_conditions() -> RaiseResult<()> {
         // 🎯 FIX : Initialisation propre du système DB de Raise
-        let env = init_test_env().await;
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
         DbSandbox::mock_db(&manager).await.unwrap();
 
@@ -268,13 +268,15 @@ mod tests {
         .await;
 
         assert!(result.is_ok(), "L'accès doit être accordé.");
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_rbac_verify_access_denied_wrong_action() {
-        let env = init_test_env().await;
+    async fn test_rbac_verify_access_denied_wrong_action() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         let m_id = "00000000-0000-0000-0000-000000000001";
         let r_id = "00000000-0000-0000-0000-000000000002";
@@ -294,13 +296,15 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("ERR_RBAC_ACCESS_DENIED"));
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_rbac_verify_access_mandator_inactive() {
-        let env = init_test_env().await;
+    async fn test_rbac_verify_access_mandator_inactive() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         let m_id = "00000000-0000-0000-0000-000000000001";
         let r_id = "00000000-0000-0000-0000-000000000002";
@@ -320,13 +324,15 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("ERR_RBAC_MANDATOR_INACTIVE"));
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_rbac_verify_access_with_dynamic_ast_success() {
-        let env = init_test_env().await;
+    async fn test_rbac_verify_access_with_dynamic_ast_success() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         let m_id = "00000000-0000-0000-0000-000000000001";
         let r_id = "00000000-0000-0000-0000-000000000002";
@@ -347,13 +353,15 @@ mod tests {
         .await;
 
         assert!(result.is_ok(), "L'AST est validé, accès accordé.");
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_rbac_verify_access_with_dynamic_ast_failure() {
-        let env = init_test_env().await;
+    async fn test_rbac_verify_access_with_dynamic_ast_failure() -> RaiseResult<()> {
+        let env = init_test_env().await?;
         let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        DbSandbox::mock_db(&manager).await.unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         let m_id = "00000000-0000-0000-0000-000000000001";
         let r_id = "00000000-0000-0000-0000-000000000002";
@@ -379,5 +387,7 @@ mod tests {
             err_msg.contains("ERR_RBAC_ACCESS_DENIED"),
             "L'AST a échoué, l'accès doit être refusé."
         );
+
+        Ok(())
     }
 }

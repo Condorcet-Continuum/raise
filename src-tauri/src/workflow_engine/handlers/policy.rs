@@ -148,7 +148,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_policy_handler_valid_ast_pass() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let (orch, pm, critic, tools, manager) =
             setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await?;
 
@@ -181,7 +181,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_policy_handler_valid_ast_trigger() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let (orch, pm, critic, tools, manager) =
             setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await?;
 
@@ -214,7 +214,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_policy_handler_fails_safe_without_ast() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let (orch, pm, critic, tools, manager) =
             setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await?;
 
@@ -246,7 +246,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_policy_handler_fails_safe_with_malformed_ast() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let (orch, pm, critic, tools, manager) =
             setup_policy_test_context(sandbox.db.clone(), &sandbox.config, &sandbox.db).await?;
 
@@ -277,7 +277,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience face au point de montage système manquant
     #[async_test]
     async fn test_policy_mount_point_resilience() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         // Le validateur doit s'appuyer sur les partitions système SSOT
         assert!(!config.mount_points.system.domain.is_empty());

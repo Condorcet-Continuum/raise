@@ -11,7 +11,7 @@ use raise::utils::testing::DbSandbox;
 #[serial_test::serial]
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
-    let env = setup_test_env(LlmMode::Enabled).await;
+    let env = setup_test_env(LlmMode::Enabled).await?;
     let test_root = env.sandbox.storage.config.data_root.clone();
 
     // --- 🎯 1. SETUP SYSTEM (Injection via Mount Points) ---
@@ -167,7 +167,7 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_agent_setup_mount_point_resilience() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await;
+        let env = setup_test_env(LlmMode::Disabled).await?;
         assert!(!env.sandbox.config.mount_points.system.domain.is_empty());
         assert!(!env.sandbox.config.mount_points.system.db.is_empty());
         Ok(())
@@ -178,7 +178,7 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_agent_missing_definition_error_handling() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await;
+        let env = setup_test_env(LlmMode::Disabled).await?;
         let test_root = env.sandbox.storage.config.data_root.clone();
 
         // On récupère le manager système via les points de montage pour initialiser le client

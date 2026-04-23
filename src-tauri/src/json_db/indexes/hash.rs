@@ -64,10 +64,13 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_hash_lifecycle() {
+    async fn test_hash_lifecycle() -> RaiseResult<()> {
         let (dir, cfg) = setup_env();
         // ✅ AJOUT : Création du StorageEngine pour les tests
-        let storage = StorageEngine::new(cfg);
+        let storage = match StorageEngine::new(cfg) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
 
         let idx_dir = dir.path().join("s/d/collections/c/_indexes");
         fs::ensure_dir_async(&idx_dir).await.unwrap();
@@ -107,13 +110,10 @@ mod tests {
         assert!(empty.is_empty());
 
         // 4. Suppression
-        update_hash_index(&storage, "s", "d", "c", &def, "doc1", Some(&doc), None)
-            .await
-            .unwrap();
+        update_hash_index(&storage, "s", "d", "c", &def, "doc1", Some(&doc), None).await?;
         let deleted =
-            search_hash_index(&storage, "s", "d", "c", &def, &json_value!("test@mail.com"))
-                .await
-                .unwrap();
+            search_hash_index(&storage, "s", "d", "c", &def, &json_value!("test@mail.com")).await?;
         assert!(deleted.is_empty());
+        Ok(())
     }
 }

@@ -5,9 +5,9 @@ use raise::json_db::collections::manager::CollectionsManager;
 use raise::utils::prelude::*;
 
 #[async_test]
-async fn test_create_and_drop_index_lifecycle() {
+async fn test_create_and_drop_index_lifecycle() -> RaiseResult<()> {
     // 1. SETUP ENVIRONNEMENT (Isolé et unifié)
-    let env = setup_test_env(LlmMode::Disabled).await;
+    let env = setup_test_env(LlmMode::Disabled).await?;
 
     // Le CollectionsManager est déjà initialisé dans UnifiedTestEnv,
     // mais on en crée une instance locale pour plus de clarté dans le test.
@@ -93,4 +93,6 @@ async fn test_create_and_drop_index_lifecycle() {
     );
 
     println!("✅ INDEX LIFECYCLE SUCCESS");
+
+    Ok(())
 }

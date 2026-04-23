@@ -8,8 +8,8 @@ use raise::json_db::storage::file_storage::{create_db, drop_db, open_db, DropMod
 use raise::json_db::storage::JsonDbConfig;
 
 #[async_test]
-async fn db_lifecycle_minimal() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn db_lifecycle_minimal() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let cfg = JsonDbConfig {
         data_root: env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
     };
@@ -45,11 +45,13 @@ async fn db_lifecycle_minimal() {
     drop_db(&cfg, space, db, DropMode::Hard)
         .await
         .expect("❌ drop_db hard doit réussir");
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_collection_drop_cleans_system_index() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_collection_drop_cleans_system_index() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
     let collection = "temp_collection_to_drop";
 
@@ -71,11 +73,13 @@ async fn test_collection_drop_cleans_system_index() {
     assert!(sys_json_after
         .pointer(&format!("/collections/{}", collection))
         .is_none());
+
+    Ok(())
 }
 
 #[async_test]
-async fn test_system_index_strict_conformance() {
-    let env = setup_test_env(LlmMode::Disabled).await;
+async fn test_system_index_strict_conformance() -> RaiseResult<()> {
+    let env = setup_test_env(LlmMode::Disabled).await?;
     let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
 
     mgr.create_collection("init_trigger", "v1/db/generic.schema.json")
@@ -107,4 +111,6 @@ async fn test_system_index_strict_conformance() {
     validator
         .validate(&doc)
         .expect("❌ Non-conformité détectée");
+
+    Ok(())
 }

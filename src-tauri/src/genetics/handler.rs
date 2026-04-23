@@ -202,7 +202,7 @@ mod tests {
 
     #[async_test]
     async fn test_genetics_handler_success_allocation() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let manager = CollectionsManager::new(

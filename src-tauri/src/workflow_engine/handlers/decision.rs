@@ -163,7 +163,7 @@ mod tests {
     #[serial_test::serial] // 🎯 FIX : Protection CUDA car on charge l'Orchestrateur
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_decision_handler_condorcet_evaluation() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
             setup_dummy_context(sandbox.db.clone(), &config, &sandbox.db).await?;
@@ -201,7 +201,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_missing_candidates() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let (orch, pm, critic, tools, manager) =
             setup_dummy_context(sandbox.db.clone(), &config, &sandbox.db).await?;
@@ -236,7 +236,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Validation de la partition système via Mount Points
     #[async_test]
     async fn test_decision_mount_point_resolution() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         assert!(!config.mount_points.system.domain.is_empty());
         assert!(!config.mount_points.system.db.is_empty());

@@ -1095,7 +1095,7 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_ai_ask_execution_offline_safety() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
 
         // 🎯 On utilise le mock de CliContext qui initialise orchestrator à None

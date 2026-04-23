@@ -287,7 +287,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_api_semantic_full_workflow() -> RaiseResult<()> {
         mock::inject_mock_config().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let model_id = "dl-model-test-uuid";
 
@@ -327,7 +327,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_api_semantic_deterministic_path() -> RaiseResult<()> {
         mock::inject_mock_config().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let model_id = "path-test-999";
 
@@ -382,7 +382,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_api_resilience_workspace_mount() -> RaiseResult<()> {
         mock::inject_mock_config().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let ws_domain = &config.mount_points.system.domain;
@@ -425,7 +425,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_api_error_on_invalid_parameters() -> RaiseResult<()> {
         mock::inject_mock_config().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // Hyperparamètres nuls = corruption sémantique
@@ -471,7 +471,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_api_error_on_invalid_urn() -> RaiseResult<()> {
         mock::inject_mock_config().await;
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.db, "_", "_");
 
         let res = predict_semantic(&manager, "d", "b", "ref:short", vec![]).await;
@@ -487,7 +487,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_api_resilience_missing_config_path() -> RaiseResult<()> {
         // 1. Initialisation de la sandbox (qui va injecter une config par défaut)
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let manager = CollectionsManager::new(&sandbox.db, "resilience_domain", "resilience_db");
 
         // 2. 🎯 FORÇAGE : On écrase la config globale avec une version SANS chemins

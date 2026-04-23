@@ -45,7 +45,8 @@ fn resolve_schema_node<'a>(
     schema: &'a JsonValue,
     reg: &'a SchemaRegistry,
     current_uri: &str,
-) -> &'a JsonValue {
+) -> RaiseResult<&'a JsonValue> {
+    // Ajout du Result
     if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
         let (file_uri, fragment) = if ref_str.starts_with('#') {
             (current_uri.to_string(), Some(ref_str.to_string()))
@@ -57,14 +58,24 @@ fn resolve_schema_node<'a>(
 
         if let Some(target_root) = reg.get_by_uri(&file_uri) {
             if let Some(frag) = fragment {
-                return target_root
-                    .pointer(&frag.replace('#', ""))
-                    .unwrap_or(schema);
+                let ptr = frag.replace('#', "");
+                return match target_root.pointer(&ptr) {
+                    Some(node) => Ok(node),
+                    None => raise_error!(
+                        "ERR_SCHEMA_POINTER_NOT_FOUND",
+                        error = format!("Pointeur JSON '{}' introuvable dans {}", ptr, file_uri),
+                        context = json_value!({
+                            "uri": file_uri,
+                            "pointer": ptr,
+                            "source_ref": ref_str
+                        })
+                    ),
+                };
             }
-            return target_root;
+            return Ok(target_root);
         }
     }
-    schema
+    Ok(schema)
 }
 
 fn apply_defaults(
@@ -103,7 +114,7 @@ fn apply_defaults(
     if let Some(obj) = instance.as_object_mut() {
         if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
             for (key, sub_schema) in props {
-                let resolved_schema = resolve_schema_node(sub_schema, reg, current_uri);
+                let resolved_schema = resolve_schema_node(sub_schema, reg, current_uri)?;
                 let is_missing = obj.get(key).is_none_or(|v| v.is_null());
 
                 if is_missing {
@@ -382,15 +393,16 @@ fn validate_object(
                 let is_defined = defined_props.contains(&k);
                 let matches_pattern = compiled_patterns.iter().any(|re| re.is_match(k));
 
-                if !is_defined && !matches_pattern && k != "$schema" && k != "@context" {
+                if !is_defined
+                    && !matches_pattern
+                    && !k.starts_with('_')
+                    && k != "$schema"
+                    && k != "@context"
+                {
                     raise_error!(
                         "ERR_VALIDATION_ADDITIONAL_PROPERTY_FORBIDDEN",
-                        error = format!("Propriété non autorisée détectée : '{}'", k),
-                        context = json_value!({
-                            "forbidden_key": k,
-                            "action": "validate_additional_properties",
-                            "hint": "Ce schéma est clos (additionalProperties: false). Seules les propriétés explicitement définies sont acceptées."
-                        })
+                        error = format!("Propriété non autorisée : '{}'", k),
+                        context = json_value!({ "forbidden_key": k, "uri": current_uri })
                     );
                 }
             }
@@ -590,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn test_string_constraints() {
+    fn test_string_constraints() -> RaiseResult<()> {
         let v = setup_validator(json_value!({
             "type": "string",
             "minLength": 3,
@@ -602,10 +614,11 @@ mod tests {
         assert!(v.validate(&json_value!("TE")).is_err());
         assert!(v.validate(&json_value!("TESTING")).is_err());
         assert!(v.validate(&json_value!("test")).is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_number_constraints() {
+    fn test_number_constraints() -> RaiseResult<()> {
         let v = setup_validator(json_value!({
             "type": "number",
             "minimum": 10.5,
@@ -616,10 +629,11 @@ mod tests {
         assert!(v.validate(&json_value!(10.5)).is_ok());
         assert!(v.validate(&json_value!(5)).is_err());
         assert!(v.validate(&json_value!(21.5)).is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_apply_defaults_basic() {
+    fn test_apply_defaults_basic() -> RaiseResult<()> {
         let v = setup_validator(json_value!({
             "type": "object",
             "properties": {
@@ -629,15 +643,15 @@ mod tests {
         }));
 
         let mut data = json_value!({});
-        v.compute_then_validate(&mut data)
-            .expect("L'hydratation doit réussir");
+        v.compute_then_validate(&mut data)?;
 
         assert_eq!(data["active"], true);
         assert_eq!(data["version"], 1);
+        Ok(())
     }
 
     #[test]
-    fn test_dual_schema_x_compute() {
+    fn test_dual_schema_x_compute() -> RaiseResult<()> {
         let mut reg = SchemaRegistry::new();
 
         reg.register("db://test/v1".to_string(), json_value!({
@@ -671,5 +685,6 @@ mod tests {
             data_v2.get("_id").is_some(),
             "Le schéma v2 n'a pas injecté '_id'"
         );
+        Ok(())
     }
 }

@@ -105,12 +105,12 @@ mod tests {
     use super::*;
     use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
-    fn create_test_env() -> (PluginManager, StorageEngine, tempfile::TempDir) {
+    fn create_test_env() -> RaiseResult<(PluginManager, StorageEngine, tempfile::TempDir)> {
         let dir = tempdir().unwrap();
         let config = JsonDbConfig::new(dir.path().to_path_buf());
-        let storage = StorageEngine::new(config);
+        let storage = StorageEngine::new(config)?;
         let manager = PluginManager::new(&storage, None);
-        (manager, storage, dir)
+        Ok((manager, storage, dir))
     }
 
     /// Générateur de Bytecode WASM ultra-sécurisé (Validé par spécification).
@@ -127,8 +127,8 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_plugin_workflow_signal_retrieval() {
-        let (manager, _storage, _tmp_dir) = create_test_env();
+    async fn test_plugin_workflow_signal_retrieval() -> RaiseResult<()> {
+        let (manager, _storage, _tmp_dir) = create_test_env()?;
 
         let wasm_bytes = generate_minimal_wasm();
         let wasm_path = _tmp_dir.path().join("workflow_spy.wasm");
@@ -153,12 +153,15 @@ mod tests {
         );
 
         println!("✅ Test de cycle de vie Manager passé avec succès.");
+
+        Ok(())
     }
 
     #[async_test]
-    async fn test_plugin_not_found() {
-        let (manager, _, _) = create_test_env();
+    async fn test_plugin_not_found() -> RaiseResult<()> {
+        let (manager, _, _) = create_test_env()?;
         let res = manager.run_plugin_with_context("unknown", None).await;
         assert!(res.is_err());
+        Ok(())
     }
 }

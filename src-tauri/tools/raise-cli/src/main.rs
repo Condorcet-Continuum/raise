@@ -163,7 +163,7 @@ async fn main() -> RaiseResult<()> {
         ),
     };
 
-    let storage = SharedRef::new(StorageEngine::new(JsonDbConfig::new(db_root)));
+    let storage = SharedRef::new(StorageEngine::new(JsonDbConfig::new(db_root))?);
 
     // ---------------------------------------------------------
     // 🧠 INITIALISATION SÉMANTIQUE (Bootstrapping In-Index)

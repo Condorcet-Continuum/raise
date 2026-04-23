@@ -131,7 +131,7 @@ impl<'a> QueryEngine<'a> {
             let mut sub_query = query.clone();
             sub_query.collection = actual_collection_path.clone();
 
-            let index_candidate = self.find_index_candidate(&sub_query).await;
+            let index_candidate = self.find_index_candidate(&sub_query).await?;
 
             let mut batch_docs = match index_candidate {
                 Some((_field, value, index_field_name)) => {
@@ -201,8 +201,13 @@ impl<'a> QueryEngine<'a> {
 
     /// 🎯 RECHERCHE D'INDEX ROBUSTE
     /// Retourne : (Nom du champ dans le document, Valeur cherchée, Nom de l'index à utiliser)
-    async fn find_index_candidate(&self, query: &Query) -> Option<(String, JsonValue, String)> {
-        let filter = query.filter.as_ref()?;
+    async fn find_index_candidate(
+        &self,
+        query: &Query,
+    ) -> RaiseResult<Option<(String, JsonValue, String)>> {
+        let Some(filter) = query.filter.as_ref() else {
+            return Ok(None);
+        };
 
         for cond in &filter.conditions {
             if cond.operator != ComparisonOperator::Eq {
@@ -210,7 +215,16 @@ impl<'a> QueryEngine<'a> {
             }
 
             let clean_field = self.normalize_field_path(&cond.field, &query.collection);
-            let leaf = cond.field.split('.').next_back().unwrap_or(&cond.field);
+            let leaf = match cond.field.split('.').next_back() {
+                Some(l) => l.to_string(),
+                None => {
+                    raise_error!(
+                        "ERR_QUERY_INVALID_FIELD",
+                        error = "Le nom du champ de recherche est vide ou invalide.",
+                        context = json_value!({ "field": cond.field })
+                    );
+                }
+            };
 
             // On VÉRIFIE systématiquement l'existence de l'index avant de valider le candidat
             if self
@@ -218,15 +232,20 @@ impl<'a> QueryEngine<'a> {
                 .has_index(&query.collection, &clean_field)
                 .await
             {
-                return Some((cond.field.clone(), cond.value.clone(), clean_field));
+                return Ok(Some((cond.field.clone(), cond.value.clone(), clean_field)));
             }
 
-            if leaf != clean_field && self.index_provider.has_index(&query.collection, leaf).await {
-                return Some((cond.field.clone(), cond.value.clone(), leaf.to_string()));
+            if leaf != clean_field
+                && self
+                    .index_provider
+                    .has_index(&query.collection, &leaf)
+                    .await
+            {
+                return Ok(Some((cond.field.clone(), cond.value.clone(), leaf)));
             }
         }
 
-        None
+        Ok(None)
     }
 
     // --- LOGIQUE MÉTIER ET NORMALISATION ---
@@ -681,10 +700,9 @@ mod tests {
         }
     }
 
-    // 🎯 FIX : Retourne RaiseResult<()> et utilisation de `mount_points`
     #[async_test]
     async fn test_full_query_execution() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,
@@ -733,10 +751,9 @@ mod tests {
         Ok(())
     }
 
-    // 🎯 FIX : Retourne RaiseResult<()> et utilisation de `mount_points`
     #[async_test]
     async fn test_smart_like_and_array() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,
@@ -779,10 +796,9 @@ mod tests {
         Ok(())
     }
 
-    // 🎯 FIX : Retourne RaiseResult<()> et utilisation de `mount_points`
     #[async_test]
     async fn test_query_engine_uses_mock_index() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,
@@ -831,10 +847,9 @@ mod tests {
         Ok(())
     }
 
-    // 🎯 FIX : Retourne RaiseResult<()> et utilisation de `mount_points`
     #[async_test]
     async fn test_evaluate_condition_logic() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &sandbox.config.mount_points.system.domain,

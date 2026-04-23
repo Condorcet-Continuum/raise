@@ -321,7 +321,7 @@ mod tests {
     }
 
     async fn setup_mock_orchestrator_env() -> RaiseResult<AgentDbSandbox> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

@@ -23,11 +23,11 @@ impl Tracer {
                 }
             }
         }
-        Ok(Self::build_graph(docs))
+        Self::build_graph(docs)
     }
 
     /// 🎯 PURE GRAPH : Initialisation via l'itérateur universel
-    pub fn from_legacy_model(model: &ProjectModel) -> Self {
+    pub fn from_legacy_model(model: &ProjectModel) -> RaiseResult<Self> {
         let mut docs = Vec::new();
 
         // On itère sur absolument tout le modèle de manière dynamique
@@ -40,15 +40,15 @@ impl Tracer {
         Self::build_graph(docs)
     }
 
-    pub fn from_json_list(documents: Vec<JsonValue>) -> Self {
+    pub fn from_json_list(documents: Vec<JsonValue>) -> RaiseResult<Self> {
         Self::build_graph(documents)
     }
 
-    fn build_graph(documents: Vec<JsonValue>) -> Self {
+    fn build_graph(documents: Vec<JsonValue>) -> RaiseResult<Self> {
         let mut downstream: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
         let mut upstream: UnorderedMap<String, Vec<String>> = UnorderedMap::new();
-        let ctx = ContextManager::new();
-        let registry = VocabularyRegistry::global();
+        let ctx = ContextManager::new()?;
+        let registry = VocabularyRegistry::global()?;
 
         for doc in documents {
             let id = match doc.get("_id").or(doc.get("id")).and_then(|v| v.as_str()) {
@@ -87,10 +87,10 @@ impl Tracer {
             }
         }
 
-        Self {
+        Ok(Self {
             downstream_links: downstream,
             upstream_links: upstream,
-        }
+        })
     }
 
     pub fn get_downstream_ids(&self, element_id: &str) -> Vec<String> {
@@ -128,7 +128,7 @@ mod tests {
     use crate::model_engine::types::{ArcadiaElement, NameType};
 
     #[test]
-    fn test_reverse_indexing_ai_model() {
+    fn test_reverse_indexing_ai_model() -> RaiseResult<()> {
         let mut model = ProjectModel::default();
         let mut props = UnorderedMap::new();
         props.insert("model_id".to_string(), json_value!("ai_1"));
@@ -145,7 +145,7 @@ mod tests {
             },
         );
 
-        let tracer = Tracer::from_legacy_model(&model);
+        let tracer = Tracer::from_legacy_model(&model)?;
         let upstream = tracer.get_upstream_ids("ai_1");
 
         assert_eq!(
@@ -154,5 +154,7 @@ mod tests {
             "Le lien inverse (upstream) n'a pas été détecté."
         );
         assert_eq!(upstream[0], "rep_1");
+
+        Ok(())
     }
 }

@@ -66,7 +66,6 @@ impl<'a> TransactionManager<'a> {
                     id,
                     mut document,
                 } => {
-                    // 🎯 FIX : Ajout de &query_engine et de .await?
                     self.resolve_all_refs(&query_engine, &mut document, &prepared_ops)
                         .await?;
 
@@ -632,7 +631,7 @@ impl<'a> TransactionManager<'a> {
         // 🎯 2. LA RÈGLE D'OR : On ouvre le verrou système UNIQUEMENT ICI.
         // On n'est plus en paramètre, 'sys_tx' est une variable LOCALE possédée.
         let col_mgr = CollectionsManager::new(self.storage, &self.space, &self.db);
-        let lock = self.storage.get_index_lock(&self.space, &self.db);
+        let lock = self.storage.get_index_lock(&self.space, &self.db)?;
         let guard = lock.lock().await;
         let mut sys_tx = col_mgr.begin_system_tx(&guard).await?;
 
@@ -1186,7 +1185,7 @@ mod tests {
 
     #[async_test]
     async fn test_transaction_commit_success() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let space = &sandbox.config.mount_points.system.domain;
         let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
@@ -1219,7 +1218,7 @@ mod tests {
 
     #[async_test]
     async fn test_transaction_rollback_on_error() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let space = &sandbox.config.mount_points.system.domain;
         let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
@@ -1256,7 +1255,7 @@ mod tests {
 
     #[async_test]
     async fn test_smart_insert_injects_metadata() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let space = &sandbox.config.mount_points.system.domain;
         let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
@@ -1288,7 +1287,7 @@ mod tests {
 
     #[async_test]
     async fn test_atomicity_failure_rollback_smart() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let space = &sandbox.config.mount_points.system.domain;
         let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
@@ -1342,7 +1341,7 @@ mod tests {
 
     #[async_test]
     async fn test_upsert_workflow() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let space = &sandbox.config.mount_points.system.domain;
         let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
@@ -1406,7 +1405,7 @@ mod tests {
 
     #[async_test]
     async fn test_upsert_resolution_by_name() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let space = &sandbox.config.mount_points.system.domain;
         let db = &sandbox.config.mount_points.system.db;
         let storage = &sandbox.storage;
@@ -1455,7 +1454,7 @@ mod tests {
 
     #[async_test]
     async fn test_omni_reference_resolution() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let storage = &sandbox.storage;
 
         // 🌍 1. INITIALISATION CROSS-DB

@@ -147,17 +147,16 @@ fn parse_single_sort_spec(spec: &str) -> RaiseResult<SortField> {
 }
 
 pub fn parse_filter_from_json(value: &JsonValue) -> RaiseResult<QueryFilter> {
+    // 1. Validation de la racine
     let Some(obj) = value.as_object() else {
         raise_error!(
-            "ERR_JSON_TYPE_MISMATCH",
-            error = "Type de donnée invalide : un objet JSON était attendu.",
-            context = json_value!({
-                "expected_type": "Object",
-                "actual_value_sample": format!("{:?}", value),
-                "action": "ensure_object_structure"
-            })
+            "ERR_QUERY_PARSE_TYPE",
+            error = "Le filtre doit être un objet JSON.",
+            context = json_value!({ "received": value })
         );
     };
+
+    // 2. Extraction de l'opérateur logique (And/Or/Not)
     let op = match obj
         .get("operator")
         .and_then(|v| v.as_str())
@@ -167,49 +166,75 @@ pub fn parse_filter_from_json(value: &JsonValue) -> RaiseResult<QueryFilter> {
     {
         "or" => FilterOperator::Or,
         "not" => FilterOperator::Not,
-        _ => FilterOperator::And,
+        "and" => FilterOperator::And,
+        _ => FilterOperator::And, // Ici on accepte 'and' par défaut
     };
 
     let mut conditions = Vec::new();
+
+    // 3. Traitement strict des conditions
     if let Some(arr) = obj.get("conditions").and_then(|v| v.as_array()) {
-        for c in arr {
-            if let Some(co) = c.as_object() {
-                let f = co
-                    .get("field")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+        for (index, c) in arr.iter().enumerate() {
+            let Some(co) = c.as_object() else {
+                raise_error!(
+                    "ERR_QUERY_PARSE_COND_TYPE",
+                    error = format!("La condition #{} n'est pas un objet.", index)
+                );
+            };
 
-                let o_str = co
-                    .get("operator")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("eq")
-                    .to_lowercase();
+            let field = match co
+                .get("field")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                Some(f) => f.to_string(),
+                None => {
+                    raise_error!(
+                        "ERR_QUERY_PARSE_MISSING_FIELD",
+                        error = format!(
+                            "Le champ 'field' est manquant ou vide dans la condition #{}",
+                            index
+                        ),
+                        context = json_value!({ "condition": co })
+                    );
+                }
+            };
 
-                let v = co.get("value").cloned().unwrap_or(JsonValue::Null);
+            let o_str = co
+                .get("operator")
+                .and_then(|v| v.as_str())
+                .unwrap_or("eq")
+                .to_lowercase();
+            let op_enum = match o_str.as_str() {
+                "eq" | "=" => ComparisonOperator::Eq,
+                "ne" | "!=" | "<>" => ComparisonOperator::Ne,
+                "gt" | ">" => ComparisonOperator::Gt,
+                "gte" | ">=" => ComparisonOperator::Gte,
+                "lt" | "<" => ComparisonOperator::Lt,
+                "lte" | "<=" => ComparisonOperator::Lte,
+                "in" => ComparisonOperator::In,
+                "contains" => ComparisonOperator::Contains,
+                "startswith" => ComparisonOperator::StartsWith,
+                "endswith" => ComparisonOperator::EndsWith,
+                "like" => ComparisonOperator::Like,
+                "matches" => ComparisonOperator::Matches,
+                _ => {
+                    raise_error!(
+                        "ERR_QUERY_PARSE_OPERATOR",
+                        error =
+                            format!("Opérateur '{}' inconnu dans la condition #{}", o_str, index),
+                        context = json_value!({ "field": field, "operator": o_str })
+                    );
+                }
+            };
 
-                let op_enum = match o_str.as_str() {
-                    "eq" | "=" => ComparisonOperator::Eq,
-                    "ne" | "!=" | "<>" => ComparisonOperator::Ne,
-                    "gt" | ">" => ComparisonOperator::Gt,
-                    "gte" | ">=" => ComparisonOperator::Gte,
-                    "lt" | "<" => ComparisonOperator::Lt,
-                    "lte" | "<=" => ComparisonOperator::Lte,
-                    "in" => ComparisonOperator::In,
-                    "contains" | "contain" => ComparisonOperator::Contains,
-                    "startswith" | "starts_with" => ComparisonOperator::StartsWith,
-                    "endswith" | "ends_with" => ComparisonOperator::EndsWith,
-                    "like" => ComparisonOperator::Like,
-                    "matches" | "regex" => ComparisonOperator::Matches,
-                    _ => ComparisonOperator::Eq,
-                };
+            let value = co.get("value").cloned().unwrap_or(JsonValue::Null);
 
-                conditions.push(Condition {
-                    field: f,
-                    operator: op_enum,
-                    value: v,
-                });
-            }
+            conditions.push(Condition {
+                field,
+                operator: op_enum,
+                value,
+            });
         }
     }
 
@@ -228,7 +253,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_filter_full() {
+    fn test_parse_filter_full() -> RaiseResult<()> {
         let json_input = json_value!({
             "operator": "and",
             "conditions": [
@@ -245,31 +270,44 @@ mod tests {
             filter.conditions[1].operator,
             ComparisonOperator::StartsWith
         );
+
+        Ok(())
     }
 
     #[test]
-    fn test_parse_projection() {
+    fn test_parse_projection() -> RaiseResult<()> {
         let p = parse_projection(&["name".into(), "age".into()]).unwrap();
         match p {
             Projection::Include(v) => assert_eq!(v.len(), 2),
-            _ => panic!("Should be Include"),
+            _ => {
+                raise_error!(
+                    "ERR_TEST_ASSERTION_FAILED",
+                    error = "La projection devrait être de type 'Include'."
+                );
+            }
         }
 
         let p_ex = parse_projection(&["-password".into()]).unwrap();
         match p_ex {
             Projection::Exclude(v) => assert_eq!(v[0], "password"),
-            _ => panic!("Should be Exclude"),
+            _ => {
+                raise_error!(
+                    "ERR_TEST_ASSERTION_FAILED",
+                    error = "La projection devrait être de type 'Exclude'."
+                );
+            }
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_query_builder() {
+    fn test_query_builder() -> RaiseResult<()> {
         let q = QueryBuilder::new("users")
             .where_eq("active", json_value!(true))
             .limit(5)
             .sort("created_at", SortOrder::Desc)
-            .select(vec!["handle".into()])
-            .unwrap()
+            .select(vec!["handle".into()])?
             .build();
 
         assert_eq!(q.collection, "users");
@@ -277,5 +315,7 @@ mod tests {
         assert_eq!(q.limit, Some(5));
         assert!(q.sort.is_some());
         assert!(q.projection.is_some());
+
+        Ok(())
     }
 }

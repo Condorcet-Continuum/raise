@@ -100,7 +100,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial] // 🎯 FIX : Évite les conflits de lock sur la Sandbox
     async fn test_blockchain_status_mock() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
@@ -116,7 +116,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_vpn_config_flow() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await;
+        let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
@@ -133,7 +133,7 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_blockchain_mount_point_integrity() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await;
+        let _sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         if config.mount_points.system.domain.is_empty() {

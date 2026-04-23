@@ -123,7 +123,15 @@ impl McpTool for QueryDbTool {
         match doc_res {
             // 🎯 FIX : On récupère le document en tant que variable mutable (mut doc)
             Ok(Some(mut doc)) => {
-                let processor = JsonLdProcessor::new();
+                let processor = match JsonLdProcessor::new() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return McpToolResult::error(
+                            call.id,
+                            &format!("Erreur d'initialisation du processeur sémantique: {}", e),
+                        )
+                    }
+                };
                 if as_rdf {
                     // 🎯 FIX : On passe la référence mutable pour expansion RDF en place
                     match processor.to_ntriples(&mut doc) {
@@ -164,7 +172,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_query_db_missing_args() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         let tool = QueryDbTool::new(
@@ -188,7 +196,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_query_db_resilience_bad_urn() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let tool = QueryDbTool::new(
             sandbox.db.clone(),
@@ -211,7 +219,7 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_query_db_mount_point_resolution() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
         // On vérifie que l'outil utilise bien les domaines configurés dynamiquement dans AppConfig
@@ -229,7 +237,7 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience face à une collection inexistante
     #[async_test]
     async fn test_query_db_non_existent_collection() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await;
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let tool = QueryDbTool::new(
             sandbox.db.clone(),

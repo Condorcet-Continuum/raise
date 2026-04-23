@@ -7,9 +7,9 @@ use raise::json_db::storage::JsonDbConfig;
 // 🎯 Requis pour le plan de construction
 
 #[async_test]
-async fn drop_is_idempotent_and_recreate_works() {
+async fn drop_is_idempotent_and_recreate_works() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement isolé
-    let env = setup_test_env(LlmMode::Disabled).await;
+    let env = setup_test_env(LlmMode::Disabled).await?;
 
     let cfg = JsonDbConfig {
         data_root: env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
@@ -72,4 +72,6 @@ async fn drop_is_idempotent_and_recreate_works() {
         !db_root.exists(),
         "❌ Le dossier racine doit avoir disparu après le Hard Drop"
     );
+
+    Ok(())
 }

@@ -141,14 +141,24 @@ impl VocabularyRegistry {
         Ok(())
     }
 
-    pub fn global() -> &'static Self {
+    pub fn global() -> RaiseResult<&'static Self> {
         #[cfg(test)]
         {
             if INSTANCE.get().is_none() {
                 Self::init_mock_for_tests();
             }
         }
-        INSTANCE.get().expect("VocabularyRegistry non initialisé")
+        if let Some(registry) = INSTANCE.get() {
+            Ok(registry)
+        } else {
+            raise_error!(
+                "ERR_DB_REGISTRY_NOT_INITIALIZED",
+                error = "Le registre sémantique (VocabularyRegistry) est inaccessible.",
+                context = json_value!({
+                    "help": "Vérifiez que VocabularyRegistry::init_from_db() a été appelé durant l'amorçage."
+                })
+            )
+        }
     }
 
     /// CŒUR RCU : Parsing JSON-LD 100% en RAM
@@ -331,28 +341,70 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
-    async fn test_interning_pointer_consistency() -> RaiseResult<()> {
+    async fn test_vocabulary_integrity_and_rcu() -> RaiseResult<()> {
         let reg = VocabularyRegistry::new();
-        let uri = "https://raise.io/ontology/CoreNode";
+
+        // 1. Test de l'interning (Égalité des pointeurs)
+        let uri = "https://raise.io/oa#OperationalActivity";
         let p1 = reg.intern(uri);
         let p2 = reg.intern(uri);
-        // Vérification de l'adresse physique du pointeur (Zéro allocation redondante)
-        assert!(SharedRef::ptr_eq(&p1, &p2));
+        assert!(
+            SharedRef::ptr_eq(&p1, &p2),
+            "Dette détectée : Doublon mémoire pour une même URI."
+        );
+
+        // 2. Test RCU (Isolation pendant erreur)
+        let valid_json = json_value!({
+            "@context": { "oa": "https://raise.io/oa#" },
+            "@graph": [
+                { "@id": "oa:Actor", "@type": "owl:Class", "rdfs:label": "Acteur" }
+            ]
+        });
+        reg.load_layer_from_json("oa", &valid_json).await?;
+        let state_v1 = reg.get_state();
+
+        // Tentative de chargement d'un JSON corrompu
+        let corrupt_json = json_value!({ "invalid": true });
+        let result = reg.load_layer_from_json("fail", &corrupt_json).await;
+
+        assert!(
+            result.is_err(),
+            "Le registre aurait dû rejeter le JSON malformé."
+        );
+        // L'état ne doit pas avoir bougé
+        assert!(
+            SharedRef::ptr_eq(&state_v1, &reg.get_state()),
+            "L'état a été corrompu après un échec."
+        );
+
         Ok(())
     }
 
-    #[async_test]
-    #[serial_test::serial]
-    async fn test_rcu_atomicity_on_malformed_json() -> RaiseResult<()> {
-        let reg = VocabularyRegistry::new();
-        let valid = json_value!({ "@context": {"oa": "http://oa#"}, "@graph": [] });
-        reg.load_layer_from_json("base", &valid).await?;
-        let state_before = reg.get_state();
+    #[test]
+    fn test_ancestry_inference() {
+        // ✅ FIX : On n'a pas besoin d'instancier 'reg' pour appeler la méthode statique.
+        let mut s = RegistryState::default();
 
-        let corrupt = json_value!({ "invalid": true });
-        assert!(reg.load_layer_from_json("fail", &corrupt).await.is_err());
-        // L'état précédent doit être préservé à 100% (Isolation RCU)
-        assert!(SharedRef::ptr_eq(&state_before, &reg.get_state()));
-        Ok(())
+        let root: SharedRef<str> = SharedRef::from("CoreNode");
+        let child: SharedRef<str> = SharedRef::from("Actor");
+
+        s.classes.insert(
+            child.clone(),
+            Class {
+                iri: child.clone(),
+                label: SharedRef::from(""),
+                comment: SharedRef::from(""),
+                sub_class_of: Some(root.clone()),
+            },
+        );
+
+        // Appel direct via le type.
+        VocabularyRegistry::rebuild_ancestry(&mut s);
+
+        let ancestors = s
+            .ancestry
+            .get(&child)
+            .expect("L'entrée d'ancêtre devrait exister.");
+        assert!(ancestors.contains(&root));
     }
 }

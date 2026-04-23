@@ -171,6 +171,7 @@ fn translate_query(sql_query: &SqlQuery) -> RaiseResult<Query> {
             .collect();
         offset = digits.parse::<usize>().ok();
     }
+
     let sort = if let Some(order_by_struct) = &sql_query.order_by {
         match &order_by_struct.kind {
             OrderByKind::Expressions(exprs) => {
@@ -470,13 +471,17 @@ fn sql_value_to_json(val: &SqlJsonValue) -> RaiseResult<JsonValue> {
     }
 }
 
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json_db::transactions::TransactionRequest;
 
     #[test]
-    fn test_parse_insert() {
+    fn test_parse_insert() -> RaiseResult<()> {
         let sql = "INSERT INTO users (name, age) VALUES ('Alice', 30), ('Bob', 25)";
         let result = parse_sql(sql).unwrap();
 
@@ -498,15 +503,18 @@ mod tests {
             }
             _ => panic!("Expected Write request"),
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_parse_select_legacy() {
+    fn test_parse_select_legacy() -> RaiseResult<()> {
         let sql = "SELECT name FROM users WHERE age > 18";
         let result = parse_sql(sql).unwrap();
         match result {
             SqlRequest::Read(q) => assert_eq!(q.collection, "users"),
             _ => panic!("Expected Read request"),
         }
+        Ok(())
     }
 }
