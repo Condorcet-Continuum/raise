@@ -2,7 +2,7 @@
 
 use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 
-use crate::common::{setup_test_env, LlmMode};
+use crate::common::{get_test_wm_config, setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
@@ -72,11 +72,11 @@ async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
     data_mgr.create_collection("types", generic_schema).await?;
 
     // --- 🎯 3. CONTEXTE & EXÉCUTION ---
-    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_data");
+    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_data")?;
 
     let world_engine = SharedRef::new(
         raise::ai::world_model::NeuroSymbolicEngine::new(
-            raise::utils::data::config::WorldModelConfig::default(),
+            get_test_wm_config(),
             NeuralWeightsMap::new(),
         )
         .expect("WM Engine fail"),
@@ -91,7 +91,7 @@ async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
         test_root.clone(),
         test_root.join("dataset"),
     )
-    .await;
+    .await?;
 
     let agent = DynamicAgent::new(agent_urn);
 
@@ -199,7 +199,7 @@ mod resilience_tests {
         // 2. Préparation du contexte d'exécution
         let world_engine = SharedRef::new(
             raise::ai::world_model::NeuroSymbolicEngine::new(
-                raise::utils::data::config::WorldModelConfig::default(),
+                get_test_wm_config(),
                 NeuralWeightsMap::new(),
             )
             .expect("WM Engine fail"),
@@ -219,7 +219,7 @@ mod resilience_tests {
             test_root.clone(),
             test_root.join("dataset"),
         )
-        .await;
+        .await?;
 
         let agent = DynamicAgent::new("agent_broken");
 

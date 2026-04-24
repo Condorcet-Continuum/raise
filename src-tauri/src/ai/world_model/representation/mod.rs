@@ -9,6 +9,7 @@ pub use quantizer::VectorQuantizer;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::world_model::engine::WorldModelConfig;
     use crate::utils::prelude::*;
 
     #[test]
@@ -17,7 +18,7 @@ mod tests {
         let vb =
             NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &ComputeHardware::Cpu);
 
-        // 🎯 FIX : On crée une config locale pour le test
+        //  On crée une config locale pour le test
         let config = WorldModelConfig {
             vocab_size: 10,
             embedding_dim: 4,
@@ -26,7 +27,7 @@ mod tests {
             use_gpu: false,
         };
 
-        // 🎯 FIX : On passe la référence à la config
+        //  On passe la référence à la config
         let vq = VectorQuantizer::new(&config, vb);
         assert!(vq.is_ok(), "L'API VectorQuantizer doit être accessible.");
     }

@@ -14,88 +14,107 @@ use crate::utils::prelude::*; // 🎯 Façade Unique
 pub mod persistence {
     use super::*;
 
-    /// Sauvegarde un rapport de qualité dans le JsonDb en utilisant le schéma maître système.
+    /// Sauvegarde un rapport de qualité dans le JsonDb en utilisant les réglages dynamiques.
     pub async fn save_quality_report(
         manager: &CollectionsManager<'_>,
         report: &QualityReport,
     ) -> RaiseResult<String> {
-        let app_config = AppConfig::get();
+        // 🎯 DATA-DRIVEN : Lecture depuis la configuration du composant
+        let settings =
+            AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_assurance").await?;
 
-        // 🎯 FIX MOUNT POINTS : Résolution du schéma via la partition système configurée
-        let schema_uri = format!(
-            "db://{}/{}/schemas/v2/assurance/quality_report.schema.json",
-            app_config.mount_points.system.domain, app_config.mount_points.system.db
-        );
+        let coll_name = match settings["quality_collection"].as_str() {
+            Some(c) => c.to_string(),
+            None => raise_error!(
+                "ERR_ASSURANCE_CONFIG",
+                error = "Paramètre 'quality_collection' manquant dans service_settings."
+            ),
+        };
+
+        let schema_uri = match settings["quality_schema"].as_str() {
+            Some(s) => s.to_string(),
+            None => raise_error!(
+                "ERR_ASSURANCE_CONFIG",
+                error = "Paramètre 'quality_schema' manquant dans service_settings."
+            ),
+        };
 
         // S'assure que la collection existe (idempotent)
-        if let Err(e) = manager
-            .create_collection("quality_reports", &schema_uri)
-            .await
-        {
+        if let Err(e) = manager.create_collection(&coll_name, &schema_uri).await {
             user_trace!(
                 "INF_COLL_EXISTS",
-                json_value!({"coll": "quality_reports", "error": e.to_string()})
+                json_value!({"coll": coll_name, "error": e.to_string()})
             );
         }
 
         let doc = json::serialize_to_value(report)?;
 
         // 🎯 Rigueur : Match sur l'opération d'écriture
-        match manager.upsert_document("quality_reports", doc).await {
+        match manager.upsert_document(&coll_name, doc).await {
             Ok(_) => Ok(report.id.clone()),
             Err(e) => {
-                // 🎯 FIX : La macro diverge, pas de 'return'.
                 raise_error!(
                     "ERR_ASSURANCE_SAVE_REPORT_FAILED",
                     error = e.to_string(),
-                    context = json_value!({ "report_id": report.id, "type": "QualityReport" })
+                    context = json_value!({ "report_id": report.id, "type": "QualityReport", "collection": coll_name })
                 );
             }
         }
     }
 
-    /// Sauvegarde une trame d'explicabilité (XAI) dans le JsonDb.
+    /// Sauvegarde une trame d'explicabilité (XAI) dans le JsonDb avec configuration dynamique.
     pub async fn save_xai_frame(
         manager: &CollectionsManager<'_>,
         frame: &XaiFrame,
     ) -> RaiseResult<String> {
-        let app_config = AppConfig::get();
+        // 🎯 DATA-DRIVEN : Lecture depuis la configuration
+        let settings =
+            AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_assurance").await?;
 
-        let schema_uri = format!(
-            "db://{}/{}/schemas/v2/assurance/xai_frame.schema.json",
-            app_config.mount_points.system.domain, app_config.mount_points.system.db
-        );
+        let coll_name = match settings["xai_collection"].as_str() {
+            Some(c) => c.to_string(),
+            None => raise_error!(
+                "ERR_ASSURANCE_CONFIG",
+                error = "Paramètre 'xai_collection' manquant dans service_settings."
+            ),
+        };
 
-        if let Err(e) = manager.create_collection("xai_frames", &schema_uri).await {
+        let schema_uri = match settings["xai_schema"].as_str() {
+            Some(s) => s.to_string(),
+            None => raise_error!(
+                "ERR_ASSURANCE_CONFIG",
+                error = "Paramètre 'xai_schema' manquant dans service_settings."
+            ),
+        };
+
+        if let Err(e) = manager.create_collection(&coll_name, &schema_uri).await {
             user_trace!(
                 "INF_COLL_EXISTS",
-                json_value!({"coll": "xai_frames", "error": e.to_string()})
+                json_value!({"coll": coll_name, "error": e.to_string()})
             );
         }
 
         let doc = json::serialize_to_value(frame)?;
 
-        match manager.upsert_document("xai_frames", doc).await {
+        match manager.upsert_document(&coll_name, doc).await {
             Ok(_) => Ok(frame.id.clone()),
             Err(e) => {
                 raise_error!(
                     "ERR_ASSURANCE_SAVE_XAI_FAILED",
                     error = e.to_string(),
-                    context = json_value!({ "frame_id": frame.id, "type": "XaiFrame" })
+                    context = json_value!({ "frame_id": frame.id, "type": "XaiFrame", "collection": coll_name })
                 );
             }
         }
     }
 }
 
-// 🎯 MODIFICATION : Centralisation de l'exécution avec Assurance (Noyau)
 /// Exécute un agent et garantit la persistance de l'audit (XAI + Qualité).
 pub async fn execute_certified<A: crate::ai::agents::Agent>(
     agent: &A,
     ctx: &crate::ai::agents::AgentContext,
     intent: &crate::ai::agents::intent_classifier::EngineeringIntent,
 ) -> RaiseResult<Option<crate::ai::agents::AgentResult>> {
-    // 1. Exécution de l'agent via le noyau
     let result = agent.process(ctx, intent).await?;
 
     if let Some(res) = &result {
@@ -106,17 +125,13 @@ pub async fn execute_certified<A: crate::ai::agents::Agent>(
             &config.mount_points.system.db,
         );
 
-        // 2. Persistance XAI automatique
         if let Some(frame) = &res.xai_frame {
             let _ = self::persistence::save_xai_frame(&sys_manager, frame).await;
         }
 
-        // 3. Audit de Qualité automatique si modifications (Artefacts)
         if !res.artifacts.is_empty() {
-            let report = self::QualityReport::new(
-                &ctx.paths.domain_root.to_string_lossy(),
-                "active_db", // Ou ctx.db.db_name si disponible
-            );
+            let report =
+                self::QualityReport::new(&ctx.paths.domain_root.to_string_lossy(), "active_db");
             let _ = self::persistence::save_quality_report(&sys_manager, &report).await;
         }
     }
@@ -129,20 +144,36 @@ pub async fn get_xai_frame(
     manager: &CollectionsManager<'_>,
     frame_id: &str,
 ) -> RaiseResult<XaiFrame> {
-    // 1. Recherche directe dans la collection système
-    match manager.get_document("xai_frames", frame_id).await {
+    // 🎯 DATA-DRIVEN : On demande la collection au Kernel
+    let settings =
+        AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_assurance").await?;
+    let coll_name = match settings["xai_collection"].as_str() {
+        Some(c) => c,
+        None => raise_error!(
+            "ERR_ASSURANCE_CONFIG",
+            error = "Paramètre 'xai_collection' manquant dans service_settings."
+        ),
+    };
+
+    match manager.get_document(coll_name, frame_id).await {
         Ok(Some(doc)) => {
             let frame: XaiFrame = json::deserialize_from_value(doc)?;
             Ok(frame)
         }
         Ok(None) => raise_error!(
             "ERR_ASSURANCE_XAI_NOT_FOUND",
-            error = format!("Trame XAI '{}' introuvable.", frame_id)
+            error = format!(
+                "Trame XAI '{}' introuvable dans la collection {}.",
+                frame_id, coll_name
+            )
         ),
         Err(e) => raise_error!("ERR_ASSURANCE_DB_READ", error = e),
     }
 }
 
+// =========================================================================
+// TESTS UNITAIRES (Rigueur Façade & Résilience)
+// =========================================================================
 // =========================================================================
 // TESTS UNITAIRES (Rigueur Façade & Résilience)
 // =========================================================================
@@ -155,10 +186,38 @@ mod tests {
     use crate::ai::assurance::xai::XaiFrame;
     use crate::ai::assurance::xai::{ExplanationScope, XaiMethod};
     use crate::ai::llm::client::LlmClient;
+    use crate::ai::world_model::engine::WorldModelConfig;
     use crate::ai::world_model::NeuroSymbolicEngine;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
 
-    // 1. Mock Agent : Simule un agent qui produit une explication et un artefact
+    fn get_assurance_settings() -> JsonValue {
+        let config = AppConfig::get();
+        let schema_quality = format!(
+            "db://{}/{}/schemas/v2/assurance/quality_report.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        let schema_xai = format!(
+            "db://{}/{}/schemas/v2/assurance/xai_frame.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        json_value!({
+            "quality_collection": "quality_reports",
+            "quality_schema": schema_quality,
+            "xai_collection": "xai_frames",
+            "xai_schema": schema_xai
+        })
+    }
+
+    fn get_test_wm_config() -> WorldModelConfig {
+        WorldModelConfig {
+            vocab_size: 1024,
+            embedding_dim: 512,
+            action_dim: 64,
+            hidden_dim: 1024,
+            use_gpu: false,
+        }
+    }
     struct MockCertifiedAgent;
     #[async_interface]
     impl Agent for MockCertifiedAgent {
@@ -187,7 +246,7 @@ mod tests {
                 message: "Action certifiée terminée.".into(),
                 artifacts: vec![artifact],
                 outgoing_message: None,
-                xai_frame: Some(frame), // On injecte une trame pour le test
+                xai_frame: Some(frame),
             }))
         }
     }
@@ -200,17 +259,18 @@ mod tests {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
-        // 2. Initialisation des moteurs requis pour le contexte
         let sys_mgr = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
 
+        // 🎯 INJECTION PROPRE : On injecte séparément le LLM et l'Assurance
         inject_mock_component(&sys_mgr, "llm", json_value!({})).await?;
+        inject_mock_component(&sys_mgr, "ai_assurance", get_assurance_settings()).await?;
 
         let llm = LlmClient::new(&sys_mgr).await?;
-        let world = SharedRef::new(NeuroSymbolicEngine::new_empty(Default::default())?);
+        let world = SharedRef::new(NeuroSymbolicEngine::new_empty(get_test_wm_config())?);
 
         let ctx = AgentContext::new(
             "test_certified",
@@ -221,23 +281,20 @@ mod tests {
             sandbox.domain_root.clone(),
             sandbox.domain_root.clone(),
         )
-        .await;
+        .await?;
 
         let agent = MockCertifiedAgent;
         let intent = EngineeringIntent::Chat;
 
-        // 3. EXÉCUTION DE LA FONCTION CIBLE
         let result = execute_certified(&agent, &ctx, &intent).await?;
         assert!(result.is_some());
 
-        // 4. VÉRIFICATION DE LA PERSISTANCE (Partition Système)
         let audit_mgr = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
 
-        // 1. Vérification XAI
         let query_xai = Query::new("xai_frames");
         let xai_res = QueryEngine::new(&audit_mgr)
             .execute_query(query_xai)
@@ -248,7 +305,6 @@ mod tests {
             "La trame XAI aurait dû être sauvegardée."
         );
 
-        // 2. Vérification Qualité
         let query_quality = Query::new("quality_reports");
         let quality_res = QueryEngine::new(&audit_mgr)
             .execute_query(query_quality)
@@ -274,7 +330,9 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // 1. Test Sauvegarde Quality Report
+        // 🎯 INJECTION PROPRE
+        inject_mock_component(&manager, "ai_assurance", get_assurance_settings()).await?;
+
         let mut report = QualityReport::new("model_v2_resilient", "dataset_gold");
         report.add_metric(
             "Precision",
@@ -287,17 +345,14 @@ mod tests {
 
         let report_id = persistence::save_quality_report(&manager, &report).await?;
 
-        // 🎯 Vérification via Match strict (Zéro Dette)
         let saved_report = match manager.get_document("quality_reports", &report_id).await? {
             Some(doc) => doc,
-            // 🎯 FIX : Suppression du 'return' devant la macro
             None => raise_error!("ERR_TEST_FAIL", error = "Rapport non persisté"),
         };
 
         assert_eq!(saved_report["model_id"], "model_v2_resilient");
         assert_eq!(saved_report["global_score"], 100.0);
 
-        // 2. Test Sauvegarde XAI Frame
         let frame = XaiFrame::new(
             "model_v2_resilient",
             XaiMethod::Lime,
@@ -307,7 +362,6 @@ mod tests {
 
         let saved_frame = match manager.get_document("xai_frames", &frame_id).await? {
             Some(doc) => doc,
-            // 🎯 FIX : Suppression du 'return' devant la macro
             None => raise_error!("ERR_TEST_FAIL", error = "Trame XAI introuvable"),
         };
 
@@ -329,6 +383,9 @@ mod tests {
         );
 
         DbSandbox::mock_db(&ws_manager).await?;
+
+        // 🎯 INJECTION PROPRE
+        inject_mock_component(&ws_manager, "ai_assurance", get_assurance_settings()).await?;
 
         let report = QualityReport::new("ws_model", "ws_data");
         let result = persistence::save_quality_report(&ws_manager, &report).await;
@@ -353,6 +410,9 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+
+        // 🎯 INJECTION PROPRE
+        inject_mock_component(&manager, "ai_assurance", get_assurance_settings()).await?;
 
         let mut report = QualityReport::new("err_test", "void");
         report.id = "".to_string();

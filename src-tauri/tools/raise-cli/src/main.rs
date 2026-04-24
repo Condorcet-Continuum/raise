@@ -461,7 +461,7 @@ impl CliContext {
             .unwrap_or_else(|| domain_path.join("dataset"));
 
         // 🎯 Forge du contexte en utilisant les moteurs de l'orchestrateur
-        Ok(AgentContext::new(
+        AgentContext::new(
             agent_id,
             &session.id,
             self.storage.clone(),
@@ -470,7 +470,7 @@ impl CliContext {
             domain_path,
             dataset_path,
         )
-        .await)
+        .await
     }
 
     #[cfg(test)]

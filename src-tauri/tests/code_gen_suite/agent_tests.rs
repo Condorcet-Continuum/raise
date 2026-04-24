@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/code_gen_suite/agent_tests.rs
 
-use crate::common::{setup_test_env, LlmMode};
+use crate::common::{get_test_wm_config, setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::{EngineeringIntent, IntentClassifier};
 use raise::ai::agents::{dynamic_agent::DynamicAgent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
@@ -60,11 +60,11 @@ async fn test_software_agent_creates_component_end_to_end() -> RaiseResult<()> {
         .await?;
 
     // --- 🎯 3. CONTEXTE & EXÉCUTION IA ---
-    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_codegen");
+    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_codegen")?;
 
     let world_engine = SharedRef::new(
         raise::ai::world_model::NeuroSymbolicEngine::new(
-            raise::utils::data::config::WorldModelConfig::default(),
+            get_test_wm_config(),
             NeuralWeightsMap::new(),
         )
         .expect("WM Engine fail"),
@@ -197,7 +197,7 @@ mod resilience_tests {
         // 2. Préparation du contexte d'exécution
         let world_engine = SharedRef::new(
             raise::ai::world_model::NeuroSymbolicEngine::new(
-                raise::utils::data::config::WorldModelConfig::default(),
+                get_test_wm_config(),
                 NeuralWeightsMap::new(),
             )
             .expect("WM Engine fail"),
@@ -217,7 +217,7 @@ mod resilience_tests {
             test_root.clone(),
             test_root.join("dataset"),
         )
-        .await;
+        .await?;
 
         let agent = DynamicAgent::new("agent_broken_codegen");
 

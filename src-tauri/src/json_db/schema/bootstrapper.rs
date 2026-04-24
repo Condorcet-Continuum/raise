@@ -16,6 +16,15 @@ impl<'a> SchemaBootstrapper<'a> {
         Self { manager }
     }
 
+    /// 🎯 Utilitaires Zéro Dette : Construit dynamiquement le préfixe URI du BIOS
+    fn get_bios_uri_prefix() -> String {
+        let domain = crate::utils::core::RuntimeEnv::var("RAISE_BOOTSTRAP_DOMAIN")
+            .unwrap_or_else(|_| "_system".to_string());
+        let db = crate::utils::core::RuntimeEnv::var("RAISE_BOOTSTRAP_DB")
+            .unwrap_or_else(|_| "bootstrap".to_string());
+        format!("db://{}/{}", domain, db)
+    }
+
     // ========================================================================
     // ORCHESTRATEUR PRINCIPAL
     // ========================================================================
@@ -47,9 +56,14 @@ impl<'a> SchemaBootstrapper<'a> {
         let ddl = DdlHandler::new(self.manager);
         let mut materialized_count = 0;
 
+        let bootstrap_uri = format!(
+            "{}/schemas/v2/system/db/index_bootstrap.schema.json",
+            Self::get_bios_uri_prefix()
+        );
+
         let global_registry = SchemaRegistry::from_uri(
             &self.manager.storage.config,
-            "db://_system/bootstrap/schemas/v2/system/db/index_bootstrap.schema.json",
+            &bootstrap_uri,
             &self.manager.space,
             &self.manager.db,
         )
@@ -70,17 +84,14 @@ impl<'a> SchemaBootstrapper<'a> {
 
         for external_uri in schemas_to_clone {
             if let Some(schema_content) = global_registry.get_by_uri(&external_uri) {
-                let version = external_uri
-                    .split("/schemas/")
-                    .nth(1)
-                    .and_then(|s| s.split('/').next())
-                    .unwrap_or("v2");
-                let rel_path = external_uri
-                    .split(&format!("/schemas/{}/", version))
-                    .nth(1)
-                    .unwrap_or(&external_uri);
+                // Parsing robuste via pattern matching
+                let rel_path = if let Some(idx) = external_uri.find("/schemas/") {
+                    // On prend tout ce qui est après le préfixe "db://domain/db/schemas/"
+                    &external_uri[idx + 9..]
+                } else {
+                    &external_uri
+                };
 
-                // 🎯 On passe le jeton au DdlHandler
                 ddl.create_schema(tx, rel_path, schema_content.clone())
                     .await?;
                 materialized_count += 1;
@@ -142,6 +153,11 @@ impl<'a> SchemaBootstrapper<'a> {
         let mgr = self.manager;
         let col_name = "_migrations";
 
+        let migration_schema_uri = format!(
+            "{}/schemas/v2/db/migration.schema.json",
+            Self::get_bios_uri_prefix()
+        );
+
         // Si la collection n'existe pas dans le jeton, on la crée
         if tx
             .document
@@ -150,10 +166,9 @@ impl<'a> SchemaBootstrapper<'a> {
             .is_none()
         {
             let ddl = DdlHandler::new(mgr);
-            let uri = "db://_system/bootstrap/schemas/v2/db/migration.schema.json";
-            ddl.create_collection(tx, col_name, uri).await?;
+            ddl.create_collection(tx, col_name, &migration_schema_uri)
+                .await?;
         }
-
         let col_path = mgr
             .storage
             .config
@@ -163,7 +178,7 @@ impl<'a> SchemaBootstrapper<'a> {
         if !fs::exists_async(&doc_path).await {
             let migration_doc = json_value!({
                 "_id": version,
-                "$schema": "db://_system/bootstrap/schemas/v2/db/migration.schema.json",
+                "$schema": migration_schema_uri,
                 "version": version,
                 "description": description,
                 "applied_at": UtcClock::now().to_rfc3339()

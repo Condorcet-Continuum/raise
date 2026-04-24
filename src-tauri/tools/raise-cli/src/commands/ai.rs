@@ -176,7 +176,6 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
     // 1. GESTION DE SESSION OBLIGATOIRE (Heartbeat global pour toutes les commandes)
     let _ = ctx.session_mgr.touch().await;
 
-    // 🎯 FIX CRITIQUE : Suppression du expect() en production
     let domain_path = match ctx.config.get_path("PATH_RAISE_DOMAIN") {
         Some(path) => path,
         None => raise_error!(
@@ -216,7 +215,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
             let final_domain = domain.clone().unwrap_or_else(|| ctx.active_domain.clone());
             let final_db = target_db.clone().unwrap_or_else(|| ctx.active_db.clone());
             let final_epochs = epochs.unwrap_or(3);
-            let final_lr = lr.unwrap_or(ctx.config.deep_learning.learning_rate);
+            let final_lr = lr.unwrap_or(0.001);
 
             user_info!(
                 "AI_TRAINING_START",
@@ -265,7 +264,21 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         .map(|s| s.id.clone())
         .unwrap_or_else(|| "cli_session".to_string());
 
-    let wm_config = raise::utils::data::config::WorldModelConfig::default();
+    // 1. On crée un manager pointant sur la partition système
+    let sys_manager = raise::json_db::collections::manager::CollectionsManager::new(
+        &storage,
+        &ctx.config.mount_points.system.domain,
+        &ctx.config.mount_points.system.db,
+    );
+    // 2. On récupère les settings du World Model (Zéro Dette)
+    let wm_settings =
+        AppConfig::get_runtime_settings(&sys_manager, "ref:components:handle:ai_world_model")
+            .await?;
+    let wm_config: raise::ai::world_model::engine::WorldModelConfig =
+        match json::deserialize_from_value(wm_settings) {
+            Ok(cfg) => cfg,
+            Err(e) => raise_error!("ERR_WM_CONFIG_DESERIALIZE", error = e.to_string()),
+        };
 
     // 🎯 FIX CRITIQUE : Suppression du expect() en production
     let world_engine = match raise::ai::world_model::NeuroSymbolicEngine::new_empty(wm_config) {
@@ -286,7 +299,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         domain_path.clone(),
         dataset_path,
     )
-    .await;
+    .await?;
 
     // 4. EXÉCUTION DES COMMANDES AGENTS/LLM
     match command {

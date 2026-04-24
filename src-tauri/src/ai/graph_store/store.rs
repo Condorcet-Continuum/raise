@@ -22,8 +22,16 @@ impl GraphStore {
         let app_config = AppConfig::get();
         let use_vectors =
             app_config.core.graph_mode == "internal" || app_config.core.graph_mode == "db";
-        let embedding_dim = app_config.world_model.embedding_dim;
-
+        let wm_settings =
+            AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_graph_store")
+                .await?;
+        let embedding_dim = match wm_settings.get("embedding_dim").and_then(|v| v.as_u64()) {
+                Some(dim) => dim as usize,
+                None => raise_error!(
+                    "ERR_GRAPH_CONFIG_INVALID",
+                    error = "Le paramètre 'embedding_dim' est manquant ou invalide dans la configuration de 'ai_graph_store'."
+                ),
+            };
         let mut vector_store = None;
         let mut embedder = None;
 
@@ -213,7 +221,30 @@ pub fn extract_rich_semantic_content(data: &JsonValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
+    use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
+
+    async fn setup_store_test_env(sandbox: &AgentDbSandbox) -> RaiseResult<CollectionsManager<'_>> {
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+        DbSandbox::mock_db(&manager).await?;
+
+        // 🎯 Injection stricte des settings pour satisfaire le Gatekeeper
+        inject_mock_component(
+            &manager,
+            "ai_graph_store",
+            json_value!({
+                "embedding_dim": 512,
+                "provider": "native"
+            }),
+        )
+        .await?;
+
+        Ok(manager)
+    }
 
     #[test]
     fn test_rich_semantic_extraction() {
@@ -239,13 +270,7 @@ mod tests {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
 
-        // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
-        DbSandbox::mock_db(&manager).await?;
+        let manager = setup_store_test_env(&sandbox).await?;
 
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
@@ -282,13 +307,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_store_resilience_missing_source() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
-        DbSandbox::mock_db(&manager).await?;
+        let manager = setup_store_test_env(&sandbox).await?;
 
         let store = GraphStore::new(sandbox.domain_root.clone(), &manager).await?;
 
@@ -309,12 +328,7 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_store_initialization_no_vectors() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
+        let manager = setup_store_test_env(&sandbox).await?;
 
         // On initialise sans mock NLP : le GraphStore doit passer en mode dégradé documentaire sans crasher
         let store = GraphStore::new(sandbox.domain_root.clone(), &manager).await?;

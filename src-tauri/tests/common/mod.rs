@@ -3,8 +3,9 @@
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
 // 🎯 Utilisation de la façade testing pour l'isolation totale
+use raise::ai::world_model::engine::WorldModelConfig;
 use raise::utils::prelude::*;
-use raise::utils::testing::{inject_mock_component, DbSandbox}; // 🎯 Façade Unique RAISE
+use raise::utils::testing::{inject_mock_component, DbSandbox};
 
 static INIT: InitGuard = InitGuard::new();
 
@@ -21,6 +22,18 @@ pub struct UnifiedTestEnv {
     pub client: Option<LlmClient>,
     pub space: String,
     pub db: String,
+}
+
+/// Fournit une configuration déterministe du World Model pour l'ensemble des tests
+#[allow(dead_code)]
+pub fn get_test_wm_config() -> WorldModelConfig {
+    WorldModelConfig {
+        vocab_size: 1024,
+        embedding_dim: 512,
+        action_dim: 64,
+        hidden_dim: 1024,
+        use_gpu: false,
+    }
 }
 
 /// Initialise un environnement de test robuste et résilien

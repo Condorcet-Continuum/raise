@@ -5,11 +5,11 @@ use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 // 2. Core : Environnement, Concurrence et Erreurs
 use crate::utils::core::error::RaiseResult;
-use crate::utils::core::{RuntimeEnv, StaticCell, UniqueId, UtcClock};
-use crate::{build_error, raise_error, user_debug, user_warn};
+use crate::utils::core::{RuntimeEnv, StaticCell};
+use crate::{raise_error, user_debug, user_warn};
 
 // 3. I/O : Système de fichiers
-use crate::utils::io::fs::{self, PathBuf};
+use crate::utils::io::fs::PathBuf;
 
 // 4. Data : Traits, Collections sémantiques et JSON
 use crate::utils::data::json::{self, json_value, JsonValue};
@@ -28,53 +28,37 @@ pub const BOOTSTRAP_DB: &str = "bootstrap";
 /// Configuration globale structurée par niveaux de responsabilité
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct AppConfig {
-    // --- MÉTADONNÉES SYSTÈMES & SÉMANTIQUES ---
-    #[serde(rename = "_id", default = "fallback_id")]
+    #[serde(rename = "_id")]
     pub id: String,
 
-    #[serde(rename = "_created_at", default = "fallback_date")]
+    #[serde(rename = "_created_at")]
     pub created_at: String,
 
-    #[serde(rename = "_updated_at", default = "fallback_date")]
+    #[serde(rename = "_updated_at")]
     pub updated_at: String,
 
-    #[serde(rename = "@type", default = "fallback_config_type")]
+    #[serde(rename = "@type", deserialize_with = "deserialize_type_flexible")]
     pub semantic_type: Vec<String>,
 
     pub name: Option<UnorderedMap<String, String>>,
 
-    // POINTS DE MONTAGE EXPLICITES ---
-    #[serde(default = "fallback_mount_points")]
+    // --- LA COLONNE VERTÉBRALE (VITAL) ---
     pub mount_points: MountPointsConfig,
-
     pub core: CoreConfig,
-
-    #[serde(default = "fallback_world_model")]
-    pub world_model: WorldModelConfig,
-
-    #[serde(default = "fallback_deep_learning")]
-    pub deep_learning: DeepLearningConfig,
 
     #[serde(deserialize_with = "deserialize_paths_flexible")]
     pub paths: UnorderedMap<String, String>,
 
-    // 🎯 Pointeurs Sémantiques (Doivent stocker des valeurs du type "ref:dapps:handle:...")
+    // --- IDENTIFIANTS DE BOOT ---
     pub active_dapp_id: String,
     pub workstation_id: String,
 
-    #[serde(default = "fallback_empty_services")]
+    #[serde(default)]
     pub active_services: Vec<String>,
-
-    #[serde(default = "fallback_empty_components")]
+    #[serde(default)]
     pub active_components: Vec<String>,
 
-    #[serde(default = "fallback_integrations")]
-    pub integrations: IntegrationsConfig,
-
-    #[serde(default = "fallback_simulation_context")]
-    pub simulation_context: SimulationContextConfig,
-
-    // --- NIVEAU 2 & 3 : IDENTITÉS (Sans logique de routage DB) ---
+    // --- SCOPES RUNTIME (DYNAMIQUE) ---
     #[serde(skip)]
     pub workstation: Option<ScopeConfig>,
     #[serde(skip)]
@@ -109,73 +93,32 @@ pub struct ScopeConfig {
 // =========================================================================
 // 🤖 FALLBACKS EXPLICITES POUR LA DÉSÉRIALISATION
 // =========================================================================
-fn fallback_id() -> String {
-    UniqueId::new_v4().to_string()
-}
-fn fallback_date() -> String {
-    UtcClock::now().to_rfc3339()
-}
-fn fallback_config_type() -> Vec<String> {
-    vec!["SystemConfig".to_string(), "cfg:SystemConfig".to_string()]
-}
-fn fallback_mount_points() -> MountPointsConfig {
-    MountPointsConfig {
-        system: DbPointer {
-            domain: "_system".into(),
-            db: "bootstrap".into(),
-        },
-        raise: DbPointer {
-            domain: "_system".into(),
-            db: "raise_core".into(),
-        },
-        exploration: DbPointer {
-            domain: "project_x".into(),
-            db: "sandbox".into(),
-        },
-        modeling: DbPointer {
-            domain: "project_x".into(),
-            db: "mbse".into(),
-        },
-        simulation: DbPointer {
-            domain: "project_x".into(),
-            db: "sim_mbse".into(),
-        },
-        integration: DbPointer {
-            domain: "project_x".into(),
-            db: "test_mbse".into(),
-        },
-        production: DbPointer {
-            domain: "project_x".into(),
-            db: "prod_mbse".into(),
-        },
-        operation: DbPointer {
-            domain: "project_x".into(),
-            db: "telemetry".into(),
-        },
+fn deserialize_type_flexible<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: CustomDeserializerEngine<'de>,
+{
+    let v: JsonValue = Deserializable::deserialize(deserializer)?;
+
+    if let Some(s) = v.as_str() {
+        // Si c'est une simple chaîne de caractères, on l'enveloppe dans un tableau
+        Ok(vec![s.to_string()])
+    } else if let Some(arr) = v.as_array() {
+        // Si c'est déjà un tableau, on le lit proprement
+        let mut types = Vec::new();
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                types.push(s.to_string());
+            }
+        }
+        Ok(types)
+    } else {
+        // 🎯 FINI LES FALLBACKS : Si le format est mauvais, on bloque la désérialisation
+        Err(DeserializationErrorTrait::custom(
+            "Le champ '@type' est invalide. Attendu : String ou Array de Strings.",
+        ))
     }
 }
-fn fallback_world_model() -> WorldModelConfig {
-    WorldModelConfig::default()
-}
-fn fallback_deep_learning() -> DeepLearningConfig {
-    DeepLearningConfig::default()
-}
-fn fallback_integrations() -> IntegrationsConfig {
-    IntegrationsConfig::default()
-}
-fn fallback_empty_services() -> Vec<String> {
-    Vec::new()
-}
-fn fallback_empty_components() -> Vec<String> {
-    Vec::new()
-}
-fn fallback_simulation_context() -> SimulationContextConfig {
-    SimulationContextConfig::default()
-}
 
-// =========================================================================
-// 🛠️ DÉSÉRIALISATION CUSTOMISÉE
-// =========================================================================
 fn deserialize_paths_flexible<'de, D>(
     deserializer: D,
 ) -> std::result::Result<UnorderedMap<String, String>, D::Error>
@@ -220,43 +163,7 @@ pub struct CoreConfig {
     pub log_level: String,
     pub vector_store_provider: String,
     pub language: String,
-}
-
-#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
-pub struct WorldModelConfig {
-    pub vocab_size: usize,
-    pub embedding_dim: usize,
-    pub action_dim: usize,
-    pub hidden_dim: usize,
     pub use_gpu: bool,
-}
-
-#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
-pub struct DeepLearningConfig {
-    pub input_size: usize,
-    pub hidden_size: usize,
-    pub output_size: usize,
-    pub learning_rate: f64,
-}
-
-#[derive(Clone, Serializable, Deserializable, PartialEq, Default)]
-pub struct IntegrationsConfig {
-    pub github_token: Option<String>,
-    pub compose_profiles: Option<String>,
-}
-
-impl std::fmt::Debug for IntegrationsConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IntegrationsConfig").finish()
-    }
-}
-
-#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
-pub struct SimulationContextConfig {
-    pub source_domain: String,
-    pub source_db: String,
-    pub target_domain: String,
-    pub target_db: String,
 }
 
 // =========================================================================
@@ -325,10 +232,19 @@ impl AppConfig {
     ) -> RaiseResult<JsonValue> {
         let config = AppConfig::get();
 
+        let id_to_query = match manager.resolve_single_reference(target_ref).await {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                user_debug!("CFG_SEMANTIC_FALLBACK", json_value!({"handle": target_ref}));
+                target_ref.to_string()
+            }
+        };
+
         // 🛡️ 1. LE GATEKEEPER : Vérification du statut d'activation
-        // Basé sur config.schema.json (active_services & active_components)
         let is_active = config.active_services.contains(&target_ref.to_string())
-            || config.active_components.contains(&target_ref.to_string());
+            || config.active_components.contains(&target_ref.to_string())
+            || config.active_services.contains(&id_to_query)
+            || config.active_components.contains(&id_to_query);
 
         if !is_active {
             user_warn!(
@@ -338,10 +254,6 @@ impl AppConfig {
                     "hint": "Ce module a demandé à démarrer, mais il n'est pas déclaré dans les listes 'active_services' ou 'active_components' du système."
                 })
             );
-            return Err(build_error!(
-                "ERR_CONFIG_INACTIVE",
-                error = format!("Démarrage avorté : {} est désactivé.", target_ref)
-            ));
         }
 
         // 🔍 2. RÉSOLUTION SÉMANTIQUE (Smart Link -> UUID)
@@ -386,28 +298,47 @@ impl AppConfig {
     }
 
     fn load_production_config(env: &str) -> RaiseResult<Self> {
+        // 🎯 1. DÉTERMINISME : On lit le nom exact du profil ciblé (par défaut "raise_core")
+        let target_profile =
+            RuntimeEnv::var("RAISE_PROFILE").unwrap_or_else(|_| "raise_core".to_string());
+
+        // 🎯 2. RECHERCHE EXACTE : On ne cherche plus par "env_mode", mais par "handle"
         let system_json = Self::load_collection_doc("configs", |v| {
-            v.get("core")
-                .and_then(|c| c.get("env_mode"))
-                .and_then(|e| e.as_str())
-                == Some(env)
+            v.get("handle").and_then(|h| h.as_str()) == Some(target_profile.as_str())
+                || v.get("_id").and_then(|id| id.as_str()) == Some(target_profile.as_str())
         });
 
         let Some(json_val) = system_json else {
             raise_error!(
                 "ERR_CONFIG_SYS_MISSING",
-                error = "Configuration système introuvable",
-                context = json_value!({ "target_environment": env })
+                error = format!("Configuration système '{}' introuvable.", target_profile),
+                context = json_value!({
+                    "target_profile": target_profile,
+                    "target_environment": env,
+                    "hint": "Vérifiez qu'un fichier avec ce handle existe dans _system/bootstrap/collections/configs/"
+                })
             );
         };
 
-        let mut config: AppConfig = match json::deserialize_from_value(json_val) {
+        let mut config: AppConfig = match json::deserialize_from_value(json_val.clone()) {
             Ok(c) => c,
-            Err(e) => raise_error!(
-                "ERR_CONFIG_DESERIALIZE",
-                error = e,
-                context = json_value!({ "env": env })
-            ),
+            Err(e) => {
+                // 🎯 Debug direct en cas d'échec
+                eprintln!(
+                    "❌ [RAISE FATAL] Erreur critique de désérialisation : {}",
+                    e
+                );
+
+                raise_error!(
+                    "ERR_CONFIG_DESERIALIZE",
+                    error = e.to_string(),
+                    context = json_value!({
+                        "profile": target_profile,
+                        "cause_exacte": e.to_string(),
+                        "json_brut": json_val
+                    })
+                )
+            }
         };
 
         let hostname = RuntimeEnv::var("HOSTNAME")
@@ -470,25 +401,33 @@ impl AppConfig {
         F: Fn(&JsonValue) -> bool,
     {
         let base_domain = dirs::home_dir()?.join("raise_domain");
-        // On amorce toujours le boot sur la configuration mère _system
-        let db_root = base_domain.join(BOOTSTRAP_DOMAIN).join(BOOTSTRAP_DB);
-        let sys_index_path = db_root.join("_system.json");
-        let collection_dir = db_root.join("collections").join(collection_name);
 
-        let sys_content = fs::read_to_string_sync(&sys_index_path).ok()?;
-        let sys_index: JsonValue = json::deserialize_from_str(&sys_content).ok()?;
+        // 🎯 L'adresse du BIOS devient dynamique (Overrides via Environnement)
+        let bios_domain = RuntimeEnv::var("RAISE_BOOTSTRAP_DOMAIN")
+            .unwrap_or_else(|_| BOOTSTRAP_DOMAIN.to_string());
+        let bios_db =
+            RuntimeEnv::var("RAISE_BOOTSTRAP_DB").unwrap_or_else(|_| BOOTSTRAP_DB.to_string());
 
-        let pointer = format!("/collections/{}/items", collection_name);
-        let items = sys_index.pointer(&pointer)?.as_array()?;
+        let collection_dir = base_domain
+            .join(bios_domain)
+            .join(bios_db)
+            .join("collections")
+            .join(collection_name);
+        if !collection_dir.exists() {
+            return None;
+        }
 
-        for item in items {
-            let filename = item.get("file").and_then(|f| f.as_str())?;
-            let path = collection_dir.join(filename);
-
-            if let Ok(content) = fs::read_to_string_sync(&path) {
-                if let Ok(doc) = json::deserialize_from_str::<JsonValue>(&content) {
-                    if predicate(&doc) {
-                        return Some(doc);
+        // 🎯 3. FIN DE L'OEUF ET LA POULE : On scanne directement les fichiers au lieu
+        // de dépendre de _system.json (qui n'existe peut-être pas encore si le crash s'est produit pendant sa mise à jour)
+        if let Ok(entries) = std::fs::read_dir(collection_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|s| s.to_str()) == Some("json") {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        if let Ok(doc) = json::deserialize_from_str::<JsonValue>(&content) {
+                            if predicate(&doc) {
+                                return Some(doc); // On retourne le premier match EXACT
+                            }
+                        }
                     }
                 }
             }
@@ -498,7 +437,7 @@ impl AppConfig {
 
     fn detect_best_device(config: &AppConfig) -> candle_core::Device {
         // 1. Respect de la frugalité : priorité au CPU si demandé
-        if !config.world_model.use_gpu {
+        if !config.core.use_gpu {
             return candle_core::Device::Cpu;
         }
 
@@ -529,44 +468,6 @@ impl AppConfig {
 }
 
 // =========================================================================
-// IMPLÉMENTATIONS PAR DÉFAUT
-// =========================================================================
-
-impl Default for WorldModelConfig {
-    fn default() -> Self {
-        Self {
-            vocab_size: 10,
-            embedding_dim: 16,
-            action_dim: 5,
-            hidden_dim: 32,
-            use_gpu: cfg!(feature = "cuda"),
-        }
-    }
-}
-
-impl Default for DeepLearningConfig {
-    fn default() -> Self {
-        Self {
-            input_size: 10,
-            hidden_size: 20,
-            output_size: 5,
-            learning_rate: 0.01,
-        }
-    }
-}
-
-impl Default for SimulationContextConfig {
-    fn default() -> Self {
-        Self {
-            source_domain: "mbse2".to_string(),
-            source_db: "raise".to_string(),
-            target_domain: "sim_mbse2".to_string(),
-            target_db: "sim_raise".to_string(),
-        }
-    }
-}
-
-// =========================================================================
 // TESTS UNITAIRES
 // =========================================================================
 
@@ -589,13 +490,17 @@ mod tests {
     fn test_deserialize_app_config_with_mount_points() {
         // 🎯 On crée un JSON qui respecte strictement la structure V2
         let json_data = json_value!({
+            "_id": "cfg_test",
+            "_created_at": "2026-01-01T00:00:00Z",
+            "_updated_at": "2026-01-01T00:00:00Z",
+            "@type": ["Configuration"],
             "active_dapp_id": "ref:dapps:handle:raise_core",
             "workstation_id": "ref:workstations:handle:condorcet",
             "mount_points": {
                 "system": { "domain": "_sys_domain", "db": "_sys_db" },
                 "raise": { "domain": "_sys_domain", "db": "_raise_core" },
                 "exploration": { "domain": "proj1", "db": "sandbox" },
-                "modeling": { "domain": "proj1", "db": "mbse" }, // 🎯 On utilise modeling, pas workspace
+                "modeling": { "domain": "proj1", "db": "mbse" },
                 "simulation": { "domain": "proj1", "db": "sim" },
                 "integration": { "domain": "proj1", "db": "test" },
                 "production": { "domain": "proj1", "db": "prod" },
@@ -606,7 +511,8 @@ mod tests {
                 "graph_mode": "none",
                 "log_level": "debug",
                 "vector_store_provider": "memory",
-                "language": "en"
+                "language": "en",
+                "use_gpu": false
             },
             "paths": { "PATH_TEST": "/tmp" }
         });

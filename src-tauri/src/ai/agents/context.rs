@@ -35,8 +35,8 @@ impl AgentContext {
         world_engine: SharedRef<NeuroSymbolicEngine>,
         domain_root: PathBuf,
         dataset_root: PathBuf,
-    ) -> Self {
-        Self {
+    ) -> RaiseResult<Self> {
+        Ok(Self {
             agent_id: agent_id.to_string(),
             session_id: session_id.to_string(),
             db,
@@ -47,11 +47,17 @@ impl AgentContext {
                 domain_root,
                 dataset_root,
             },
-        }
+        })
     }
 
-    pub fn generate_default_session_id(agent_name: &str, workflow_id: &str) -> String {
-        format!("session_{}_{}", agent_name, workflow_id)
+    pub fn generate_default_session_id(agent_name: &str, workflow_id: &str) -> RaiseResult<String> {
+        if agent_name.is_empty() || workflow_id.is_empty() {
+            raise_error!(
+                "ERR_AGENT_SESSION_ID_VOID",
+                error = "L'ID de session ne peut pas être généré avec des identifiants vides."
+            );
+        }
+        Ok(format!("session_{}_{}", agent_name, workflow_id))
     }
 }
 
@@ -64,6 +70,20 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+
+    // 🎯 FIX : Import de la nouvelle structure isolée du World Model
+    use crate::ai::world_model::engine::WorldModelConfig;
+
+    // 🎯 FIX : Utilitaire local Zéro Dette pour remplacer le `.default()`
+    fn get_test_wm_config() -> WorldModelConfig {
+        WorldModelConfig {
+            vocab_size: 1024,
+            embedding_dim: 512,
+            action_dim: 64,
+            hidden_dim: 1024,
+            use_gpu: false,
+        }
+    }
 
     #[async_test]
     #[serial_test::serial]
@@ -89,7 +109,8 @@ mod tests {
         let domain_path = PathBuf::from("/data/domain");
         let dataset_path = PathBuf::from("/data/dataset");
 
-        let wm_config = crate::utils::data::config::WorldModelConfig::default();
+        // 🎯 FIX : Utilisation de la configuration de test locale
+        let wm_config = get_test_wm_config();
 
         // 🎯 Rigueur : Match sur la création du World Model
         let world_engine = match NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new()) {
@@ -106,7 +127,7 @@ mod tests {
             domain_path.clone(),
             dataset_path.clone(),
         )
-        .await;
+        .await?;
 
         assert_eq!(ctx.agent_id, "agent_001");
         assert_eq!(ctx.session_id, "session_abc");
@@ -134,7 +155,9 @@ mod tests {
             Err(e) => panic!("Échec LLM : {:?}", e),
         };
 
-        let wm_config = crate::utils::data::config::WorldModelConfig::default();
+        // 🎯 FIX : Utilisation de la configuration de test locale
+        let wm_config = get_test_wm_config();
+
         let world_engine = match NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new()) {
             Ok(engine) => SharedRef::new(engine),
             Err(e) => panic!("Échec Neuro : {:?}", e),
@@ -149,7 +172,7 @@ mod tests {
             PathBuf::new(),
             PathBuf::new(),
         )
-        .await;
+        .await?;
 
         assert!(ctx.agent_id.is_empty());
         assert!(ctx.session_id.is_empty());
@@ -158,10 +181,12 @@ mod tests {
     }
 
     #[test]
-    fn test_session_id_format() {
-        let session = AgentContext::generate_default_session_id("data_agent", "WF-99");
+    fn test_session_id_format() -> RaiseResult<()> {
+        let session = AgentContext::generate_default_session_id("data_agent", "WF-99")?;
         assert!(session.contains("data_agent"));
         assert!(session.contains("WF-99"));
         assert!(session.starts_with("session_"));
+
+        Ok(())
     }
 }

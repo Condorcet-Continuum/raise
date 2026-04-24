@@ -209,6 +209,19 @@ mod tests {
     use crate::utils::core::error::AppError;
     use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
 
+    // 🎯 Import de la configuration Zéro Dette
+    use crate::ai::world_model::engine::WorldModelConfig;
+
+    fn get_test_wm_config() -> WorldModelConfig {
+        WorldModelConfig {
+            vocab_size: 1024,
+            embedding_dim: 512,
+            action_dim: 64,
+            hidden_dim: 1024,
+            use_gpu: false,
+        }
+    }
+
     async fn setup_test_ctx(sandbox: &AgentDbSandbox) -> RaiseResult<AgentContext> {
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
@@ -224,10 +237,7 @@ mod tests {
         };
 
         let world_engine = SharedRef::new(
-            match NeuroSymbolicEngine::new(
-                crate::utils::data::config::WorldModelConfig::default(),
-                NeuralWeightsMap::new(),
-            ) {
+            match NeuroSymbolicEngine::new(get_test_wm_config(), NeuralWeightsMap::new()) {
                 Ok(we) => we,
                 Err(e) => raise_error!("ERR_TEST_WM", error = e),
             },
@@ -242,7 +252,7 @@ mod tests {
             sandbox.domain_root.clone(),
             sandbox.domain_root.clone(),
         )
-        .await)
+        .await?)
     }
 
     #[test]
@@ -289,9 +299,7 @@ mod tests {
         let schema_uri = "db://_system/_system/schemas/v1/db/generic.schema.json";
         manager.create_collection("agents", schema_uri).await?;
 
-        // 🎯 STRICT : Utilisation de `insert_with_schema`.
-        // Le generic.schema.json autorise les objets flexibles, donc l'insertion passera
-        // la barrière de la base, mais le code métier de l'agent la refusera car il manque prompt_id.
+        // 🎯 L'agent est inséré dans sa collection "agents"
         let doc_to_insert = json_value!({
             "_id": "invalid_agent",
             "base": { "name": {"fr": "Sans Prompt"}, "neuro_profile": {} }
@@ -342,7 +350,7 @@ mod tests {
             .create_collection("session_agents", generic_uri)
             .await?;
 
-        // 2. Injection des données valides via la Forteresse (insert_with_schema)
+        // 2. Injection des données valides via la Forteresse
         sys_manager
             .insert_with_schema(
                 "prompts",

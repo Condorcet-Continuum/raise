@@ -1,6 +1,7 @@
 // FICHIER : src-tauri/src/ai/deep_learning/serialization.rs
 
 use crate::ai::deep_learning::models::sequence_net::SequenceNet;
+use crate::ai::deep_learning::trainer::DeepLearningConfig;
 use crate::utils::prelude::*; // 🎯 Façade Unique
 
 /// Sauvegarde les poids du modèle dans un fichier au format SafeTensors.
@@ -76,15 +77,26 @@ pub fn load_checkpoint(varmap: &mut NeuralWeightsMap, path: impl AsRef<Path>) ->
 mod tests {
     use super::*;
     use crate::ai::deep_learning::trainer::Trainer;
+    use crate::utils::core::error::AppError;
     use crate::utils::testing::DbSandbox;
+
+    // 🎯 FIX : Utilitaire local pour remplacer la dépendance au noyau (AppConfig)
+    fn get_test_dl_config() -> DeepLearningConfig {
+        DeepLearningConfig {
+            learning_rate: 0.01,
+            input_size: 5,
+            hidden_size: 10,
+            output_size: 2,
+        }
+    }
 
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_save_and_load_consistency() -> RaiseResult<()> {
         // 1. Initialisation via Sandbox (SSOT)
-        let sandbox = DbSandbox::new().await?;
-        let config = &sandbox.config.deep_learning;
+        let _sandbox = DbSandbox::new().await?; // _sandbox car utilisé juste pour le boot DB/FS
+        let config = get_test_dl_config(); // 🎯 FIX : Config locale
         let device = AppConfig::device();
 
         let temp_dir = tempdir()?;
@@ -100,7 +112,8 @@ mod tests {
             vb_source,
         )?;
 
-        let mut trainer = Trainer::new(&varmap_source, config.learning_rate)?;
+        // 🎯 FIX : Le Trainer prend la config entière (clone)
+        let mut trainer = Trainer::new(&varmap_source, config.clone())?;
         let input = NeuralTensor::randn(0f32, 1.0, (1, 5, config.input_size), device)?;
         let target = NeuralTensor::zeros((1, 5), ComputeType::U32, device)?;
         trainer.train_step(&model_source, &input, &target)?;
@@ -110,8 +123,8 @@ mod tests {
         // 3. Persistance
         save_model(&varmap_source, &path)?;
 
-        // 4. Chargement via la nouvelle API
-        let model_loaded = load_model(&path, config)?;
+        // 4. Chargement via la nouvelle API (Passage par référence de config)
+        let model_loaded = load_model(&path, &config)?;
 
         // 5. Vérification de l'intégrité mathématique
         let output_loaded = model_loaded.forward(&input)?;
@@ -128,12 +141,12 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_missing_file() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await?;
-        let config = &sandbox.config.deep_learning;
+        let _sandbox = DbSandbox::new().await?;
+        let config = get_test_dl_config(); // 🎯 FIX : Config locale
         let fake_path = PathBuf::from("/tmp/non_existent_model_123.safetensors");
 
         // Le chargement doit retourner une erreur structurée et non paniquer
-        let result = load_model(&fake_path, config);
+        let result = load_model(&fake_path, &config);
 
         match result {
             Err(AppError::Structured(data)) => {
@@ -148,9 +161,9 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_checkpoint_fine_tuning_logic() -> RaiseResult<()> {
-        let sandbox = DbSandbox::new().await?;
+        let _sandbox = DbSandbox::new().await?;
         let device = AppConfig::device();
-        let config = &sandbox.config.deep_learning;
+        let config = get_test_dl_config(); // 🎯 FIX : Config locale
 
         let temp_dir = tempdir()?;
         let path = temp_dir.path().join("checkpoint.safetensors");
@@ -168,8 +181,6 @@ mod tests {
         // 2. On prépare un nouveau varmap
         let mut new_varmap = NeuralWeightsMap::new();
 
-        // 🎯 FIX : On déclare la structure AVANT le chargement
-        // Cela enregistre les clés attendues dans new_varmap
         let _ = SequenceNet::new(
             config.input_size,
             config.hidden_size,

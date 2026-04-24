@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/ai/world_model/representation/quantizer.rs
 
+use crate::ai::world_model::engine::WorldModelConfig;
 use crate::utils::prelude::*;
 
 /// Module de Quantification Vectorielle (VQ-VAE style).

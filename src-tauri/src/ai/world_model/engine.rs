@@ -9,6 +9,22 @@ use crate::ai::world_model::perception::ArcadiaEncoder;
 use crate::ai::world_model::representation::VectorQuantizer;
 use crate::model_engine::types::ArcadiaElement;
 
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
+pub struct WorldModelConfig {
+    pub vocab_size: usize,
+    pub embedding_dim: usize,
+    pub action_dim: usize,
+    pub hidden_dim: usize,
+    pub use_gpu: bool,
+}
+
+pub struct NeuroSymbolicEngine {
+    pub varmap: NeuralWeightsMap,
+    pub quantizer: VectorQuantizer,
+    pub predictor: WorldModelPredictor,
+    pub config: WorldModelConfig,
+}
+
 pub struct WorldAction {
     pub intent: CommandType,
 }
@@ -41,14 +57,33 @@ impl WorldAction {
     }
 }
 
-pub struct NeuroSymbolicEngine {
-    pub varmap: NeuralWeightsMap,
-    pub quantizer: VectorQuantizer,
-    pub predictor: WorldModelPredictor,
-    pub config: WorldModelConfig,
-}
-
 impl NeuroSymbolicEngine {
+    pub async fn bootstrap(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
+        // 1. Récupération des réglages via le Kernel (inclut le Warning si inactif)
+        let settings =
+            AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_world_model")
+                .await?;
+
+        // 2. Désérialisation stricte : Pas de map_err, on utilise Match pour la clarté
+        let config: WorldModelConfig = match json::deserialize_from_value(settings) {
+            Ok(cfg) => cfg,
+            Err(e) => raise_error!(
+                "ERR_WM_CONFIG_DESERIALIZE",
+                error = e.to_string(),
+                context = json_value!({ "component": "ai_world_model" })
+            ),
+        };
+
+        // 3. Initialisation résiliente (Load si existant, sinon New)
+        if Self::exists(manager).await {
+            user_info!("MSG_WM_LOAD", json_value!({"handle": "ai_world_model"}));
+            Self::load(manager, config).await
+        } else {
+            user_info!("MSG_WM_INIT", json_value!({"action": "create_new"}));
+            Self::new(config, NeuralWeightsMap::new())
+        }
+    }
+
     /// Initialise le moteur Neuro-Symbolique Arcadia.
     pub fn new(config: WorldModelConfig, varmap: NeuralWeightsMap) -> RaiseResult<Self> {
         let vb =

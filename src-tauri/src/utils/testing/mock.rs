@@ -9,8 +9,7 @@ use crate::utils::io::fs::{self, tempdir, Path, PathBuf, TempDir};
 
 // 2. Data : Configuration, JSON et Traits
 use crate::utils::data::config::{
-    AppConfig, CoreConfig, DbPointer, DeepLearningConfig, IntegrationsConfig, MountPointsConfig,
-    SimulationContextConfig, WorldModelConfig, BOOTSTRAP_DB, BOOTSTRAP_DOMAIN, CONFIG,
+    AppConfig, CoreConfig, DbPointer, MountPointsConfig, BOOTSTRAP_DB, BOOTSTRAP_DOMAIN, CONFIG,
 };
 use crate::utils::data::json::{self, json_value, JsonValue};
 use crate::utils::data::UnorderedMap;
@@ -227,11 +226,12 @@ pub fn create_default_test_config() -> AppConfig {
         id: UniqueId::new_v4().to_string(),
         created_at: UtcClock::now().to_rfc3339(),
         updated_at: UtcClock::now().to_rfc3339(),
-        semantic_type: vec!["SystemConfig".to_string(), "cfg:SystemConfig".to_string()],
+        semantic_type: vec!["SystemConfig".to_string()],
         name: Some(UnorderedMap::from([(
             "en".to_string(),
             "Default Test Config".to_string(),
         )])),
+
         mount_points: MountPointsConfig {
             system: DbPointer {
                 domain: BOOTSTRAP_DOMAIN.to_string(),
@@ -266,37 +266,23 @@ pub fn create_default_test_config() -> AppConfig {
                 db: "telemetry".into(),
             },
         },
-        workstation: None,
-        user: None,
         core: CoreConfig {
             env_mode: "test".to_string(),
             graph_mode: "none".to_string(),
             log_level: "debug".to_string(),
             vector_store_provider: "memory".to_string(),
             language: "en".to_string(),
+            use_gpu: false, // 🎯 FIX : Initialisation du champ Core
         },
-        world_model: WorldModelConfig::default(),
-        deep_learning: DeepLearningConfig::default(),
+
         paths,
         active_dapp_id: "ref:dapps:handle:raise_core".to_string(),
         workstation_id: "ref:workstations:handle:test_ws".to_string(),
+        active_services: vec!["ref:services:handle:svc_ai".to_string()],
+        active_components: vec!["ref:components:handle:ai_llm".to_string()],
 
-        //  On autorise explicitement les services et composants utilisés dans les tests IA
-        active_services: vec![
-            "ref:services:handle:svc_ai".to_string(),
-            "ref:services:blueprint:google_gemini".to_string(),
-            "ref:services:blueprint:anthropic_claude".to_string(),
-            "ref:services:blueprint:mistral_ai".to_string(),
-        ],
-        active_components: vec![
-            "ref:components:handle:ai_llm".to_string(),
-            "ref:components:handle:ai_voice".to_string(),
-            "ref:components:handle:ai_nlp".to_string(),
-            "ref:components:handle:ai_agents".to_string(),
-        ],
-
-        integrations: IntegrationsConfig::default(),
-        simulation_context: SimulationContextConfig::default(),
+        workstation: None,
+        user: None,
     }
 }
 

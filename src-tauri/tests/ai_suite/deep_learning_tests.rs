@@ -3,10 +3,20 @@ use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 use raise::ai::deep_learning::models::sequence_net::SequenceNet;
 use raise::ai::deep_learning::serialization;
+use raise::ai::deep_learning::trainer::DeepLearningConfig;
 use raise::ai::deep_learning::trainer::Trainer;
 use raise::commands::dl_commands::DlState;
 use raise::utils::testing::*;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+fn get_test_dl_config() -> DeepLearningConfig {
+    DeepLearningConfig {
+        learning_rate: 0.01,
+        input_size: 5,
+        hidden_size: 10,
+        output_size: 2,
+    }
+}
 
 #[async_test]
 #[serial_test::serial]
@@ -14,9 +24,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 async fn test_dl_e2e_integration() -> RaiseResult<()> {
     // --- 1. CONFIGURATION ROBUSTE & ISOLÉE ---
     mock::inject_mock_config().await;
-    let config = &AppConfig::get().deep_learning;
+    let config = get_test_dl_config();
 
-    // 🎯 FIX : Résolution manuelle du device (CPU pour les tests) car to_device() est manquant
     let device = ComputeHardware::Cpu;
 
     let state = DlState::new();
@@ -69,7 +78,7 @@ async fn test_dl_e2e_integration() -> RaiseResult<()> {
 
         match (&*model_opt, &*varmap_opt) {
             (Some(model), Some(varmap)) => {
-                let mut trainer = match Trainer::from_config(varmap, config) {
+                let mut trainer = match Trainer::from_config(varmap, &config) {
                     Ok(t) => t,
                     Err(e) => raise_error!("ERR_DL_TRAINER_CONFIG", error = e.to_string()),
                 };
@@ -116,7 +125,7 @@ async fn test_dl_e2e_integration() -> RaiseResult<()> {
     // --- Étape 4 : Rechargement ---
     let new_state = DlState::new();
     {
-        let model = match serialization::load_model(&save_path, config) {
+        let model = match serialization::load_model(&save_path, &config) {
             Ok(m) => m,
             Err(e) => raise_error!("ERR_DL_LOAD_FAIL", error = e.to_string()),
         };
@@ -149,8 +158,8 @@ mod resilience_tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_dl_config_dimension_resilience() -> RaiseResult<()> {
         mock::inject_mock_config().await;
-        let mut config = AppConfig::get().deep_learning.clone();
-        config.input_size = 0;
+        let mut config = get_test_dl_config();
+        config.input_size = 0; // Injection d'erreur
 
         let device = ComputeHardware::Cpu;
         let varmap = NeuralWeightsMap::new();

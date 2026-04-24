@@ -1,4 +1,5 @@
 // FICHIER : src-tauri/src/ai/world_model/dynamics/predictor.rs
+use crate::ai::world_model::engine::WorldModelConfig;
 use crate::utils::prelude::*;
 
 /// Le Prédicteur de Transition (World Model Dynamics).

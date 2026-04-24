@@ -81,11 +81,11 @@ impl<'a> RuleStore<'a> {
         let mut doc = match json::serialize_to_value(&rule) {
             Ok(v) => v,
             Err(e) => {
-                return Err(build_error!(
+                raise_error!(
                     "ERR_RULE_SERIALIZATION_FAILED",
                     error = e.to_string(),
                     context = json_value!({ "handle": rule.handle, "target": collection })
-                ))
+                )
             }
         };
 
@@ -101,11 +101,11 @@ impl<'a> RuleStore<'a> {
         {
             Ok(v) => v,
             Err(e) => {
-                return Err(build_error!(
+                raise_error!(
                     "ERR_RULE_DB_WRITE_FAILED",
                     error = e.to_string(),
                     context = json_value!({ "handle": rule.handle, "target": collection })
-                ))
+                )
             }
         };
 
@@ -113,11 +113,11 @@ impl<'a> RuleStore<'a> {
         let final_rule: Rule = match json::deserialize_from_value(saved_doc) {
             Ok(r) => r,
             Err(e) => {
-                return Err(build_error!(
+                raise_error!(
                     "ERR_RULE_REHYDRATION_FAILED",
                     error = e.to_string(),
                     context = json_value!({ "handle": rule.handle })
-                ))
+                )
             }
         };
 

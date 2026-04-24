@@ -99,6 +99,7 @@ impl<'a> WorldTrainer<'a> {
 mod tests {
     use super::*;
     use crate::ai::nlp::parser::CommandType;
+    use crate::ai::world_model::engine::WorldModelConfig;
     use crate::model_engine::types::NameType;
 
     fn make_dummy(id: &str, layer_idx: usize) -> ArcadiaElement {
@@ -123,7 +124,7 @@ mod tests {
         // 1. Setup
         let varmap = NeuralWeightsMap::new();
 
-        // 🎯 Création de la config pour l'entraînement
+        // Création de la config pour l'entraînement
         let config = WorldModelConfig {
             vocab_size: 10,
             embedding_dim: 16, // Aligné avec l'encodeur V2
@@ -132,7 +133,7 @@ mod tests {
             use_gpu: false,
         };
 
-        // 🎯 Initialisation via la config
+        // 1 Initialisation via la config
         let engine = NeuroSymbolicEngine::new(config, varmap).unwrap();
 
         // 2. Trainer

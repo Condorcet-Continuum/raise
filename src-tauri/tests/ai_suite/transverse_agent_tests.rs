@@ -2,7 +2,7 @@
 
 use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 
-use crate::common::{setup_test_env, LlmMode};
+use crate::common::{get_test_wm_config, setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
@@ -73,11 +73,11 @@ async fn test_transverse_agent_ivvq_cycle() -> RaiseResult<()> {
         .await?;
 
     // --- 🎯 3. CONTEXTE & EXÉCUTION ---
-    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_transverse");
+    let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_transverse")?;
 
     let world_engine = SharedRef::new(
         raise::ai::world_model::NeuroSymbolicEngine::new(
-            raise::utils::data::config::WorldModelConfig::default(),
+            get_test_wm_config(),
             NeuralWeightsMap::new(),
         )
         .expect("WM Engine fail"),
@@ -92,7 +92,7 @@ async fn test_transverse_agent_ivvq_cycle() -> RaiseResult<()> {
         test_root.clone(),
         test_root.join("dataset"),
     )
-    .await;
+    .await?;
 
     let agent = DynamicAgent::new(agent_urn);
 
@@ -186,7 +186,7 @@ mod resilience_tests {
 
         let world_engine = SharedRef::new(
             raise::ai::world_model::NeuroSymbolicEngine::new(
-                Default::default(),
+                get_test_wm_config(),
                 NeuralWeightsMap::new(),
             )
             .unwrap(),
@@ -206,7 +206,7 @@ mod resilience_tests {
             test_root.clone(),
             test_root.clone(),
         )
-        .await;
+        .await?;
 
         let agent = DynamicAgent::new("agent_broken_transverse");
         let res = agent.process(&ctx, &EngineeringIntent::Chat).await;

@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/business_agent_tests.rs
 
-use crate::common::{setup_test_env, LlmMode};
+use crate::common::{get_test_wm_config, setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
@@ -70,7 +70,7 @@ async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
         "handle": "prompt_business",
         "role": "Analyste Métier",
         "identity": { "persona": "Expert Arcadia. Répond en JSON pur.", "tone": "froid" },
-        "environment": "Environnement de test MBSE Arcadia", // 🎯 FIX : Le champ exigé par le PromptEngine
+        "environment": "Environnement de test MBSE Arcadia",
         "directives": ["Génère un TABLEAU JSON avec: '_id', 'name', 'type' (OperationalActor/OperationalCapability), 'layer' (OA)."]
     })).await?;
 
@@ -92,16 +92,18 @@ async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
     oa_mgr.create_collection("actors", generic_schema).await?;
 
     // --- 🎯 3. CONTEXTE & EXÉCUTION ---
-    let session_id = AgentContext::generate_default_session_id("agent_business", "test_oa");
+    // 🎯 FIX : Unwrapping du RaiseResult (?)
+    let session_id = AgentContext::generate_default_session_id("agent_business", "test_oa")?;
 
     let world_engine = SharedRef::new(
         raise::ai::world_model::NeuroSymbolicEngine::new(
-            raise::utils::data::config::WorldModelConfig::default(),
+            get_test_wm_config(), // 🎯 FIX : Utilisation explicite sans default()
             NeuralWeightsMap::new(),
         )
         .expect("WM Engine fail"),
     );
 
+    // 🎯 FIX : Unwrapping du RaiseResult (?) après await
     let ctx = AgentContext::new(
         "agent_business",
         &session_id,
@@ -111,7 +113,7 @@ async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
         test_root.clone(),
         test_root.join("dataset"),
     )
-    .await;
+    .await?;
 
     let agent = DynamicAgent::new("agent_business");
     let intent = EngineeringIntent::DefineBusinessUseCase {
@@ -181,7 +183,6 @@ mod resilience_tests {
         let env = setup_test_env(LlmMode::Disabled).await?;
         let test_root = env.sandbox.storage.config.data_root.clone();
 
-        // On récupère le manager système via les points de montage pour initialiser le client
         let sys_mgr = CollectionsManager::new(
             &env.sandbox.storage,
             &env.sandbox.config.mount_points.system.domain,
@@ -190,14 +191,12 @@ mod resilience_tests {
 
         let world_engine = SharedRef::new(
             raise::ai::world_model::NeuroSymbolicEngine::new(
-                raise::utils::data::config::WorldModelConfig::default(),
+                get_test_wm_config(), // 🎯 FIX : Utilisation explicite sans default()
                 NeuralWeightsMap::new(),
             )
             .expect("WM Engine fail"),
         );
 
-        // 🎯 FIX : Initialisation du client LLM pour le test de résilience
-        // Si env.client est None (LlmMode::Disabled), on en crée un nouveau sur le champ.
         let llm_client = match env.client.clone() {
             Some(client) => client,
             None => LlmClient::new(&sys_mgr)
@@ -205,6 +204,7 @@ mod resilience_tests {
                 .expect("Failed to create fallback LlmClient"),
         };
 
+        // 🎯 FIX : Unwrapping du RaiseResult (?) après await
         let ctx = AgentContext::new(
             "agent_ghost",
             "sess_ghost",
@@ -214,7 +214,7 @@ mod resilience_tests {
             test_root.clone(),
             test_root.join("dataset"),
         )
-        .await;
+        .await?;
 
         let agent = DynamicAgent::new("agent_ghost");
 
@@ -223,7 +223,6 @@ mod resilience_tests {
 
         match result {
             Err(AppError::Structured(data)) => {
-                // On vérifie que le code d'erreur levé par DynamicAgent est bien celui attendu
                 assert_eq!(data.code, "ERR_AGENT_CONFIG_NOT_FOUND");
                 Ok(())
             }

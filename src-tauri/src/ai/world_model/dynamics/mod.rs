@@ -7,6 +7,7 @@ pub use predictor::WorldModelPredictor;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::world_model::engine::WorldModelConfig;
     use crate::utils::prelude::*;
 
     #[test]
@@ -17,12 +18,13 @@ mod tests {
         let vb =
             NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &ComputeHardware::Cpu);
 
-        // 🎯 On crée la config
+        // On instancie tous les paramètres explicitement
         let config = WorldModelConfig {
+            vocab_size: 1024,
             embedding_dim: 16,
             action_dim: 5,
             hidden_dim: 32,
-            ..Default::default()
+            use_gpu: false,
         };
 
         // 🎯 On passe la config par référence

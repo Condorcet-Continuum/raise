@@ -4,7 +4,7 @@ use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
 // Imports Deep Learning
 use crate::ai::deep_learning::{
-    models::sequence_net::SequenceNet, serialization, trainer::Trainer,
+    models::sequence_net::SequenceNet, serialization, trainer::DeepLearningConfig, trainer::Trainer,
 };
 
 use tauri::{command, State};
@@ -13,6 +13,7 @@ use tauri::{command, State};
 pub struct DlState {
     pub model: SyncMutex<Option<SequenceNet>>,
     pub varmap: SyncMutex<Option<NeuralWeightsMap>>,
+    pub config: SyncMutex<Option<DeepLearningConfig>>,
 }
 
 impl DlState {
@@ -20,6 +21,7 @@ impl DlState {
         Self {
             model: SyncMutex::new(None),
             varmap: SyncMutex::new(None),
+            config: SyncMutex::new(None),
         }
     }
 }
@@ -33,8 +35,8 @@ impl Default for DlState {
 // --- COMMANDES DEEP LEARNING (INTERFACE TAURI) ---
 
 #[command]
-pub fn init_dl_model(state: State<'_, DlState>) -> RaiseResult<String> {
-    init_dl_model_internal(&state)
+pub fn init_dl_model(state: State<'_, DlState>, config: DeepLearningConfig) -> RaiseResult<String> {
+    init_dl_model_internal(&state, config)
 }
 
 #[command]
@@ -53,14 +55,17 @@ pub fn save_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<Str
 }
 
 #[command]
-pub fn load_dl_model(state: State<'_, DlState>, path: String) -> RaiseResult<String> {
-    load_dl_model_internal(&state, path)
+pub fn load_dl_model(
+    state: State<'_, DlState>,
+    path: String,
+    config: DeepLearningConfig,
+) -> RaiseResult<String> {
+    load_dl_model_internal(&state, path, config)
 }
 
 // --- LOGIQUE INTERNE (TESTABLE SANS TAURI::STATE) ---
 
-fn init_dl_model_internal(state: &DlState) -> RaiseResult<String> {
-    let config = &AppConfig::get().deep_learning;
+fn init_dl_model_internal(state: &DlState, config: DeepLearningConfig) -> RaiseResult<String> {
     let device = AppConfig::device(); // 🎯 Façade SSOT
 
     let varmap = NeuralWeightsMap::new();
@@ -88,21 +93,36 @@ fn init_dl_model_internal(state: &DlState) -> RaiseResult<String> {
         Ok(g) => g,
         Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
     };
+    let mut cg = match state.config.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
 
     *mg = Some(model);
     *vg = Some(varmap);
+    *cg = Some(config);
     Ok("OK".to_string())
 }
 
 fn run_dl_prediction_internal(state: &DlState, input: Vec<f32>) -> RaiseResult<Vec<f32>> {
-    let config = &AppConfig::get().deep_learning;
     let device = AppConfig::device();
 
     let guard = match state.model.lock() {
         Ok(g) => g,
         Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
     };
+    let cg = match state.config.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
 
+    let config = match &*cg {
+        Some(c) => c,
+        None => raise_error!(
+            "ERR_MODEL_NOT_LOADED",
+            error = "Aucune configuration DL chargée."
+        ),
+    };
     if let Some(model) = &*guard {
         let t = match NeuralTensor::from_vec(input, (1usize, 1usize, config.input_size), device) {
             Ok(tensor) => tensor,
@@ -124,7 +144,6 @@ fn run_dl_prediction_internal(state: &DlState, input: Vec<f32>) -> RaiseResult<V
 }
 
 fn train_dl_step_internal(state: &DlState, input: Vec<f32>, target: u32) -> RaiseResult<f64> {
-    let config = &AppConfig::get().deep_learning;
     let device = AppConfig::device();
 
     let mg = match state.model.lock() {
@@ -134,6 +153,18 @@ fn train_dl_step_internal(state: &DlState, input: Vec<f32>, target: u32) -> Rais
     let vg = match state.varmap.lock() {
         Ok(g) => g,
         Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
+    let cg = match state.config.lock() {
+        Ok(g) => g,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
+
+    let config = match &*cg {
+        Some(c) => c,
+        None => raise_error!(
+            "ERR_MODEL_NOT_LOADED",
+            error = "Aucune configuration DL chargée."
+        ),
     };
 
     match (&*mg, &*vg) {
@@ -179,8 +210,11 @@ fn save_dl_model_internal(state: &DlState, path: String) -> RaiseResult<String> 
     }
 }
 
-fn load_dl_model_internal(state: &DlState, path: String) -> RaiseResult<String> {
-    let config = &AppConfig::get().deep_learning;
+fn load_dl_model_internal(
+    state: &DlState,
+    path: String,
+    config: DeepLearningConfig,
+) -> RaiseResult<String> {
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
@@ -190,7 +224,7 @@ fn load_dl_model_internal(state: &DlState, path: String) -> RaiseResult<String> 
         );
     }
 
-    let m = match serialization::load_model(path_buf, config) {
+    let m = match serialization::load_model(path_buf, &config) {
         Ok(model) => model,
         Err(e) => raise_error!("ERR_DL_MODEL_LOAD_FAIL", error = e.to_string()),
     };
@@ -199,8 +233,13 @@ fn load_dl_model_internal(state: &DlState, path: String) -> RaiseResult<String> 
         Ok(guard) => guard,
         Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
     };
+    let mut config_guard = match state.config.lock() {
+        Ok(guard) => guard,
+        Err(_) => raise_error!("ERR_SYS_MUTEX_POISONED"),
+    };
 
     *model_guard = Some(m);
+    *config_guard = Some(config);
     Ok("Loaded".to_string())
 }
 
@@ -213,14 +252,25 @@ mod tests {
     use super::*;
     use crate::utils::testing::mock;
 
+    fn get_test_dl_config() -> DeepLearningConfig {
+        DeepLearningConfig {
+            learning_rate: 0.01,
+            input_size: 5,
+            hidden_size: 10,
+            output_size: 2,
+        }
+    }
+
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_dl_commands_initialization() -> RaiseResult<()> {
         mock::inject_mock_config().await;
         let state = DlState::new();
+        let config = get_test_dl_config();
+
         // 🎯 FIX: Appel de la logique interne au lieu de la commande Tauri
-        let res = init_dl_model_internal(&state);
+        let res = init_dl_model_internal(&state, config);
         assert!(res.is_ok());
         Ok(())
     }
@@ -229,11 +279,10 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_uninitialized_prediction() -> RaiseResult<()> {
-        // 🎯 FIX : Initialisation de la config globale pour éviter la panique sur AppConfig::get()
         mock::inject_mock_config().await;
 
         let state = DlState::new();
-        // 🎯 FIX : Vérification que la prédiction échoue proprement si le modèle n'est pas chargé
+        // Doit échouer car aucun modèle ni configuration n'a été chargé
         let res = run_dl_prediction_internal(&state, vec![0.1]);
         assert!(res.is_err());
         Ok(())
@@ -243,7 +292,6 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_dl_device_ssot() -> RaiseResult<()> {
-        // 🎯 FIX : Initialisation du matériel pour éviter la panique sur AppConfig::device()
         mock::inject_mock_config().await;
 
         let device = AppConfig::device();

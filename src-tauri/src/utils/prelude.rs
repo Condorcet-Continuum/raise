@@ -79,12 +79,7 @@ pub use crate::utils::io::{
 
 // --- 3. DATA, JSON & COLLECTIONS ---
 pub use crate::utils::data::compute::{execute_compute_plan, ComputeOperatorFn, COMPUTE_REGISTRY};
-pub use crate::utils::data::config::{
-    AppConfig,
-    CoreConfig,
-    DeepLearningConfig, // 🎯 Config DL
-    WorldModelConfig,
-};
+pub use crate::utils::data::config::{AppConfig, CoreConfig};
 pub use crate::utils::data::json::{self, json_value, JsonObject, JsonValue};
 pub use crate::utils::data::{
     Deserializable,

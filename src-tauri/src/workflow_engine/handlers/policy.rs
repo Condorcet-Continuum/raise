@@ -131,6 +131,29 @@ mod tests {
         inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
         inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
 
+        inject_mock_component(
+            &manager,
+            "ai_graph_store",
+            json_value!({
+                "embedding_dim": 16,
+                "provider": "native"
+            }),
+        )
+        .await?;
+
+        inject_mock_component(
+            &manager,
+            "ai_world_model",
+            json_value!({
+                "vocab_size": 16,
+                "embedding_dim": 16,
+                "action_dim": 8,
+                "hidden_dim": 32,
+                "use_gpu": false
+            }),
+        )
+        .await?;
+
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .expect("Orchestrator setup failed");

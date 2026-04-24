@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/ai/deep_learning/api.rs
 
+use crate::ai::deep_learning::trainer::DeepLearningConfig;
 use crate::ai::deep_learning::{
     models::sequence_net::SequenceNet, serialization, trainer::Trainer,
 };
@@ -88,13 +89,16 @@ async fn fetch_model_metadata(
         );
     }
 
-    let mut config = AppConfig::get().deep_learning.clone();
-    config.input_size = input_size;
-    config.hidden_size = hidden_size;
-    config.output_size = output_size;
-    config.learning_rate = learning_rate;
+    // 🎯 FIX ZÉRO DETTE : On n'appelle plus AppConfig::get().deep_learning !
+    // La configuration est instanciée localement depuis les données DB.
+    let config = DeepLearningConfig {
+        input_size,
+        hidden_size,
+        output_size,
+        learning_rate,
+    };
 
-    // 4. 🎯 RÉSOLUTION VIA MOUNT POINTS (Zéro Dette)
+    // 4. 🎯 RÉSOLUTION VIA MOUNT POINTS (Chemins physiques système)
     let app_config = AppConfig::get();
     let domain_root = match app_config.get_path("PATH_RAISE_DOMAIN") {
         Some(path) => path,
@@ -112,7 +116,6 @@ async fn fetch_model_metadata(
         .join(&col)
         .join(format!("{}.safetensors", model_id));
 
-    // 5. ZÉRO SETUP : Auto-création résiliente du répertoire binaire
     // 5. ZÉRO SETUP : Auto-création résiliente du répertoire binaire
     if let Some(parent) = weights_path.parent() {
         if let Err(e) = fs::ensure_dir_async(parent).await {

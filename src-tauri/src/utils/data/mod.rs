@@ -17,7 +17,7 @@ pub use json::{
     serialize_to_string_pretty, serialize_to_value, JsonObject, JsonValue,
 };
 
-pub use config::{AppConfig, CoreConfig, DeepLearningConfig, WorldModelConfig, CONFIG};
+pub use config::{AppConfig, CoreConfig, CONFIG};
 // Types standards et structures de données fréquemment utilisés dans le domaine métier
 // --- Contrats de Sérialisation ---
 pub use serde::de::DeserializeOwned as DeserializableOwned;

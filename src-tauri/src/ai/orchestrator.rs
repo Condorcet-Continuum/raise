@@ -6,11 +6,12 @@ use crate::ai::context::{
 };
 use crate::ai::llm::client::{LlmBackend, LlmClient};
 use crate::ai::nlp::parser::CommandType;
+use crate::ai::world_model::engine::WorldModelConfig;
 use crate::ai::world_model::{NeuroSymbolicEngine, WorldAction, WorldTrainer};
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
-use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
+use crate::utils::prelude::*;
 
 // --- IMPORTS AGENTS ---
 use crate::ai::agents::intent_classifier::IntentClassifier;
@@ -38,37 +39,32 @@ impl AiOrchestrator {
         manager: &CollectionsManager<'_>,
         storage: SharedRef<StorageEngine>,
     ) -> RaiseResult<Self> {
-        let app_config = AppConfig::get();
-
         // 1. Initialisation des composants RAG et LLM (Gérés par leurs propres façades)
         let rag = RagRetriever::new(manager).await?;
         let symbolic = SimpleRetriever::new(model);
         let llm = LlmClient::new(manager).await?;
+        let world_engine = match NeuroSymbolicEngine::bootstrap(manager).await {
+            Ok(engine) => engine,
+            Err(e) => {
+                user_warn!(
+                    "WRN_WORLD_MODEL_LOAD_FAILED",
+                    json_value!({ "error": e.to_string(), "hint": "Modèle corrompu ou absent. Démarrage à froid." })
+                );
 
-        let wm_config = app_config.world_model.clone();
+                // Récupération de la configuration (Zéro Dette)
+                let wm_settings = AppConfig::get_runtime_settings(
+                    manager,
+                    "ref:components:handle:ai_world_model",
+                )
+                .await?;
+                let wm_config: WorldModelConfig = match json::deserialize_from_value(wm_settings) {
+                    Ok(cfg) => cfg,
+                    Err(err) => raise_error!("ERR_WM_CONFIG_DESERIALIZE", error = err.to_string()),
+                };
 
-        // 2. Gestion résiliente du World Model (Cerveau Neuro-Symbolique)
-        let world_engine = if NeuroSymbolicEngine::exists(manager).await {
-            user_info!(
-                "MSG_ORCH_WM_LOAD",
-                json_value!({"action": "load_world_model"})
-            );
-            match NeuroSymbolicEngine::load(manager, wm_config.clone()).await {
-                Ok(engine) => engine,
-                Err(e) => {
-                    user_warn!(
-                        "WRN_ORCH_WM_CORRUPTED",
-                        json_value!({"error": e.to_string(), "action": "reset_to_empty"})
-                    );
-                    NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new())?
-                }
+                // Initialisation d'un modèle vierge en mémoire
+                NeuroSymbolicEngine::new_empty(wm_config)?
             }
-        } else {
-            user_info!(
-                "MSG_ORCH_WM_NEW",
-                json_value!({"action": "init_empty_world_model"})
-            );
-            NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new())?
         };
 
         // 3. Initialisation du stockage de mémoire conversationnelle
@@ -122,7 +118,7 @@ impl AiOrchestrator {
 
         let session_scope = current_intent.default_session_scope();
         let global_session_id =
-            AgentContext::generate_default_session_id("orchestrator", session_scope);
+            AgentContext::generate_default_session_id("orchestrator", session_scope)?;
 
         // Résolution déterministe des chemins via AppConfig
         let domain_path = match app_config.get_path("PATH_RAISE_DOMAIN") {
@@ -157,7 +153,7 @@ impl AiOrchestrator {
                 domain_path.clone(),
                 dataset_path.clone(),
             )
-            .await;
+            .await?;
 
             let agent = DynamicAgent::new(&current_agent_urn);
             match agent.process(&ctx, &current_intent).await? {
@@ -362,6 +358,29 @@ mod tests {
                 "rust_config_file": "config.json",
                 "rust_tokenizer_file": "tokenizer.json",
                 "rust_safetensors_file": "model.safetensors"
+            }),
+        )
+        .await?;
+
+        inject_mock_component(
+            &manager,
+            "ai_graph_store",
+            json_value!({
+                "embedding_dim": 512,
+                "provider": "native"
+            }),
+        )
+        .await?;
+
+        inject_mock_component(
+            &manager,
+            "ai_world_model",
+            json_value!({
+                "vocab_size": 1024,
+                "embedding_dim": 16,
+                "action_dim": 8,
+                "hidden_dim": 32,
+                "use_gpu": false
             }),
         )
         .await?;

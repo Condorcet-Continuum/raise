@@ -111,17 +111,17 @@ mod tests {
         // 🎯 FIX : Isolation des erreurs d'allocation NeuralTensor
         let feat = match NeuralTensor::zeros((3, 2), ComputeType::F32, &device) {
             Ok(t) => t,
-            Err(e) => return Err(build_error!("ERR_TEST_TENSOR_ALLOC", error = e.to_string())),
+            Err(e) => raise_error!("ERR_TEST_TENSOR_ALLOC", error = e.to_string()),
         };
 
         let edge_src = match NeuralTensor::new(&[0u32, 1, 0, 1, 2], &device) {
             Ok(t) => t,
-            Err(e) => return Err(build_error!("ERR_TEST_TENSOR_ALLOC", error = e.to_string())),
+            Err(e) => raise_error!("ERR_TEST_TENSOR_ALLOC", error = e.to_string()),
         };
 
         let edge_dst = match NeuralTensor::new(&[1u32, 2, 0, 1, 2], &device) {
             Ok(t) => t,
-            Err(e) => return Err(build_error!("ERR_TEST_TENSOR_ALLOC", error = e.to_string())),
+            Err(e) => raise_error!("ERR_TEST_TENSOR_ALLOC", error = e.to_string()),
         };
 
         // 🎯 FIX : On utilise ? car layer.forward retourne déjà un RaiseResult natif
