@@ -97,8 +97,6 @@ mod tests {
     #[async_test]
     #[serial_test::serial] // 🎯 FIX : Isolation des accès Sandbox
     async fn test_plugins_workflow_integrity() -> RaiseResult<()> {
-        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-
         let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = crate::context::SessionManager::new(storage.clone());

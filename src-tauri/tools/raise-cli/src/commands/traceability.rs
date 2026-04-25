@@ -131,9 +131,6 @@ mod tests {
     #[async_test]
     #[serial_test::serial] // 🎯 FIX : Empêche les collisions de ressources et d'états globaux
     async fn test_traceability_cli_audit_workflow() -> RaiseResult<()> {
-        // 🎯 FIX : Initialisation sémantique obligatoire pour les tests de modèle
-        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-
         let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = crate::context::SessionManager::new(storage.clone());

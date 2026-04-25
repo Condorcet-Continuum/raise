@@ -251,7 +251,6 @@ mod tests {
     #[serial_test::serial]
     async fn test_semantic_manager_ontology_lifecycle_in_index() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
-        VocabularyRegistry::init_mock_for_tests();
 
         let db_mgr = CollectionsManager::new(&sandbox.storage, "sim", "db");
         DbSandbox::mock_db(&db_mgr).await?;
@@ -281,7 +280,6 @@ mod tests {
     #[serial_test::serial]
     async fn test_semantic_manager_insert_node_validation() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
-        VocabularyRegistry::init_mock_for_tests();
 
         let db_mgr = CollectionsManager::new(&sandbox.storage, "system", "db");
         DbSandbox::mock_db(&db_mgr).await?;
@@ -309,7 +307,6 @@ mod tests {
     #[serial_test::serial]
     async fn test_auto_alignment_physical_layer() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
-        VocabularyRegistry::init_mock_for_tests();
 
         let db_mgr = CollectionsManager::new(&sandbox.db, "simu", "db");
         DbSandbox::mock_db(&db_mgr).await?;

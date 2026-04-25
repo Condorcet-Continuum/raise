@@ -37,9 +37,6 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> RaiseResult<UnifiedTestEnv> {
     // 2. RÉSOLUTION DES POINTS DE MONTAGE VIA LA FAÇADE
     let (sys_domain, sys_db, _) = config.resolve_system_uri(None, "bootstrap");
 
-    // 3. INITIALISATION DU SYSTÈME SÉMANTIQUE
-    raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-
     // 4. PRÉPARATION DU MANAGER ET DES SCHÉMAS PHYSIQUES
     // (L'AgentDbSandbox a déjà mocké la DB système, on récupère juste le manager)
     let mgr = CollectionsManager::new(&sandbox.db, &sys_domain, &sys_db);

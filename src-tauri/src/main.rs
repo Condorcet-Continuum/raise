@@ -416,7 +416,7 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience du point de montage système
+    /// Résilience du point de montage système
     #[async_test]
     async fn test_mount_point_resolution_resilience() -> RaiseResult<()> {
         let _sandbox = AgentDbSandbox::new().await?;

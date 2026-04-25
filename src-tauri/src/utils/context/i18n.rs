@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/src/utils/context/i18n.rs
 
 // 1. Dépendances Métier (DB)
-use crate::json_db::collections;
+use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
 // 2. Core : Concurrence et Erreurs
@@ -14,7 +14,7 @@ use crate::utils::data::json::{self, json_value};
 use crate::utils::data::{Deserializable, OrderedMap, Serializable, UnorderedMap};
 
 // 4. Macros RAISE Globales
-use crate::raise_error;
+use crate::{raise_error, user_info};
 
 /// 🎯 TYPE SÉMANTIQUE RAISE : Gère les chaînes multilingues du Knowledge Graph.
 /// Aligné sur 'i18nNonEmptyString' des schémas JSON.
@@ -53,9 +53,8 @@ impl From<&str> for I18nString {
 
 #[derive(Debug, Deserializable)]
 struct LocaleDocument {
-    #[allow(dead_code)]
-    locale: String,
-    translations: Vec<TranslationItem>,
+    pub handle: String,
+    pub translations: Vec<TranslationItem>,
 }
 
 #[derive(Debug, Deserializable)]
@@ -80,72 +79,60 @@ impl Translator {
         }
     }
 
-    /// Charge une langue spécifique depuis la collection 'locales' du point de montage système.
+    /// Charge une langue spécifique depuis la collection 'locales' via le Catalogue Système Global.
     pub async fn load_from_db(&mut self, storage: &StorageEngine, lang: &str) -> RaiseResult<()> {
         let app_config = AppConfig::get();
+        let sys_domain = &app_config.mount_points.system.domain;
+        let sys_db = &app_config.mount_points.system.db;
 
-        let (target_domain, target_db, target_collection) =
-            app_config.resolve_system_uri(app_config.system_assets.locales_uri.as_ref(), "locales");
+        // Instanciation du manager sur la partition système pour lancer la recherche
+        let manager = CollectionsManager::new(storage, sys_domain, sys_db);
 
-        // 🎯 Rigueur : Match complet sur la lecture DB
-        let docs =
-            match collections::list_all(storage, &target_domain, &target_db, &target_collection)
-                .await
-            {
-                Ok(d) => d,
+        // 🎯 FIX MAGIQUE : Recherche globale pilotée par le catalogue
+        let result = match manager.find_global_document("locales", lang).await {
+            Ok(res) => res,
+            Err(e) => raise_error!(
+                "ERR_I18N_DB_READ",
+                error = e.to_string(),
+                context = json_value!({ "requested_lang": lang, "action": "find_global_document" })
+            ),
+        };
+
+        if let Some((found_domain, found_db, doc_val)) = result {
+            // 🎯 Rigueur : Désérialisation stricte
+            let document: LocaleDocument = match json::deserialize_from_value(doc_val) {
+                Ok(doc) => doc,
                 Err(e) => raise_error!(
-                    "ERR_I18N_DB_READ",
-                    error = e,
-                    context = json_value!({
-                        "requested_lang": lang,
-                        "resolved_domain": target_domain,
-                        "resolved_db": target_db,
-                        "resolved_collection": target_collection,
-                        "uri_source": app_config.system_assets.locales_uri
-                    })
+                    "ERR_I18N_PARSE",
+                    error = e.to_string(),
+                    context = json_value!({ "lang": lang })
                 ),
             };
 
-        for doc_val in docs {
-            if doc_val.get("locale").and_then(|v| v.as_str()) == Some(lang) {
-                // 🎯 Rigueur : Match complet sur la désérialisation
-                let document: LocaleDocument = match json::deserialize_from_value(doc_val) {
-                    Ok(doc) => doc,
-                    Err(e) => raise_error!(
-                        "ERR_I18N_PARSE",
-                        error = e,
-                        context = json_value!({ "lang": lang })
-                    ),
-                };
+            self.translations = document
+                .translations
+                .into_iter()
+                .map(|item| (item.key, item.value))
+                .collect();
 
-                self.translations = document
-                    .translations
-                    .into_iter()
-                    .map(|item| (item.key, item.value))
-                    .collect();
+            self.current_lang = document.handle.clone(); // Utilisation du handle
 
-                self.current_lang = lang.to_string();
+            user_info!(
+                "I18N_LOCALE_LOADED",
+                json_value!({
+                    "language": lang,
+                    "key_count": self.translations.len(),
+                    "source": format!("{}/{}", found_domain, found_db)
+                })
+            );
 
-                tracing::info!(
-                    target: "system_core",
-                    event_id = "I18N_LOCALE_LOADED",
-                    language = lang,
-                    key_count = self.translations.len(),
-                    source = if app_config.system_assets.locales_uri.is_some() { "shared_registry" } else { "mount_point_fallback" },
-                    "🌍 Langue chargée avec succès."
-                );
-
-                return Ok(());
-            }
+            return Ok(());
         }
 
         raise_error!(
             "ERR_I18N_NOT_FOUND",
-            error = format!(
-                "Langue '{}' introuvable dans la collection '{}'",
-                lang, target_collection
-            ),
-            context = json_value!({ "lang": lang, "collection": target_collection })
+            error = format!("Langue '{}' introuvable globalement.", lang),
+            context = json_value!({ "lang": lang })
         );
     }
 
@@ -231,6 +218,7 @@ mod tests {
 
         let doc = json_value!({
             "_id": UniqueId::new_v4().to_string(),
+            "handle": "fr",
             "locale": "fr",
             "translations": [
                 { "key": "WELCOME", "value": "Bienvenue sur RAISE" },

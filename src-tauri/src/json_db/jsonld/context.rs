@@ -174,14 +174,12 @@ impl ContextManager {
 mod tests {
     use super::*;
 
-    fn setup_env() {
-        VocabularyRegistry::init_mock_for_tests();
-    }
-
     /// 💎 TEST : Vérification de l'Interning (Ptr equality).
-    #[test]
-    fn test_context_interning_ptr_integrity() -> RaiseResult<()> {
-        setup_env();
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_context_interning_ptr_integrity() -> RaiseResult<()> {
+        crate::utils::testing::mock::inject_mock_config().await; // 🎯 FIX : Initialisation explicite
+
         let manager = ContextManager::new()?;
         let registry = VocabularyRegistry::global()?;
         let term = "oa";
@@ -200,10 +198,11 @@ mod tests {
     }
 
     /// 💎 TEST : Protection contre la récursion infinie (Cycles).
-    #[test]
+    #[async_test]
     #[serial_test::serial]
-    fn test_infinite_recursion_protection() -> RaiseResult<()> {
-        setup_env();
+    async fn test_infinite_recursion_protection() -> RaiseResult<()> {
+        crate::utils::testing::mock::inject_mock_config().await; // 🎯 FIX
+
         let mut manager = ContextManager::new()?;
         // Création d'un cycle vicieux
         manager
@@ -220,9 +219,11 @@ mod tests {
     }
 
     /// 💎 TEST : Résolution d'alias d'alias (Recursion profonde).
-    #[test]
-    fn test_deep_alias_resolution() -> RaiseResult<()> {
-        setup_env();
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_deep_alias_resolution() -> RaiseResult<()> {
+        crate::utils::testing::mock::inject_mock_config().await; // 🎯 FIX
+
         let mut manager = ContextManager::new()?;
         // Alias chain : Acteur -> oa:OperationalActor -> https://raise.io/oa#OperationalActor
         let doc = json_value!({ "@context": { "Acteur": "oa:OperationalActor" } });
@@ -235,9 +236,11 @@ mod tests {
     }
 
     /// 💎 TEST : Idempotence et Cycle de vie (Expand <-> Compact).
-    #[test]
-    fn test_expansion_compaction_roundtrip() -> RaiseResult<()> {
-        setup_env();
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_expansion_compaction_roundtrip() -> RaiseResult<()> {
+        crate::utils::testing::mock::inject_mock_config().await; // 🎯 FIX
+
         let manager = ContextManager::new()?;
         let cases = vec!["oa:Activity", "rdfs:label"];
         for term in cases {
@@ -249,9 +252,11 @@ mod tests {
     }
 
     /// 💎 TEST : Résilience face aux injections JSON invalides.
-    #[test]
-    fn test_load_malformed_json_resilience() -> RaiseResult<()> {
-        setup_env();
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_load_malformed_json_resilience() -> RaiseResult<()> {
+        crate::utils::testing::mock::inject_mock_config().await;
+
         let mut manager = ContextManager::new()?;
         let count_before = manager.active_mappings.len();
         let _ = manager.load_from_doc(&json_value!(null));

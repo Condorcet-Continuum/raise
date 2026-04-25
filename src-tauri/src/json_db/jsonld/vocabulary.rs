@@ -117,37 +117,44 @@ impl VocabularyRegistry {
 
     /// INITIALISATION DEPUIS LA DB (Zéro Fichier)
     pub async fn init_from_db(db_mgr: &CollectionsManager<'_>) -> RaiseResult<()> {
-        let registry = Self::new();
+        // 1. On garantit que l'instance globale existe avant de la populer
+        if INSTANCE.get().is_none() {
+            let _ = INSTANCE.set(Self::new());
+        }
+        let registry = Self::global()?;
+
+        // 2. On lit le catalogue système
         let sys_path = db_mgr
             .storage
             .config
             .db_root(&db_mgr.space, &db_mgr.db)
             .join("_system.json");
+
         if fs::exists_async(&sys_path).await {
             let content = fs::read_to_string_async(&sys_path).await?;
             let sys_doc: JsonValue = json::deserialize_from_str(&content)?;
+
+            // 3. Hydratation de l'état RCU via le registre global
             if let Some(ontologies) = sys_doc.get("ontologies").and_then(|o| o.as_object()) {
                 for (ns, _) in ontologies {
                     if let Ok(Some(doc)) = db_mgr
                         .get_document("_ontologies", &format!("ontology_{}", ns))
                         .await
                     {
+                        // On injecte les données DB dans le singleton actif !
                         let _ = registry.load_layer_from_json(ns, &doc).await;
                     }
                 }
             }
         }
-        let _ = INSTANCE.set(registry);
         Ok(())
     }
 
+    pub fn set_global_instance(registry: Self) {
+        let _ = INSTANCE.set(registry);
+    }
+
     pub fn global() -> RaiseResult<&'static Self> {
-        #[cfg(test)]
-        {
-            if INSTANCE.get().is_none() {
-                Self::init_mock_for_tests();
-            }
-        }
         if let Some(registry) = INSTANCE.get() {
             Ok(registry)
         } else {
@@ -279,30 +286,6 @@ impl VocabularyRegistry {
 
     pub fn is_iri(t: &str) -> bool {
         t.starts_with("http") || t.starts_with("urn:")
-    }
-
-    pub fn init_mock_for_tests() {
-        if INSTANCE.get().is_none() {
-            let r = Self::new();
-            let mut s = RegistryState::default();
-
-            // 🎯 FIX : Ajout des préfixes Arcadia standards pour les tests
-            let prefixes = [
-                ("oa", "https://raise.io/oa#"),
-                ("sa", "https://raise.io/sa#"),
-                ("la", "https://raise.io/la#"),
-                ("pa", "https://raise.io/pa#"),
-                ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
-            ];
-
-            for (p, i) in prefixes {
-                s.default_context.insert(p.to_string(), r.intern(i));
-            }
-            if let Ok(mut w) = r.state.write() {
-                *w = SharedRef::new(s);
-            }
-            let _ = INSTANCE.set(r);
-        }
     }
 }
 

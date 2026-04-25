@@ -220,7 +220,6 @@ mod tests {
     #[async_test]
     #[serial_test::serial] // 🎯 FIX : Empêche les conflits de session et de VRAM
     async fn test_cli_set_sensor_writes_to_db() -> RaiseResult<()> {
-        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
         let sandbox = AgentDbSandbox::new().await?;
 
         let config = AppConfig::get();

@@ -110,9 +110,6 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_model_engine_workflow_integrity() -> RaiseResult<()> {
-        // 🎯 FIX : Initialisation sémantique obligatoire pour le ModelEngine
-        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
-
         let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = crate::context::SessionManager::new(storage.clone());

@@ -317,10 +317,8 @@ impl JsonLdProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json_db::jsonld::vocabulary::VocabularyRegistry;
 
     fn setup_test_processor() -> RaiseResult<JsonLdProcessor> {
-        VocabularyRegistry::init_mock_for_tests();
         JsonLdProcessor::new()
     }
 

@@ -189,7 +189,6 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_session_lifecycle() -> RaiseResult<()> {
-        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
         let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = crate::context::SessionManager::new(storage.clone());

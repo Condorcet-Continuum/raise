@@ -850,6 +850,106 @@ pub async fn inject_mock_config() {
             crate::utils::data::config::DEVICE.get()
         );
     }
+
+    use crate::json_db::jsonld::VocabularyRegistry;
+
+    if VocabularyRegistry::global().is_err() {
+        let registry = VocabularyRegistry::new();
+
+        // On crée un mini-contexte JSON-LD valide
+        let mock_ontology = json_value!({
+            "@context": {
+                "oa": "https://raise.io/oa#",
+                "sa": "https://raise.io/sa#",
+                "la": "https://raise.io/la#",
+                "pa": "https://raise.io/pa#",
+                "rdfs": "http://www.w3.org/2000/01/rdf-schema#"
+            }
+        });
+
+        // On utilise la VRAIE fonction de production pour hydrater l'état RCU !
+        let _ = registry
+            .load_layer_from_json("system_mock", &mock_ontology)
+            .await;
+
+        // On verrouille l'instance dans le singleton global
+        VocabularyRegistry::set_global_instance(registry);
+    }
+}
+pub async fn inject_test_catalog(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v1/db/generic.schema.json",
+        BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+    );
+
+    // 1. Création des collections de gouvernance (Zéro Dette : on ignore si elles existent déjà)
+    let _ = manager.create_collection("domains", &schema_uri).await;
+    let _ = manager.create_collection("databases", &schema_uri).await;
+
+    let config = AppConfig::get();
+
+    // 2. Injection du domaine Système
+    let sys_domain_handle = &config.mount_points.system.domain;
+    let sys_domain_id = format!("dom_{}", sys_domain_handle);
+
+    manager
+        .upsert_document(
+            "domains",
+            json_value!({
+                "_id": sys_domain_id,
+                "handle": sys_domain_handle,
+                "name": {"fr": "Domaine Système", "en": "System Domain"},
+                "status": "active"
+            }),
+        )
+        .await?;
+
+    // 3. Injection de la base de données Système
+    manager
+        .upsert_document(
+            "databases",
+            json_value!({
+                "_id": format!("db_{}", config.mount_points.system.db),
+                "handle": config.mount_points.system.db,
+                "domain_id": sys_domain_id,
+                "is_system": true,
+                "status": "active"
+            }),
+        )
+        .await?;
+
+    // 4. Injection automatique du domaine métier 'modeling' défini dans la config
+    let mod_domain_handle = &config.mount_points.modeling.domain;
+    if mod_domain_handle != sys_domain_handle {
+        let mod_domain_id = format!("dom_{}", mod_domain_handle);
+
+        manager
+            .upsert_document(
+                "domains",
+                json_value!({
+                    "_id": mod_domain_id,
+                    "handle": mod_domain_handle,
+                    "name": {"fr": "Domaine Modélisation", "en": "Modeling Domain"},
+                    "status": "active"
+                }),
+            )
+            .await?;
+
+        manager
+            .upsert_document(
+                "databases",
+                json_value!({
+                    "_id": format!("db_{}", config.mount_points.modeling.db),
+                    "handle": config.mount_points.modeling.db,
+                    "domain_id": mod_domain_id,
+                    "is_system": false,
+                    "status": "active"
+                }),
+            )
+            .await?;
+    }
+
+    Ok(())
 }
 
 // --- SANDBOXES ---
@@ -857,6 +957,78 @@ pub struct DbSandbox {
     _dir: TempDir,
     pub storage: StorageEngine,
     pub config: AppConfig,
+}
+
+pub async fn inject_system_ontologies(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+    use crate::json_db::jsonld::VocabularyRegistry;
+    use crate::json_db::schema::ddl::DdlHandler;
+
+    let schema_uri = format!(
+        "db://{}/{}/schemas/v2/system/db/ontology.schema.json",
+        BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+    );
+
+    // 1. Schéma DDL de l'Ontologie (Basé sur la Production)
+    let schema_doc = json_value!({
+        "$id": schema_uri.clone(),
+        "type": "object",
+        "properties": {
+            "@context": { "type": ["object", "string", "array"] },
+            "@graph": { "type": "array" },
+            "namespace": { "type": "string" },
+            "version": { "type": "string" }
+        },
+        "required": ["@context", "@graph"],
+        "additionalProperties": true
+    });
+
+    let _ = manager
+        .create_schema_def("v2/system/db/ontology.schema.json", schema_doc)
+        .await;
+
+    // 2. Création de la collection système
+    let _ = manager.create_collection("_ontologies", &schema_uri).await;
+
+    // 3. Injection du Dataset (Subset de raise.jsonld pour les tests)
+    let raise_onto = json_value!({
+        "_id": "ontology_raise",
+        "handle": "onto-raise-core",
+        "namespace": "raise",
+        "version": "1.1.0",
+        "@context": {
+            "oa": "https://raise.io/oa#",
+            "sa": "https://raise.io/sa#",
+            "la": "https://raise.io/la#",
+            "pa": "https://raise.io/pa#",
+            "transverse": "https://raise.io/transverse#",
+            "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+            "owl": "http://www.w3.org/2002/07/owl#",
+            "raise": "https://raise.io/ontology/raise#"
+        },
+        "@graph": [
+            { "@id": "raise:Role", "@type": "owl:Class" },
+            { "@id": "raise:Permission", "@type": "owl:Class" },
+            { "@id": "raise:Agent", "@type": "owl:Class", "rdfs:subClassOf": "pa:PhysicalActor" },
+            { "@id": "raise:belongsToDapp", "@type": "owl:ObjectProperty" }
+        ]
+    });
+
+    let _ = manager.insert_raw("_ontologies", &raise_onto).await;
+
+    // 4. Inscription DDL dans le Jeton Système
+    let ddl = DdlHandler::new(manager);
+    let _ = ddl
+        .register_ontology(
+            "raise",
+            "db://_system/bootstrap/ontologies/raise.jsonld",
+            "1.1.0",
+        )
+        .await;
+
+    // 5. Hydratation dynamique du Cerveau Sémantique avec la DB !
+    let _ = VocabularyRegistry::init_from_db(manager).await;
+
+    Ok(())
 }
 
 impl DbSandbox {
@@ -928,6 +1100,8 @@ impl DbSandbox {
             )
             .await;
 
+        inject_system_ontologies(&mgr).await?;
+
         Ok(sandbox)
     }
 
@@ -944,18 +1118,20 @@ impl DbSandbox {
 
         //  Injection de la dApp dans les tests qui appellent mock_db manuellement
         let base_uri = format!("db://{}/{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB);
-        let _ = manager
+        manager
             .create_collection(
                 "dapps",
                 &format!("{}/schemas/v1/db/generic.schema.json", base_uri),
             )
-            .await;
-        let _ = manager
+            .await?;
+        manager
             .insert_raw(
                 "dapps",
                 &json_value!({"_id": "mock-dapp-raise-core", "handle": "raise_core"}),
             )
-            .await;
+            .await?;
+
+        inject_system_ontologies(manager).await?;
 
         res
     }
@@ -988,7 +1164,10 @@ impl AgentDbSandbox {
             ),
         }
 
-        // 🎯 INJECTION SYSTÉMATIQUE DE LA STACK IA COMPLÈTE
+        // 🎯  Injection du catalogue de gouvernance pour activer find_global_document
+        inject_test_catalog(&temp_manager).await?;
+
+        // INJECTION SYSTÉMATIQUE DE LA STACK IA COMPLÈTE
         // 1. LLM & NLP (Modèles de base)
         inject_mock_component(
             &temp_manager,
@@ -1015,7 +1194,7 @@ impl AgentDbSandbox {
         // 2. RAG & Graph Store (Mémoire) { "model_name": "minilm" }
         inject_mock_component(
             &temp_manager,
-            "rag",
+            "ai_context_rag",
             json_value!({"model_name": "minilm", "provider": "mock" }),
         )
         .await?;
@@ -1064,7 +1243,7 @@ impl AgentDbSandbox {
 
         inject_mock_component(
             &temp_manager,
-            "voice",
+            "ai_voice",
             json_value!({
                 "rust_model_file": "model.safetensors",
                 "rust_config_file": "config.json",

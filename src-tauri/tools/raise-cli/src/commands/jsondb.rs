@@ -525,7 +525,6 @@ mod tests {
     #[async_test]
     #[serial_test::serial]
     async fn test_parse_data_helper_robustness() -> RaiseResult<()> {
-        raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
         assert!(parse_data(r#"{"test":true}"#).await.is_ok());
         Ok(())
     }

@@ -100,7 +100,7 @@ mod tests {
             id: Some("https://raise.io/oa#name".into()),
             type_: Some("xsd:string".into()),
             container: None,
-            language: None, // ✅ FIX : On initialise explicitement le nouveau champ
+            language: None,
         };
 
         // Conversion en JsonValue via la façade Raise

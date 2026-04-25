@@ -1,6 +1,8 @@
 // FICHIER : src-tauri/src/json_db/schema/ddl.rs
 
 use crate::json_db::collections::manager::{CollectionsManager, SystemIndexTx};
+use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
+
 use crate::json_db::schema::SchemaRegistry;
 use crate::json_db::storage::file_storage;
 use crate::utils::prelude::*;
@@ -110,26 +112,91 @@ impl<'a> DdlHandler<'a> {
             file_storage::DropMode::Hard,
         )
         .await?;
+
+        self.unregister_from_system_governance().await?;
+
         Ok(true)
     }
 
     async fn register_in_system_governance(&self) -> RaiseResult<()> {
         let app_config = AppConfig::get();
-        let raise_domain = &app_config.mount_points.raise.domain;
-        let raise_db = &app_config.mount_points.raise.db;
+        let raise_domain = &app_config.mount_points.system.domain;
+        let raise_db = &app_config.mount_points.system.db;
 
+        // Si on initialise la base système elle-même, on s'arrête (elle s'auto-déclare via 00_init_db)
         if &self.manager.space == raise_domain && &self.manager.db == raise_db {
             return Ok(());
         }
 
         let sys_mgr = CollectionsManager::new(self.manager.storage, raise_domain, raise_db);
 
+        // 1. Enregistrement du Domaine (Upsert)
+        let domain_handle = self.manager.space.clone();
         let domain_doc = json_value!({
-            "handle": self.manager.space.clone(),
-            "name": { "fr": self.manager.space.clone(), "en": self.manager.space.clone() },
+            "handle": domain_handle.clone(),
+            "name": { "fr": domain_handle.clone(), "en": domain_handle.clone() },
             "status": "active"
         });
+
         let _ = sys_mgr.upsert_document("domains", domain_doc).await;
+
+        // 2. Enregistrement de la Base de Données (Upsert)
+        let db_handle = self.manager.db.clone();
+        let db_doc = json_value!({
+            "handle": db_handle.clone(),
+            "name": { "fr": db_handle.clone(), "en": db_handle.clone() },
+            "domain_id": format!("ref:domains:handle:{}", domain_handle),
+            "is_system": false,
+            "status": "active"
+        });
+
+        let _ = sys_mgr.upsert_document("databases", db_doc).await;
+
+        user_info!(
+            "MSG_DB_REGISTERED_IN_GOVERNANCE",
+            json_value!({ "domain": domain_handle, "db": db_handle })
+        );
+
+        Ok(())
+    }
+
+    async fn unregister_from_system_governance(&self) -> RaiseResult<()> {
+        let app_config = AppConfig::get();
+        let raise_domain = &app_config.mount_points.system.domain;
+        let raise_db = &app_config.mount_points.system.db;
+
+        // Sécurité : On ne permet pas à la base système de se désinscrire elle-même ici
+        if &self.manager.space == raise_domain && &self.manager.db == raise_db {
+            return Ok(());
+        }
+
+        let sys_mgr = CollectionsManager::new(self.manager.storage, raise_domain, raise_db);
+
+        // 1. On cherche la base de données ciblée dans le catalogue via son handle
+        let mut query = Query::new("databases");
+        query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("handle", json::json_value!(&self.manager.db))],
+        });
+        query.limit = Some(1);
+
+        let qe = QueryEngine::new(&sys_mgr);
+        if let Ok(res) = qe.execute_query(query).await {
+            if let Some(doc) = res.documents.first() {
+                // 2. Si on la trouve, on la supprime proprement
+                if let Some(id) = doc.get("_id").and_then(|v| v.as_str()) {
+                    let _ = sys_mgr.delete_document("databases", id).await;
+
+                    user_info!(
+                        "MSG_DB_UNREGISTERED_FROM_GOVERNANCE",
+                        json::json_value!({
+                            "domain": &self.manager.space,
+                            "db": &self.manager.db
+                        })
+                    );
+                }
+            }
+        }
 
         Ok(())
     }
@@ -829,6 +896,82 @@ mod tests {
             "L'ontologie RAISE n'a pas été ajoutée correctement."
         );
         assert_eq!(sys_doc["ontologies"]["raise"]["version"], "1.1.0");
+
+        Ok(())
+    }
+
+    /// 🧪 TEST 5 : Cycle de vie complet d'une Base de Données (Gouvernance système)
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_ddl_database_lifecycle_with_governance() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+
+        let target_domain = "project_omega";
+        let target_db = "flight_software";
+
+        // 🎯 FIX : Initialiser les collections de gouvernance dans la base système pour le test
+        let sys_mgr = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
+        );
+        let generic_schema = "db://_system/bootstrap/schemas/v1/db/generic.schema.json";
+        sys_mgr.create_collection("domains", generic_schema).await?;
+        sys_mgr
+            .create_collection("databases", generic_schema)
+            .await?;
+
+        // 1. Initialisation du manager pour la NOUVELLE base
+        let target_mgr = CollectionsManager::new(&sandbox.storage, target_domain, target_db);
+        let ddl = DdlHandler::new(&target_mgr);
+
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/index.schema.json",
+            crate::utils::data::config::BOOTSTRAP_DOMAIN,
+            crate::utils::data::config::BOOTSTRAP_DB
+        );
+
+        // 2. Création de la DB (DDL)
+        let created = ddl.create_db_with_schema(&schema_uri).await?;
+        assert!(created, "La base de données aurait dû être créée.");
+
+        // 3. Vérification Physique
+        let db_path = sandbox.storage.config.db_root(target_domain, target_db);
+        assert!(
+            db_path.exists(),
+            "Le dossier racine de la base doit exister."
+        );
+
+        // 4. Vérification de la Gouvernance (Catalogue Système)
+        // La méthode get_document() sait chercher par 'handle' grâce à son fallback interne
+        let domain_doc = sys_mgr.get_document("domains", target_domain).await?;
+        assert!(
+            domain_doc.is_some(),
+            "Le domaine doit être inscrit dans le catalogue système"
+        );
+
+        let db_doc = sys_mgr.get_document("databases", target_db).await?;
+        assert!(
+            db_doc.is_some(),
+            "La base de données doit être inscrite dans le catalogue système"
+        );
+
+        // 5. Suppression de la DB (DDL)
+        let dropped = ddl.drop_db().await?;
+        assert!(dropped, "La base de données aurait dû être supprimée.");
+
+        // 6. Vérification du Nettoyage Physique
+        assert!(
+            !db_path.exists(),
+            "Le dossier racine de la base doit avoir été supprimé."
+        );
+
+        // 7. Vérification du Nettoyage de la Gouvernance
+        let db_doc_after = sys_mgr.get_document("databases", target_db).await?;
+        assert!(
+            db_doc_after.is_none(),
+            "La base de données doit être désinscrite du catalogue système"
+        );
 
         Ok(())
     }

@@ -1108,6 +1108,86 @@ impl<'a> CollectionsManager<'a> {
         Ok(document)
     }
 
+    pub async fn find_global_document(
+        &self,
+        collection: &str,
+        id_or_handle: &str,
+    ) -> RaiseResult<Option<(String, String, JsonValue)>> {
+        let config = AppConfig::get();
+        let sys_domain = &config.mount_points.system.domain;
+        let sys_db = &config.mount_points.system.db;
+
+        // 1. Accès au Catalogue Système
+        let sys_mgr = if self.space == *sys_domain && self.db == *sys_db {
+            // Optimisation : On évite de recréer le manager si on y est déjà
+            None
+        } else {
+            Some(CollectionsManager::new(self.storage, sys_domain, sys_db))
+        };
+        let catalog = sys_mgr.as_ref().unwrap_or(self);
+
+        // 2. Récupérer toutes les bases de données déclarées
+        let databases = match catalog.list_all("databases").await {
+            Ok(dbs) => dbs,
+            Err(_) => return Ok(None), // Fail-gracefully si le catalogue n'est pas prêt
+        };
+
+        for db_doc in databases {
+            // On ignore les bases désactivées
+            if db_doc.get("status").and_then(|v| v.as_str()) == Some("inactive") {
+                continue;
+            }
+
+            let db_handle = match db_doc.get("handle").and_then(|v| v.as_str()) {
+                Some(h) => h.to_string(),
+                None => continue,
+            };
+
+            let domain_id = match db_doc.get("domain_id").and_then(|v| v.as_str()) {
+                Some(id) => id,
+                None => continue,
+            };
+
+            // 3. Résolution du domaine
+            let domain_handle =
+                if let Ok(Some(domain_doc)) = catalog.get_document("domains", domain_id).await {
+                    domain_doc
+                        .get("handle")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                } else {
+                    continue;
+                };
+
+            if domain_handle.is_empty() {
+                continue;
+            }
+
+            // 4. Recherche Locale immédiate (Optimisation)
+            if domain_handle == self.space && db_handle == self.db {
+                if let Ok(Some(doc)) = self.get_document(collection, id_or_handle).await {
+                    return Ok(Some((domain_handle, db_handle, doc)));
+                }
+                continue;
+            }
+
+            // 5. Recherche dans la base distante
+            let temp_mgr = CollectionsManager::new(self.storage, &domain_handle, &db_handle);
+
+            // Remplacement du fs::exists par la lecture de l'index de la base (Zéro Dette OS)
+            if let Ok(index) = temp_mgr.load_index().await {
+                if index["collections"].get(collection).is_some() {
+                    if let Ok(Some(doc)) = temp_mgr.get_document(collection, id_or_handle).await {
+                        return Ok(Some((domain_handle, db_handle, doc)));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     fn compute_document_checksum(&self, doc: &JsonValue) -> String {
         use sha2::{Digest, Sha256};
         let content = json::serialize_to_bytes(doc).unwrap_or_default();
@@ -1729,6 +1809,75 @@ mod tests {
             resolved, expected_uuid,
             "Le lien sémantique doit pointer vers l'UUID physique"
         );
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_manager_find_global_document() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let sys_domain = &sandbox.config.mount_points.system.domain;
+        let sys_db = &sandbox.config.mount_points.system.db;
+
+        let sys_mgr = CollectionsManager::new(&sandbox.storage, sys_domain, sys_db);
+        DbSandbox::mock_db(&sys_mgr).await?;
+
+        // 1. Initialisation du Catalogue Système
+        let schema_uri = "db://_system/_system/schemas/v1/db/generic.schema.json";
+        sys_mgr.create_collection("domains", schema_uri).await?;
+        sys_mgr.create_collection("databases", schema_uri).await?;
+
+        // Injection d'un domaine et d'une base de données distante
+        sys_mgr
+            .insert_raw(
+                "domains",
+                &json_value!({
+                    "_id": "dom_archive", "handle": "archive_domain", "status": "active"
+                }),
+            )
+            .await?;
+
+        sys_mgr.insert_raw("databases", &json_value!({
+            "_id": "db_archive", "handle": "history_db", "domain_id": "dom_archive", "status": "active"
+        })).await?;
+
+        // 2. Création des données dans la base distante
+        let remote_mgr = CollectionsManager::new(&sandbox.storage, "archive_domain", "history_db");
+        DbSandbox::mock_db(&remote_mgr).await?;
+        remote_mgr
+            .create_collection("global_items", schema_uri)
+            .await?;
+        remote_mgr
+            .insert_raw(
+                "global_items",
+                &json_value!({
+                    "_id": "g_123", "handle": "my_global_item", "status": "archived"
+                }),
+            )
+            .await?;
+
+        // 3. Test de la recherche globale depuis la base principale
+        let result = sys_mgr
+            .find_global_document("global_items", "my_global_item")
+            .await?;
+
+        assert!(
+            result.is_some(),
+            "Le document global aurait dû être trouvé via le catalogue"
+        );
+
+        let (found_domain, found_db, doc) = result.unwrap();
+        assert_eq!(found_domain, "archive_domain");
+        assert_eq!(found_db, "history_db");
+        assert_eq!(doc["_id"], "g_123");
+        assert_eq!(doc["status"], "archived");
+
+        // 4. Test d'un objet introuvable
+        let missing = sys_mgr
+            .find_global_document("global_items", "ghost")
+            .await?;
+        assert!(missing.is_none());
+
         Ok(())
     }
 }
