@@ -91,7 +91,7 @@ fn load_demo() {
             println!("Projet chargé : {}", model.meta.name);
             println!("Nombre de composants logiques : {}", model.la.components.len());
         },
-        Err(e) => eprintln!("Erreur de chargement : {}", e),
+        Err(e) => !("Erreur de chargement : {}", e),
     }
 }
 

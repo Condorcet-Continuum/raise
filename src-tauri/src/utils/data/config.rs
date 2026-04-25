@@ -4,12 +4,13 @@
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 // 2. Core : Environnement, Concurrence et Erreurs
+use crate::utils::core::error::AppError;
 use crate::utils::core::error::RaiseResult;
 use crate::utils::core::{RuntimeEnv, StaticCell};
-use crate::{raise_error, user_debug, user_warn};
+use crate::{kernel_fatal, raise_error};
 
 // 3. I/O : Système de fichiers
-use crate::utils::io::fs::PathBuf;
+use crate::utils::io::fs::{self, PathBuf};
 
 // 4. Data : Traits, Collections sémantiques et JSON
 use crate::utils::data::json::{self, json_value, JsonValue};
@@ -63,6 +64,9 @@ pub struct AppConfig {
     pub workstation: Option<ScopeConfig>,
     #[serde(skip)]
     pub user: Option<ScopeConfig>,
+
+    #[serde(default)]
+    pub system_assets: SystemAssets,
 }
 
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
@@ -88,6 +92,23 @@ pub struct DbPointer {
 pub struct ScopeConfig {
     pub id: String,
     pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serializable, Deserializable, Default, PartialEq)]
+pub struct SystemAssets {
+    pub schemas_uri: Option<String>,
+    pub locales_uri: Option<String>,
+    pub ontologies_uri: Option<String>,
+    pub ai_assets_paths: Option<AiAssetsPaths>,
+}
+
+#[derive(Debug, Clone, Serializable, Deserializable, Default, PartialEq)]
+pub struct AiAssetsPaths {
+    pub models: Option<String>,
+    pub embeddings: Option<String>,
+    pub lora: Option<String>,
+    pub voice: Option<String>,
+    pub ontologies: Option<String>,
 }
 
 // =========================================================================
@@ -228,52 +249,29 @@ impl AppConfig {
 
     pub async fn get_runtime_settings(
         manager: &CollectionsManager<'_>,
-        target_ref: &str, // ex: "ref:components:handle:ai_llm" ou "ref:services:handle:svc_ai"
+        target_ref: &str,
     ) -> RaiseResult<JsonValue> {
         let config = AppConfig::get();
 
-        let id_to_query = match manager.resolve_single_reference(target_ref).await {
+        // 1. RÉSOLUTION DYNAMIQUE DU DOMAINE CIBLE (Cross-Domain Ready)
+        let (target_domain, target_db, _) =
+            config.resolve_system_uri(Some(&target_ref.to_string()), "service_configs");
+
+        let target_manager = CollectionsManager::new(manager.storage, &target_domain, &target_db);
+
+        // 2. RÉSOLUTION DE L'ID
+        let id_to_query = match target_manager.resolve_single_reference(target_ref).await {
             Ok(uuid) => uuid,
-            Err(_) => {
-                user_debug!("CFG_SEMANTIC_FALLBACK", json_value!({"handle": target_ref}));
-                target_ref.to_string()
-            }
+            Err(_) => target_ref.to_string(), // Si on a déjà passé l'UUID direct
         };
 
-        // 🛡️ 1. LE GATEKEEPER : Vérification du statut d'activation
-        let is_active = config.active_services.contains(&target_ref.to_string())
-            || config.active_components.contains(&target_ref.to_string())
-            || config.active_services.contains(&id_to_query)
-            || config.active_components.contains(&id_to_query);
-
-        if !is_active {
-            user_warn!(
-                "WRN_MODULE_INACTIVE",
-                json_value!({
-                    "target": target_ref,
-                    "hint": "Ce module a demandé à démarrer, mais il n'est pas déclaré dans les listes 'active_services' ou 'active_components' du système."
-                })
-            );
-        }
-
-        // 🔍 2. RÉSOLUTION SÉMANTIQUE (Smart Link -> UUID)
-        let id_to_query = match manager.resolve_single_reference(target_ref).await {
-            Ok(uuid) => uuid,
-            Err(_) => {
-                user_debug!("CFG_SEMANTIC_FALLBACK", json_value!({"handle": target_ref}));
-                target_ref.to_string()
-            }
-        };
-
-        // 🛤️ 3. DÉTERMINATION DU CHAMP DE RECHERCHE
-        // Si c'est un composant, on cherche par 'component_id', sinon par 'service_id'
+        // 3. REQUÊTE STRICTE
         let join_field = if target_ref.contains("components:") {
             "component_id"
         } else {
             "service_id"
         };
 
-        // 💾 4. REQUÊTE SUR LA BASE DE DONNÉES (service_configs)
         let mut query = Query::new("service_configs");
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
@@ -281,34 +279,58 @@ impl AppConfig {
         });
         query.limit = Some(1);
 
-        let result = QueryEngine::new(manager).execute_query(query).await?;
+        let result = QueryEngine::new(&target_manager)
+            .execute_query(query)
+            .await?;
 
-        // 📦 5. EXTRACTION DU DICTIONNAIRE
+        // 4. RETOUR OU ERREUR FATALE (Pas de fallback silencieux !)
         if let Some(doc) = result.documents.into_iter().next() {
             if let Some(settings) = doc.get("service_settings") {
                 return Ok(settings.clone());
+            } else {
+                raise_error!(
+                    "ERR_CONFIG_INVALID_SETTINGS",
+                    error = "Le document a été trouvé mais 'service_settings' est absent.",
+                    context = json_value!({ "target": target_ref })
+                );
             }
         }
 
+        // 🚨 ERREUR STRICTE : La config n'est pas trouvée
         raise_error!(
-            "ERR_CONFIG_MISSING_SETTINGS",
-            error = "Le document service_config a été trouvé, mais le dictionnaire 'service_settings' est absent.",
-            context = json_value!({ "target": target_ref, "queried_id": id_to_query })
-        );
+            "ERR_CONFIG_NOT_FOUND",
+            error = "Configuration introuvable pour ce composant dans la base de données cible.",
+            context = json_value!({
+                "target": target_ref,
+                "queried_id": id_to_query,
+                "domain": target_domain,
+                "db": target_db
+            })
+        )
+    }
+
+    fn get_bootstrap_pointers() -> (String, String) {
+        let domain = RuntimeEnv::var("RAISE_BOOTSTRAP_DOMAIN")
+            .unwrap_or_else(|_| BOOTSTRAP_DOMAIN.to_string());
+        let db = RuntimeEnv::var("RAISE_BOOTSTRAP_DB").unwrap_or_else(|_| BOOTSTRAP_DB.to_string());
+        (domain, db)
     }
 
     fn load_production_config(env: &str) -> RaiseResult<Self> {
-        // 🎯 1. DÉTERMINISME : On lit le nom exact du profil ciblé (par défaut "raise_core")
         let target_profile =
             RuntimeEnv::var("RAISE_PROFILE").unwrap_or_else(|_| "raise_core".to_string());
 
-        // 🎯 2. RECHERCHE EXACTE : On ne cherche plus par "env_mode", mais par "handle"
-        let system_json = Self::load_collection_doc("configs", |v| {
-            v.get("handle").and_then(|h| h.as_str()) == Some(target_profile.as_str())
-                || v.get("_id").and_then(|id| id.as_str()) == Some(target_profile.as_str())
+        // 🎯 MATCH STRICT : On cherche le handle ET on vérifie que le statut est "active"
+        let system_match = Self::load_collection_doc_with_meta("configs", |v| {
+            let handle_match = v.get("handle").and_then(|h| h.as_str())
+                == Some(target_profile.as_str())
+                || v.get("_id").and_then(|id| id.as_str()) == Some(target_profile.as_str());
+
+            let is_active = v.get("status").and_then(|s| s.as_str()) != Some("inactive");
+            handle_match && is_active
         });
 
-        let Some(json_val) = system_json else {
+        let Some((config_path, raw_json, _json_val)) = system_match else {
             raise_error!(
                 "ERR_CONFIG_SYS_MISSING",
                 error = format!("Configuration système '{}' introuvable.", target_profile),
@@ -320,22 +342,29 @@ impl AppConfig {
             );
         };
 
-        let mut config: AppConfig = match json::deserialize_from_value(json_val.clone()) {
+        let mut config: AppConfig = match json::deserialize_from_str(&raw_json) {
             Ok(c) => c,
             Err(e) => {
-                // 🎯 Debug direct en cas d'échec
-                eprintln!(
-                    "❌ [RAISE FATAL] Erreur critique de désérialisation : {}",
-                    e
+                let AppError::Structured(data) = &e;
+                let detail_technique = data
+                    .context
+                    .get("technical_error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Détail technique absent")
+                    .to_string();
+
+                kernel_fatal!(
+                    "Désérialisation du Schéma de Configuration",
+                    config_path.display(),
+                    detail_technique
                 );
 
                 raise_error!(
-                    "ERR_CONFIG_DESERIALIZE",
+                    "ERR_CONFIG_SCHEMA_INVALID",
                     error = e.to_string(),
                     context = json_value!({
-                        "profile": target_profile,
-                        "cause_exacte": e.to_string(),
-                        "json_brut": json_val
+                        "file": config_path.to_string_lossy(),
+                        "profile": target_profile
                     })
                 )
             }
@@ -345,8 +374,7 @@ impl AppConfig {
             .or_else(|_| RuntimeEnv::var("COMPUTERNAME"))
             .unwrap_or_else(|_| "localhost".to_string());
 
-        // 🎯 On peuple le champ 'workstation' (ScopeConfig) à partir de la DB
-        if let Some(ws_json) = Self::load_collection_doc("workstations", |v| {
+        if let Some((_, _, ws_json)) = Self::load_collection_doc_with_meta("workstations", |v| {
             v.get("hostname").and_then(|h| h.as_str()) == Some(hostname.as_str())
         }) {
             config.workstation = Some(ScopeConfig {
@@ -362,17 +390,16 @@ impl AppConfig {
             .or_else(|_| RuntimeEnv::var("USERNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
 
-        let user_json = Self::load_collection_doc("users", |v| {
+        let user_json = Self::load_collection_doc_with_meta("users", |v| {
             v.get("handle").and_then(|u| u.as_str()) == Some(userhandle.as_str())
         })
         .or_else(|| {
-            // Fallback admin uniquement si l'utilisateur OS n'existe pas dans la DB
-            Self::load_collection_doc("users", |v| {
+            Self::load_collection_doc_with_meta("users", |v| {
                 v.get("handle").and_then(|u| u.as_str()) == Some("admin")
             })
         });
 
-        if let Some(doc) = user_json {
+        if let Some((_, _, doc)) = user_json {
             config.user = Some(ScopeConfig {
                 id: doc
                     .get("handle")
@@ -385,7 +412,6 @@ impl AppConfig {
                     .and_then(|v| v.as_str())
                     .map(String::from),
             });
-            // On met à jour l'ID de workstation si nécessaire
             config.workstation_id = doc
                 .get("default_workstation_id")
                 .and_then(|v| v.as_str())
@@ -396,17 +422,16 @@ impl AppConfig {
         Ok(config)
     }
 
-    fn load_collection_doc<F>(collection_name: &str, predicate: F) -> Option<JsonValue>
+    /// 🎯 RETOURNE LE CHEMIN, LE TEXTE BRUT ET L'ARBRE PARSÉ
+    fn load_collection_doc_with_meta<F>(
+        collection_name: &str,
+        predicate: F,
+    ) -> Option<(PathBuf, String, JsonValue)>
     where
         F: Fn(&JsonValue) -> bool,
     {
         let base_domain = dirs::home_dir()?.join("raise_domain");
-
-        // 🎯 L'adresse du BIOS devient dynamique (Overrides via Environnement)
-        let bios_domain = RuntimeEnv::var("RAISE_BOOTSTRAP_DOMAIN")
-            .unwrap_or_else(|_| BOOTSTRAP_DOMAIN.to_string());
-        let bios_db =
-            RuntimeEnv::var("RAISE_BOOTSTRAP_DB").unwrap_or_else(|_| BOOTSTRAP_DB.to_string());
+        let (bios_domain, bios_db) = Self::get_bootstrap_pointers();
 
         let collection_dir = base_domain
             .join(bios_domain)
@@ -417,15 +442,13 @@ impl AppConfig {
             return None;
         }
 
-        // 🎯 3. FIN DE L'OEUF ET LA POULE : On scanne directement les fichiers au lieu
-        // de dépendre de _system.json (qui n'existe peut-être pas encore si le crash s'est produit pendant sa mise à jour)
-        if let Ok(entries) = std::fs::read_dir(collection_dir) {
+        if let Ok(entries) = fs::read_dir_sync(collection_dir) {
             for entry in entries.flatten() {
                 if entry.path().extension().and_then(|s| s.to_str()) == Some("json") {
-                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                    if let Ok(content) = fs::read_to_string_sync(&entry.path()) {
                         if let Ok(doc) = json::deserialize_from_str::<JsonValue>(&content) {
                             if predicate(&doc) {
-                                return Some(doc); // On retourne le premier match EXACT
+                                return Some((entry.path(), content, doc));
                             }
                         }
                     }
@@ -464,6 +487,65 @@ impl AppConfig {
 
     pub fn device() -> &'static candle_core::Device {
         DEVICE.get().expect("Device non initialisé")
+    }
+
+    /// Résout une URI système (ex: "db://_system/bootstrap/collections/locales")
+    /// Retourne un tuple propre : (domain, db, target_name)
+    pub fn resolve_system_uri(
+        &self,
+        uri_opt: Option<&String>,
+        fallback_target: &str,
+    ) -> (String, String, String) {
+        if let Some(uri) = uri_opt {
+            if let Some(path) = uri.strip_prefix("db://") {
+                let parts: Vec<&str> = path.split('/').collect();
+                if parts.len() >= 3 {
+                    let domain = parts[0].to_string();
+                    let db = parts[1].to_string();
+                    let target = parts[2..].join("/");
+
+                    // Nettoyage intelligent : si l'URI inclut "collections/", on l'enlève pour le SGBD
+                    let clean_target = if target.starts_with("collections/") {
+                        target.replace("collections/", "")
+                    } else {
+                        target
+                    };
+                    return (domain, db, clean_target);
+                }
+            }
+        }
+
+        // 🛡️ Fallback sur la partition système par défaut
+        (
+            self.mount_points.system.domain.clone(),
+            self.mount_points.system.db.clone(),
+            fallback_target.to_string(),
+        )
+    }
+
+    /// Résout un chemin physique absolu (ex: modèles IA) avec un fallback relatif
+    pub fn resolve_asset_path(
+        &self,
+        asset_path_opt: Option<&String>,
+        fallback_suffix: &str,
+    ) -> RaiseResult<PathBuf> {
+        if let Some(absolute_path) = asset_path_opt {
+            Ok(PathBuf::from(absolute_path))
+        } else {
+            // 🛡️ Fallback : On reconstruit le chemin relatif depuis le point de montage système
+            let domain_path = match self.get_path("PATH_RAISE_DOMAIN") {
+                Some(p) => p,
+                None => raise_error!(
+                    "ERR_CONFIG_DOMAIN_PATH_MISSING",
+                    error = "Le chemin racine 'PATH_RAISE_DOMAIN' est absent de la configuration."
+                ),
+            };
+
+            Ok(domain_path
+                .join(&self.mount_points.system.domain)
+                .join(&self.mount_points.system.db)
+                .join(fallback_suffix))
+        }
     }
 }
 

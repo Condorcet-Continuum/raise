@@ -43,7 +43,11 @@ use raise::spatial_engine;
 fn main() {
     // 1. INITIALISATION CONFIGURATION & LOGGING
     if let Err(e) = AppConfig::init() {
-        eprintln!("❌ Erreur fatale de configuration : {}", e);
+        kernel_fatal!(
+            "Bootstrap du Système (Initialisation)",
+            "Environment / AppConfig",
+            e
+        );
         terminate_process(1);
     }
 

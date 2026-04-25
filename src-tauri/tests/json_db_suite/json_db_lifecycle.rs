@@ -52,7 +52,7 @@ async fn db_lifecycle_minimal() -> RaiseResult<()> {
 #[async_test]
 async fn test_collection_drop_cleans_system_index() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let collection = "temp_collection_to_drop";
 
     mgr.create_collection(collection, "v1/db/generic.schema.json")
@@ -80,7 +80,7 @@ async fn test_collection_drop_cleans_system_index() -> RaiseResult<()> {
 #[async_test]
 async fn test_system_index_strict_conformance() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
 
     mgr.create_collection("init_trigger", "v1/db/generic.schema.json")
         .await
@@ -103,7 +103,7 @@ async fn test_system_index_strict_conformance() -> RaiseResult<()> {
         Some(expected_schema.as_str())
     );
 
-    let registry = SchemaRegistry::from_db(&env.sandbox.storage.config, &env.space, &env.db)
+    let registry = SchemaRegistry::from_db(&env.sandbox.db.config, &env.space, &env.db)
         .await
         .unwrap();
     let validator = SchemaValidator::compile_with_registry(&expected_schema, &registry).unwrap();

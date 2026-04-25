@@ -234,7 +234,7 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
     use crate::workflow_engine::critic::WorkflowCritic;
 
     async fn setup_task_test_context<'a>(
@@ -254,32 +254,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_graph_store",
-            json_value!({
-                "embedding_dim": 16,
-                "provider": "native"
-            }),
-        )
-        .await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_world_model",
-            json_value!({
-                "vocab_size": 16,
-                "embedding_dim": 16,
-                "action_dim": 8,
-                "hidden_dim": 32,
-                "use_gpu": false
-            }),
-        )
-        .await?;
 
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await

@@ -52,7 +52,7 @@ async fn exec_sql_read(engine: &QueryEngine<'_>, sql: &str) -> raise::json_db::q
 #[async_test]
 async fn test_sql_select_by_kind() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let col = "actors_kind";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -72,7 +72,7 @@ async fn test_sql_select_by_kind() -> RaiseResult<()> {
 #[async_test]
 async fn test_sql_numeric_comparison_x_props() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let col = "actors_age";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -92,7 +92,7 @@ async fn test_sql_numeric_comparison_x_props() -> RaiseResult<()> {
 #[async_test]
 async fn test_sql_logical_and_mixed() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let col = "actors_logical";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -118,7 +118,7 @@ async fn test_sql_logical_and_mixed() -> RaiseResult<()> {
 #[async_test]
 async fn test_sql_like_display_name() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let col = "actors_like";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -138,7 +138,7 @@ async fn test_sql_like_display_name() -> RaiseResult<()> {
 #[async_test]
 async fn test_sql_order_by_x_prop() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let col = "actors_order";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 
@@ -171,7 +171,7 @@ async fn test_sql_order_by_x_prop() -> RaiseResult<()> {
 #[async_test]
 async fn test_sql_json_array_contains() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let col = "actors_tags";
     seed_actors(&mgr, col, &env.space, &env.db).await;
 

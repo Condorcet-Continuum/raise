@@ -316,84 +316,13 @@ mod tests {
         }
     }
 
-    async fn setup_mock_orchestrator_env() -> RaiseResult<AgentDbSandbox> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
-
-        // 🎯 L'ASTUCE : On construit le chemin ABSOLU vers ton vrai dossier utilisateur
-        let models_dir = dirs::home_dir()
-            .unwrap_or_default()
-            .join("raise_domain/_system/ai-assets/models");
-
-        let light_model_path = models_dir
-            .join("quew2-5-5b/qwen2.5-1.5b-instruct-q4_k_m.gguf")
-            .to_string_lossy()
-            .to_string();
-        let light_tokenizer_path = models_dir
-            .join("quew2-5-5b/tokenizer.json")
-            .to_string_lossy()
-            .to_string();
-
-        // On injecte les chemins absolus pour contourner le /tmp de la Sandbox
-        inject_mock_component(
-            &manager,
-            "llm",
-            json_value!({
-                "rust_model_file": light_model_path,
-                "rust_tokenizer_file": light_tokenizer_path
-            }),
-        )
-        .await?;
-
-        inject_mock_component(
-            &manager,
-            "nlp",
-            json_value!({
-                "model_name": "minilm",
-                "rust_config_file": "config.json",
-                "rust_tokenizer_file": "tokenizer.json",
-                "rust_safetensors_file": "model.safetensors"
-            }),
-        )
-        .await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_graph_store",
-            json_value!({
-                "embedding_dim": 512,
-                "provider": "native"
-            }),
-        )
-        .await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_world_model",
-            json_value!({
-                "vocab_size": 1024,
-                "embedding_dim": 16,
-                "action_dim": 8,
-                "hidden_dim": 32,
-                "use_gpu": false
-            }),
-        )
-        .await?;
-
-        Ok(sandbox)
-    }
-
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_lifecycle() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
-        let sandbox = setup_mock_orchestrator_env().await?;
+
+        let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,
@@ -430,7 +359,8 @@ mod tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_orchestrator_wm_resilience() -> RaiseResult<()> {
-        let sandbox = setup_mock_orchestrator_env().await?;
+        let sandbox = AgentDbSandbox::new().await?;
+
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
             &sandbox.db,

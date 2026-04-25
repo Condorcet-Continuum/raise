@@ -69,21 +69,7 @@ impl AgentContext {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
-
-    // 🎯 FIX : Import de la nouvelle structure isolée du World Model
-    use crate::ai::world_model::engine::WorldModelConfig;
-
-    // 🎯 FIX : Utilitaire local Zéro Dette pour remplacer le `.default()`
-    fn get_test_wm_config() -> WorldModelConfig {
-        WorldModelConfig {
-            vocab_size: 1024,
-            embedding_dim: 512,
-            action_dim: 64,
-            hidden_dim: 1024,
-            use_gpu: false,
-        }
-    }
+    use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
     #[serial_test::serial]
@@ -98,8 +84,6 @@ mod tests {
             &sandbox.config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await?;
-
         // 🎯 Rigueur : Match sur la création du client LLM
         let llm = match LlmClient::new(&manager).await {
             Ok(client) => client,
@@ -109,11 +93,8 @@ mod tests {
         let domain_path = PathBuf::from("/data/domain");
         let dataset_path = PathBuf::from("/data/dataset");
 
-        // 🎯 FIX : Utilisation de la configuration de test locale
-        let wm_config = get_test_wm_config();
-
         // 🎯 Rigueur : Match sur la création du World Model
-        let world_engine = match NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new()) {
+        let world_engine = match NeuroSymbolicEngine::bootstrap(&manager).await {
             Ok(engine) => SharedRef::new(engine),
             Err(e) => panic!("Échec de l'initialisation du NeuroSymbolicEngine : {:?}", e),
         };
@@ -148,17 +129,12 @@ mod tests {
             &sandbox.config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await?;
-
         let llm = match LlmClient::new(&manager).await {
             Ok(client) => client,
             Err(e) => panic!("Échec LLM : {:?}", e),
         };
 
-        // 🎯 FIX : Utilisation de la configuration de test locale
-        let wm_config = get_test_wm_config();
-
-        let world_engine = match NeuroSymbolicEngine::new(wm_config, NeuralWeightsMap::new()) {
+        let world_engine = match NeuroSymbolicEngine::bootstrap(&manager).await {
             Ok(engine) => SharedRef::new(engine),
             Err(e) => panic!("Échec Neuro : {:?}", e),
         };

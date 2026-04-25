@@ -83,19 +83,28 @@ impl Translator {
     /// Charge une langue spécifique depuis la collection 'locales' du point de montage système.
     pub async fn load_from_db(&mut self, storage: &StorageEngine, lang: &str) -> RaiseResult<()> {
         let app_config = AppConfig::get();
-        let sys_domain = &app_config.mount_points.system.domain;
-        let sys_db = &app_config.mount_points.system.db;
+
+        let (target_domain, target_db, target_collection) =
+            app_config.resolve_system_uri(app_config.system_assets.locales_uri.as_ref(), "locales");
 
         // 🎯 Rigueur : Match complet sur la lecture DB
-        let docs = match collections::list_all(storage, sys_domain, sys_db, "locales").await {
-            Ok(d) => d,
-            Err(e) => raise_error!(
-                "ERR_I18N_DB_READ",
-                error = e,
-                context =
-                    json_value!({ "requested_lang": lang, "domain": sys_domain, "db": sys_db })
-            ),
-        };
+        let docs =
+            match collections::list_all(storage, &target_domain, &target_db, &target_collection)
+                .await
+            {
+                Ok(d) => d,
+                Err(e) => raise_error!(
+                    "ERR_I18N_DB_READ",
+                    error = e,
+                    context = json_value!({
+                        "requested_lang": lang,
+                        "resolved_domain": target_domain,
+                        "resolved_db": target_db,
+                        "resolved_collection": target_collection,
+                        "uri_source": app_config.system_assets.locales_uri
+                    })
+                ),
+            };
 
         for doc_val in docs {
             if doc_val.get("locale").and_then(|v| v.as_str()) == Some(lang) {
@@ -122,7 +131,8 @@ impl Translator {
                     event_id = "I18N_LOCALE_LOADED",
                     language = lang,
                     key_count = self.translations.len(),
-                    "🌍 Langue chargée depuis le point de montage système."
+                    source = if app_config.system_assets.locales_uri.is_some() { "shared_registry" } else { "mount_point_fallback" },
+                    "🌍 Langue chargée avec succès."
                 );
 
                 return Ok(());
@@ -131,8 +141,11 @@ impl Translator {
 
         raise_error!(
             "ERR_I18N_NOT_FOUND",
-            error = "Langue introuvable dans la collection 'locales'",
-            context = json_value!({ "lang": lang })
+            error = format!(
+                "Langue '{}' introuvable dans la collection '{}'",
+                lang, target_collection
+            ),
+            context = json_value!({ "lang": lang, "collection": target_collection })
         );
     }
 

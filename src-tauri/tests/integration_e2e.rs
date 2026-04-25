@@ -19,13 +19,13 @@ async fn test_full_stack_integration() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
 
     // 🎯 RÉSILIENCE : Utilisation des partitions injectées par la Sandbox
-    let manager = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let manager = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
 
     // Résolution dynamique du point de montage système
     let system_domain = &env.sandbox.config.mount_points.system.domain;
     let system_db = &env.sandbox.config.mount_points.system.db;
 
-    let sys_mgr = CollectionsManager::new(&env.sandbox.storage, system_domain, system_db);
+    let sys_mgr = CollectionsManager::new(&env.sandbox.db, system_domain, system_db);
 
     let generic_schema = "db://_system/_system/schemas/v1/db/generic.schema.json";
 
@@ -145,7 +145,7 @@ mod resilience_tests {
         let env = setup_test_env(LlmMode::Disabled).await?;
 
         // On initialise un loader sur une partition qui n'existe pas physiquement
-        let ghost_mgr = CollectionsManager::new(&env.sandbox.storage, "ghost_space", "ghost_db");
+        let ghost_mgr = CollectionsManager::new(&env.sandbox.db, "ghost_space", "ghost_db");
         let loader = ModelLoader::new_with_manager(ghost_mgr)?;
 
         match loader.index_project().await {

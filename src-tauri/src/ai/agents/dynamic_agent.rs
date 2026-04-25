@@ -207,20 +207,7 @@ mod tests {
     use crate::ai::llm::client::LlmClient;
     use crate::ai::world_model::NeuroSymbolicEngine;
     use crate::utils::core::error::AppError;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
-
-    // 🎯 Import de la configuration Zéro Dette
-    use crate::ai::world_model::engine::WorldModelConfig;
-
-    fn get_test_wm_config() -> WorldModelConfig {
-        WorldModelConfig {
-            vocab_size: 1024,
-            embedding_dim: 512,
-            action_dim: 64,
-            hidden_dim: 1024,
-            use_gpu: false,
-        }
-    }
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     async fn setup_test_ctx(sandbox: &AgentDbSandbox) -> RaiseResult<AgentContext> {
         let config = AppConfig::get();
@@ -229,20 +216,16 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        inject_mock_component(&manager, "llm", json_value!({})).await?;
 
         let llm = match LlmClient::new(&manager).await {
             Ok(c) => c,
             Err(e) => raise_error!("ERR_TEST_LLM", error = e),
         };
 
-        let world_engine = SharedRef::new(
-            match NeuroSymbolicEngine::new(get_test_wm_config(), NeuralWeightsMap::new()) {
-                Ok(we) => we,
-                Err(e) => raise_error!("ERR_TEST_WM", error = e),
-            },
-        );
-
+        let world_engine = SharedRef::new(match NeuroSymbolicEngine::bootstrap(&manager).await {
+            Ok(we) => we,
+            Err(e) => raise_error!("ERR_TEST_WM", error = e),
+        });
         Ok(AgentContext::new(
             "test_agent",
             "sess_123",

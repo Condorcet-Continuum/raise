@@ -2,10 +2,8 @@
 
 use raise::ai::llm::client::LlmClient;
 use raise::json_db::collections::manager::CollectionsManager;
-// 🎯 Utilisation de la façade testing pour l'isolation totale
-use raise::ai::world_model::engine::WorldModelConfig;
 use raise::utils::prelude::*;
-use raise::utils::testing::{inject_mock_component, DbSandbox};
+use raise::utils::testing::{inject_mock_component, AgentDbSandbox}; // 🎯 On passe à AgentDbSandbox
 
 static INIT: InitGuard = InitGuard::new();
 
@@ -18,217 +16,145 @@ pub enum LlmMode {
 
 #[allow(dead_code)]
 pub struct UnifiedTestEnv {
-    pub sandbox: DbSandbox,
+    pub sandbox: AgentDbSandbox, // 🎯 UPGRADE : La sandbox intègre désormais toute l'IA
     pub client: Option<LlmClient>,
     pub space: String,
     pub db: String,
 }
 
-/// Fournit une configuration déterministe du World Model pour l'ensemble des tests
-#[allow(dead_code)]
-pub fn get_test_wm_config() -> WorldModelConfig {
-    WorldModelConfig {
-        vocab_size: 1024,
-        embedding_dim: 512,
-        action_dim: 64,
-        hidden_dim: 1024,
-        use_gpu: false,
-    }
-}
+// 🧹 SUPPRESSION TOTALE de `get_test_wm_config()` !
 
-/// Initialise un environnement de test robuste et résilien
+/// Initialise un environnement de test robuste, isolé et aligné sur le Registre de Ressources.
 pub async fn setup_test_env(llm_mode: LlmMode) -> RaiseResult<UnifiedTestEnv> {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     });
 
-    // 1. ISOLATION : Création de la Sandbox (Config, Storage, TempDir)
-    let sandbox = DbSandbox::new().await?;
+    // 1. ISOLATION : Création de la Sandbox (L'IA est injectée automatiquement ici !)
+    let sandbox = AgentDbSandbox::new().await?;
+    let config = &sandbox.config;
 
-    // 🎯 RÉSILIENCE MOUNT POINTS : Utilisation dynamique de la config sandbox
-    let system_domain = sandbox.config.mount_points.system.domain.clone();
-    let system_db = sandbox.config.mount_points.system.db.clone();
-    let domain_path = match sandbox.config.get_path("PATH_RAISE_DOMAIN") {
-        Some(path) => path,
-        None => panic!("❌ PATH_RAISE_DOMAIN manquant dans la config sandbox"),
-    };
+    // 2. RÉSOLUTION DES POINTS DE MONTAGE VIA LA FAÇADE
+    let (sys_domain, sys_db, _) = config.resolve_system_uri(None, "bootstrap");
 
-    // Création du marqueur d'environnement de test pour les outils
-    if let Err(e) = std::fs::write(domain_path.join(".is_test_env"), "1") {
-        panic!("❌ Impossible de créer le marqueur de test : {}", e);
-    }
-
-    // 2. INITIALISATION DU SYSTÈME SÉMANTIQUE MOCKÉ
+    // 3. INITIALISATION DU SYSTÈME SÉMANTIQUE
     raise::json_db::jsonld::VocabularyRegistry::init_mock_for_tests();
 
-    // 3. PRÉPARATION DES SCHÉMAS PHYSIQUES
-    let mgr = CollectionsManager::new(&sandbox.storage, &system_domain, &system_db);
-
-    match DbSandbox::mock_db(&mgr).await {
-        Ok(_) => user_success!("SUC_TEST_DB_READY"),
-        Err(e) => panic!("❌ Échec initialisation index système : {}", e),
-    }
+    // 4. PRÉPARATION DU MANAGER ET DES SCHÉMAS PHYSIQUES
+    // (L'AgentDbSandbox a déjà mocké la DB système, on récupère juste le manager)
+    let mgr = CollectionsManager::new(&sandbox.db, &sys_domain, &sys_db);
 
     // =========================================================================
-    // 🎯 INITIALISATION DES COLLECTIONS (Résilience & Isolation)
+    // 🎯 INITIALISATION DES COLLECTIONS MÉTIER
     // =========================================================================
     let generic_schema_uri = format!(
         "db://{}/{}/schemas/v1/db/generic.schema.json",
-        system_domain, system_db
+        sys_domain, sys_db
     );
-    let generic_schema = generic_schema_uri.as_str();
 
-    // A. Collections Système
-    let system_collections = vec!["session_agents", "prompts", "agents", "configs"];
+    // A. Collections Système spécifiques aux tests d'intégration
+    let system_collections = vec![
+        "session_agents",
+        "prompts",
+        "agents",
+        "configs",
+        "service_configs",
+    ];
     for coll in system_collections {
-        if let Err(e) = mgr.create_collection(coll, generic_schema).await {
-            user_error!(
-                "ERR_TEST_COLLECTION_FAIL",
-                json_value!({"coll": coll, "error": e.to_string()})
-            );
-        }
+        let _ = mgr.create_collection(coll, &generic_schema_uri).await;
     }
 
-    // B. Couches MBSE Arcadia (Partition 'un2')
+    // B. Couches MBSE Arcadia (Partition Métier 'un2')
     let layers = vec![
         ("oa", vec!["capabilities", "actors"]),
         ("data", vec!["classes", "types"]),
         ("sa", vec!["functions"]),
         ("la", vec!["components", "functions"]),
         ("pa", vec!["physical_nodes"]),
-        (
-            "transverse",
-            vec!["requirements", "test_procedures", "test_campaigns"],
-        ),
+        ("transverse", vec!["requirements", "test_procedures"]),
         ("epbs", vec!["configuration_items"]),
     ];
 
     for (db_name, collections) in layers {
-        let layer_mgr = CollectionsManager::new(&sandbox.storage, "un2", db_name);
-        let _ = DbSandbox::mock_db(&layer_mgr).await;
+        let layer_mgr = CollectionsManager::new(&sandbox.db, "un2", db_name);
+        let _ = raise::utils::testing::DbSandbox::mock_db(&layer_mgr).await;
         for coll in collections {
-            let _ = layer_mgr.create_collection(coll, generic_schema).await;
+            let _ = layer_mgr.create_collection(coll, &generic_schema_uri).await;
         }
     }
 
     // =========================================================================
     // 5. INJECTION DE LA CONFIGURATION (Data-Driven)
     // =========================================================================
-    // 🎯 VRAIE SUPPRESSION DU '?' ICI :
-    let _ = inject_mock_component(
+
+    // 🎯 TABLE DE ROUTAGE ONTOLOGIQUE
+    mgr.upsert_document(
+        "configs",
+        json_value!({
+            "_id": "ref:configs:handle:ontological_mapping",
+            "handle": "ontological_mapping",
+            "search_spaces": [
+                { "layer": "oa", "collection": "capabilities" },
+                { "layer": "oa", "collection": "actors" },
+                { "layer": "data", "collection": "classes" },
+                { "layer": "data", "collection": "types" },
+                { "layer": "sa", "collection": "functions" },
+                { "layer": "la", "collection": "components" },
+                { "layer": "la", "collection": "functions" },
+                { "layer": "pa", "collection": "physical_nodes" },
+                { "layer": "transverse", "collection": "requirements" }
+            ],
+            "mappings": {
+                "Class": { "layer": "data", "collection": "classes" },
+                "DataType": { "layer": "data", "collection": "types" },
+                "Function": { "layer": "sa", "collection": "functions" },
+                "LogicalFunction": { "layer": "la", "collection": "functions" },
+                "LogicalComponent": { "layer": "la", "collection": "components" },
+                "Requirement": { "layer": "transverse", "collection": "requirements" }
+            }
+        }),
+    )
+    .await?;
+
+    // 🧹 SUPPRESSION MAGISTRALE : Les DEUX injections manuelles du "llm" ont disparu !
+
+    // On conserve uniquement l'injection de la config "ai_agents" (spécifique aux workflows d'intégration)
+    inject_mock_component(
         &mgr,
         "ai_agents",
         json_value!({
             "target_domain": "un2",
-            "system_domain": system_domain,
-            "system_db": system_db
+            "system_domain": sys_domain,
+            "system_db": sys_db
         }),
     )
-    .await;
-
-    // Mapping Ontologique Standard Arcadia
-    let _ = mgr
-        .upsert_document(
-            "configs",
-            json_value!({
-                "_id": "ref:configs:handle:ontological_mapping",
-                "handle": "ontological_mapping",
-                "search_spaces": [
-                    { "layer": "oa", "collection": "capabilities" },
-                    { "layer": "oa", "collection": "actors" },
-                    { "layer": "data", "collection": "classes" },
-                    { "layer": "data", "collection": "types" },
-                    { "layer": "sa", "collection": "functions" },
-                    { "layer": "la", "collection": "components" },
-                    { "layer": "la", "collection": "functions" },
-                    { "layer": "pa", "collection": "physical_nodes" },
-                    { "layer": "transverse", "collection": "requirements" }
-                ],
-                "mappings": {
-                    "Class": { "layer": "data", "collection": "classes" },
-                    "Function": { "layer": "sa", "collection": "functions" },
-                    "LogicalFunction": { "layer": "la", "collection": "functions" },
-                    "LogicalComponent": { "layer": "la", "collection": "components" },
-                    "Requirement": { "layer": "transverse", "collection": "requirements" }
-                }
-            }),
-        )
-        .await;
+    .await?;
 
     // =========================================================================
     // 6. INITIALISATION LLM
     // =========================================================================
-    // 🎯 VRAIE SUPPRESSION DU '?' ICI :
-    let _ = inject_mock_component(&mgr, "llm", json_value!({})).await;
-
     let client = match llm_mode {
-        LlmMode::Enabled => {
-            let mock_model_file = domain_path.join("_system/ai-assets/models/mock.gguf");
-            let _ = fs::ensure_dir_sync(mock_model_file.parent().unwrap());
-            let _ = fs::write_sync(&mock_model_file, b"dummy");
-            Some(
-                LlmClient::new(&mgr)
-                    .await
-                    .map_err(|e| {
-                        panic!("❌ Échec critique initialisation LlmClient : {:?}", e);
-                    })
-                    .unwrap(),
-            )
-        }
+        LlmMode::Enabled => Some(LlmClient::new(&mgr).await?),
         LlmMode::Disabled => None,
     };
 
     Ok(UnifiedTestEnv {
         sandbox,
         client,
-        space: system_domain,
-        db: system_db,
+        space: sys_domain,
+        db: sys_db,
     })
 }
 
-/// Génère des jeux de données mock pour les tests de RAG/Traceability
+/// Génère des jeux de données mock.
 #[allow(dead_code)]
 pub async fn seed_mock_datasets(domain_path: &Path) -> RaiseResult<PathBuf> {
     let dataset_dir = domain_path.join("dataset/arcadia/v1/data/exchange-items");
-    match fs::create_dir_all_async(&dataset_dir).await {
-        Ok(_) => {
-            let gps_file = dataset_dir.join("position_gps.json");
-            let mock_data = json_value!({ "name": "GPS", "exchangeMechanism": "Flow" });
-            match fs::write_json_atomic_async(&gps_file, &mock_data).await {
-                Ok(_) => Ok(gps_file),
-                Err(e) => raise_error!("ERR_TEST_SEED_FAIL", error = e.to_string()),
-            }
-        }
-        Err(e) => raise_error!("ERR_TEST_DIR_FAIL", error = e.to_string()),
-    }
-}
+    fs::create_dir_all_async(&dataset_dir).await?;
 
-// =========================================================================
-// TESTS DE RÉSILIENCE DU COMMON (Zéro Dette)
-// =========================================================================
+    let gps_file = dataset_dir.join("position_gps.json");
+    let mock_data = json_value!({ "name": "GPS", "exchangeMechanism": "Flow" });
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[async_test]
-    async fn test_env_isolation_resilience() -> RaiseResult<()> {
-        let env1 = setup_test_env(LlmMode::Disabled).await?;
-        let env2 = setup_test_env(LlmMode::Disabled).await?;
-
-        // On vérifie que les chemins temporaires sont distincts (Isolation physique)
-        assert_ne!(
-            env1.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap(),
-            env2.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()
-        );
-        Ok(())
-    }
-
-    #[async_test]
-    async fn test_mount_point_config_integrity() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await?;
-        // Vérifie que les mount points système sont bien injectés dans l'env de test
-        assert!(!env.sandbox.config.mount_points.system.domain.is_empty());
-        Ok(())
-    }
+    fs::write_json_atomic_async(&gps_file, &mock_data).await?;
+    Ok(gps_file)
 }

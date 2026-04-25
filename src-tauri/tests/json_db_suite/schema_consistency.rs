@@ -11,7 +11,7 @@ use walkdir::WalkDir; // Pour explorer les schémas récursivement
 async fn test_structural_integrity_json_schema() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement isolé (copie les schémas auto)
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let cfg = &env.sandbox.storage.config;
+    let cfg = &env.sandbox.db.config;
 
     let schemas_root = cfg.db_schemas_root(&env.space, &env.db).join("v1");
 
@@ -144,7 +144,7 @@ async fn test_semantic_consistency_json_ld() -> RaiseResult<()> {
 #[async_test]
 async fn test_detect_actor_duality() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let cfg = &env.sandbox.storage.config;
+    let cfg = &env.sandbox.db.config;
     let schemas_root = cfg.db_schemas_root(&env.space, &env.db).join("v1");
 
     let generic_path = schemas_root.join("actors/actor.schema.json");

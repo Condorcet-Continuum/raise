@@ -171,8 +171,8 @@ pub use crate::utils::network::{
 
 // --- 6. MACROS & OBSERVABILITÉ (Exports Racine) ---
 pub use crate::{
-    build_error, raise_error, require_session, user_debug, user_error, user_info, user_success,
-    user_trace, user_warn,
+    build_error, kernel_fatal, kernel_trace, raise_error, require_session, user_debug, user_error,
+    user_info, user_success, user_trace, user_warn,
 };
 
 // On expose les logs de core pour le paramétrage du moteur

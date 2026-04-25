@@ -126,7 +126,7 @@ impl EmbeddingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
 
     /// Test existant : Initialisation par défaut
     #[async_test]
@@ -142,8 +142,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
 
         let mut engine = EmbeddingEngine::new(&manager).await?;
         assert!(engine.embed_query("Hello").is_ok());
@@ -163,8 +161,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
-
         // Test Lightweight
         let mut fast_engine =
             EmbeddingEngine::new_with_type(EngineType::Lightweight, &manager).await?;
@@ -182,28 +178,51 @@ mod tests {
         Ok(())
     }
 
-    /// On teste l'initialisation directe pour valider l'interception d'erreur
+    /// Validation du Fallback automatique de la Façade
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_engine_resilience_bad_domain() -> RaiseResult<()> {
+    async fn test_embedding_engine_fallback_resilience() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
 
-        // Manager pointant sur un domaine inexistant
-        let manager = CollectionsManager::new(&sandbox.db, "ghost_zone", "ghost_db");
+        // 🎯 SABOTAGE CIBLÉ : On altère la config dans la VRAIE partition Système
+        // pour faire croire que le modèle lourd (Native) a été supprimé du disque.
+        let mut nlp_doc = manager
+            .get_document("service_configs", "cfg_ai_nlp_test")
+            .await?
+            .expect("La config NLP devrait être présente");
 
-        // 🎯 On appelle new_with_type(Native) directement
-        // Cela évite le fallback automatique de EmbeddingEngine::new()
-        // et permet de vérifier que la couche DB lève bien l'erreur attendue.
-        let result = EmbeddingEngine::new_with_type(EngineType::Native, &manager).await;
+        nlp_doc["service_settings"]["rust_safetensors_file"] = json_value!("ghost.safetensors");
+        let _ = manager
+            .delete_document("service_configs", "cfg_ai_nlp_test")
+            .await;
+        manager.insert_raw("service_configs", &nlp_doc).await?;
 
-        match result {
-        Err(AppError::Structured(_)) => Ok(()),
-        _ => panic!("Le moteur aurait dû lever une erreur structurée lors de l'accès au domaine 'ghost_zone'"),
+        // 🎯 MAGIE : On appelle la façade globale `EmbeddingEngine::new`
+        // Elle va tenter d'allumer Native, se prendre le mur du fichier manquant,
+        // attraper l'erreur gracieusement, et s'allumer en Lightweight !
+        let mut engine = EmbeddingEngine::new(&manager).await?;
+
+        // 🟢 ZÉRO DETTE : On vérifie que le moteur de secours fonctionne
+        let result = engine.embed_query("Test de résilience du fallback");
+        assert!(
+            result.is_ok(),
+            "La façade aurait dû basculer en mode Lightweight et survivre."
+        );
+
+        // Le vecteur Lightweight (FastEmbed) a souvent une dimension différente (ex: 384)
+        assert!(!result.unwrap().is_empty());
+
+        Ok(())
     }
-    }
 
-    /// 🎯 NOUVEAU TEST : Protection contre les requêtes vides
+    ///  Protection contre les requêtes vides
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
@@ -216,7 +235,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({})).await?;
         let mut engine = EmbeddingEngine::new_with_type(EngineType::Lightweight, &manager).await?;
 
         let result = engine.embed_query("");

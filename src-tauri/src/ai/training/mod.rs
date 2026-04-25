@@ -18,7 +18,7 @@ pub async fn ai_train_domain_native(
     let config_app = AppConfig::get();
 
     // ---------------------------------------------------------
-    // 1. RÉCUPÉRATION DES ASSETS VIA MOUNT POINTS
+    // 1. RÉCUPÉRATION DES ASSETS VIA LE REGISTRE DE RESSOURCES
     // ---------------------------------------------------------
     let settings =
         match AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_llm").await {
@@ -35,29 +35,23 @@ pub async fn ai_train_domain_native(
         .and_then(|v| v.as_str())
         .unwrap_or("tokenizer.json");
 
-    let domain_path = match config_app.get_path("PATH_RAISE_DOMAIN") {
-        Some(p) => p,
-        None => raise_error!(
-            "ERR_CONFIG_PATH_MISSING",
-            error = "PATH_RAISE_DOMAIN non défini"
-        ),
-    };
-
-    // Résolution déterministe via la partition système
-    let base_assets_path = domain_path
-        .join(&config_app.mount_points.system.domain)
-        .join(&config_app.mount_points.system.db)
-        .join("ai-assets/models");
+    // 🎯 RÉSOLUTION DYNAMIQUE (SSOT)
+    let base_assets_path = config_app.resolve_asset_path(
+        config_app
+            .system_assets
+            .ai_assets_paths
+            .as_ref()
+            .and_then(|p| p.models.as_ref()),
+        "ai-assets/models",
+    )?;
 
     let tokenizer_path = base_assets_path.join(tokenizer_filename);
 
     if !tokenizer_path.exists() {
         raise_error!(
             "ERR_AI_TOKENIZER_FILE_NOT_FOUND",
-            error = format!(
-                "Fichier TextTokenizer introuvable dans le point de montage : {:?}",
-                tokenizer_path
-            )
+            error = "Fichier TextTokenizer introuvable.",
+            context = json_value!({ "resolved_path": tokenizer_path.to_string_lossy() })
         );
     }
 
@@ -151,11 +145,17 @@ pub async fn ai_train_domain_native(
     // ---------------------------------------------------------
     // 5. SAUVEGARDE DE L'ADAPTATEUR (RESILIENCE DISQUE)
     // ---------------------------------------------------------
-    let lora_dir = domain_path
-        .join(&config_app.mount_points.system.domain)
-        .join(&config_app.mount_points.system.db)
-        .join("ai-assets/lora")
-        .join(format!("raise-{}-adapter", domain));
+    // 🎯 RÉSOLUTION DYNAMIQUE pour le dossier de sortie
+    let lora_base_path = config_app.resolve_asset_path(
+        config_app
+            .system_assets
+            .ai_assets_paths
+            .as_ref()
+            .and_then(|p| p.lora.as_ref()),
+        "ai-assets/lora",
+    )?;
+
+    let lora_dir = lora_base_path.join(format!("raise-{}-adapter", domain));
 
     fs::ensure_dir_async(&lora_dir).await?;
 
@@ -183,7 +183,7 @@ pub async fn ai_train_domain_native(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
     #[serial_test::serial]
@@ -197,18 +197,15 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(
-            &manager,
-            "llm",
-            json_value!({ "rust_tokenizer_file": "tokenizer.json" }),
-        )
-        .await?;
-
-        let domain_path = config.get_path("PATH_RAISE_DOMAIN").unwrap();
-        let models_dir = domain_path
-            .join(&config.mount_points.system.domain)
-            .join(&config.mount_points.system.db)
-            .join("ai-assets/models");
+        // 🎯 FIX : Utilisation du helper SSOT pour les tests aussi
+        let models_dir = config.resolve_asset_path(
+            config
+                .system_assets
+                .ai_assets_paths
+                .as_ref()
+                .and_then(|p| p.models.as_ref()),
+            "ai-assets/models",
+        )?;
 
         fs::ensure_dir_async(&models_dir).await?;
 

@@ -83,7 +83,7 @@ let doc = json!({
 
 match validator.validate(&doc) {
     Ok(_) => println!("✅ Document valide"),
-    Err(e) => eprintln!("❌ Erreur de validation : {}", e),
+    Err(e) => !("❌ Erreur de validation : {}", e),
 }
 
 ```

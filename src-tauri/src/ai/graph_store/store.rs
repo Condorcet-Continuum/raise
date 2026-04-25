@@ -221,7 +221,7 @@ pub fn extract_rich_semantic_content(data: &JsonValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     async fn setup_store_test_env(sandbox: &AgentDbSandbox) -> RaiseResult<CollectionsManager<'_>> {
         let config = AppConfig::get();
@@ -231,18 +231,6 @@ mod tests {
             &config.mount_points.system.db,
         );
         DbSandbox::mock_db(&manager).await?;
-
-        // 🎯 Injection stricte des settings pour satisfaire le Gatekeeper
-        inject_mock_component(
-            &manager,
-            "ai_graph_store",
-            json_value!({
-                "embedding_dim": 512,
-                "provider": "native"
-            }),
-        )
-        .await?;
-
         Ok(manager)
     }
 

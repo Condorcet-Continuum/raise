@@ -51,16 +51,14 @@ impl NativeTensorEngine {
 
         // 3. Construction des chemins via les Mount Points (Zéro Dette)
         let config = AppConfig::get();
-        let base_path = match config.get_path("PATH_RAISE_DOMAIN") {
-            Some(p) => p
-                .join(&config.mount_points.system.domain)
-                .join(&config.mount_points.system.db)
-                .join("ai-assets/models"),
-            None => raise_error!(
-                "ERR_CONFIG_DOMAIN_PATH_MISSING",
-                error = "Le chemin racine 'PATH_RAISE_DOMAIN' est absent de la configuration."
-            ),
-        };
+        let base_path = config.resolve_asset_path(
+            config
+                .system_assets
+                .ai_assets_paths
+                .as_ref()
+                .and_then(|p| p.models.as_ref()),
+            "ai-assets/models",
+        )?;
 
         let model_path = base_path.join(&model_filename);
         let tokenizer_path = base_path.join(&tokenizer_filename);
@@ -221,7 +219,7 @@ impl NativeTensorEngine {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
 
     #[test]
     fn test_qwen_chatml_format() {
@@ -244,8 +242,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await?;
-
         let mut engine = NativeTensorEngine::new(&manager).await?;
         let response = engine.generate("Réponds 'OK'.", "Test", 5)?;
 
@@ -265,16 +261,14 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // Injection d'une config pointant vers un fichier fantôme
-        inject_mock_component(
-            &manager,
-            "llm",
-            json_value!({
-                "rust_model_file": "ghost_model.gguf",
-                "rust_tokenizer_file": "ghost_tok.json"
-            }),
-        )
-        .await?;
+        let mut llm_doc = manager
+            .get_document("service_configs", "cfg_ai_llm_test")
+            .await?
+            .expect("La config LLM devrait être présente via AgentDbSandbox");
+
+        llm_doc["service_settings"]["rust_model_file"] =
+            json_value!("this_file_does_not_exist.gguf");
+        manager.insert_raw("service_configs", &llm_doc).await?;
 
         let result = NativeTensorEngine::new(&manager).await;
 

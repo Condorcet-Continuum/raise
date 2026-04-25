@@ -9,7 +9,8 @@ use crate::utils::io::fs::{self, tempdir, Path, PathBuf, TempDir};
 
 // 2. Data : Configuration, JSON et Traits
 use crate::utils::data::config::{
-    AppConfig, CoreConfig, DbPointer, MountPointsConfig, BOOTSTRAP_DB, BOOTSTRAP_DOMAIN, CONFIG,
+    AiAssetsPaths, AppConfig, CoreConfig, DbPointer, MountPointsConfig, SystemAssets, BOOTSTRAP_DB,
+    BOOTSTRAP_DOMAIN, CONFIG,
 };
 use crate::utils::data::json::{self, json_value, JsonValue};
 use crate::utils::data::UnorderedMap;
@@ -18,8 +19,8 @@ use crate::utils::data::UnorderedMap;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
-pub const MOCK_LLM_MODEL: &str = "Qwen2.5-7B-Instruct-Q4_K_M.gguf";
-pub const MOCK_LLM_TOKENIZER: &str = "tokenizer.json";
+pub const MOCK_LLM_MODEL: &str = "mock/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+pub const MOCK_LLM_TOKENIZER: &str = "mock/tokenizer.json";
 
 // --- DÉFINITION DES SCHÉMAS STANDARDS POUR TESTS ---
 
@@ -213,6 +214,10 @@ pub async fn bootstrap_system_index(
 pub fn create_default_test_config() -> AppConfig {
     let mut paths = UnorderedMap::new();
     let tmp = RuntimeEnv::temp_dir();
+
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/zair"));
+    let base_ai_assets = home.join("raise_domain/_system/ai-assets");
+
     paths.insert(
         "PATH_RAISE_DOMAIN".to_string(),
         tmp.to_string_lossy().to_string(),
@@ -221,7 +226,6 @@ pub fn create_default_test_config() -> AppConfig {
         "PATH_LOGS".to_string(),
         tmp.join("logs").to_string_lossy().to_string(),
     );
-
     AppConfig {
         id: UniqueId::new_v4().to_string(),
         created_at: UtcClock::now().to_rfc3339(),
@@ -275,11 +279,50 @@ pub fn create_default_test_config() -> AppConfig {
             use_gpu: false, // 🎯 FIX : Initialisation du champ Core
         },
 
+        system_assets: SystemAssets {
+            schemas_uri: Some(format!(
+                "db://{}/{}/schemas",
+                BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+            )),
+            locales_uri: Some(format!(
+                "db://{}/{}/collections/locales",
+                BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+            )),
+            ontologies_uri: Some(format!(
+                "db://{}/{}/ontologies/raise/@context/raise.jsonld",
+                BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
+            )),
+            ai_assets_paths: Some(AiAssetsPaths {
+                models: Some(base_ai_assets.join("models").to_string_lossy().to_string()),
+                embeddings: Some(
+                    base_ai_assets
+                        .join("embeddings")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                lora: Some(base_ai_assets.join("lora").to_string_lossy().to_string()),
+                voice: Some(base_ai_assets.join("voice").to_string_lossy().to_string()),
+                ontologies: Some(
+                    base_ai_assets
+                        .join("ontologies")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+            }),
+        },
+
         paths,
         active_dapp_id: "ref:dapps:handle:raise_core".to_string(),
         workstation_id: "ref:workstations:handle:test_ws".to_string(),
         active_services: vec!["ref:services:handle:svc_ai".to_string()],
-        active_components: vec!["ref:components:handle:ai_llm".to_string()],
+        active_components: vec![
+            "ref:components:handle:ai_llm".to_string(),
+            "ref:components:handle:ai_nlp".to_string(),
+            "ref:components:handle:rag".to_string(),
+            "ref:components:handle:ai_graph_store".to_string(),
+            "ref:components:handle:ai_world_model".to_string(),
+            "ref:components:handle:ai_voice".to_string(),
+        ],
 
         workstation: None,
         user: None,
@@ -341,14 +384,22 @@ pub fn load_test_sandbox() -> RaiseResult<AppConfig> {
     config.mount_points.system.domain = BOOTSTRAP_DOMAIN.to_string();
     config.mount_points.system.db = BOOTSTRAP_DB.to_string();
 
-    // 🎯 FIX GATEKEEPER : Si un test charge le JSON, on s'assure d'activer au moins l'IA
-    if !config
-        .active_components
-        .contains(&"ref:components:handle:ai_llm".to_string())
-    {
-        config
-            .active_components
-            .push("ref:components:handle:ai_llm".to_string());
+    // On dresse la liste de survie absolue pour que les tests IA fonctionnent
+    let required_ai_components = vec![
+        "ref:components:handle:ai_llm",
+        "ref:components:handle:ai_nlp",
+        "ref:components:handle:rag",
+        "ref:components:handle:ai_graph_store",
+        "ref:components:handle:ai_world_model",
+        "ref:components:handle:ai_voice",
+    ];
+
+    // On inspecte la config qu'on vient de charger depuis le fichier JSON...
+    for comp in required_ai_components {
+        if !config.active_components.contains(&comp.to_string()) {
+            // ... S'il en manque un, on le force brutalement dedans !
+            config.active_components.push(comp.to_string());
+        }
     }
 
     Ok(config)
@@ -590,6 +641,18 @@ pub async fn inject_mock_component(
             &json_value!({
                 "_id": service_id_physical,
                 "handle": "svc_ai"
+            }),
+        )
+        .await;
+
+    manager.create_collection("components", &schema_uri).await?;
+    let _ = manager
+        .insert_raw(
+            "components",
+            &json_value!({
+                "_id": format!("ref:components:handle:{}", real_handle),
+                "handle": real_handle,
+                "status": "active"
             }),
         )
         .await;
@@ -924,6 +987,92 @@ impl AgentDbSandbox {
                 e
             ),
         }
+
+        // 🎯 INJECTION SYSTÉMATIQUE DE LA STACK IA COMPLÈTE
+        // 1. LLM & NLP (Modèles de base)
+        inject_mock_component(
+            &temp_manager,
+            "llm",
+            json_value!({
+                "rust_model_file":  MOCK_LLM_MODEL,
+                "rust_tokenizer_file":  MOCK_LLM_TOKENIZER
+            }),
+        )
+        .await?;
+
+        inject_mock_component(
+            &temp_manager,
+            "nlp",
+            json_value!({
+                "model_name": "minilm",
+                "rust_config_file": "config.json",
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_safetensors_file": "model.safetensors"
+            }),
+        )
+        .await?;
+
+        // 2. RAG & Graph Store (Mémoire) { "model_name": "minilm" }
+        inject_mock_component(
+            &temp_manager,
+            "rag",
+            json_value!({"model_name": "minilm", "provider": "mock" }),
+        )
+        .await?;
+
+        inject_mock_component(
+            &temp_manager,
+            "ai_graph_store",
+            json_value!({ "embedding_dim": 16, "provider": "native" , "storage_mode": "memory"}),
+        )
+        .await?;
+
+        // 3. World Model (Modèle du monde pour les agents)
+        inject_mock_component(
+            &temp_manager,
+            "ai_world_model",
+            json_value!({
+                "vocab_size": 16,
+                "embedding_dim": 16,
+                "action_dim": 8,
+                "hidden_dim": 32,
+                "use_gpu": true
+            }),
+        )
+        .await?;
+
+        let schema_quality = format!(
+            "db://{}/{}/schemas/v2/assurance/quality_report.schema.json",
+            base.config.mount_points.system.domain, base.config.mount_points.system.db
+        );
+        let schema_xai = format!(
+            "db://{}/{}/schemas/v2/assurance/xai_frame.schema.json",
+            base.config.mount_points.system.domain, base.config.mount_points.system.db
+        );
+
+        inject_mock_component(
+            &temp_manager,
+            "ai_assurance",
+            json_value!({
+                "quality_collection": "quality_reports",
+                "quality_schema": schema_quality,
+                "xai_collection": "xai_frames",
+                "xai_schema": schema_xai
+            }),
+        )
+        .await?;
+
+        inject_mock_component(
+            &temp_manager,
+            "voice",
+            json_value!({
+                "rust_model_file": "model.safetensors",
+                "rust_config_file": "config.json",
+                "rust_tokenizer_file": "tokenizer.json",
+                "rust_mel_filters": "mel_filters.safetensors"
+            }),
+        )
+        .await?;
 
         Ok(Self {
             _dir: base._dir,

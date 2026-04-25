@@ -8,7 +8,7 @@ use raise::utils::prelude::*; // Apporte JsonValue, json!, Result, etc.
 async fn query_get_article_by_id() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement isolé
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
 
     // 2. Création de la collection
     mgr.create_collection(
@@ -59,7 +59,7 @@ async fn query_get_article_by_id() -> RaiseResult<()> {
 #[async_test]
 async fn query_find_one_article_by_handle() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
 
     mgr.create_collection(
         "articles",
@@ -99,7 +99,7 @@ async fn query_find_one_article_by_handle() -> RaiseResult<()> {
 #[async_test]
 async fn query_find_many_with_sort_and_limit_simulated() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
 
     mgr.create_collection(
         "articles",

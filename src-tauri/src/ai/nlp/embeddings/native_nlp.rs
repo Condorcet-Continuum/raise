@@ -35,36 +35,56 @@ impl NativeNlpEngine {
         };
 
         // 2. Extraction des valeurs avec fallback
-        let model_dir = settings
-            .get("model_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("minilm");
-        let config_filename = settings
-            .get("rust_config_file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("config.json");
-        let tokenizer_filename = settings
-            .get("rust_tokenizer_file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("tokenizer.json");
-        let weights_filename = settings
+        let model_dir = match settings.get("model_name").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => raise_error!(
+                "ERR_NLP_MISSING_VAR",
+                error = "La variable 'model_name' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_nlp"})
+            ),
+        };
+        let config_filename = match settings.get("rust_config_file").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => raise_error!(
+                "ERR_NLP_MISSING_VAR",
+                error = "La variable 'rust_config_file' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_nlp"})
+            ),
+        };
+        let tokenizer_filename = match settings.get("rust_tokenizer_file").and_then(|v| v.as_str())
+        {
+            Some(v) => v,
+            None => raise_error!(
+                "ERR_NLP_MISSING_VAR",
+                error = "La variable 'rust_tokenizer_file' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_nlp"})
+            ),
+        };
+        let weights_filename = match settings
             .get("rust_safetensors_file")
             .and_then(|v| v.as_str())
-            .unwrap_or("model.safetensors");
+        {
+            Some(v) => v,
+            None => raise_error!(
+                "ERR_NLP_MISSING_VAR",
+                error =
+                    "La variable 'rust_safetensors_file' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_nlp"})
+            ),
+        };
 
         // 2. Résolution dynamique du chemin via AppConfig
         let config_global = AppConfig::get();
-        let base_path = match config_global.get_path("PATH_RAISE_DOMAIN") {
-            Some(p) => p
-                .join(&config_global.mount_points.system.domain)
-                .join(&config_global.mount_points.system.db)
-                .join("ai-assets/embeddings")
-                .join(model_dir),
-            None => raise_error!(
-                "ERR_CONFIG_DOMAIN_PATH_MISSING",
-                error = "Le chemin racine 'PATH_RAISE_DOMAIN' est absent de la configuration."
-            ),
-        };
+        let base_path = config_global
+            .resolve_asset_path(
+                config_global
+                    .system_assets
+                    .ai_assets_paths
+                    .as_ref()
+                    .and_then(|p| p.embeddings.as_ref()),
+                "ai-assets/embeddings",
+            )?
+            .join(model_dir);
 
         let config_path = base_path.join(config_filename);
         let tokenizer_path = base_path.join(tokenizer_filename);
@@ -204,7 +224,7 @@ fn normalize_l2(v: &NeuralTensor) -> RaiseResult<NeuralTensor> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
 
     async fn provide_assets_to_sandbox(model_name: &str) {
         let config = AppConfig::get();
@@ -257,7 +277,6 @@ mod tests {
             &sandbox.config.mount_points.system.domain,
             &sandbox.config.mount_points.system.db,
         );
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
 
         let engine = NativeNlpEngine::new(&manager).await?;
         assert!(engine.tokenizer.get_vocab_size(true) > 0);
@@ -276,7 +295,6 @@ mod tests {
             &sandbox.config.mount_points.system.domain,
             &sandbox.config.mount_points.system.db,
         );
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
 
         let mut engine = NativeNlpEngine::new(&manager).await?;
         let vec = engine.embed_query("Test NLP")?;
@@ -288,6 +306,8 @@ mod tests {
     }
 
     #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_resilience_missing_nlp_assets() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
@@ -297,7 +317,21 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "ghost_model"})).await?;
+        let mut nlp_doc = manager
+            .get_document("service_configs", "cfg_ai_nlp_test")
+            .await?
+            .expect("La config NLP devrait être présente via AgentDbSandbox");
+
+        // On modifie volontairement le chemin des poids du modèle vers un fantôme
+        nlp_doc["service_settings"]["rust_safetensors_file"] =
+            json_value!("this_file_does_not_exist.safetensors");
+
+        // 🎯 FIX : Utilisation des méthodes `raw` pour écraser le document
+        // sans déclencher d'erreur de référence sur l'utilisateur 'admin'
+        let _ = manager
+            .delete_document("service_configs", "cfg_ai_nlp_test")
+            .await;
+        manager.insert_raw("service_configs", &nlp_doc).await?;
 
         let result = NativeNlpEngine::new(&manager).await;
         match result {

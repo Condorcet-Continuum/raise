@@ -70,7 +70,7 @@ async fn seed_article(
 #[async_test]
 async fn query_get_article_by_id() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
     let handle = "query-get-id";
@@ -90,7 +90,7 @@ async fn query_get_article_by_id() -> RaiseResult<()> {
 #[async_test]
 async fn query_find_one_article_by_handle() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
     let handle = "query-find-one";
@@ -127,7 +127,7 @@ async fn query_find_one_article_by_handle() -> RaiseResult<()> {
 #[async_test]
 async fn query_find_many_with_sort_and_limit() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let base_doc = load_test_doc(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap()).await;
 
     // Insertion de 10 articles : sort-0 à sort-9

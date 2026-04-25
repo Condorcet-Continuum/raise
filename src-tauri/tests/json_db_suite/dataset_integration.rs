@@ -8,7 +8,7 @@ use raise::utils::prelude::*; // SSOT : Apporte JsonValue, json, Result, etc.
 async fn debug_import_exchange_item() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement isolé
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
 
     // 2. Création du fichier factice (remplace l'ancienne méthode)
     let data_path = seed_mock_datasets(&env.sandbox.config.get_path("PATH_RAISE_DOMAIN").unwrap())

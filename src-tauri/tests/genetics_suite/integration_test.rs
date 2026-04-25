@@ -19,7 +19,7 @@ async fn test_genetics_integration_with_json_db() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
 
     // 🎯 FIX : On utilise la vraie partition métier (MBSE) initialisée par la sandbox
-    let la_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "la");
+    let la_mgr = CollectionsManager::new(&env.sandbox.db, "un2", "la");
 
     // Insertion dans les bonnes collections (au lieu d'une collection générique 'la')
     la_mgr.insert_raw("functions", &json_value!({
@@ -31,7 +31,7 @@ async fn test_genetics_integration_with_json_db() -> RaiseResult<()> {
     })).await.unwrap();
 
     // 🎯 FIX : Le ModelLoader a besoin du manager système pour lire la table 'configs' !
-    let sys_mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let sys_mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
     let loader = ModelLoader::new_with_manager(sys_mgr)?;
     let model = loader.load_full_model().await.expect("Erreur chargement");
 

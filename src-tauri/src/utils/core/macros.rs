@@ -157,6 +157,28 @@ macro_rules! user_error {
     }};
 }
 
+/// Trace bas niveau pour les étapes de démarrage du noyau.
+#[macro_export]
+macro_rules! kernel_trace {
+    ($action:expr, $detail:expr) => {
+        eprintln!("[RAISE KERNEL] ⚙️  {:<20} | {}", $action, $detail);
+    };
+}
+
+/// Erreur fatale bas niveau (Kernel Panic) déclenchée avant que le logger ne soit prêt.
+#[macro_export]
+macro_rules! kernel_fatal {
+    ($context:expr, $file:expr, $err:expr) => {
+        eprintln!("\n========================================================");
+        eprintln!("🚨 [RAISE KERNEL PANIC] ÉCHEC CRITIQUE D'INITIALISATION");
+        eprintln!("========================================================");
+        eprintln!("📍 Phase   : {}", $context);
+        eprintln!("📄 Fichier : {}", $file);
+        eprintln!("🔥 Erreur  : {}", $err);
+        eprintln!("========================================================\n");
+    };
+}
+
 /// 🚀 Macro surpuissante pour générer des erreurs structurées AI-Ready
 #[macro_export]
 macro_rules! build_error {

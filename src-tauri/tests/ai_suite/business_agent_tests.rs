@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/tests/ai_suite/business_agent_tests.rs
 
-use crate::common::{get_test_wm_config, setup_test_env, LlmMode};
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
@@ -12,14 +12,16 @@ use raise::utils::testing::DbSandbox;
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Enabled).await?;
-    let test_root = env.sandbox.storage.config.data_root.clone();
+
+    // 🎯 FIX : On utilise `domain_root` exposé par AgentDbSandbox
+    let test_root = env.sandbox.domain_root.clone();
 
     // --- 🎯 1. SETUP SYSTEM (Injection via Mount Points) ---
-    // Utilisation dynamique des points de montage système pour la résilience
     let system_domain = &env.sandbox.config.mount_points.system.domain;
     let system_db = &env.sandbox.config.mount_points.system.db;
 
-    let sys_mgr = CollectionsManager::new(&env.sandbox.storage, system_domain, system_db);
+    // 🎯 FIX : Remplacement de `storage` par `db`
+    let sys_mgr = CollectionsManager::new(&env.sandbox.db, system_domain, system_db);
 
     match DbSandbox::mock_db(&sys_mgr).await {
         Ok(_) => user_info!("INF_TEST_MOCK_DB_READY"),
@@ -65,7 +67,6 @@ async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
         )
         .await?;
 
-    // Configuration de l'identité de l'agent
     sys_mgr.upsert_document("prompts", json_value!({
         "handle": "prompt_business",
         "role": "Analyste Métier",
@@ -83,7 +84,8 @@ async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
     })).await?;
 
     // --- 🎯 2. SETUP PROJECT (Physique) ---
-    let oa_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "oa");
+    // 🎯 FIX : Remplacement de `storage` par `db`
+    let oa_mgr = CollectionsManager::new(&env.sandbox.db, "un2", "oa");
     let _ = DbSandbox::mock_db(&oa_mgr).await;
 
     oa_mgr
@@ -92,22 +94,19 @@ async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
     oa_mgr.create_collection("actors", generic_schema).await?;
 
     // --- 🎯 3. CONTEXTE & EXÉCUTION ---
-    // 🎯 FIX : Unwrapping du RaiseResult (?)
     let session_id = AgentContext::generate_default_session_id("agent_business", "test_oa")?;
 
+    // 🎯 FIX MAGIQUE : On utilise `bootstrap` pour que le World Model lise sa propre config !
     let world_engine = SharedRef::new(
-        raise::ai::world_model::NeuroSymbolicEngine::new(
-            get_test_wm_config(), // 🎯 FIX : Utilisation explicite sans default()
-            NeuralWeightsMap::new(),
-        )
-        .expect("WM Engine fail"),
+        raise::ai::world_model::NeuroSymbolicEngine::bootstrap(&sys_mgr)
+            .await
+            .expect("WM Engine bootstrap fail"),
     );
 
-    // 🎯 FIX : Unwrapping du RaiseResult (?) après await
     let ctx = AgentContext::new(
         "agent_business",
         &session_id,
-        SharedRef::new(env.sandbox.storage.clone()),
+        env.sandbox.db.clone(), // 🎯 FIX : .db est DÉJÀ un SharedRef
         env.client.clone().expect("LlmClient requis"),
         world_engine,
         test_root.clone(),
@@ -122,7 +121,6 @@ async fn test_business_agent_generates_oa_entities() -> RaiseResult<()> {
         description: "Un Client dépose un dossier.".to_string(),
     };
 
-    // Traitement avec gestion RAISE
     match agent.process(&ctx, &intent).await {
         Ok(_) => user_success!("SUC_TEST_AGENT_PROCESSED"),
         Err(e) => raise_error!("ERR_AGENT_PROCESS_FAIL", error = e.to_string()),
@@ -164,7 +162,6 @@ mod resilience_tests {
     use super::*;
     use raise::ai::llm::client::LlmClient;
 
-    /// 🎯 Test la résilience face à un point de montage système manquant
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
@@ -175,26 +172,27 @@ mod resilience_tests {
         Ok(())
     }
 
-    /// 🎯 Test le comportement en cas d'absence de prompt obligatoire (Match...raise_error)
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_agent_missing_definition_error_handling() -> RaiseResult<()> {
         let env = setup_test_env(LlmMode::Disabled).await?;
-        let test_root = env.sandbox.storage.config.data_root.clone();
 
+        // 🎯 FIX : Utilisation de domain_root
+        let test_root = env.sandbox.domain_root.clone();
+
+        // 🎯 FIX : Remplacement de `storage` par `db`
         let sys_mgr = CollectionsManager::new(
-            &env.sandbox.storage,
+            &env.sandbox.db,
             &env.sandbox.config.mount_points.system.domain,
             &env.sandbox.config.mount_points.system.db,
         );
 
+        // 🎯 FIX : Bootstrap du World Model
         let world_engine = SharedRef::new(
-            raise::ai::world_model::NeuroSymbolicEngine::new(
-                get_test_wm_config(), // 🎯 FIX : Utilisation explicite sans default()
-                NeuralWeightsMap::new(),
-            )
-            .expect("WM Engine fail"),
+            raise::ai::world_model::NeuroSymbolicEngine::bootstrap(&sys_mgr)
+                .await
+                .expect("WM Engine bootstrap fail"),
         );
 
         let llm_client = match env.client.clone() {
@@ -204,11 +202,10 @@ mod resilience_tests {
                 .expect("Failed to create fallback LlmClient"),
         };
 
-        // 🎯 FIX : Unwrapping du RaiseResult (?) après await
         let ctx = AgentContext::new(
             "agent_ghost",
             "sess_ghost",
-            SharedRef::new(env.sandbox.storage.clone()),
+            env.sandbox.db.clone(), // 🎯 FIX : .db est déjà un SharedRef
             llm_client,
             world_engine,
             test_root.clone(),
@@ -218,7 +215,6 @@ mod resilience_tests {
 
         let agent = DynamicAgent::new("agent_ghost");
 
-        // Exécution du test de résilience : l'agent "agent_ghost" n'existe pas en DB
         let result = agent.process(&ctx, &EngineeringIntent::Chat).await;
 
         match result {

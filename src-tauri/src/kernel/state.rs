@@ -96,7 +96,7 @@ impl RaiseKernelState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
 
     /// 🎯 TEST 1 : Résilience et Dégradation Gracieuse
     /// Vérifie que le Kernel s'allume même si les fichiers GGUF sont absents de la sandbox.
@@ -106,28 +106,24 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_kernel_boot_graceful_degradation() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
-
         let config = AppConfig::get();
+
         let manager = CollectionsManager::new(
             &sandbox.db, // 🎯 sandbox.db est notre StorageEngine !
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
 
-        // Injection d'une configuration LLM pointant vers des fichiers fantômes
-        inject_mock_component(
-            &manager,
-            "llm",
-            json_value!({
-                "rust_model_file": "ghost_model.gguf",
-                "rust_tokenizer_file": "ghost_tok.json"
-            }),
-        )
-        .await?;
+        let mut llm_doc = manager
+            .get_document("service_configs", "cfg_ai_llm_test")
+            .await?
+            .expect("La config LLM devrait être présente via AgentDbSandbox");
 
-        // 🎯 FIX : Utilisation directe de sandbox.db qui est déjà un SharedRef<StorageEngine>
-        let storage_ref = sandbox.db.clone();
-        let kernel = RaiseKernelState::boot(storage_ref).await?;
+        llm_doc["service_settings"]["rust_model_file"] = json_value!("ghost_model.gguf");
+        llm_doc["service_settings"]["rust_tokenizer_file"] = json_value!("ghost_tok.json");
+        manager.insert_raw("service_configs", &llm_doc).await?;
+
+        let kernel = RaiseKernelState::boot(sandbox.db.clone()).await?;
 
         // 1. Vérification : Le Générateur de Code (qui n'a pas de contrainte VRAM) DOIT être allumé
         assert!(

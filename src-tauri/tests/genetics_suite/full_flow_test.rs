@@ -16,7 +16,7 @@ use raise::utils::testing::DbSandbox;
 #[async_test]
 async fn test_arcadia_to_genetics_pipeline() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let manager = CollectionsManager::new(&env.sandbox.storage, "test_workspace", "arcadia_db");
+    let manager = CollectionsManager::new(&env.sandbox.db, "test_workspace", "arcadia_db");
     DbSandbox::mock_db(&manager).await.unwrap();
     // Injections de test
     let _ = manager

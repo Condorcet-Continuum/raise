@@ -15,9 +15,9 @@ async fn test_json_db_global_scenario() -> RaiseResult<()> {
     async fn run() -> RaiseResult<()> {
         // 1. SETUP ENVIRONNEMENT (Robuste & Isolé)
         let env = setup_test_env(LlmMode::Disabled).await?;
-        let col_mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
-        let mut idx_mgr = IndexManager::new(&env.sandbox.storage, &env.space, &env.db);
-        let tx_mgr = TransactionManager::new(&env.sandbox.storage, &env.space, &env.db);
+        let col_mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
+        let mut idx_mgr = IndexManager::new(&env.sandbox.db, &env.space, &env.db);
+        let tx_mgr = TransactionManager::new(&env.sandbox.db, &env.space, &env.db);
 
         // 2. CRÉATION SCHÉMA & INDEX
         println!("--- Step 1: Create Collection & Index ---");

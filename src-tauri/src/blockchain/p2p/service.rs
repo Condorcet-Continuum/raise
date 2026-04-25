@@ -50,12 +50,19 @@ pub fn init_arcadia_network(app_handle: AppHandle) {
             // On lance la boucle en arrière-plan
             spawn_p2p_service(app_handle.clone(), swarm, swarm_rx, local_peer_id);
 
-            println!("✅ [Arcadia] Swarm, Ledger, Consensus et Service P2P initialisés.");
+            kernel_trace!("Arcadia Network", "Swarm, Ledger et Consensus initialisés.");
         } else {
-            eprintln!("⚠️ [Arcadia] Impossible de récupérer les pairs VPN.");
+            kernel_trace!(
+                "Arcadia Network",
+                "⚠️  Impossible de récupérer les pairs VPN."
+            );
         }
     } else {
-        eprintln!("❌ [Arcadia] Échec du démarrage du réseau P2P.");
+        kernel_fatal!(
+            "Démarrage Réseau P2P",
+            "libp2p Swarm Service",
+            "Échec de l'initialisation du Swarm (Network Stack)"
+        );
     }
 }
 

@@ -140,7 +140,7 @@ impl WorkflowExecutor {
 mod tests {
     use super::*;
     use crate::model_engine::types::ProjectModel;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
     use crate::workflow_engine::tools::SystemMonitorTool;
 
     async fn create_test_executor_with_tools(
@@ -152,31 +152,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_graph_store",
-            json_value!({
-                "embedding_dim": 16,
-                "provider": "native"
-            }),
-        )
-        .await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_world_model",
-            json_value!({
-                "vocab_size": 16,
-                "embedding_dim": 16,
-                "action_dim": 8,
-                "hidden_dim": 32,
-                "use_gpu": false
-            }),
-        )
-        .await?;
 
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone()).await?;
         let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
@@ -275,8 +250,6 @@ mod tests {
     async fn test_resilience_missing_handler() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
-
-        // 🎯 FIX : Utiliser ta fonction d'aide qui injecte les mocks LLM et RAG en base de données
         let mut exec_mut = create_test_executor_with_tools(sandbox.db.clone(), config).await?;
 
         let manager = CollectionsManager::new(

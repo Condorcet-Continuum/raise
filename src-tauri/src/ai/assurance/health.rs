@@ -195,7 +195,7 @@ impl RaiseHealthEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::mock::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::mock::AgentDbSandbox;
 
     #[async_test]
     #[serial_test::serial]
@@ -209,8 +209,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        inject_mock_component(&manager, "llm", json_value!({})).await?;
 
         let report = RaiseHealthEngine::check_engine_health(&manager).await?;
 
@@ -235,8 +233,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({})).await?;
-
         let report = RaiseHealthEngine::check_engine_health(&manager).await?;
 
         assert!(!report.assets_integrity);
@@ -258,6 +254,9 @@ mod tests {
             &config.mount_points.system.db,
         );
 
+        let _ = manager
+            .delete_document("service_configs", "cfg_ai_llm_test")
+            .await;
         let result = RaiseHealthEngine::check_engine_health(&manager).await;
 
         match result {

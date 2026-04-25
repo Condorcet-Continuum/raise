@@ -122,7 +122,7 @@ impl GraphFeatures {
 mod tests {
     use super::*;
     use crate::ai::nlp::embeddings::EmbeddingEngine;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
     #[serial_test::serial]
@@ -159,18 +159,6 @@ mod tests {
         manager
             .insert_raw("pa", &json_value!({"_id": "H1", "name": "Antenna"}))
             .await?;
-
-        inject_mock_component(
-            &manager,
-            "nlp",
-            json_value!({
-                "model_name": "minilm",
-                "rust_config_file": "config.json",
-                "rust_tokenizer_file": "tokenizer.json",
-                "rust_safetensors_file": "model.safetensors"
-            }),
-        )
-        .await?;
 
         let mut engine = EmbeddingEngine::new(&manager).await?;
         let uris = vec![
@@ -239,7 +227,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({"model_name": "minilm"})).await?;
         let mut engine = EmbeddingEngine::new(&manager).await?;
 
         let uris = vec!["ghost:entity_01".to_string()];

@@ -11,7 +11,7 @@ async fn workunit_compute_then_validate_minimal() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Disabled).await?;
 
     // 2. Chargement du registre des schémas depuis la DB isolée
-    let reg = SchemaRegistry::from_db(&env.sandbox.storage.config, &env.space, &env.db)
+    let reg = SchemaRegistry::from_db(&env.sandbox.db.config, &env.space, &env.db)
         .await
         .expect("❌ Impossible de charger le registre des schémas");
 
@@ -63,9 +63,9 @@ async fn workunit_compute_then_validate_minimal() -> RaiseResult<()> {
 async fn finance_compute_minimal() -> RaiseResult<()> {
     // 1. Initialisation de l'environnement
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let mgr = CollectionsManager::new(&env.sandbox.storage, &env.space, &env.db);
+    let mgr = CollectionsManager::new(&env.sandbox.db, &env.space, &env.db);
 
-    let reg = SchemaRegistry::from_db(&env.sandbox.storage.config, &env.space, &env.db)
+    let reg = SchemaRegistry::from_db(&env.sandbox.db.config, &env.space, &env.db)
         .await
         .expect("❌ Échec init registre");
 

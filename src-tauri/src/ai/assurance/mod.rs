@@ -186,38 +186,9 @@ mod tests {
     use crate::ai::assurance::xai::XaiFrame;
     use crate::ai::assurance::xai::{ExplanationScope, XaiMethod};
     use crate::ai::llm::client::LlmClient;
-    use crate::ai::world_model::engine::WorldModelConfig;
     use crate::ai::world_model::NeuroSymbolicEngine;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox, DbSandbox};
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
-    fn get_assurance_settings() -> JsonValue {
-        let config = AppConfig::get();
-        let schema_quality = format!(
-            "db://{}/{}/schemas/v2/assurance/quality_report.schema.json",
-            config.mount_points.system.domain, config.mount_points.system.db
-        );
-        let schema_xai = format!(
-            "db://{}/{}/schemas/v2/assurance/xai_frame.schema.json",
-            config.mount_points.system.domain, config.mount_points.system.db
-        );
-
-        json_value!({
-            "quality_collection": "quality_reports",
-            "quality_schema": schema_quality,
-            "xai_collection": "xai_frames",
-            "xai_schema": schema_xai
-        })
-    }
-
-    fn get_test_wm_config() -> WorldModelConfig {
-        WorldModelConfig {
-            vocab_size: 1024,
-            embedding_dim: 512,
-            action_dim: 64,
-            hidden_dim: 1024,
-            use_gpu: false,
-        }
-    }
     struct MockCertifiedAgent;
     #[async_interface]
     impl Agent for MockCertifiedAgent {
@@ -265,12 +236,8 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // 🎯 INJECTION PROPRE : On injecte séparément le LLM et l'Assurance
-        inject_mock_component(&sys_mgr, "llm", json_value!({})).await?;
-        inject_mock_component(&sys_mgr, "ai_assurance", get_assurance_settings()).await?;
-
         let llm = LlmClient::new(&sys_mgr).await?;
-        let world = SharedRef::new(NeuroSymbolicEngine::new_empty(get_test_wm_config())?);
+        let world = SharedRef::new(NeuroSymbolicEngine::bootstrap(&sys_mgr).await?);
 
         let ctx = AgentContext::new(
             "test_certified",
@@ -330,9 +297,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // 🎯 INJECTION PROPRE
-        inject_mock_component(&manager, "ai_assurance", get_assurance_settings()).await?;
-
         let mut report = QualityReport::new("model_v2_resilient", "dataset_gold");
         report.add_metric(
             "Precision",
@@ -384,9 +348,6 @@ mod tests {
 
         DbSandbox::mock_db(&ws_manager).await?;
 
-        // 🎯 INJECTION PROPRE
-        inject_mock_component(&ws_manager, "ai_assurance", get_assurance_settings()).await?;
-
         let report = QualityReport::new("ws_model", "ws_data");
         let result = persistence::save_quality_report(&ws_manager, &report).await;
 
@@ -410,9 +371,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        // 🎯 INJECTION PROPRE
-        inject_mock_component(&manager, "ai_assurance", get_assurance_settings()).await?;
 
         let mut report = QualityReport::new("err_test", "void");
         report.id = "".to_string();

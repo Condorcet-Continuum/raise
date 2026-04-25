@@ -115,7 +115,7 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
 
     #[async_test]
@@ -131,33 +131,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        // Setup des composants IA factices
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_graph_store",
-            json_value!({
-                "embedding_dim": 16,
-                "provider": "native"
-            }),
-        )
-        .await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_world_model",
-            json_value!({
-                "vocab_size": 16,
-                "embedding_dim": 16,
-                "action_dim": 8,
-                "hidden_dim": 32,
-                "use_gpu": false
-            }),
-        )
-        .await?;
 
         // Préparation du Jumeau Numérique
         let schema_uri = format!(
@@ -204,47 +177,23 @@ mod tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_system_tool_mount_point_resilience() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
+
+        let sys_manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        let orch = AiOrchestrator::new(ProjectModel::default(), &sys_manager, sandbox.db.clone())
+            .await
+            .unwrap();
 
         // 🎯 On définit notre partition fantôme
         let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
 
-        // 🎯 FIX CRITIQUE : Initialisation physique de la base de données fantôme
         // Cela crée la structure nécessaire dans le StorageEngine sans créer de données métier.
-        crate::utils::testing::DbSandbox::mock_db(&manager).await?;
-
-        // 🎯 On crée la collection technique pour l'IA
-        let core_schema = "db://_system/_system/schemas/v1/db/generic.schema.json";
-        manager
-            .create_collection("service_configs", core_schema)
-            .await?;
-
-        // Injection du mock LLM pour permettre à l'orchestrateur de s'initialiser
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
-        inject_mock_component(
-            &manager,
-            "ai_graph_store",
-            json_value!({
-                "embedding_dim": 16,
-                "provider": "native"
-            }),
-        )
-        .await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_world_model",
-            json_value!({
-                "vocab_size": 16,
-                "embedding_dim": 16,
-                "action_dim": 8,
-                "hidden_dim": 32,
-                "use_gpu": false
-            }),
-        )
-        .await?;
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
-            .await
-            .unwrap();
+        DbSandbox::mock_db(&manager).await?;
 
         let ctx = HandlerContext {
             orchestrator: &SharedRef::new(AsyncMutex::new(orch)),

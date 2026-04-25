@@ -499,34 +499,6 @@ impl CliContext {
     }
 }
 
-// =========================================================================
-// TESTS UNITAIRES (Conformité « Zéro Dette »)
-// =========================================================================
-/*
-#[cfg(test)]
-impl CliContext {
-    pub fn mock(
-        config: &'static AppConfig,
-        session_mgr: context::SessionManager,
-        storage: SharedRef<StorageEngine>,
-    ) -> Self {
-        Self {
-            config,
-            session_mgr,
-            storage,
-            orchestrator: None,
-            active_user: "mock_user".to_string(),
-            active_domain: "mock_domain".to_string(),
-            active_db: "mock_db".to_string(),
-            is_test_mode: true,
-            is_simulation: false,
-            sim_domain: "mock_sim_domain".to_string(),
-            sim_db: "mock_sim_db".to_string(),
-        }
-    }
-}
- */
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,7 +529,7 @@ mod tests {
         }
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience de la résolution des Mount Points
+    ///  Résilience de la résolution des Mount Points
     #[test]
     #[serial_test::serial]
     fn test_mount_point_resolution_integrity() -> RaiseResult<()> {

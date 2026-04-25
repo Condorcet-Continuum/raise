@@ -8,7 +8,7 @@ use raise::json_db::collections::manager::CollectionsManager;
 async fn test_end_to_end_rules_execution() -> RaiseResult<()> {
     // 1. SETUP ROBUSTE
     let env = setup_test_env(LlmMode::Disabled).await?;
-    let storage = &env.sandbox.storage;
+    let storage = &env.sandbox.db;
     let space = &env.space;
     let db = &env.db;
 

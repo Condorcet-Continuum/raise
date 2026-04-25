@@ -57,7 +57,11 @@ impl AudioListener {
                 let _ = prod.push_slice(data);
             },
             move |err| {
-                eprintln!("❌ [Audio] Erreur critique du flux d'entrée : {}", err);
+                kernel_fatal!(
+                    "Flux d'Entrée Audio (Callback OS)",
+                    "cpal::InputStream",
+                    err
+                );
             },
             None,
         ) {
@@ -111,8 +115,10 @@ impl AudioListener {
                         if silence_counter >= SILENCE_FRAMES_MAX {
                             // On envoie le clone de la phrase au moteur STT
                             if tx.send(current_phrase.clone()).await.is_err() {
-                                eprintln!(
-                                    "⚠️ [Audio] Le moteur IA ne reçoit plus les données vocales."
+                                kernel_fatal!(
+                                    "Pipeline Audio-to-AI (MPSC Stream)",
+                                    "audio::voice_processor",
+                                    "Le moteur IA ne reçoit plus les données vocales (Canal de transmission fermé)."
                                 );
                                 break;
                             }

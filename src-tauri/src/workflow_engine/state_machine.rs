@@ -331,7 +331,7 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_legacy_conditional_branching() {
+    async fn test_ast_conditional_branching_migrated() {
         let def = WorkflowDefinition {
             _id: None,
             handle: "wf_branch".into(),
@@ -353,7 +353,7 @@ mod tests {
             edges: vec![WorkflowEdge {
                 from: "start".into(),
                 to: "path_a".into(),
-                condition: Some("status == 'ok'".into()),
+                condition: Some(r#"{"eq": [{"var": "status"}, {"val": "ok"}]}"#.into()),
             }],
         };
         let sm = WorkflowStateMachine::new(&def);

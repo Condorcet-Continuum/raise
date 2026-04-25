@@ -2,7 +2,8 @@
 
 use raise::utils::prelude::*; // 🎯 Façade Unique RAISE
 
-use crate::common::{get_test_wm_config, setup_test_env, LlmMode};
+// 🧹 FIX : Suppression de `get_test_wm_config`
+use crate::common::{setup_test_env, LlmMode};
 use raise::ai::agents::intent_classifier::EngineeringIntent;
 use raise::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext};
 use raise::json_db::collections::manager::CollectionsManager;
@@ -13,14 +14,17 @@ use raise::utils::testing::DbSandbox;
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
     let env = setup_test_env(LlmMode::Enabled).await?;
-    let test_root = env.sandbox.storage.config.data_root.clone();
+
+    // 🎯 FIX : On utilise `domain_root` exposé par AgentDbSandbox
+    let test_root = env.sandbox.domain_root.clone();
 
     // --- 🎯 1. SETUP SYSTEM (Injection via Mount Points) ---
     // Utilisation dynamique des points de montage pour la partition système
     let system_domain = &env.sandbox.config.mount_points.system.domain;
     let system_db = &env.sandbox.config.mount_points.system.db;
 
-    let sys_mgr = CollectionsManager::new(&env.sandbox.storage, system_domain, system_db);
+    // 🎯 FIX : Remplacement de `storage` par `db`
+    let sys_mgr = CollectionsManager::new(&env.sandbox.db, system_domain, system_db);
 
     match DbSandbox::mock_db(&sys_mgr).await {
         Ok(_) => user_info!("INF_TEST_MOCK_DB_READY"),
@@ -46,9 +50,16 @@ async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
             json_value!({
                 "handle": "prompt_data",
                 "role": "Architecte Données",
-                "identity": { "persona": "Expert Data Arcadia. Répond en JSON pur.", "tone": "technique" },
-                "environment": "Couche DATA du projet Condorcet.",
-                "directives": ["Génère un TABLEAU JSON avec: '_id', 'name', 'type' (Class/DataType), 'layer' (DATA)."]
+                "identity": { 
+                    "persona": "Tu es un parseur JSON strict. Tu ne parles pas.", 
+                    "tone": "technique" 
+                },
+                "environment": "Couche DATA du projet Arcadia.",
+                "directives": [
+                    "RÉPONDS UNIQUEMENT AVEC UN TABLEAU JSON.",
+                    "PAS DE TEXTE AVANT. PAS DE TEXTE APRÈS.",
+                    "FORMAT: [{\"_id\": \"...\", \"name\": \"...\", \"type\": \"Class\", \"layer\": \"DATA\"}]"
+                ]
             }),
         )
         .await?;
@@ -63,7 +74,8 @@ async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
     })).await?;
 
     // --- 🎯 2. SETUP PROJET (Physique) ---
-    let data_mgr = CollectionsManager::new(&env.sandbox.storage, "un2", "mbse");
+    // 🎯 FIX : Remplacement de `storage` par `db`
+    let data_mgr = CollectionsManager::new(&env.sandbox.db, "un2", "mbse");
     let _ = DbSandbox::mock_db(&data_mgr).await;
 
     data_mgr
@@ -74,18 +86,17 @@ async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
     // --- 🎯 3. CONTEXTE & EXÉCUTION ---
     let session_id = AgentContext::generate_default_session_id(agent_urn, "test_suite_data")?;
 
+    // 🎯 FIX MAGIQUE : On utilise `bootstrap` pour que le World Model lise sa propre config !
     let world_engine = SharedRef::new(
-        raise::ai::world_model::NeuroSymbolicEngine::new(
-            get_test_wm_config(),
-            NeuralWeightsMap::new(),
-        )
-        .expect("WM Engine fail"),
+        raise::ai::world_model::NeuroSymbolicEngine::bootstrap(&sys_mgr)
+            .await
+            .expect("WM Engine bootstrap fail"),
     );
 
     let ctx = AgentContext::new(
         agent_urn,
         &session_id,
-        SharedRef::new(env.sandbox.storage.clone()),
+        env.sandbox.db.clone(), // 🎯 FIX : .db est DÉJÀ un SharedRef
         env.client.clone().expect("LlmClient requis pour les tests"),
         world_engine,
         test_root.clone(),
@@ -177,10 +188,13 @@ mod resilience_tests {
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_data_agent_missing_prompt_resilience() -> RaiseResult<()> {
         let env = setup_test_env(LlmMode::Disabled).await?;
-        let test_root = env.sandbox.storage.config.data_root.clone();
 
+        // 🎯 FIX : Utilisation de domain_root
+        let test_root = env.sandbox.domain_root.clone();
+
+        // 🎯 FIX : Remplacement de `storage` par `db`
         let sys_mgr = CollectionsManager::new(
-            &env.sandbox.storage,
+            &env.sandbox.db,
             &env.sandbox.config.mount_points.system.domain,
             &env.sandbox.config.mount_points.system.db,
         );
@@ -197,12 +211,11 @@ mod resilience_tests {
             .await?;
 
         // 2. Préparation du contexte d'exécution
+        // 🎯 FIX : Bootstrap du World Model
         let world_engine = SharedRef::new(
-            raise::ai::world_model::NeuroSymbolicEngine::new(
-                get_test_wm_config(),
-                NeuralWeightsMap::new(),
-            )
-            .expect("WM Engine fail"),
+            raise::ai::world_model::NeuroSymbolicEngine::bootstrap(&sys_mgr)
+                .await
+                .expect("WM Engine bootstrap fail"),
         );
 
         let llm_client = match env.client.clone() {
@@ -213,7 +226,7 @@ mod resilience_tests {
         let ctx = AgentContext::new(
             "agent_broken",
             "sess_resilience",
-            SharedRef::new(env.sandbox.storage.clone()),
+            env.sandbox.db.clone(), // 🎯 FIX : .db est déjà un SharedRef
             llm_client,
             world_engine,
             test_root.clone(),

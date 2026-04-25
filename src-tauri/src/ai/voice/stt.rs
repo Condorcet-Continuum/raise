@@ -29,35 +29,54 @@ impl WhisperEngine {
             ),
         };
 
-        let model_filename = settings
-            .get("rust_model_file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("model.safetensors");
-        let config_filename = settings
-            .get("rust_config_file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("config.json");
-        let tokenizer_filename = settings
-            .get("rust_tokenizer_file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("tokenizer.json");
-        let mel_filename = settings
-            .get("rust_mel_filters")
-            .and_then(|v| v.as_str())
-            .unwrap_or("mel_filters.safetensors");
+        // 2. Extraction stricte des valeurs (Tolérance Zéro)
+        let model_filename = match settings.get("rust_model_file").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => raise_error!(
+                "ERR_WHISPER_MISSING_VAR",
+                error = "La variable 'rust_model_file' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_voice"})
+            ),
+        };
+
+        let config_filename = match settings.get("rust_config_file").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => raise_error!(
+                "ERR_WHISPER_MISSING_VAR",
+                error = "La variable 'rust_config_file' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_voice"})
+            ),
+        };
+
+        let tokenizer_filename = match settings.get("rust_tokenizer_file").and_then(|v| v.as_str())
+        {
+            Some(v) => v,
+            None => raise_error!(
+                "ERR_WHISPER_MISSING_VAR",
+                error = "La variable 'rust_tokenizer_file' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_voice"})
+            ),
+        };
+
+        let mel_filename = match settings.get("rust_mel_filters").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => raise_error!(
+                "ERR_WHISPER_MISSING_VAR",
+                error = "La variable 'rust_mel_filters' est introuvable dans la configuration.",
+                context = json_value!({"component": "ai_voice"})
+            ),
+        };
 
         // 2. Résolution dynamique via les Mount Points (Portabilité MBSE)
         let app_config = AppConfig::get();
-        let base_path = match app_config.get_path("PATH_RAISE_DOMAIN") {
-            Some(p) => p
-                .join(&app_config.mount_points.system.domain)
-                .join(&app_config.mount_points.system.db)
-                .join("ai-assets/voice/whisper"),
-            None => raise_error!(
-                "ERR_CONFIG_DOMAIN_PATH_MISSING",
-                error = "Le chemin racine 'PATH_RAISE_DOMAIN' est absent de la configuration."
-            ),
-        };
+        let base_path = app_config.resolve_asset_path(
+            app_config
+                .system_assets
+                .ai_assets_paths
+                .as_ref()
+                .and_then(|p| p.voice.as_ref()),
+            "ai-assets/voice/whisper",
+        )?;
 
         let model_path = base_path.join(model_filename);
         let config_path = base_path.join(config_filename);
@@ -244,7 +263,7 @@ impl WhisperEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
 
     /// Test existant : Détection des assets manquants via Mount Points
     #[async_test]
@@ -259,26 +278,15 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(
-            &manager,
-            "voice",
-            json_value!({
-                "rust_model_file": "inexistant.safetensors"
-            }),
-        )
-        .await?;
-
         let result = WhisperEngine::new(&manager).await;
 
         match result {
             Err(AppError::Structured(err)) => {
-                assert!(
-                    err.code == "ERR_AI_WHISPER_ASSETS_MISSING"
-                        || err.code == "ERR_CONFIG_DOMAIN_PATH_MISSING"
-                );
+                // On exige EXACTEMENT l'erreur de fichier manquant (plus de fallback ambigu)
+                assert_eq!(err.code, "ERR_AI_WHISPER_ASSETS_MISSING");
                 Ok(())
             }
-            _ => panic!("L'initialisation aurait dû lever une erreur structurée RAISE"),
+            _ => panic!("L'initialisation aurait dû lever ERR_AI_WHISPER_ASSETS_MISSING"),
         }
     }
 
@@ -303,20 +311,30 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience face à une configuration de Mount Point invalide
+    ///  Résilience face à une configuration de Mount Point invalide
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_whisper_resilience_bad_mount_point() -> RaiseResult<()> {
+    async fn test_whisper_resilience_missing_config() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
-        // On crée un manager pointant vers un domaine non initialisé
-        let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        // 🎯 SABOTAGE : Plutôt que d'utiliser une partition fantôme (que le Gatekeeper contourne),
+        // on supprime purement et simplement la configuration dans la VRAIE base système.
+        let _ = manager
+            .delete_document("service_configs", "cfg_ai_voice_test")
+            .await;
 
         let result = WhisperEngine::new(&manager).await;
 
         match result {
             Err(AppError::Structured(err)) => {
-                // Doit échouer car get_runtime_settings ne trouvera rien dans la partition fantôme
+                // Le Gatekeeper doit rejeter le démarrage car la config n'existe plus !
                 assert_eq!(err.code, "ERR_AI_VOICE_CONFIG_LOAD");
                 Ok(())
             }
@@ -329,6 +347,9 @@ mod tests {
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_whisper_device_fallback_logic() -> RaiseResult<()> {
+        // 🎯 FIX : Initialisation de l'environnement de test pour charger le DEVICE
+        let _sandbox = AgentDbSandbox::new().await?;
+
         let device = AppConfig::device();
         // Vérification que la façade SSOT retourne un device valide pour Native
         assert!(device.is_cpu() || device.is_cuda() || device.is_metal());

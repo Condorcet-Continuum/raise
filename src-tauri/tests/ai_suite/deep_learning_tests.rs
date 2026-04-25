@@ -9,6 +9,8 @@ use raise::commands::dl_commands::DlState;
 use raise::utils::testing::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// 🎯 On conserve cet utilitaire car DeepLearningConfig est une structure mathématique bas niveau,
+// et non un composant d'orchestration géré par la base de données.
 fn get_test_dl_config() -> DeepLearningConfig {
     DeepLearningConfig {
         learning_rate: 0.01,
@@ -23,10 +25,12 @@ fn get_test_dl_config() -> DeepLearningConfig {
 #[cfg_attr(not(feature = "cuda"), ignore)]
 async fn test_dl_e2e_integration() -> RaiseResult<()> {
     // --- 1. CONFIGURATION ROBUSTE & ISOLÉE ---
-    mock::inject_mock_config().await;
+    // 🎯 FIX : Utilisation de l'AgentDbSandbox (Remplace `inject_mock_config`)
+    let sandbox = AgentDbSandbox::new().await?;
     let config = get_test_dl_config();
 
-    let device = ComputeHardware::Cpu;
+    // 🎯 FIX : On respecte le SSOT (Single Source of Truth) en utilisant le vrai Device détecté
+    let device = AppConfig::device().clone();
 
     let state = DlState::new();
     let start = SystemTime::now();
@@ -36,11 +40,13 @@ async fn test_dl_e2e_integration() -> RaiseResult<()> {
     };
 
     let filename = format!("test_integration_model_{}.safetensors", unique_id);
-    let save_path = std::env::temp_dir().join(filename);
+
+    // 🎯 FIX : On enregistre le fichier dans le dossier isolé de la Sandbox (auto-nettoyé)
+    let save_path = sandbox.domain_root.join(filename);
 
     user_info!(
         "INF_DL_TEST_START",
-        json_value!({"path": save_path.to_string_lossy()})
+        json_value!({"path": save_path.to_string_lossy(), "device": format!("{:?}", device)})
     );
 
     // --- Étape 1 : Initialisation du Modèle (Match strict) ---
@@ -136,6 +142,7 @@ async fn test_dl_e2e_integration() -> RaiseResult<()> {
         }
     }
 
+    // Suppression du fichier de test
     if save_path.exists() {
         let _ = fs::remove_file_sync(&save_path);
     }
@@ -157,11 +164,14 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_dl_config_dimension_resilience() -> RaiseResult<()> {
-        mock::inject_mock_config().await;
+        // 🎯 FIX : Initialisation système via Sandbox
+        let _sandbox = AgentDbSandbox::new().await?;
+
         let mut config = get_test_dl_config();
         config.input_size = 0; // Injection d'erreur
 
-        let device = ComputeHardware::Cpu;
+        // 🎯 FIX : Résolution dynamique du périphérique
+        let device = AppConfig::device().clone();
         let varmap = NeuralWeightsMap::new();
         let vb = NeuralWeightsBuilder::from_varmap(&varmap, ComputeType::F32, &device);
 
@@ -181,6 +191,9 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_dl_state_concurrency_resilience() -> RaiseResult<()> {
+        // 🎯 FIX : Initialisation système pour garantir le bon formatage des logs asynchrones
+        let _sandbox = AgentDbSandbox::new().await?;
+
         let state = SharedRef::new(DlState::new());
         let mut handles = vec![];
 

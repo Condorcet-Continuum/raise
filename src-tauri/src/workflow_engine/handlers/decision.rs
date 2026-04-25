@@ -118,7 +118,7 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
     use crate::workflow_engine::critic::WorkflowCritic;
 
     async fn setup_dummy_context<'a>(
@@ -139,32 +139,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "llm", json_value!({ "provider": "mock" })).await?;
-        inject_mock_component(&manager, "rag", json_value!({ "provider": "mock" })).await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_graph_store",
-            json_value!({
-                "embedding_dim": 16,
-                "provider": "native"
-            }),
-        )
-        .await?;
-
-        inject_mock_component(
-            &manager,
-            "ai_world_model",
-            json_value!({
-                "vocab_size": 16,
-                "embedding_dim": 16,
-                "action_dim": 8,
-                "hidden_dim": 32,
-                "use_gpu": false
-            }),
-        )
-        .await?;
-
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
             .await
             .expect("Setup Orchestrator failed");
@@ -183,7 +157,7 @@ mod tests {
     }
 
     #[async_test]
-    #[serial_test::serial] // 🎯 FIX : Protection CUDA car on charge l'Orchestrateur
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_decision_handler_condorcet_evaluation() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
@@ -196,7 +170,7 @@ mod tests {
             plugin_manager: &pm,
             critic: &critic,
             tools: &tools,
-            manager: &manager, // 🎯 Injection manager consolidée
+            manager: &manager,
         };
 
         let handler = DecisionHandler;
@@ -219,7 +193,7 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience face à l'absence de candidats
+    ///   Résilience face à l'absence de candidats
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
@@ -256,7 +230,7 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Validation de la partition système via Mount Points
+    /// Validation de la partition système via Mount Points
     #[async_test]
     async fn test_decision_mount_point_resolution() -> RaiseResult<()> {
         let _sandbox = AgentDbSandbox::new().await?;

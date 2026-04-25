@@ -184,7 +184,7 @@ impl RagRetriever {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::{inject_mock_component, AgentDbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {
         static LOCK: StaticCell<AsyncMutex<()>> = StaticCell::new();
@@ -204,8 +204,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await?;
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
 
@@ -249,8 +247,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await?;
-
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
         rag.index_document(&manager, "Ceci parle de cuisine.", "chef.txt")
             .await?;
@@ -272,8 +268,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await?;
 
         {
             let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
@@ -302,8 +296,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        inject_mock_component(&manager, "nlp", json_value!({ "model_name": "minilm" })).await?;
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
         let long_text = "Data ".repeat(1000);
