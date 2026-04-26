@@ -1,12 +1,13 @@
 // FICHIER : src-tauri/src/ai/llm/native_engine.rs
 
+use crate::kernel::assets::AssetResolver;
 use crate::utils::prelude::*; // 🎯 Façade Unique
-
 pub struct NativeTensorEngine {
     model: Qwen2QuantizedModel::ModelWeights,
     tokenizer: TextTokenizer,
     device: ComputeHardware,
     logits_processor: TokenLogitsProcessor,
+    max_context_size: usize,
 }
 
 impl NativeTensorEngine {
@@ -51,7 +52,7 @@ impl NativeTensorEngine {
 
         // 3. Construction des chemins via les Mount Points (Zéro Dette)
         let config = AppConfig::get();
-        let base_path = config.resolve_asset_path(
+        let primary_base_path = config.resolve_asset_path(
             config
                 .system_assets
                 .ai_assets_paths
@@ -60,25 +61,42 @@ impl NativeTensorEngine {
             "ai-assets/models",
         )?;
 
-        let model_path = base_path.join(&model_filename);
-        let tokenizer_path = base_path.join(&tokenizer_filename);
+        let category = "ai-assets/models";
 
-        // 4. Vérifications de résilience physique via Match
-        if !model_path.exists() {
-            raise_error!(
+        // 4. Résolution factorisée via AssetResolver (Fallback DB -> Global)
+        let model_path = match AssetResolver::resolve_ai_file_sync(
+            &primary_base_path,
+            category,
+            &model_filename,
+        ) {
+            Some(p) => p,
+            None => raise_error!(
                 "ERR_AI_MODEL_FILE_NOT_FOUND",
                 error = format!("Modèle GGUF introuvable : {}", model_filename),
-                context = json_value!({ "resolved_path": model_path.to_string_lossy() })
-            );
-        }
+                context = AssetResolver::missing_file_context(
+                    &primary_base_path,
+                    category,
+                    &model_filename
+                )
+            ),
+        };
 
-        if !tokenizer_path.exists() {
-            raise_error!(
+        let tokenizer_path = match AssetResolver::resolve_ai_file_sync(
+            &primary_base_path,
+            category,
+            &tokenizer_filename,
+        ) {
+            Some(p) => p,
+            None => raise_error!(
                 "ERR_AI_TOKENIZER_FILE_NOT_FOUND",
                 error = format!("Tokenizer introuvable : {}", tokenizer_filename),
-                context = json_value!({ "resolved_path": tokenizer_path.to_string_lossy() })
-            );
-        }
+                context = AssetResolver::missing_file_context(
+                    &primary_base_path,
+                    category,
+                    &tokenizer_filename
+                )
+            ),
+        };
 
         // 5. Résolution Hardware (SSOT: AppConfig)
         let device = AppConfig::device().clone();
@@ -119,11 +137,30 @@ impl NativeTensorEngine {
                 Err(e) => raise_error!("ERR_AI_QWEN2_WEIGHTS_LOAD", error = e.to_string()),
             };
 
+        // 🎯 CORRECTION POINT 1 & 2 : Lecture des paramètres d'inférence avec fallbacks
+        let max_context_size = settings
+            .get("max_context_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(32768) as usize; // 32k est la limite habituelle de Qwen 2.5 Coder
+
+        let temperature = settings
+            .get("temperature")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.7) as f64;
+
+        // Graine dynamique (Zéro Dette : utilisation de la façade de temps)
+        let seed = if cfg!(test) {
+            299792458 // Déterministe pour les tests (Vitesse de la lumière)
+        } else {
+            UtcClock::now().timestamp_nanos_opt().unwrap_or(299792458) as u64
+        };
+
         Ok(Self {
             model: weights,
             tokenizer,
             device,
-            logits_processor: TokenLogitsProcessor::new(299792458, Some(0.7), None),
+            logits_processor: TokenLogitsProcessor::new(seed, Some(temperature), None),
+            max_context_size,
         })
     }
 
@@ -148,6 +185,24 @@ impl NativeTensorEngine {
         };
 
         let mut tokens = tokens.get_ids().to_vec();
+
+        // Bouclier Context Window Overflow
+        let total_tokens_required = tokens.len() + max_tokens;
+        if total_tokens_required > self.max_context_size {
+            raise_error!(
+                "ERR_AI_CONTEXT_OVERFLOW",
+                error = format!(
+                    "Le prompt et la génération prévue ({} tokens) dépassent la capacité maximale du modèle ({} tokens).",
+                    total_tokens_required, self.max_context_size
+                ),
+                context = json_value!({
+                    "prompt_tokens": tokens.len(),
+                    "requested_max_tokens": max_tokens,
+                    "max_capacity": self.max_context_size
+                })
+            );
+        }
+
         let mut generated_tokens = Vec::new();
         let mut index_pos = 0;
 

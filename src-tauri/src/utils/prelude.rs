@@ -137,6 +137,7 @@ pub use crate::utils::inference::{
     // ⚖️ 2. Gestion des Modèles et Poids (NN)
     NeuralWeightsBuilder, // Constructeur pour charger les paramètres d'un modèle
     NeuralWeightsMap,     // Espace mémoire hébergeant les poids du réseau
+    NvidiaMonitor,
     OptimizerConfigAdamW, // Hyperparamètres de l'optimiseur
     Qwen2QuantizedModel,  // Moteur LLM natif (ex: Qwen2)
 
@@ -149,7 +150,6 @@ pub use crate::utils::inference::{
     TokenLogitsProcessor, // Gestionnaire de température / Top-P / Top-K
     WhisperAudio,         // Traitement du signal (Mel, MFCC)
     WhisperConfig,        // Paramétrage audio
-
     // 👁️ 7. Multimodalité : Audio & Vision
     WhisperModel,        // Architecture de transcription audio
     DEFAULT_EMBED_MODEL, // Modèle par défaut

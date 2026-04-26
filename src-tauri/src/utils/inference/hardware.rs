@@ -5,6 +5,7 @@ use crate::utils::prelude::*;
 // 🎯 On importe notre alias strict depuis le fichier voisin
 use super::types::ComputeHardware;
 
+pub use nvml_wrapper::Nvml as NvidiaMonitor;
 // 🧠 RÉSILIENCE MATÉRIELLE DE L'IA (Hardware Resolution)
 //
 // Le rôle de ce chef d'orchestre matériel est de scruter la machine physique

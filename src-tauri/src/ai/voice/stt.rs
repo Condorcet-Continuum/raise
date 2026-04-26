@@ -1,8 +1,8 @@
 // FICHIER : src-tauri/src/ai/voice/stt.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
+use crate::kernel::assets::AssetResolver;
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
-
 pub struct WhisperEngine {
     model: WhisperModel::model::Whisper,
     tokenizer: TextTokenizer,
@@ -69,7 +69,7 @@ impl WhisperEngine {
 
         // 2. Résolution dynamique via les Mount Points (Portabilité MBSE)
         let app_config = AppConfig::get();
-        let base_path = app_config.resolve_asset_path(
+        let primary_base_path = app_config.resolve_asset_path(
             app_config
                 .system_assets
                 .ai_assets_paths
@@ -78,23 +78,25 @@ impl WhisperEngine {
             "ai-assets/voice/whisper",
         )?;
 
-        let model_path = base_path.join(model_filename);
-        let config_path = base_path.join(config_filename);
-        let tokenizer_path = base_path.join(tokenizer_filename);
-        let mel_path = base_path.join(mel_filename);
+        let category = "ai-assets/voice/whisper";
 
-        // 3. Vérification de résilience physique via Match
-        if !model_path.exists()
-            || !config_path.exists()
-            || !tokenizer_path.exists()
-            || !mel_path.exists()
-        {
-            raise_error!(
-                "ERR_AI_WHISPER_ASSETS_MISSING",
-                error = "Fichiers Whisper introuvables dans le point de montage système.",
-                context = json_value!({ "resolved_path": base_path.to_string_lossy() })
-            );
-        }
+        // 3. Résolution factorisée via AssetResolver (Zéro Dette)
+        let resolve_or_fail = |filename: &str| -> RaiseResult<PathBuf> {
+            match AssetResolver::resolve_ai_file_sync(&primary_base_path, category, filename) {
+                Some(p) => Ok(p),
+                None => raise_error!(
+                    "ERR_AI_WHISPER_ASSETS_MISSING",
+                    error = format!("Fichier Whisper introuvable : {}", filename),
+                    context =
+                        AssetResolver::missing_file_context(&primary_base_path, category, filename)
+                ),
+            }
+        };
+
+        let model_path = resolve_or_fail(model_filename)?;
+        let config_path = resolve_or_fail(config_filename)?;
+        let tokenizer_path = resolve_or_fail(tokenizer_filename)?;
+        let mel_path = resolve_or_fail(mel_filename)?;
 
         let device = AppConfig::device().clone();
         user_info!(

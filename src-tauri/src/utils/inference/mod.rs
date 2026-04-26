@@ -83,7 +83,7 @@ pub use types::{
 
 // --- Matériel et Poids ---
 // Fonctions critiques de démarrage et d'allocation de ressources.
-pub use hardware::resolve_compute_device;
+pub use hardware::{resolve_compute_device, NvidiaMonitor};
 pub use weights::load_neural_weights;
 
 // --- Capacités d'Analyse ---
