@@ -93,9 +93,7 @@ jobs:
   # ------------------------------------------------------------------
   sbom:
     name: 🔍 Generate SBOMs
-    runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"    
+    runs-on: ubuntu-latest 
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -154,7 +152,7 @@ jobs:
 
       - name: Setup Tools (Node & Rust)
         uses: actions/setup-node@v4
-        with: { node-version: 20, cache: 'npm' }
+        with: { node-version: 24, cache: 'npm' }
       
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: 'wasm32-unknown-unknown,wasm32-wasip1' }
