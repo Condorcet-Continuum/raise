@@ -10,7 +10,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   DEBIAN_FRONTEND: noninteractive
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ------------------------------------------------------------------
@@ -65,7 +64,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '24.13.1'
           cache: 'npm'
 
       # Si src-wasm dépend du code modifié, assurez-vous qu'il est à jour, sinon on laisse tel quel.
