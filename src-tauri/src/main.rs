@@ -12,8 +12,8 @@ use tauri::Manager;
 use raise::blockchain::{ConnectionProfile, FabricClient};
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, dl_commands,
-    genetics_commands, json_db_commands, model_commands, rules_commands, traceability_commands,
-    training_commands, utils_commands, workflow_commands,
+    genetics_commands, gnn_commands, json_db_commands, model_commands, rules_commands,
+    traceability_commands, training_commands, utils_commands, workflow_commands,
 };
 
 use raise::json_db::collections::manager::CollectionsManager;
@@ -37,6 +37,7 @@ use raise::AppState;
 
 use raise::ai::graph_store::GraphStore;
 use raise::commands::dl_commands::DlState;
+use raise::commands::gnn_commands::GnnState;
 use raise::spatial_engine;
 
 #[allow(clippy::await_holding_lock)]
@@ -184,6 +185,7 @@ fn main() {
             }));
             app.manage(AsyncMutex::new(WorkflowStore::default()));
             app.manage(DlState::new());
+            app.manage(GnnState::new());
 
             // BLOCKCHAIN
             raise::blockchain::ensure_innernet_state(app.handle(), "default");
@@ -261,6 +263,9 @@ fn main() {
             dl_commands::train_dl_step,
             dl_commands::save_dl_model,
             dl_commands::load_dl_model,
+            gnn_commands::init_gnn_engine,
+            gnn_commands::train_gnn_step,
+            gnn_commands::audit_ontology,
             training_commands::tauri_train_domain,
             cognitive_commands::cognitive_load_plugin,
             cognitive_commands::cognitive_run_plugin,

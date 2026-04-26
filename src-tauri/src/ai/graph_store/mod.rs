@@ -1,7 +1,9 @@
 // FICHIER : src-tauri/src/ai/graph_store/mod.rs
 
 pub mod adjacency;
+pub mod engine;
 pub mod features;
+pub mod logic;
 pub mod store;
 
 pub use adjacency::GraphAdjacency;
