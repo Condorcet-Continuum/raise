@@ -256,7 +256,7 @@ pub async fn handle(args: AiArgs, ctx: CliContext) -> RaiseResult<()> {
         return Ok(());
     }
 
-    let client = LlmClient::new(&manager).await?;
+    let client = LlmClient::new(&manager, storage.clone(), ctx.kernel.native_llm.clone()).await?;
 
     let current_session = ctx.session_mgr.get_current_session().await;
     let session_id = current_session
@@ -761,7 +761,7 @@ async fn run_train_world_action(
     );
 
     println!("⏳ Réveil de l'Orchestrateur et du Moteur Neuro-Symbolique...");
-    let orchestrator = AiOrchestrator::new(ProjectModel::default(), manager, storage).await?;
+    let orchestrator = AiOrchestrator::new(ProjectModel::default(), manager, storage, None).await?;
 
     println!("\n🌍 --- ENTRAÎNEMENT DU WORLD MODEL (NEURO-SYMBOLIQUE) ---");
     println!("🧠 Scénario : Apprentissage de la transition d'un composant Logique (LA) vers Physique (PA).");

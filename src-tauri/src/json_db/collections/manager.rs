@@ -1118,13 +1118,15 @@ impl<'a> CollectionsManager<'a> {
         let sys_db = &config.mount_points.system.db;
 
         // 1. Accès au Catalogue Système
-        let sys_mgr = if self.space == *sys_domain && self.db == *sys_db {
-            // Optimisation : On évite de recréer le manager si on y est déjà
-            None
+        // On crée un manager système prêt pour le catalogue ou le fallback
+        let sys_mgr = CollectionsManager::new(self.storage, sys_domain, sys_db);
+
+        // On détermine quel manager sert de catalogue de gouvernance
+        let catalog = if self.space == *sys_domain && self.db == *sys_db {
+            self
         } else {
-            Some(CollectionsManager::new(self.storage, sys_domain, sys_db))
+            &sys_mgr
         };
-        let catalog = sys_mgr.as_ref().unwrap_or(self);
 
         // 2. Récupérer toutes les bases de données déclarées
         let databases = match catalog.list_all("databases").await {
@@ -1185,6 +1187,17 @@ impl<'a> CollectionsManager<'a> {
             }
         }
 
+        // 3. 🛡️ FALLBACK CRITIQUE : Partition Système (Résilience Bootstrap)
+        if self.space != *sys_domain || self.db != *sys_db {
+            user_debug!(
+                "DB_GLOBAL_SEARCH_FALLBACK",
+                json_value!({"coll": collection, "target": id_or_handle})
+            );
+            // Ici, sys_mgr n'est plus une Option, donc get_document() fonctionne !
+            if let Ok(Some(doc)) = sys_mgr.get_document(collection, id_or_handle).await {
+                return Ok(Some((sys_domain.clone(), sys_db.clone(), doc)));
+            }
+        }
         Ok(None)
     }
 
@@ -1877,6 +1890,59 @@ mod tests {
             .find_global_document("global_items", "ghost")
             .await?;
         assert!(missing.is_none());
+
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_manager_find_global_fallback_to_system() -> RaiseResult<()> {
+        // 1. SETUP : On utilise la sandbox qui initialise déjà la partition système
+        let sandbox = DbSandbox::new().await?;
+        let sys_domain = &sandbox.config.mount_points.system.domain;
+        let sys_db = &sandbox.config.mount_points.system.db;
+
+        // On crée un manager sur la partition SYSTÈME pour y injecter une ressource
+        let sys_mgr = CollectionsManager::new(&sandbox.storage, sys_domain, sys_db);
+        DbSandbox::mock_db(&sys_mgr).await?;
+
+        sys_mgr
+            .create_collection(
+                "locales",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+        sys_mgr
+            .insert_raw(
+                "locales",
+                &json_value!({
+                    "_id": "fr",
+                    "handle": "fr",
+                    "value": "Bonjour"
+                }),
+            )
+            .await?;
+
+        // 2. TARGET : On crée un manager sur une base métier TOTALEMENT ISOLÉE
+        // Cette base n'est pas déclarée dans le catalogue 'databases'
+        let user_mgr = CollectionsManager::new(&sandbox.storage, "project_x", "sandbox_db");
+        // On n'appelle PAS mock_db ici pour simuler une base vide/nouvelle
+
+        // 3. ACTION : On cherche la ressource 'fr' globalement depuis la base métier
+        let result = user_mgr.find_global_document("locales", "fr").await?;
+
+        // 4. VERIFICATION
+        assert!(
+            result.is_some(),
+            "Le fallback aurait dû trouver 'fr' dans la partition système même sans catalogue"
+        );
+
+        let (found_domain, found_db, doc) = result.unwrap();
+
+        // On vérifie que le moteur nous confirme bien que ça vient du système
+        assert_eq!(found_domain, *sys_domain);
+        assert_eq!(found_db, *sys_db);
+        assert_eq!(doc["value"], "Bonjour");
 
         Ok(())
     }

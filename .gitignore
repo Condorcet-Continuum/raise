@@ -65,3 +65,6 @@ leann/__pycache__/
 leann/.pytest_cache/
 leann/local_storage/
 
+# Ignorer les tests souverains locaux
+src-tauri/tests/souverain/
+src-tauri/tests/souverain.rs

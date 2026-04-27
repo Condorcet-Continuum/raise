@@ -11,7 +11,6 @@ pub struct GitTool;
 
 impl GitTool {
     /// 🛠️ Commande Interne : Exécution via `AsyncCommand`.
-    /// Utilise strictement `match` et la macro `raise_error!` sans `return Err` redondant.
     async fn execute_git(args: &[&str], cwd: &Path) -> RaiseResult<String> {
         let command_res = AsyncCommand::new("git")
             .args(args)
@@ -25,7 +24,6 @@ impl GitTool {
                     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    // 🎯 La macro raise_error! gère déjà le retour Err(...)
                     raise_error!(
                         "ERR_GIT_COMMAND_FAILED",
                         error = stderr,
@@ -153,7 +151,7 @@ mod tests {
     }
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_git_publish_error_on_invalid_repo() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;

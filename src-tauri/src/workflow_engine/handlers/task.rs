@@ -230,6 +230,7 @@ impl NodeHandler for TaskHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::llm::client::LlmEngine;
     use crate::ai::orchestrator::AiOrchestrator;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
@@ -241,6 +242,7 @@ mod tests {
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
         config: &'a AppConfig,
         sandbox_db: &'a crate::json_db::storage::StorageEngine,
+        engine: SharedRef<AsyncMutex<dyn LlmEngine>>,
     ) -> RaiseResult<(
         SharedRef<AsyncMutex<AiOrchestrator>>,
         SharedRef<PluginManager>,
@@ -255,9 +257,14 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
-            .await
-            .unwrap();
+        let orch = AiOrchestrator::new(
+            ProjectModel::default(),
+            &manager,
+            storage.clone(),
+            Some(engine),
+        )
+        .await
+        .unwrap();
         Ok((
             SharedRef::new(AsyncMutex::new(orch)),
             SharedRef::new(PluginManager::new(&storage, None)),
@@ -273,8 +280,13 @@ mod tests {
     async fn test_task_handler_squad_delegation() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
-        let (orch, pm, critic, tools, manager) =
-            setup_task_test_context(sandbox.db.clone(), &config, &sandbox.db).await?;
+        let (orch, pm, critic, tools, manager) = setup_task_test_context(
+            sandbox.db.clone(),
+            &config,
+            &sandbox.db,
+            sandbox.shared_engine.clone(),
+        )
+        .await?;
 
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
@@ -378,8 +390,13 @@ mod tests {
     async fn test_task_handler_missing_mission_resilience() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
-        let (orch, pm, critic, tools, manager) =
-            setup_task_test_context(sandbox.db.clone(), &config, &sandbox.db).await?;
+        let (orch, pm, critic, tools, manager) = setup_task_test_context(
+            sandbox.db.clone(),
+            &config,
+            &sandbox.db,
+            sandbox.shared_engine.clone(),
+        )
+        .await?;
 
         let ctx = HandlerContext {
             orchestrator: &orch,

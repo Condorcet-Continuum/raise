@@ -217,7 +217,13 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        let llm = match LlmClient::new(&manager).await {
+        let llm = match LlmClient::new(
+            &manager,
+            sandbox.db.clone(),
+            Some(sandbox.shared_engine.clone()),
+        )
+        .await
+        {
             Ok(c) => c,
             Err(e) => raise_error!("ERR_TEST_LLM", error = e),
         };

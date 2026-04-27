@@ -1,5 +1,7 @@
 // FICHIER : src-tauri/src/utils/testing/mock.rs
 #![cfg(any(test, debug_assertions))]
+use crate::utils::prelude::*;
+use async_trait::async_trait;
 
 // 1. Core : Concurrence, Mémoire et Identifiants
 use crate::raise_error;
@@ -16,11 +18,28 @@ use crate::utils::data::json::{self, json_value, JsonValue};
 use crate::utils::data::UnorderedMap;
 
 // 4. Dépendances métier (Base de données JSON)
+use crate::ai::llm::client::LlmEngine;
+use crate::ai::llm::native_engine::NativeTensorEngine;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};
 
 pub const MOCK_LLM_MODEL: &str = "mock/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 pub const MOCK_LLM_TOKENIZER: &str = "mock/tokenizer.json";
+
+// 🎯 SINGLETON GLOBAL POUR LES TESTS
+static SHARED_LLM_ENGINE: AsyncStaticCell<SharedRef<AsyncMutex<dyn LlmEngine>>> =
+    AsyncStaticCell::const_new();
+
+pub struct MockLlmEngine {
+    pub response: String,
+}
+
+#[async_trait]
+impl LlmEngine for MockLlmEngine {
+    async fn generate(&mut self, _: &str, _: &str, _: usize) -> RaiseResult<String> {
+        Ok(self.response.clone())
+    }
+}
 
 // --- DÉFINITION DES SCHÉMAS STANDARDS POUR TESTS ---
 
@@ -1142,6 +1161,7 @@ pub struct AgentDbSandbox {
     pub db: SharedRef<StorageEngine>,
     pub config: AppConfig,
     pub domain_root: PathBuf,
+    pub shared_engine: SharedRef<AsyncMutex<dyn LlmEngine>>,
 }
 
 impl AgentDbSandbox {
@@ -1253,11 +1273,47 @@ impl AgentDbSandbox {
         )
         .await?;
 
+        // 4. Injection des Fallbacks Cloud pour satisfaire le Gatekeeper dans les tests
+        // (Garantit que LlmClient peut tester son routage de secours sans crasher)
+        for provider in ["mistral_ai", "anthropic_claude", "google_gemini"] {
+            let config_doc = json_value!({
+                "_id": format!("cfg_{}_test", provider),
+                "handle": format!("cfg_{}_test", provider),
+                "component_id": format!("ref:services:blueprint:{}", provider),
+                "environment": "test",
+                "service_settings": {
+                    "api_key": "mock_key_for_sandbox",
+                    "model": "mock-model",
+                    "url": "http://127.0.0.1:9999/mock_api"
+                }
+            });
+            let _ = temp_manager
+                .insert_raw("service_configs", &config_doc)
+                .await;
+        }
+
+        // 🎯 INITIALISATION / RÉCUPÉRATION DU MOTEUR PARTAGÉ
+        let shared_engine = SHARED_LLM_ENGINE
+            .get_or_try_init(|| async {
+                user_info!(
+                    "INF_TEST_LLM_INIT",
+                    json_value!({"msg": "Chargement du moteur partagé..."})
+                );
+                let engine = NativeTensorEngine::new(&temp_manager).await?;
+                // 🎯 Cast vers dyn LlmEngine
+                let engine_trait: SharedRef<AsyncMutex<dyn LlmEngine>> =
+                    SharedRef::new(AsyncMutex::new(engine));
+                Ok::<_, AppError>(engine_trait)
+            })
+            .await?
+            .clone();
+
         Ok(Self {
             _dir: base._dir,
             db,
             config: base.config,
             domain_root,
+            shared_engine,
         })
     }
 }

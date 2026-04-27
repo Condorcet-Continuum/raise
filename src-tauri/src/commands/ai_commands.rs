@@ -23,7 +23,7 @@ use crate::ai::training::dataset::{extract_domain_data, TrainingExample};
 
 use crate::ai::agents::prompt_engine::PromptEngine;
 use crate::ai::agents::tools::extract_json_from_llm;
-use crate::ai::llm::client::{LlmBackend, LlmClient};
+use crate::ai::llm::client::{LlmBackend, LlmClient, LlmEngine};
 
 use tauri::{command, State};
 
@@ -31,6 +31,7 @@ use tauri::{command, State};
 /// Respecte les points de montage système pour la résolution du client LLM.
 pub async fn ai_execute_blueprint_core(
     storage: SharedRef<StorageEngine>,
+    native_llm: Option<SharedRef<AsyncMutex<dyn LlmEngine>>>,
     domain: &str,
     db: &str,
     prompt_handle: &str,
@@ -38,7 +39,7 @@ pub async fn ai_execute_blueprint_core(
 ) -> RaiseResult<String> {
     // 1. Initialisation résiliente du Manager et du Client LLM
     let manager = CollectionsManager::new(storage.as_ref(), domain, db);
-    let client = match LlmClient::new(&manager).await {
+    let client = match LlmClient::new(&manager, storage.clone(), native_llm).await {
         Ok(c) => c,
         Err(e) => raise_error!("ERR_LLM_CLIENT_INIT", error = e.to_string()),
     };
@@ -61,13 +62,23 @@ pub async fn ai_execute_blueprint_core(
 #[command]
 pub async fn ai_execute_blueprint(
     storage: State<'_, SharedRef<StorageEngine>>,
+    ai_state: State<'_, AiState>,
     domain: String,
     db: String,
     prompt_handle: String,
     vars: Option<JsonValue>,
 ) -> RaiseResult<String> {
     let storage_ref = storage.inner().clone();
-    ai_execute_blueprint_core(storage_ref, &domain, &db, &prompt_handle, vars).await
+    let native_llm = {
+        let guard = ai_state.0.lock().await;
+        if let Some(orch_ref) = &*guard {
+            let orchestrator = orch_ref.lock().await;
+            orchestrator.llm_native.clone() // Le type parfait !
+        } else {
+            None
+        }
+    };
+    ai_execute_blueprint_core(storage_ref, native_llm, &domain, &db, &prompt_handle, vars).await
 }
 
 /// 📤 COMMANDE TAURI : Exporte un dataset d'entraînement pour un domaine spécifique.

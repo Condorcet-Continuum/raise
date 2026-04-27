@@ -465,8 +465,8 @@ impl CliContext {
             agent_id,
             &session.id,
             self.storage.clone(),
-            orch.llm.clone(),          // 🎯 Réutilisation du client LLM chargé
-            orch.world_engine.clone(), // 🎯 Réutilisation du World Model chargé
+            orch.llm_remote.clone(),
+            orch.world_engine.clone(),
             domain_path,
             dataset_path,
         )

@@ -108,7 +108,6 @@ async fn test_software_agent_creates_component_end_to_end() -> RaiseResult<()> {
 mod resilience_tests {
     use super::*;
     use raise::ai::agents::Agent;
-    use raise::ai::llm::client::LlmClient;
 
     #[async_test]
     #[serial_test::serial]
@@ -123,7 +122,7 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_codegen_agent_missing_prompt_resilience() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await?;
+        let env = setup_test_env(LlmMode::Enabled).await?;
         let test_root = env.sandbox.domain_root.clone();
 
         let sys_mgr = CollectionsManager::new(
@@ -148,11 +147,7 @@ mod resilience_tests {
                 .expect("WM Engine fail"),
         );
 
-        let llm_client = match env.client.clone() {
-            Some(client) => client,
-            None => LlmClient::new(&sys_mgr).await.expect("LlmClient fail"),
-        };
-
+        let llm_client = env.client.clone().expect("LlmClient requis");
         let ctx = AgentContext::new(
             "agent_broken_codegen",
             "sess_resilience",

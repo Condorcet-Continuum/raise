@@ -268,7 +268,7 @@ mod tests {
             .await
             .unwrap();
 
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone(), None)
             .await
             .unwrap();
         let pm = SharedRef::new(PluginManager::new(&storage, None));

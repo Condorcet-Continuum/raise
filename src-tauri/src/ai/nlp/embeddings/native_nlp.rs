@@ -1,5 +1,6 @@
 // FICHIER : src-tauri/src/ai/nlp/embeddings/native_nlp.rs
 
+use crate::kernel::assets::AssetResolver;
 use crate::utils::prelude::*; // 🎯 Façade Unique
 
 pub struct NativeNlpEngine {
@@ -9,14 +10,17 @@ pub struct NativeNlpEngine {
 }
 
 impl NativeNlpEngine {
-    /// Initialise le moteur d'embeddings BERT en respectant les points de montage.
+    /// Initialise le moteur d'embeddings BERT en forçant l'utilisation du CPU.
     pub async fn new(
         manager: &crate::json_db::collections::manager::CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
-        let device = AppConfig::device().clone();
+        // 🎯 CORRECTION CPU ICI : On libère la VRAM à 100% pour le LLM natif.
+        // Les embeddings tourneront de manière très véloce sur le processeur (RAM classique).
+        let device = ComputeHardware::Cpu;
+
         user_info!(
             "MSG_NLP_NATIVE_INIT",
-            json_value!({ "device": format!("{:?}", device), "backend": "BERT" })
+            json_value!({ "device": format!("{:?}", device), "backend": "BERT (CPU Forced)" })
         );
 
         // 1. Appel du Gatekeeper (Routage + Vérification d'Activation + Standard Raise)
@@ -39,7 +43,7 @@ impl NativeNlpEngine {
             Some(v) => v,
             None => raise_error!(
                 "ERR_NLP_MISSING_VAR",
-                error = "La variable 'model_name' est introuvable dans la configuration.",
+                error = "La variable 'model_name' est introuvable.",
                 context = json_value!({"component": "ai_nlp"})
             ),
         };
@@ -47,7 +51,7 @@ impl NativeNlpEngine {
             Some(v) => v,
             None => raise_error!(
                 "ERR_NLP_MISSING_VAR",
-                error = "La variable 'rust_config_file' est introuvable dans la configuration.",
+                error = "La variable 'rust_config_file' est introuvable.",
                 context = json_value!({"component": "ai_nlp"})
             ),
         };
@@ -56,7 +60,7 @@ impl NativeNlpEngine {
             Some(v) => v,
             None => raise_error!(
                 "ERR_NLP_MISSING_VAR",
-                error = "La variable 'rust_tokenizer_file' est introuvable dans la configuration.",
+                error = "La variable 'rust_tokenizer_file' est introuvable.",
                 context = json_value!({"component": "ai_nlp"})
             ),
         };
@@ -67,15 +71,14 @@ impl NativeNlpEngine {
             Some(v) => v,
             None => raise_error!(
                 "ERR_NLP_MISSING_VAR",
-                error =
-                    "La variable 'rust_safetensors_file' est introuvable dans la configuration.",
+                error = "La variable 'rust_safetensors_file' est introuvable.",
                 context = json_value!({"component": "ai_nlp"})
             ),
         };
 
-        // 2. Résolution dynamique du chemin via AppConfig
+        // 3. Résolution dynamique de la racine via AppConfig
         let config_global = AppConfig::get();
-        let base_path = config_global
+        let primary_base_path = config_global
             .resolve_asset_path(
                 config_global
                     .system_assets
@@ -86,20 +89,29 @@ impl NativeNlpEngine {
             )?
             .join(model_dir);
 
-        let config_path = base_path.join(config_filename);
-        let tokenizer_path = base_path.join(tokenizer_filename);
-        let weights_path = base_path.join(weights_filename);
+        let category = format!("ai-assets/embeddings/{}", model_dir);
 
-        // 3. Vérification de résilience physique
-        if !weights_path.exists() || !config_path.exists() || !tokenizer_path.exists() {
-            raise_error!(
-                "ERR_AI_EMBEDDING_ASSETS_MISSING",
-                error = format!("Modèle BERT introuvable dans : {:?}", base_path),
-                context = json_value!({ "path": base_path.to_string_lossy() })
-            );
-        }
+        // 4. 🎯 Résolution factorisée via AssetResolver (Zéro Dette)
+        let resolve_or_fail = |filename: &str| -> RaiseResult<PathBuf> {
+            match AssetResolver::resolve_ai_file_sync(&primary_base_path, &category, filename) {
+                Some(p) => Ok(p),
+                None => raise_error!(
+                    "ERR_AI_EMBEDDING_ASSETS_MISSING",
+                    error = format!("Fichier NLP introuvable : {}", filename),
+                    context = AssetResolver::missing_file_context(
+                        &primary_base_path,
+                        &category,
+                        filename
+                    )
+                ),
+            }
+        };
 
-        // 4. Chargement sécurisé de la configuration BERT
+        let config_path = resolve_or_fail(config_filename)?;
+        let tokenizer_path = resolve_or_fail(tokenizer_filename)?;
+        let weights_path = resolve_or_fail(weights_filename)?;
+
+        // 5. Chargement sécurisé de la configuration BERT
         let config_str = match fs::read_to_string_sync(&config_path) {
             Ok(content) => content,
             Err(e) => raise_error!("ERR_NLP_CONFIG_READ", error = e.to_string()),
@@ -110,18 +122,18 @@ impl NativeNlpEngine {
             Err(e) => raise_error!("ERR_NLP_CONFIG_PARSE", error = e.to_string()),
         };
 
-        // 5. Chargement du TextTokenizer
+        // 6. Chargement du TextTokenizer
         let tokenizer = match TextTokenizer::from_file(&tokenizer_path) {
             Ok(t) => t,
             Err(e) => raise_error!("ERR_NLP_TOKENIZER_LOAD", error = e.to_string()),
         };
 
-        // 6. Chargement des poids via Memory Mapping
+        // 7. Chargement des poids via Memory Mapping (Sur CPU !)
         let vb = unsafe {
             match NeuralWeightsBuilder::from_mmaped_safetensors(
                 &[&weights_path],
                 ComputeType::F32,
-                &device,
+                &device, // 🎯 Utilise désormais ComputeHardware::Cpu
             ) {
                 Ok(builder) => builder,
                 Err(e) => raise_error!("ERR_NLP_WEIGHTS_LOAD", error = e.to_string()),
@@ -184,7 +196,6 @@ impl NativeNlpEngine {
         };
 
         // Pooling sémantique (Moyenne)
-        // 🎯 FIX: Suppression des parenthèses inutiles signalées par le compilateur
         let pooled = match embeddings.sum(1)? / (max_len as f64) {
             Ok(p) => p,
             Err(e) => raise_error!("ERR_NLP_POOLING", error = e.to_string()),
@@ -237,7 +248,7 @@ mod tests {
                 "raise_domain/_system/ai-assets/embeddings/{}",
                 model_name
             ));
-            // 🎯 FIX: Alignement des chemins de test sur les nouveaux points de montage
+
             let target_path = domain_path
                 .join(&config.mount_points.system.domain)
                 .join(&config.mount_points.system.db)
@@ -271,7 +282,6 @@ mod tests {
         let sandbox = AgentDbSandbox::new().await?;
         provide_assets_to_sandbox("minilm").await;
 
-        // 🎯 FIX: Utilisation des mount_points pour le manager de test
         let manager = CollectionsManager::new(
             &sandbox.db,
             &sandbox.config.mount_points.system.domain,
@@ -322,12 +332,9 @@ mod tests {
             .await?
             .expect("La config NLP devrait être présente via AgentDbSandbox");
 
-        // On modifie volontairement le chemin des poids du modèle vers un fantôme
         nlp_doc["service_settings"]["rust_safetensors_file"] =
             json_value!("this_file_does_not_exist.safetensors");
 
-        // 🎯 FIX : Utilisation des méthodes `raw` pour écraser le document
-        // sans déclencher d'erreur de référence sur l'utilisateur 'admin'
         let _ = manager
             .delete_document("service_configs", "cfg_ai_nlp_test")
             .await;

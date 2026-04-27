@@ -236,7 +236,12 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        let llm = LlmClient::new(&sys_mgr).await?;
+        let llm = LlmClient::new(
+            &sys_mgr,
+            sandbox.db.clone(),
+            Some(sandbox.shared_engine.clone()),
+        )
+        .await?;
         let world = SharedRef::new(NeuroSymbolicEngine::bootstrap(&sys_mgr).await?);
 
         let ctx = AgentContext::new(

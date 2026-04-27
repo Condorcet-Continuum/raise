@@ -128,10 +128,26 @@ pub async fn setup_test_env(llm_mode: LlmMode) -> RaiseResult<UnifiedTestEnv> {
     .await?;
 
     // =========================================================================
-    // 6. INITIALISATION LLM
+    // 6. INITIALISATION LLM : PARTAGE MUTUEL ENTRE TESTS
     // =========================================================================
     let client = match llm_mode {
-        LlmMode::Enabled => Some(LlmClient::new(&mgr).await?),
+        LlmMode::Enabled => {
+            let sys_mgr = CollectionsManager::new(
+                &sandbox.db,
+                &sandbox.config.mount_points.system.domain,
+                &sandbox.config.mount_points.system.db,
+            );
+
+            // On utilise directement le moteur exposé par la sandbox !
+            Some(
+                LlmClient::new(
+                    &sys_mgr,
+                    sandbox.db.clone(),
+                    Some(sandbox.shared_engine.clone()),
+                )
+                .await?,
+            )
+        }
         LlmMode::Disabled => None,
     };
 

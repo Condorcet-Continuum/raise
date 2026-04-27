@@ -1,13 +1,31 @@
 // FICHIER : src-tauri/src/ai/llm/native_engine.rs
 
+use crate::ai::llm::client::LlmEngine;
 use crate::kernel::assets::AssetResolver;
-use crate::utils::prelude::*; // 🎯 Façade Unique
+use crate::utils::prelude::*;
+use async_trait::async_trait;
+
 pub struct NativeTensorEngine {
     model: Qwen2QuantizedModel::ModelWeights,
     tokenizer: TextTokenizer,
     device: ComputeHardware,
     logits_processor: TokenLogitsProcessor,
     max_context_size: usize,
+}
+
+#[async_trait]
+impl LlmEngine for NativeTensorEngine {
+    async fn generate(
+        &mut self,
+        system: &str,
+        user: &str,
+        max_tokens: usize,
+    ) -> RaiseResult<String> {
+        // 🎯 On appelle votre méthode existante (déjà en &mut self)
+        // Comme elle est synchrone, on n'a pas besoin de .await ici,
+        // mais la signature du trait reste compatible async.
+        self.generate(system, user, max_tokens)
+    }
 }
 
 impl NativeTensorEngine {

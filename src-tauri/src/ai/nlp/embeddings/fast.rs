@@ -8,7 +8,7 @@ pub struct FastEmbedEngine {
 }
 
 impl FastEmbedEngine {
-    /// Initialise le moteur FastEmbed en respectant les points de montage système.
+    /// Initialise le moteur FastEmbed en respectant l'isolation stricte du domaine RAISE.
     pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
         // 1. Appel du Gatekeeper (Tolérance aux pannes pour le moteur par défaut)
         let settings =
@@ -16,7 +16,6 @@ impl FastEmbedEngine {
                 Ok(s) => s,
                 Err(_) => {
                     // FastEmbed est le moteur léger de secours (Fallback absolu).
-                    // Si la config DB est absente ou désactivée, on fallback silencieusement.
                     json_value!({})
                 }
             };
@@ -33,9 +32,29 @@ impl FastEmbedEngine {
             _ => LightweightEmbeddingModel::BGESmallENV15,
         };
 
-        let options = LightweightInitOptions::new(embed_model).with_show_download_progress(true);
+        // 4. 🎯 Rapatriement du cache FastEmbed dans le domaine RAISE (Zéro Dette)
+        let config = AppConfig::get();
+        let raise_domain_path = config
+            .get_path("PATH_RAISE_DOMAIN")
+            .unwrap_or_else(|| PathBuf::from("./raise_domain"));
 
-        // 4. Initialisation sécurisée via Match
+        let isolated_cache_dir = raise_domain_path
+            .join("_system")
+            .join("ai-assets")
+            .join("embeddings")
+            .join("fastembed");
+
+        // On s'assure que le dossier existe via la façade I/O
+        if let Err(e) = fs::ensure_dir_sync(&isolated_cache_dir) {
+            raise_error!("ERR_AI_FASTEMBED_CACHE", error = e.to_string());
+        }
+
+        // 5. Paramétrage avec l'isolation du cache
+        let options = LightweightInitOptions::new(embed_model)
+            .with_show_download_progress(true)
+            .with_cache_dir(isolated_cache_dir); // 🎯 L'isolation est garantie ici
+
+        // 6. Initialisation sécurisée via Match
         let model = match LightweightTextEmbedding::try_new(options) {
             Ok(m) => m,
             Err(e) => raise_error!(

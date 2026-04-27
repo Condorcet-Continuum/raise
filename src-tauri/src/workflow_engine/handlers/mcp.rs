@@ -111,7 +111,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone())
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone(), None)
             .await
             .expect("Orchestrator setup failed");
 

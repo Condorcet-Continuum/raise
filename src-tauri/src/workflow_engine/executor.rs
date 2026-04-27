@@ -153,7 +153,8 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone()).await?;
+        let orch =
+            AiOrchestrator::new(ProjectModel::default(), &manager, storage.clone(), None).await?;
         let plugin_manager = SharedRef::new(PluginManager::new(&storage, None));
 
         let mut exec = WorkflowExecutor::new(SharedRef::new(AsyncMutex::new(orch)), plugin_manager);

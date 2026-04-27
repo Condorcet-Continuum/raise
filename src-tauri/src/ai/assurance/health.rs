@@ -166,8 +166,12 @@ impl RaiseHealthEngine {
 
         // 🎯 LA CORRECTION EST ICI : On définit bien 3 éléments séparés (Label, Dossier, Fichier)
         let critical_files = vec![
-            ("LLM_MODEL", "models", model_filename.as_str()),
-            ("EMB_WEIGHTS", "embeddings/minilm", "model.safetensors"),
+            ("LLM_MODEL", "ai-assets/models", model_filename.as_str()),
+            (
+                "EMB_WEIGHTS",
+                "ai-assets/embeddings/minilm",
+                "model.safetensors",
+            ),
         ];
 
         // 5. Délégation de la logique de fallback à l'AssetResolver !

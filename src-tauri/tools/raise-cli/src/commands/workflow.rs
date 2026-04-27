@@ -52,15 +52,21 @@ pub enum WorkflowCommands {
 async fn init_cli_engine(ctx: &CliContext) -> RaiseResult<WorkflowScheduler> {
     let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-    let orch =
-        match AiOrchestrator::new(ProjectModel::default(), &manager, ctx.storage.clone()).await {
-            Ok(instance) => instance,
-            Err(e) => raise_error!(
-                "ERR_AI_ORCHESTRATOR_INIT",
-                error = e,
-                context = json_value!({ "hint": "Vérifiez la VRAM et les points de montage." })
-            ),
-        };
+    let orch = match AiOrchestrator::new(
+        ProjectModel::default(),
+        &manager,
+        ctx.storage.clone(),
+        ctx.kernel.native_llm.clone(),
+    )
+    .await
+    {
+        Ok(instance) => instance,
+        Err(e) => raise_error!(
+            "ERR_AI_ORCHESTRATOR_INIT",
+            error = e,
+            context = json_value!({ "hint": "Vérifiez la VRAM et les points de montage." })
+        ),
+    };
 
     let pm = SharedRef::new(PluginManager::new(&ctx.storage, None));
     let executor = WorkflowExecutor::new(SharedRef::new(AsyncMutex::new(orch)), pm);

@@ -85,7 +85,13 @@ mod tests {
         );
 
         // 🎯 Rigueur : Match sur la création du client LLM
-        let llm = match LlmClient::new(&manager).await {
+        let llm = match LlmClient::new(
+            &manager,
+            sandbox.db.clone(),
+            Some(sandbox.shared_engine.clone()),
+        )
+        .await
+        {
             Ok(client) => client,
             Err(e) => panic!("Échec de l'initialisation du LlmClient : {:?}", e),
         };
@@ -129,7 +135,13 @@ mod tests {
             &sandbox.config.mount_points.system.db,
         );
 
-        let llm = match LlmClient::new(&manager).await {
+        let llm = match LlmClient::new(
+            &manager,
+            sandbox.db.clone(),
+            Some(sandbox.shared_engine.clone()),
+        )
+        .await
+        {
             Ok(client) => client,
             Err(e) => panic!("Échec LLM : {:?}", e),
         };

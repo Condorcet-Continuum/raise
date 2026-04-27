@@ -24,6 +24,7 @@ pub use crate::utils::core::{
     AsyncFuture,
     AsyncMutex,
     AsyncRwLock,
+    AsyncStaticCell,
     BufferedRead,
     CalendarDate,
     CalendarDuration,

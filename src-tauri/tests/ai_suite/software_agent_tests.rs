@@ -134,7 +134,6 @@ async fn test_software_agent_creates_component_end_to_end() -> RaiseResult<()> {
 #[cfg(test)]
 mod resilience_tests {
     use super::*;
-    use raise::ai::llm::client::LlmClient;
 
     /// 🎯 Test la résilience face à la résolution des partitions via Mount Points
     #[async_test]
@@ -153,7 +152,7 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_software_agent_missing_prompt_resilience() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await?;
+        let env = setup_test_env(LlmMode::Enabled).await?;
 
         // 🎯 FIX : Utilisation de domain_root
         let test_root = env.sandbox.domain_root.clone();
@@ -183,10 +182,7 @@ mod resilience_tests {
                 .expect("WM Engine bootstrap fail"),
         );
 
-        let llm_client = match env.client.clone() {
-            Some(c) => c,
-            None => LlmClient::new(&sys_mgr).await.expect("LlmClient fail"),
-        };
+        let llm_client = env.client.clone().expect("LlmClient requis");
 
         let ctx = AgentContext::new(
             "agent_broken_sw",

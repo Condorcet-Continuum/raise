@@ -4,7 +4,7 @@ use crate::ai::context::{
     conversation_manager::ConversationSession, memory_store::MemoryStore, rag::RagRetriever,
     retriever::SimpleRetriever,
 };
-use crate::ai::llm::client::{LlmBackend, LlmClient};
+use crate::ai::llm::client::{LlmBackend, LlmClient, LlmEngine};
 use crate::ai::nlp::parser::CommandType;
 use crate::ai::world_model::engine::WorldModelConfig;
 use crate::ai::world_model::{NeuroSymbolicEngine, WorldAction, WorldTrainer};
@@ -22,87 +22,79 @@ use crate::ai::agents::{dynamic_agent::DynamicAgent, Agent, AgentContext, AgentR
 pub struct AiOrchestrator {
     pub rag: RagRetriever,
     pub symbolic: SimpleRetriever,
-    pub llm: LlmClient,
+    pub llm_native: Option<SharedRef<AsyncMutex<dyn LlmEngine>>>,
+    pub llm_remote: LlmClient,
     pub session: ConversationSession,
     pub memory_store: MemoryStore,
     pub world_engine: SharedRef<NeuroSymbolicEngine>,
 
     pub space: String,
     pub db_name: String,
-    storage: Option<SharedRef<StorageEngine>>,
+    pub storage: SharedRef<StorageEngine>,
 }
 
 impl AiOrchestrator {
-    /// Initialise l'orchestrateur en résolvant les composants via les Mount Points système.
     pub async fn new(
         model: ProjectModel,
         manager: &CollectionsManager<'_>,
         storage: SharedRef<StorageEngine>,
+        native_llm: Option<SharedRef<AsyncMutex<dyn LlmEngine>>>,
     ) -> RaiseResult<Self> {
-        // 1. Initialisation des composants RAG et LLM (Gérés par leurs propres façades)
+        // 1. Initialisation des composants RAG (Utilise le NLP sur CPU désormais)
         let rag = RagRetriever::new(manager).await?;
         let symbolic = SimpleRetriever::new(model);
-        let llm = LlmClient::new(manager).await?;
+
+        // 2. Client LLM Distant (Fallback)
+        let llm_remote = LlmClient::new(manager, storage.clone(), native_llm.clone()).await?;
+
+        // 3. World Model (Neuro-Symbolique)
         let world_engine = match NeuroSymbolicEngine::bootstrap(manager).await {
             Ok(engine) => engine,
             Err(e) => {
                 user_warn!(
                     "WRN_WORLD_MODEL_LOAD_FAILED",
-                    json_value!({ "error": e.to_string(), "hint": "Modèle corrompu ou absent. Démarrage à froid." })
+                    json_value!({ "error": e.to_string(), "hint": "Démarrage avec un modèle vierge." })
                 );
-
-                // Récupération de la configuration (Zéro Dette)
                 let wm_settings = AppConfig::get_runtime_settings(
                     manager,
                     "ref:components:handle:ai_world_model",
                 )
                 .await?;
-                let wm_config: WorldModelConfig = match json::deserialize_from_value(wm_settings) {
-                    Ok(cfg) => cfg,
-                    Err(err) => raise_error!("ERR_WM_CONFIG_DESERIALIZE", error = err.to_string()),
-                };
-
-                // Initialisation d'un modèle vierge en mémoire
+                let wm_config: WorldModelConfig = json::deserialize_from_value(wm_settings)?;
                 NeuroSymbolicEngine::new_empty(wm_config)?
             }
         };
 
-        // 3. Initialisation du stockage de mémoire conversationnelle
-        let memory_store = match MemoryStore::new(manager).await {
-            Ok(ms) => ms,
-            Err(e) => raise_error!(
-                "ERR_CHAT_MEMORY_STORE_INIT",
-                error = e.to_string(),
-                context = json_value!({ "domain": manager.space })
-            ),
-        };
+        // 4. Mémoire conversationnelle
+        let memory_store = MemoryStore::new(manager).await?;
+        let session = memory_store.load_or_create(manager, "main_session").await?;
 
-        let session_id = "main_session";
-        let session = memory_store.load_or_create(manager, session_id).await?;
+        user_info!(
+            "MSG_ORCHESTRATOR_INIT_SUCCESS",
+            json_value!({
+                "native_llm_attached": native_llm.is_some(),
+                "space": manager.space
+            })
+        );
 
         Ok(Self {
             rag,
             symbolic,
-            llm,
+            llm_native: native_llm,
+            llm_remote,
             session,
             memory_store,
             world_engine: SharedRef::new(world_engine),
             space: manager.space.to_string(),
             db_name: manager.db.to_string(),
-            storage: Some(storage),
+            storage,
         })
     }
 
     /// Exécute un workflow multi-agents complet avec routage d'intention.
     pub async fn execute_workflow(&mut self, user_query: &str) -> RaiseResult<AgentResult> {
         let app_config = AppConfig::get();
-        let storage_arc = match self.storage.clone() {
-            Some(s) => s,
-            None => raise_error!(
-                "ERR_AGENT_STORAGE_MISSING",
-                error = "StorageEngine non injecté"
-            ),
-        };
+        let storage_arc = self.storage.clone();
 
         // Utilisation des Mount Points pour reconstruire le manager technique
         let _manager = CollectionsManager::new(
@@ -111,8 +103,8 @@ impl AiOrchestrator {
             &app_config.mount_points.system.db,
         );
 
-        // Classification de l'intention via LLM
-        let classifier = IntentClassifier::new(self.llm.clone());
+        //   Utilisation de llm_remote au lieu de l'ancien 'llm'
+        let classifier = IntentClassifier::new(self.llm_remote.clone());
         let mut current_intent = classifier.classify(user_query).await;
         let mut current_agent_urn = current_intent.recommended_agent_id().to_string();
 
@@ -148,7 +140,7 @@ impl AiOrchestrator {
                 &current_agent_urn,
                 &global_session_id,
                 storage_arc.clone(),
-                self.llm.clone(),
+                self.llm_remote.clone(), // 🎯 FIX 3 : Utilisation de llm_remote
                 self.world_engine.clone(),
                 domain_path.clone(),
                 dataset_path.clone(),
@@ -182,47 +174,43 @@ impl AiOrchestrator {
         })
     }
 
-    /// Interface "Ask" simplifiée pour le mode conversationnel.
+    /// Interface "Ask" optimisée : Priorité au Local (VRAM partagée) -> Fallback Cloud.
     pub async fn ask(&mut self, query: &str) -> RaiseResult<String> {
         self.session.add_user_message(query);
         let app_config = AppConfig::get();
-
-        let storage_arc = match &self.storage {
-            Some(s) => s,
-            None => raise_error!("ERR_STORAGE_MISSING"),
-        };
-
         let manager = CollectionsManager::new(
-            storage_arc.as_ref(),
+            self.storage.as_ref(), // 🎯 Fonctionne désormais sans problème car le stockage est obligatoire
             &app_config.mount_points.system.domain,
             &app_config.mount_points.system.db,
         );
 
-        // Recherche hybride RAG + Symbolique
-        let rag_ctx: String = self
+        // Récupération de contexte
+        let rag_ctx = self
             .rag
             .retrieve(&manager, query, 3)
             .await
             .unwrap_or_default();
-
         let arcadia_ctx = self.symbolic.retrieve_context(query);
 
-        let mut prompt = format!("Demande Utilisateur : {}\n\n", query);
-        if !rag_ctx.is_empty() {
-            prompt.push_str(&format!("Contexte RAG : {}\n", rag_ctx));
-        }
-        if !arcadia_ctx.contains("Aucun élément") {
-            prompt.push_str(&format!("Modèle Arcadia : {}\n", arcadia_ctx));
-        }
+        let prompt = format!(
+            "Contexte MBSE : {}\nContexte Doc : {}\nDemande : {}",
+            arcadia_ctx, rag_ctx, query
+        );
 
-        let response = self
-            .llm
-            .ask(
-                LlmBackend::LocalLlama,
-                "Tu es un expert système Arcadia RAISE.",
-                &prompt,
-            )
-            .await?;
+        // STRATÉGIE HYBRIDE
+        let response = if let Some(ref shared_llm) = self.llm_native {
+            let mut llm = shared_llm.lock().await;
+            llm.generate("Tu es un expert Arcadia.", &prompt, 512)
+                .await?
+        } else {
+            self.llm_remote
+                .ask(
+                    LlmBackend::GoogleGemini,
+                    "Tu es un expert Arcadia.",
+                    &prompt,
+                ) // 🎯 FIX 4 : OpenAI au lieu de OpenAi
+                .await?
+        };
 
         self.session.add_ai_message(&response);
         let _ = self
@@ -247,12 +235,10 @@ impl AiOrchestrator {
 
         let loss = trainer.train_step(state_before, WorldAction { intent }, state_after)?;
 
-        if let Some(storage_arc) = &self.storage {
-            let manager = CollectionsManager::new(storage_arc.as_ref(), &self.space, &self.db_name);
-            match self.world_engine.save(&manager).await {
-                Ok(_) => (),
-                Err(e) => user_error!("ERR_WM_SAVE_FAIL", json_value!({"error": e.to_string()})),
-            }
+        let manager = CollectionsManager::new(self.storage.as_ref(), &self.space, &self.db_name);
+        match self.world_engine.save(&manager).await {
+            Ok(_) => (),
+            Err(e) => user_error!("ERR_WM_SAVE_FAIL", json_value!({"error": e.to_string()})),
         }
 
         Ok(loss)
@@ -260,10 +246,8 @@ impl AiOrchestrator {
 
     pub async fn learn_document(&mut self, content: &str, source: &str) -> RaiseResult<usize> {
         let app_config = AppConfig::get();
-        let storage_arc = match &self.storage {
-            Some(s) => s,
-            None => raise_error!("ERR_STORAGE_MISSING"),
-        };
+        let storage_arc = self.storage.clone();
+
         let manager = CollectionsManager::new(
             storage_arc.as_ref(),
             &app_config.mount_points.system.domain,
@@ -275,10 +259,8 @@ impl AiOrchestrator {
     pub async fn clear_history(&mut self) -> RaiseResult<()> {
         self.session = ConversationSession::new(self.session.id.clone());
         let app_config = AppConfig::get();
-        let storage_arc = match &self.storage {
-            Some(s) => s,
-            None => raise_error!("ERR_STORAGE_MISSING"),
-        };
+        let storage_arc = self.storage.clone();
+
         let manager = CollectionsManager::new(
             storage_arc.as_ref(),
             &app_config.mount_points.system.domain,
@@ -330,9 +312,10 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // 1. TEST D'INITIALISATION RÉSILIENTE
+        // 1. TEST D'INITIALISATION RÉSILIENTE (🎯 FIX 5 : Ajout de None en 4ème argument)
         let mut orch =
-            AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone()).await?;
+            AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone(), None)
+                .await?;
         assert_eq!(orch.session.id, "main_session");
 
         // 2. TEST DE L'APPRENTISSAGE RAG (Persistance DB)
@@ -381,8 +364,9 @@ mod tests {
         fs::write_async(wm_dir.join("world_model.safetensors"), b"CORRUPTED_DATA").await?;
 
         // L'orchestrateur doit détecter l'erreur, logger un Warning, et s'initialiser avec un modèle vierge
-        let orch =
-            AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone()).await?;
+        // 🎯 FIX 5 : Ajout de None en 4ème argument
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone(), None)
+            .await?;
         assert!(orch.world_engine.config.vocab_size > 0);
 
         Ok(())

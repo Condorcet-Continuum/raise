@@ -148,6 +148,7 @@ pub use std::sync::RwLock as SyncRwLock;
 
 // --- Primitives Asynchrones (Non-bloquantes) ---
 pub use tokio::sync::Mutex as AsyncMutex;
+pub use tokio::sync::OnceCell as AsyncStaticCell;
 pub use tokio::sync::RwLock as AsyncRwLock;
 
 /// 🤖 IA NOTE : Builder asynchrone pour configurer et lancer un processus externe sans bloquer Tauri.

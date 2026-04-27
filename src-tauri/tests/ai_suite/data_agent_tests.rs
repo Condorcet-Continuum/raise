@@ -168,7 +168,6 @@ async fn test_data_agent_creates_class_and_enum() -> RaiseResult<()> {
 #[cfg(test)]
 mod resilience_tests {
     use super::*;
-    use raise::ai::llm::client::LlmClient;
 
     /// 🎯 Test la résilience face à la résolution des partitions système
     #[async_test]
@@ -187,7 +186,7 @@ mod resilience_tests {
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_data_agent_missing_prompt_resilience() -> RaiseResult<()> {
-        let env = setup_test_env(LlmMode::Disabled).await?;
+        let env = setup_test_env(LlmMode::Enabled).await?;
 
         // 🎯 FIX : Utilisation de domain_root
         let test_root = env.sandbox.domain_root.clone();
@@ -218,16 +217,11 @@ mod resilience_tests {
                 .expect("WM Engine bootstrap fail"),
         );
 
-        let llm_client = match env.client.clone() {
-            Some(client) => client,
-            None => LlmClient::new(&sys_mgr).await.expect("LlmClient fail"),
-        };
-
         let ctx = AgentContext::new(
             "agent_broken",
             "sess_resilience",
             env.sandbox.db.clone(), // 🎯 FIX : .db est déjà un SharedRef
-            llm_client,
+            env.client.clone().expect("LlmClient requis"),
             world_engine,
             test_root.clone(),
             test_root.join("dataset"),

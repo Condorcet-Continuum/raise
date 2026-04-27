@@ -150,7 +150,7 @@ mod tests {
         manager.upsert_document("digital_twin", sensor_doc).await?;
 
         // Création du contexte partagé pour l'outil
-        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone())
+        let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone(), None)
             .await
             .unwrap();
         let pm = SharedRef::new(PluginManager::new(&sandbox.db, None));
@@ -185,9 +185,14 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        let orch = AiOrchestrator::new(ProjectModel::default(), &sys_manager, sandbox.db.clone())
-            .await
-            .unwrap();
+        let orch = AiOrchestrator::new(
+            ProjectModel::default(),
+            &sys_manager,
+            sandbox.db.clone(),
+            None,
+        )
+        .await
+        .unwrap();
 
         // 🎯 On définit notre partition fantôme
         let manager = CollectionsManager::new(&sandbox.db, "ghost_partition", "void_db");
