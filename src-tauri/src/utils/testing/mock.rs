@@ -1295,25 +1295,33 @@ impl AgentDbSandbox {
         // 🎯 INITIALISATION / RÉCUPÉRATION DU MOTEUR PARTAGÉ
         let shared_engine = SHARED_LLM_ENGINE
             .get_or_try_init(|| async {
-                match NativeTensorEngine::new(&temp_manager).await {
-                    Ok(engine) => {
-                        let engine_trait: SharedRef<AsyncMutex<dyn LlmEngine>> = 
-                            SharedRef::new(AsyncMutex::new(engine));
-                        
-                        // 🎯 FIX : On précise explicitement le type d'erreur AppError
-                        Ok::<_, AppError>(engine_trait) 
-                    },
-                    Err(_) => {
-                        // Fallback CI : Si le moteur réel échoue (pas de GPU/Modèle)
-                        let mock = MockLlmEngine { 
-                            response: "Test unitaire validé avec succès".to_string() 
-                        };
-                        let engine_trait: SharedRef<AsyncMutex<dyn LlmEngine>> = 
-                            SharedRef::new(AsyncMutex::new(mock));
-                        
-                        // 🎯 FIX : Idem ici pour la cohérence
-                        Ok::<_, AppError>(engine_trait)
+                // 1. Détection de l'environnement GitHub Actions
+                let is_ci = std::env::var("GITHUB_ACTIONS").is_ok();
+
+                if is_ci {
+                    // 🎯 SUR GITHUB : On tente le moteur, sinon on Mock sans broncher
+                    match NativeTensorEngine::new(&temp_manager).await {
+                        Ok(engine) => {
+                            let engine_trait: SharedRef<AsyncMutex<dyn LlmEngine>> =
+                                SharedRef::new(AsyncMutex::new(engine));
+                            Ok::<_, AppError>(engine_trait)
+                        }
+                        Err(_) => {
+                            let mock = MockLlmEngine {
+                                response: "Test unitaire validé avec succès".to_string(),
+                            };
+                            let engine_trait: SharedRef<AsyncMutex<dyn LlmEngine>> =
+                                SharedRef::new(AsyncMutex::new(mock));
+                            Ok::<_, AppError>(engine_trait)
+                        }
                     }
+                } else {
+                    // 🎯 EN LOCAL : On veut que ça pète si le vrai moteur ne charge pas !
+                    // On ne catch pas l'erreur, on la laisse remonter.
+                    let engine = NativeTensorEngine::new(&temp_manager).await?;
+                    let engine_trait: SharedRef<AsyncMutex<dyn LlmEngine>> =
+                        SharedRef::new(AsyncMutex::new(engine));
+                    Ok::<_, AppError>(engine_trait)
                 }
             })
             .await?
