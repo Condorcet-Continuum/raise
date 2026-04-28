@@ -285,6 +285,7 @@ fn translate_select(
     Ok(Query {
         collection,
         filter,
+        rls_policy: None,
         sort,
         limit,
         offset,

@@ -5,6 +5,7 @@ pub mod optimizer;
 pub mod parser;
 pub mod sql;
 
+use crate::rules_engine::ast::Expr;
 use crate::utils::prelude::*;
 
 pub use executor::QueryEngine;
@@ -15,6 +16,10 @@ pub use executor::QueryEngine;
 pub struct Query {
     pub collection: String,
     pub filter: Option<QueryFilter>,
+
+    #[serde(skip_deserializing)]
+    pub rls_policy: Option<Expr>,
+
     pub sort: Option<Vec<SortField>>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -26,6 +31,7 @@ impl Query {
         Self {
             collection: collection.to_string(),
             filter: None,
+            rls_policy: None,
             sort: None,
             limit: None,
             offset: None,
@@ -113,6 +119,14 @@ impl Condition {
     pub fn matches(field: impl Into<String>, value: JsonValue) -> Self {
         Self::new(field, ComparisonOperator::Matches, value)
     }
+
+    pub fn is_a(field: impl Into<String>, value: JsonValue) -> Self {
+        Self::new(field, ComparisonOperator::IsA, value)
+    }
+
+    pub fn ast_rule(field: impl Into<String>, value: JsonValue) -> Self {
+        Self::new(field, ComparisonOperator::AstRule, value)
+    }
 }
 
 #[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
@@ -129,6 +143,8 @@ pub enum ComparisonOperator {
     EndsWith,
     Matches, // Regex
     Like,    // SQL Like
+    IsA,     // Vérification de l'ancrage ontologique (@type)
+    AstRule, // Injection d'un AST (Row-Level Security / RBAC)
 }
 
 #[derive(Debug, Clone, Serializable, Deserializable)]
@@ -174,6 +190,7 @@ mod tests {
                 operator: FilterOperator::And,
                 conditions: vec![Condition::eq("age", json_value!(18))],
             }),
+            rls_policy: None,
             sort: None,
             limit: Some(10),
             offset: None,

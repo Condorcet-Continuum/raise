@@ -108,6 +108,7 @@ async fn query_find_one_article_by_handle() -> RaiseResult<()> {
     let query = Query {
         collection: "articles".to_string(),
         filter: Some(filter),
+        rls_policy: None,
         sort: None,
         limit: Some(1),
         offset: None,
@@ -139,6 +140,7 @@ async fn query_find_many_with_sort_and_limit() -> RaiseResult<()> {
     let q = Query {
         collection: "articles".to_string(),
         filter: None,
+        rls_policy: None,
         sort: Some(vec![SortField {
             field: "handle".to_string(),
             order: SortOrder::Desc,

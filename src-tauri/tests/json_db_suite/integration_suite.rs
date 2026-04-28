@@ -111,6 +111,7 @@ async fn test_json_db_global_scenario() -> RaiseResult<()> {
                 operator: FilterOperator::And,
                 conditions: vec![Condition::eq("age", json_value!(25))],
             }),
+            rls_policy: None,
             sort: None,
             limit: None,
             offset: None,

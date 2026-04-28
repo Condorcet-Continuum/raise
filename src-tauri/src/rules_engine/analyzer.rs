@@ -47,7 +47,7 @@ impl Analyzer {
         }
 
         match expr {
-            Expr::Val(_) | Expr::Now => Ok(()),
+            Expr::Val(_) | Expr::Now | Expr::IsA(_) => Ok(()),
 
             Expr::Var(name) => {
                 let is_local = scope.iter().any(|local_var| {

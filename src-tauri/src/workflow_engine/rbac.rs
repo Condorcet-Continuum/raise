@@ -158,6 +158,76 @@ impl RbacEngine {
             _ => false,
         }
     }
+
+    /// ROW-LEVEL SECURITY (RLS) : Extrait la politique de sécurité sous forme d'AST
+    pub async fn get_read_policy_ast(
+        manager: &CollectionsManager<'_>,
+        mandator_id: &UniqueId,
+        target_resource: &str, // ex: "missions"
+    ) -> RaiseResult<Option<Expr>> {
+        let mandator_doc = manager
+            .get_document("mandators", &mandator_id.to_string())
+            .await?
+            .ok_or_else(|| build_error!("ERR_RBAC_MANDATOR_NOT_FOUND"))?;
+
+        let mandator: Mandator = json::deserialize_from_value(mandator_doc).unwrap();
+        if mandator.status != "ACTIVE" {
+            raise_error!("ERR_RBAC_MANDATOR_INACTIVE");
+        }
+
+        let mut allowed_asts = Vec::new();
+        let mut has_unconditional_access = false;
+
+        for role_id in &mandator.assigned_roles {
+            if let Ok(Some(role_doc)) = manager.get_document("roles", &role_id.to_string()).await {
+                let role: Role = json::deserialize_from_value(role_doc).unwrap();
+                if role.status != "ACTIVE" {
+                    continue;
+                }
+
+                for perm_id in &role.granted_permissions {
+                    if let Ok(Some(perm_doc)) = manager
+                        .get_document("permissions", &perm_id.to_string())
+                        .await
+                    {
+                        // On cherche spécifiquement les permissions de LECTURE sur la ressource demandée
+                        if perm_doc["resource"] == target_resource && perm_doc["action"] == "read" {
+                            if let Some(conditions_ast) = perm_doc.get("conditions") {
+                                if let Ok(expr) =
+                                    json::deserialize_from_value::<Expr>(conditions_ast.clone())
+                                {
+                                    allowed_asts.push(expr);
+                                }
+                            } else {
+                                // Une permission sans condition donne un accès absolu !
+                                has_unconditional_access = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Si l'utilisateur est un super-admin de cette ressource (accès inconditionnel)
+        if has_unconditional_access {
+            return Ok(None);
+        }
+
+        // S'il n'a aucune permission de lecture
+        if allowed_asts.is_empty() {
+            raise_error!(
+                "ERR_RBAC_ACCESS_DENIED",
+                context = json_value!({"resource": target_resource, "action": "read"})
+            );
+        }
+
+        // Fusion intelligente : S'il a plusieurs rôles, on les combine avec un OU
+        if allowed_asts.len() == 1 {
+            Ok(Some(allowed_asts.pop().unwrap()))
+        } else {
+            Ok(Some(Expr::Or(allowed_asts)))
+        }
+    }
 }
 
 // ============================================================================

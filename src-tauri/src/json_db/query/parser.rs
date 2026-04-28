@@ -218,6 +218,8 @@ pub fn parse_filter_from_json(value: &JsonValue) -> RaiseResult<QueryFilter> {
                 "endswith" => ComparisonOperator::EndsWith,
                 "like" => ComparisonOperator::Like,
                 "matches" => ComparisonOperator::Matches,
+                "isa" | "is_a" => ComparisonOperator::IsA,
+                "astrule" | "ast_rule" => ComparisonOperator::AstRule,
                 _ => {
                     raise_error!(
                         "ERR_QUERY_PARSE_OPERATOR",

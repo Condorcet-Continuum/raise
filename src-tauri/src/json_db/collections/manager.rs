@@ -93,7 +93,9 @@ impl<'a> CollectionsManager<'a> {
             .create_db_with_schema(schema_uri)
             .await
     }
-
+    pub async fn alter_db(&self, key: &str, value: JsonValue) -> RaiseResult<()> {
+        DdlHandler::new(self).alter_db(key, value).await
+    }
     pub async fn drop_db(&self) -> RaiseResult<bool> {
         DdlHandler::new(self).drop_db().await
     }
@@ -1188,16 +1190,16 @@ impl<'a> CollectionsManager<'a> {
         }
 
         // 3. 🛡️ FALLBACK CRITIQUE : Partition Système (Résilience Bootstrap)
-        if self.space != *sys_domain || self.db != *sys_db {
-            user_debug!(
-                "DB_GLOBAL_SEARCH_FALLBACK",
-                json_value!({"coll": collection, "target": id_or_handle})
-            );
-            // Ici, sys_mgr n'est plus une Option, donc get_document() fonctionne !
-            if let Ok(Some(doc)) = sys_mgr.get_document(collection, id_or_handle).await {
-                return Ok(Some((sys_domain.clone(), sys_db.clone(), doc)));
-            }
+        //if self.space != *sys_domain || self.db != *sys_db {
+        user_debug!(
+            "DB_GLOBAL_SEARCH_FALLBACK",
+            json_value!({"coll": collection, "target": id_or_handle})
+        );
+        // Ici, sys_mgr n'est plus une Option, donc get_document() fonctionne !
+        if let Ok(Some(doc)) = sys_mgr.get_document(collection, id_or_handle).await {
+            return Ok(Some((sys_domain.clone(), sys_db.clone(), doc)));
         }
+        //}
         Ok(None)
     }
 
@@ -1397,8 +1399,7 @@ mod tests {
 
         let expected_migration_uri = format!(
             "db://{}/{}/schemas/v1/db/migration.schema.json",
-            crate::utils::data::config::BOOTSTRAP_DOMAIN,
-            crate::utils::data::config::BOOTSTRAP_DB
+            manager.space, manager.db
         );
 
         assert_eq!(

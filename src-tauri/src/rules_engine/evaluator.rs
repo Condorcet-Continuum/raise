@@ -546,6 +546,29 @@ impl Evaluator {
                 }
             }
 
+            // --- Ontologie & Sémantique ---
+            Expr::IsA(class_name) => {
+                let mut is_match = false;
+
+                // On cherche l'identité sémantique injectée par ton schéma DDL
+                if let Some(t_val) = context.get("@type") {
+                    let check_match = |s: &str| -> bool {
+                        // Supporte la correspondance exacte ("Database")
+                        // ou avec namespace ("raise:Database" ou "https://raise.io/ontology/raise#Database")
+                        s == class_name
+                            || s.ends_with(&format!(":{}", class_name))
+                            || s.ends_with(&format!("#{}", class_name))
+                    };
+
+                    if let Some(type_str) = t_val.as_str() {
+                        is_match = check_match(type_str);
+                    } else if let Some(type_arr) = t_val.as_array() {
+                        is_match = type_arr.iter().filter_map(|v| v.as_str()).any(check_match);
+                    }
+                }
+
+                Ok(CowData::Owned(JsonValue::Bool(is_match)))
+            }
             // --- Dates ---
             Expr::Now => Ok(CowData::Owned(json_value!(UtcClock::now().to_rfc3339()))),
             Expr::DateAdd { date, days } => {
@@ -590,11 +613,66 @@ impl Evaluator {
                     );
                 }
             }
-            Expr::DateDiff { start: _, end: _ } => {
-                raise_error!(
-                    "ERR_NOT_IMPLEMENTED",
-                    error = "DateDiff n'est pas encore implémenté"
-                );
+            Expr::DateDiff { start, end } => {
+                // 1. Évaluation asynchrone des deux opérandes
+                let start_val = Box::pin(Self::evaluate(start, context, provider)).await?;
+                let end_val = Box::pin(Self::evaluate(end, context, provider)).await?;
+
+                // 2. Extraction stricte avec typage (Fail-Fast)
+                let s_str = match start_val.as_str() {
+                    Some(s) => s,
+                    None => raise_error!(
+                        "ERR_RULE_TYPE_MISMATCH",
+                        context = json_value!({
+                            "target": "start_date",
+                            "expected": "string",
+                            "received": start_val,
+                            "hint": "La date de début doit être une chaîne de caractères."
+                        })
+                    ),
+                };
+
+                let e_str = match end_val.as_str() {
+                    Some(s) => s,
+                    None => raise_error!(
+                        "ERR_RULE_TYPE_MISMATCH",
+                        context = json_value!({
+                            "target": "end_date",
+                            "expected": "string",
+                            "received": end_val,
+                            "hint": "La date de fin doit être une chaîne de caractères."
+                        })
+                    ),
+                };
+
+                // 3. 🎯 Résolution "Zéro Dette" : Support RFC3339 et YYYY-MM-DD
+                if let (Ok(s_dt), Ok(e_dt)) = (
+                    s_str.parse::<LocalTimestamp>(),
+                    e_str.parse::<LocalTimestamp>(),
+                ) {
+                    // Soustraction de timestamps complets
+                    let diff = e_dt - s_dt;
+                    Ok(CowData::Owned(json_value!(diff.num_days())))
+                } else if let (Ok(s_nd), Ok(e_nd)) = (
+                    CalendarDate::parse_from_str(s_str, "%Y-%m-%d"),
+                    CalendarDate::parse_from_str(e_str, "%Y-%m-%d"),
+                ) {
+                    // Soustraction de dates calendaires simples
+                    let diff = e_nd - s_nd;
+                    Ok(CowData::Owned(json_value!(diff.num_days())))
+                } else {
+                    raise_error!(
+                        "ERR_RULE_INVALID_DATE",
+                        error = format!(
+                            "Format de date invalide pour DateDiff : start='{}', end='{}'",
+                            s_str, e_str
+                        ),
+                        context = json_value!({
+                            "action": "evaluate_date_diff",
+                            "hint": "Les dates doivent être au format RFC3339 ou YYYY-MM-DD."
+                        })
+                    );
+                }
             }
             // --- Lookup (ASYNCHRONE) ---
             Expr::Lookup {
@@ -796,6 +874,46 @@ mod tests {
         };
 
         assert_eq!(res.as_str(), Some("Alice"));
+        Ok(())
+    }
+
+    #[async_test]
+    async fn test_datediff_evaluation() -> RaiseResult<()> {
+        let provider = NoOpDataProvider;
+        let ctx = json_value!({});
+
+        // Test : "2026-04-30" - "2026-04-28" = 2 jours
+        let expr = Expr::DateDiff {
+            start: Box::new(Expr::Val(json_value!("2026-04-28"))),
+            end: Box::new(Expr::Val(json_value!("2026-04-30"))),
+        };
+
+        let res = Evaluator::evaluate(&expr, &ctx, &provider).await?;
+        assert_eq!(res.as_i64(), Some(2));
+        Ok(())
+    }
+
+    #[async_test]
+    async fn test_isa_ontological_evaluation() -> RaiseResult<()> {
+        let provider = NoOpDataProvider;
+
+        // Un document typique de ta DB (avec son ancrage injecté)
+        let ctx = json_value!({
+            "@context": "db://_system/master/_ontologies/handle/onto-raise-core",
+            "@type": ["raise:Database", "pa:PhysicalComponent"],
+            "handle": "master"
+        });
+
+        // 1. Règle : Est-ce une Database ? (Doit être VRAI)
+        let expr_true = Expr::IsA("Database".to_string());
+        let res_true = Evaluator::evaluate(&expr_true, &ctx, &provider).await?;
+        assert_eq!(res_true.as_bool(), Some(true));
+
+        // 2. Règle : Est-ce un User ? (Doit être FAUX)
+        let expr_false = Expr::IsA("User".to_string());
+        let res_false = Evaluator::evaluate(&expr_false, &ctx, &provider).await?;
+        assert_eq!(res_false.as_bool(), Some(false));
+
         Ok(())
     }
 }

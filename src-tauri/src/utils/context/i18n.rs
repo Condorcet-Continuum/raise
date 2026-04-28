@@ -71,8 +71,14 @@ pub struct Translator {
     pub current_lang: String,
 }
 
+impl Default for Translator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Translator {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             translations: UnorderedMap::new(),
             current_lang: "en".to_string(),
@@ -88,7 +94,7 @@ impl Translator {
         // Instanciation du manager sur la partition système pour lancer la recherche
         let manager = CollectionsManager::new(storage, sys_domain, sys_db);
 
-        // 🎯 FIX MAGIQUE : Recherche globale pilotée par le catalogue
+        // Recherche globale pilotée par le catalogue
         let result = match manager.find_global_document("locales", lang).await {
             Ok(res) => res,
             Err(e) => raise_error!(

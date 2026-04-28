@@ -39,10 +39,14 @@ impl<'a> SchemaBootstrapper<'a> {
         // 1. Matérialisation des schémas
         self.materialize_local_schemas(tx).await?;
 
-        // 2. Création des dossiers physiques des collections
+        // 2. Ré-ancrage des schémas vers la base locale
+        let bios_prefix = Self::get_bios_uri_prefix();
+        self.reanchor_collection_schemas(tx, &bios_prefix).await?;
+
+        // 3. Création des dossiers physiques des collections
         self.sync_physical_collections(tx).await?;
 
-        // 3. Amorçage de la migration
+        // 4. Amorçage de la migration
         self.init_migration_log(tx, initial_version, "Bootstrap de l'architecture RAISE")
             .await?;
 
@@ -131,15 +135,8 @@ impl<'a> SchemaBootstrapper<'a> {
             };
 
         for (col_name, schema_uri) in collections_to_sync {
-            let col_path = self.manager.storage.config.db_collection_path(
-                &self.manager.space,
-                &self.manager.db,
-                &col_name,
-            );
-            if !fs::exists_async(&col_path).await {
-                ddl.create_collection(tx, &col_name, &schema_uri).await?;
-                created_count += 1;
-            }
+            ddl.create_collection(tx, &col_name, &schema_uri).await?;
+            created_count += 1;
         }
         Ok(created_count)
     }
@@ -153,12 +150,13 @@ impl<'a> SchemaBootstrapper<'a> {
         let mgr = self.manager;
         let col_name = "_migrations";
 
+        // 🎯 L'URI pointe bien vers la base locale (Étape précédente)
         let migration_schema_uri = format!(
-            "{}/schemas/v2/db/migration.schema.json",
-            Self::get_bios_uri_prefix()
+            "db://{}/{}/schemas/v2/system/db/migration.schema.json",
+            mgr.space, mgr.db
         );
 
-        // Si la collection n'existe pas dans le jeton, on la crée
+        // 1. Si la collection n'existe pas dans le jeton, on la crée
         if tx
             .document
             .get("collections")
@@ -169,35 +167,66 @@ impl<'a> SchemaBootstrapper<'a> {
             ddl.create_collection(tx, col_name, &migration_schema_uri)
                 .await?;
         }
-        let col_path = mgr
-            .storage
-            .config
-            .db_collection_path(&mgr.space, &mgr.db, col_name);
-        let doc_path = col_path.join(format!("{}.json", version));
 
-        if !fs::exists_async(&doc_path).await {
+        // 2. SÉCURITÉ : On vérifie si une migration a déjà été amorcée dans l'index
+        // Cela empêche de générer des UUIDs en boucle si on relance la fonction
+        let has_migrations = tx.document["collections"]
+            .get(col_name)
+            .and_then(|c| c.get("items"))
+            .and_then(|i| i.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false);
+
+        if !has_migrations {
+            // 3. 🎯 GÉNÉRATION : Nouvel UUID v4 et définition du handle
+            let new_id = crate::utils::prelude::UniqueId::new_v4().to_string();
+
+            // 4. Le nom du fichier DOIT correspondre à l'ID physique
+            let filename = format!("{}.json", new_id);
+            let col_path = mgr
+                .storage
+                .config
+                .db_collection_path(&mgr.space, &mgr.db, col_name);
+            let doc_path = col_path.join(&filename);
+            let now = UtcClock::now().to_rfc3339();
+            // 5. Création du document aligné avec ton nouveau schéma
             let migration_doc = json_value!({
-                "_id": version,
                 "$schema": migration_schema_uri,
+                "_id": new_id,
+                "handle": version,
+                "name": {
+                    "fr": format!("Migration {}", version),
+                    "en": format!("Migration {}", version)
+                },
+                "status": "active",
                 "version": version,
                 "description": description,
-                "applied_at": UtcClock::now().to_rfc3339()
+                "applied_at": now.clone(),
+
+                // Champs requis par l'héritage de base.schema.json
+                "_created_at": now.clone(),
+                "_updated_at": now.clone(),
+                "_p2p": {
+                    "revision": 1,
+                    "origin_node": "system_bootstrapper",
+                    "last_sync_at": now
+                }
             });
 
-            // 1. Écriture PHYSIQUE du document (sans passer par insert_raw)
+            // Écriture PHYSIQUE du document
             fs::write_json_atomic_async(&doc_path, &migration_doc).await?;
 
-            // 2. Inscription LOGIQUE dans le Jeton
+            // Inscription LOGIQUE dans le Jeton
             if let Some(col_obj) = tx.document["collections"]
                 .get_mut(col_name)
                 .and_then(|c| c.as_object_mut())
             {
                 if let Some(items) = col_obj.get_mut("items").and_then(|i| i.as_array_mut()) {
-                    let filename = format!("{}.json", version);
                     items.push(json_value!({ "file": filename }));
                 }
             }
         }
+
         Ok(())
     }
 
@@ -269,10 +298,51 @@ impl<'a> SchemaBootstrapper<'a> {
         }
         Ok(count)
     }
+
+    /// Réécrit les URIs des schémas pour qu'ils pointent vers la base de données locale
+    pub async fn reanchor_collection_schemas(
+        &self,
+        tx: &mut SystemIndexTx<'_>,
+        source_prefix: &str,
+    ) -> RaiseResult<usize> {
+        let mut updated_count = 0;
+        let local_prefix = format!("db://{}/{}", self.manager.space, self.manager.db);
+
+        if let Some(cols) = tx
+            .document
+            .get_mut("collections")
+            .and_then(|c| c.as_object_mut())
+        {
+            for (col_name, col_data) in cols.iter_mut() {
+                // On vérifie si l'URI pointe vers le BIOS (bootstrap)
+                let current_uri = col_data
+                    .get("schema")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+
+                if current_uri.starts_with(source_prefix) {
+                    let new_uri = current_uri.replace(source_prefix, &local_prefix);
+
+                    // 🎯 On met à jour le Jeton en RAM
+                    col_data["schema"] = json_value!(&new_uri);
+                    updated_count += 1;
+
+                    user_debug!(
+                        "SCHEMA_REANCHORED",
+                        json_value!({
+                            "collection": col_name,
+                            "new_uri": new_uri
+                        })
+                    );
+                }
+            }
+        }
+        Ok(updated_count)
+    }
 }
 
 // ============================================================================
-// TESTS UNITAIRES (Robustesse garantie)
+// TESTS UNITAIRES
 // ============================================================================
 
 #[cfg(test)]

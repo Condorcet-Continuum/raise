@@ -98,7 +98,7 @@ impl QueryOptimizer {
     fn estimate_selectivity(&self, condition: &Condition) -> u32 {
         match condition.operator {
             // Très sélectif (Egalité stricte)
-            ComparisonOperator::Eq => self.config.cost_eq,
+            ComparisonOperator::Eq | ComparisonOperator::IsA => self.config.cost_eq,
             ComparisonOperator::In => 2,
 
             // Sélectivité moyenne (Range)
@@ -114,7 +114,7 @@ impl QueryOptimizer {
             ComparisonOperator::Contains
             | ComparisonOperator::Like
             | ComparisonOperator::Matches => self.config.cost_expensive,
-
+            ComparisonOperator::AstRule => self.config.cost_expensive,
             // Le moins sélectif (souvent tout sauf une valeur)
             ComparisonOperator::Ne => 100,
         }

@@ -8,6 +8,8 @@ use crate::json_db::query::{
     optimizer::QueryOptimizer, ComparisonOperator, Condition, FilterOperator, Projection, Query,
     QueryFilter, QueryResult, SortField, SortOrder,
 };
+use crate::rules_engine::ast::Expr;
+use crate::rules_engine::evaluator::{Evaluator, NoOpDataProvider};
 
 // --- TRAIT ASYNC POUR L'INDEX ---
 pub type BoxFuture<'a, T> = Pinned<Box<dyn AsyncFuture<Output = T> + Send + 'a>>;
@@ -168,10 +170,33 @@ impl<'a> QueryEngine<'a> {
             documents.append(&mut batch_docs);
         }
 
-        // 2. FILTRAGE (Post-chargement)
-        if let Some(filter) = &query.filter {
-            documents.retain(|doc| self.evaluate_filter(doc, filter, &query.collection));
+        // 2. FILTRAGE HYBRIDE (Sécurité + Métier) ASYNC
+        let mut filtered_docs = Vec::new();
+        for doc in documents {
+            // 🛡️ A. ROW-LEVEL SECURITY (RLS)
+            // L'utilisateur n'a pas le droit de voir ce document si l'AST le refuse
+            if let Some(rls_expr) = &query.rls_policy {
+                let provider = NoOpDataProvider; // Peut être remplacé par RealDataProvider si Lookup nécessaire
+                let is_allowed = match Evaluator::evaluate(rls_expr, &doc, &provider).await {
+                    Ok(res) => res.as_bool().unwrap_or(false),
+                    Err(_) => false, // Default Deny en cas d'erreur d'évaluation
+                };
+
+                if !is_allowed {
+                    continue; // 🚫 Document filtré silencieusement par la sécurité
+                }
+            }
+
+            // 🔍 B. FILTRAGE MÉTIER (Ce que l'utilisateur a demandé dans sa requête)
+            if let Some(filter) = &query.filter {
+                if !self.evaluate_filter(&doc, filter, &query.collection).await {
+                    continue; // Document qui ne correspond pas à la recherche
+                }
+            }
+
+            filtered_docs.push(doc);
         }
+        documents = filtered_docs;
 
         // 3. TRI, PAGINATION, PROJECTION
         if let Some(sort_fields) = &query.sort {
@@ -249,30 +274,41 @@ impl<'a> QueryEngine<'a> {
     }
 
     // --- LOGIQUE MÉTIER ET NORMALISATION ---
-
-    fn evaluate_filter(
+    async fn evaluate_filter(
         &self,
         document: &JsonValue,
         filter: &QueryFilter,
         collection_name: &str,
     ) -> bool {
         match filter.operator {
-            FilterOperator::And => filter
-                .conditions
-                .iter()
-                .all(|c| self.evaluate_condition(document, c, collection_name)),
-            FilterOperator::Or => filter
-                .conditions
-                .iter()
-                .any(|c| self.evaluate_condition(document, c, collection_name)),
-            FilterOperator::Not => !filter
-                .conditions
-                .iter()
-                .any(|c| self.evaluate_condition(document, c, collection_name)),
+            FilterOperator::And => {
+                for c in &filter.conditions {
+                    if !self.evaluate_condition(document, c, collection_name).await {
+                        return false; // Échoue dès la première condition fausse (Fail-Fast)
+                    }
+                }
+                true
+            }
+            FilterOperator::Or => {
+                for c in &filter.conditions {
+                    if self.evaluate_condition(document, c, collection_name).await {
+                        return true; // Succès dès la première condition vraie
+                    }
+                }
+                false
+            }
+            FilterOperator::Not => {
+                for c in &filter.conditions {
+                    if self.evaluate_condition(document, c, collection_name).await {
+                        return false; // Échoue si au moins une condition est vraie
+                    }
+                }
+                true
+            }
         }
     }
 
-    fn evaluate_condition(
+    async fn evaluate_condition(
         &self,
         document: &JsonValue,
         condition: &Condition,
@@ -353,6 +389,43 @@ impl<'a> QueryEngine<'a> {
                             self.match_like_smart(&item.to_string(), &clean_cond_val)
                         }
                     });
+                }
+                false
+            }
+
+            ComparisonOperator::IsA => {
+                let class_name = clean_cond_val.as_str().unwrap_or("");
+                let mut is_match = false;
+
+                if let Some(t_val) = document.get("@type") {
+                    let check_match = |s: &str| -> bool {
+                        s == class_name
+                            || s.ends_with(&format!(":{}", class_name))
+                            || s.ends_with(&format!("#{}", class_name))
+                    };
+
+                    if let Some(type_str) = t_val.as_str() {
+                        is_match = check_match(type_str);
+                    } else if let Some(type_arr) = t_val.as_array() {
+                        is_match = type_arr.iter().filter_map(|v| v.as_str()).any(check_match);
+                    }
+                }
+                is_match
+            }
+
+            ComparisonOperator::AstRule => {
+                if let Ok(expr) =
+                    crate::utils::data::json::deserialize_from_value::<Expr>(clean_cond_val)
+                {
+                    let provider = NoOpDataProvider;
+
+                    // On attend l'évaluation
+                    if let Ok(res) = Evaluator::evaluate(&expr, document, &provider).await {
+                        // On extrait le booléen proprement depuis le CowData
+                        if let Some(b) = res.as_bool() {
+                            return b;
+                        }
+                    }
                 }
                 false
             }
@@ -738,6 +811,7 @@ mod tests {
                 operator: FilterOperator::And,
                 conditions: vec![Condition::eq("role", json_value!("admin"))],
             }),
+            rls_policy: None,
             sort: None,
             limit: None,
             offset: None,
@@ -784,6 +858,7 @@ mod tests {
                     json_value!("rust"),
                 )],
             }),
+            rls_policy: None,
             sort: None,
             limit: None,
             offset: None,
@@ -833,6 +908,7 @@ mod tests {
                 operator: FilterOperator::And,
                 conditions: vec![Condition::eq("role", json_value!("admin"))],
             }),
+            rls_policy: None,
             sort: None,
             limit: None,
             offset: None,
@@ -859,13 +935,160 @@ mod tests {
 
         let doc = json_value!({ "age": 25, "tags": ["a", "b"] });
 
-        assert!(engine.evaluate_condition(&doc, &Condition::gt("age", json_value!(20)), "col"));
-        assert!(!engine.evaluate_condition(&doc, &Condition::lt("age", json_value!(20)), "col"));
-        assert!(engine.evaluate_condition(
-            &doc,
-            &Condition::contains("tags", json_value!("a")),
-            "col"
-        ));
+        assert!(
+            engine
+                .evaluate_condition(&doc, &Condition::gt("age", json_value!(20)), "col")
+                .await
+        );
+        assert!(
+            !engine
+                .evaluate_condition(&doc, &Condition::lt("age", json_value!(20)), "col")
+                .await
+        );
+        assert!(
+            engine
+                .evaluate_condition(&doc, &Condition::contains("tags", json_value!("a")), "col")
+                .await
+        );
+
+        Ok(())
+    }
+
+    #[async_test]
+    async fn test_query_engine_rls_policy_strict() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
+        );
+        DbSandbox::mock_db(&manager).await?;
+        let engine = QueryEngine::new(&manager);
+
+        manager
+            .create_collection(
+                "missions",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+
+        // On insère 3 documents avec des niveaux de sensibilité différents
+        manager
+            .insert_raw(
+                "missions",
+                &json_value!({"_id": "1", "status": "PUBLIC", "owner": "bob"}),
+            )
+            .await?;
+        manager
+            .insert_raw(
+                "missions",
+                &json_value!({"_id": "2", "status": "CONFIDENTIAL", "owner": "alice"}),
+            )
+            .await?;
+        manager
+            .insert_raw(
+                "missions",
+                &json_value!({"_id": "3", "status": "SECRET", "owner": "eve"}),
+            )
+            .await?;
+
+        // 🛡️ AST RLS : L'utilisateur n'a le droit de voir QUE les missions publiques
+        let rls_ast = Expr::Eq(vec![
+            Expr::Var("status".into()),
+            Expr::Val(json_value!("PUBLIC")),
+        ]);
+
+        let query = Query {
+            collection: "missions".into(),
+            filter: None,              // ⚠️ L'utilisateur demande TOUT (SELECT *)
+            rls_policy: Some(rls_ast), // 🛡️ Mais le backend injecte la restriction
+            sort: None,
+            limit: None,
+            offset: None,
+            projection: None,
+        };
+
+        let result = engine.execute_query(query).await?;
+
+        // VÉRIFICATION : Le moteur doit avoir silencieusement filtré les documents confidentiels
+        assert_eq!(
+            result.total_count, 1,
+            "Le RLS doit bloquer les documents non-PUBLIC"
+        );
+        assert_eq!(result.documents[0]["_id"], "1");
+
+        Ok(())
+    }
+
+    #[async_test]
+    async fn test_query_engine_rls_policy_combined_roles() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &sandbox.config.mount_points.system.domain,
+            &sandbox.config.mount_points.system.db,
+        );
+        DbSandbox::mock_db(&manager).await?;
+        let engine = QueryEngine::new(&manager);
+
+        manager
+            .create_collection(
+                "missions",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+
+        manager
+            .insert_raw(
+                "missions",
+                &json_value!({"_id": "1", "status": "PUBLIC", "owner": "bob"}),
+            )
+            .await?;
+        manager
+            .insert_raw(
+                "missions",
+                &json_value!({"_id": "2", "status": "CONFIDENTIAL", "owner": "alice"}),
+            )
+            .await?;
+        manager
+            .insert_raw(
+                "missions",
+                &json_value!({"_id": "3", "status": "SECRET", "owner": "eve"}),
+            )
+            .await?;
+
+        // 🛡️ AST RLS : Fusion de rôles (ex: Le rôle "Visiteur" OU le rôle "Propriétaire")
+        // L'utilisateur peut voir la mission SI elle est PUBLIC *OU* SI l'owner c'est "alice"
+        let rls_ast = Expr::Or(vec![
+            Expr::Eq(vec![
+                Expr::Var("status".into()),
+                Expr::Val(json_value!("PUBLIC")),
+            ]),
+            Expr::Eq(vec![
+                Expr::Var("owner".into()),
+                Expr::Val(json_value!("alice")),
+            ]),
+        ]);
+
+        let mut query = Query::new("missions");
+        query.rls_policy = Some(rls_ast);
+
+        let result = engine.execute_query(query).await?;
+
+        // VÉRIFICATION : Alice doit voir la mission publique (1) ET sa mission confidentielle (2)
+        assert_eq!(
+            result.total_count, 2,
+            "Le RLS doit autoriser PUBLIC et les missions d'Alice"
+        );
+
+        let ids: Vec<&str> = result
+            .documents
+            .iter()
+            .filter_map(|d| d["_id"].as_str())
+            .collect();
+        assert!(ids.contains(&"1"));
+        assert!(ids.contains(&"2"));
+        assert!(!ids.contains(&"3"), "La mission d'Eve doit rester bloquée");
 
         Ok(())
     }

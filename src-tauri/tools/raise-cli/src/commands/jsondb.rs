@@ -84,6 +84,12 @@ pub enum JsondbCommands {
         )]
         db_role: String,
     },
+    AlterDb {
+        #[arg(long, help = "La clé à modifier (ex: @context, db_role)")]
+        key: String,
+        #[arg(long, help = "La valeur JSON (ou @chemin/vers/fichier.json)")]
+        value: String,
+    },
     DropDb {
         #[arg(long, short = 'f')]
         force: bool,
@@ -287,6 +293,12 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
                 );
             }
         }
+        JsondbCommands::AlterDb { key, value } => {
+            let val = parse_data(&value).await?;
+            col_mgr.alter_db(&key, val).await?;
+            user_success!("JSONDB_ALTER_SUCCESS", json_value!({ "key": key }));
+        }
+
         JsondbCommands::DropDb { force } => {
             if !force {
                 user_error!(
@@ -484,7 +496,10 @@ async fn parse_data(input: &str) -> RaiseResult<JsonValue> {
     if let Some(path_str) = input.strip_prefix('@') {
         fs::read_json_async(Path::new(path_str)).await
     } else {
-        Ok(json::deserialize_from_str(input)?)
+        match json::deserialize_from_str(input) {
+            Ok(v) => Ok(v),
+            Err(_) => Ok(JsonValue::String(input.to_string())),
+        }
     }
 }
 

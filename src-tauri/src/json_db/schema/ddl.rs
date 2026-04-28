@@ -46,6 +46,7 @@ impl<'a> DdlHandler<'a> {
             tx.document["handle"] = json_value!(format!("{}_{}", mgr.space, mgr.db));
             tx.document["name"] = json_value!(format!("{}_{}", mgr.space, mgr.db));
             tx.document["space"] = json_value!(mgr.space.clone());
+            tx.document["domain"] = json_value!(mgr.space.clone());
             tx.document["database"] = json_value!(mgr.db.clone());
         }
 
@@ -98,6 +99,37 @@ impl<'a> DdlHandler<'a> {
         Ok(created)
     }
 
+    /// 🛠️ Modifie une propriété de l'index système (_system.json) pour maintenir la cohérence.
+    pub async fn alter_db(&self, key: &str, mut value: JsonValue) -> RaiseResult<()> {
+        let mgr = self.manager;
+
+        if let Some(s) = value.as_str() {
+            if s.starts_with("ref:") || s.starts_with("db://") {
+                // resolve_single_reference garantit la récupération de l'_id
+                if let Ok(resolved_id) = mgr.resolve_single_reference(s).await {
+                    value = json_value!(resolved_id);
+                }
+            }
+        }
+
+        let lock = mgr.storage.get_index_lock(&mgr.space, &mgr.db)?;
+        let guard = lock.lock().await;
+        let mut tx = mgr.begin_system_tx(&guard).await?;
+
+        tx.document[key] = value.clone();
+        tx.commit().await?;
+
+        user_debug!(
+            "DB_PROPERTY_ALTERED",
+            json_value!({
+                "db": mgr.db,
+                "key": key,
+                "stored_id": value
+            })
+        );
+
+        Ok(())
+    }
     pub async fn drop_db(&self) -> RaiseResult<bool> {
         let mgr = self.manager;
         let db_path = mgr.storage.config.db_root(&mgr.space, &mgr.db);
@@ -461,17 +493,18 @@ impl<'a> DdlHandler<'a> {
 
         // 1. Logique physique (Dossiers et Méta-fichiers)
         let final_schema_uri = self.build_schema_uri(schema_uri).await;
+
         let col_path = mgr
             .storage
             .config
             .db_collection_path(&mgr.space, &mgr.db, name);
 
         if !col_path.exists() {
-            crate::utils::io::fs::ensure_dir_async(&col_path).await?;
+            fs::ensure_dir_async(&col_path).await?;
         }
 
         let meta = json_value!({ "schema": final_schema_uri, "indexes": [] });
-        crate::utils::io::fs::write_json_atomic_async(&col_path.join("_meta.json"), &meta).await?;
+        fs::write_json_atomic_async(&col_path.join("_meta.json"), &meta).await?;
 
         // 2. Logique logique (Modification directe dans la RAM du Jeton)
         if tx.document.get("collections").is_none() {
@@ -479,10 +512,14 @@ impl<'a> DdlHandler<'a> {
         }
 
         if let Some(cols) = tx.document["collections"].as_object_mut() {
-            cols.insert(
-                name.to_string(),
-                json_value!({ "schema": final_schema_uri, "items": [] }),
-            );
+            if let Some(existing_col) = cols.get_mut(name).and_then(|c| c.as_object_mut()) {
+                existing_col.insert("schema".to_string(), json_value!(&final_schema_uri));
+            } else {
+                cols.insert(
+                    name.to_string(),
+                    json_value!({ "schema": final_schema_uri, "items": [] ,"x_indexes": []}),
+                );
+            }
         }
 
         // 🎯 Terminé ! Pas de lock, pas de save_system_index. Le Jeton s'en chargera à la fin.
@@ -502,16 +539,6 @@ impl<'a> DdlHandler<'a> {
     }
 
     pub async fn build_schema_uri(&self, schema_name: &str) -> String {
-        if schema_name.contains("/schemas/v1/") || schema_name.contains("/schemas/v2/") {
-            let parts: Vec<&str> = schema_name.split("/schemas/").collect();
-            if parts.len() == 2 {
-                let config = AppConfig::get();
-                return format!(
-                    "db://{}/{}/schemas/{}",
-                    config.mount_points.system.domain, config.mount_points.system.db, parts[1]
-                );
-            }
-        }
         if schema_name.starts_with("db://") || schema_name.starts_with("http") {
             return schema_name.to_string();
         }
@@ -648,7 +675,7 @@ impl<'a> DdlHandler<'a> {
             );
         }
 
-        // 5. On commit la transaction (sauvegarde sur disque et libération du verrou)
+        // 6. On commit la transaction (sauvegarde sur disque et libération du verrou)
         tx.commit().await?;
 
         Ok(())
@@ -915,7 +942,7 @@ mod tests {
             &sandbox.config.mount_points.system.domain,
             &sandbox.config.mount_points.system.db,
         );
-        let generic_schema = "db://_system/bootstrap/schemas/v1/db/generic.schema.json";
+        let generic_schema: &str = "db://_system/bootstrap/schemas/v1/db/generic.schema.json";
         sys_mgr.create_collection("domains", generic_schema).await?;
         sys_mgr
             .create_collection("databases", generic_schema)
@@ -971,6 +998,60 @@ mod tests {
         assert!(
             db_doc_after.is_none(),
             "La base de données doit être désinscrite du catalogue système"
+        );
+
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_ddl_alter_db_properties() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let mgr = CollectionsManager::new(&sandbox.storage, "test_alter", "db_alter");
+        let ddl = DdlHandler::new(&mgr);
+
+        // 1. Initialisation de la base avec le schéma v1 garanti par la Sandbox
+        let schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/index.schema.json",
+            crate::utils::data::config::BOOTSTRAP_DOMAIN,
+            crate::utils::data::config::BOOTSTRAP_DB
+        );
+        let created = ddl.create_db_with_schema(&schema_uri).await?;
+        assert!(created, "La base de données doit être créée");
+
+        // 🎯 FIX : Création explicite de la collection _ontologies avant l'insertion
+        mgr.create_collection(
+            "_ontologies",
+            "db://_system/_system/schemas/v1/db/generic.schema.json",
+        )
+        .await?;
+
+        // 2. On insère une ontologie cible avec un ID physique fixe
+        let expected_uuid = "uuid-physique-core-001";
+        mgr.insert_raw(
+            "_ontologies",
+            &json_value!({
+                "_id": expected_uuid,
+                "handle": "onto-raise-core",
+                "name": "Ontologie RAISE Core"
+            }),
+        )
+        .await?;
+
+        // 3. ACTION : On tente de modifier @context avec un SmartLink (chaîne brute)
+        let input_link = "ref:_ontologies:handle:onto-raise-core";
+        ddl.alter_db("@context", json_value!(input_link)).await?;
+
+        // 4. VERIFICATION DE LA CHIRURGIE
+        let index = mgr.load_index().await?;
+        let stored_val = index.get("@context").and_then(|v| v.as_str());
+
+        assert_eq!(
+            stored_val,
+            Some(expected_uuid),
+            "ECHEC CRITIQUE : L'index contient encore la référence '{}' au lieu de l'ID physique '{}'",
+            stored_val.unwrap_or("null"),
+            expected_uuid
         );
 
         Ok(())
