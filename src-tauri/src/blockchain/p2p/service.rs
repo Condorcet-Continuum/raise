@@ -82,35 +82,32 @@ pub fn spawn_p2p_service(
                     if let P2pSwarmEvent::Behaviour(MentisBehaviorEvent::Gossipsub(P2pGossipSub::Event::Message { message, .. })) = event {
 
                         if let Ok(net_msg) = json::deserialize_from_bytes::<MentisNetMessage>(&message.data) {
-
                             match net_msg {
                                 // A. Réception d'une nouvelle mutation sur le réseau
-                                MentisNetMessage::AnnounceCommit(commit) => {
+                                MentisNetMessage::AnnounceCommit(commit)if commit.verify() => {
                                     // Vérification cryptographique absolue du bloc
-                                    if commit.verify() {
-                                        let mut pending = pending_state.lock().await;
-                                        let mut engine = consensus_state.lock().await;
+                                    let mut pending = pending_state.lock().await;
+                                    let mut engine = consensus_state.lock().await;
 
-                                        // On stocke le gros bloc dans le buffer et on ouvre le vote
-                                        pending.insert(commit.clone());
-                                        engine.register_commit(&commit);
+                                    // On stocke le gros bloc dans le buffer et on ouvre le vote
+                                    pending.insert(commit.clone());
+                                    engine.register_commit(&commit);
 
-                                        // On génère la signature de notre vote (Mock adapté au verify_signature)
-                                        let mut sig = vec![0xDE, 0xAD, 0xBE, 0xEF];
-                                        sig.push((commit.id.len() % 255) as u8);
+                                    // On génère la signature de notre vote (Mock adapté au verify_signature)
+                                    let mut sig = vec![0xDE, 0xAD, 0xBE, 0xEF];
+                                    sig.push((commit.id.len() % 255) as u8);
 
-                                        let my_vote = Vote {
-                                            commit_id: commit.id.clone(),
-                                            voter: local_peer_id.clone(),
-                                            signature: sig,
-                                        };
+                                    let my_vote = Vote {
+                                        commit_id: commit.id.clone(),
+                                        voter: local_peer_id.clone(),
+                                        signature: sig,
+                                    };
 
-                                        // On publie notre vote à tous les pairs
-                                        if let Ok(vote_data) = json::serialize_to_bytes(&MentisNetMessage::SubmitVote(my_vote)) {
-                                            // 🎯 FIX: Utilisation de l'alias P2pGossipSub
-                                            let topic = P2pGossipSub::IdentTopic::new("mentis-consensus");
-                                            let _ = swarm.behaviour_mut().gossipsub.publish(topic, vote_data);
-                                        }
+                                    // On publie notre vote à tous les pairs
+                                    if let Ok(vote_data) = json::serialize_to_bytes(&MentisNetMessage::SubmitVote(my_vote)) {
+                                        // 🎯 FIX: Utilisation de l'alias P2pGossipSub
+                                        let topic = P2pGossipSub::IdentTopic::new("mentis-consensus");
+                                        let _ = swarm.behaviour_mut().gossipsub.publish(topic, vote_data);
                                     }
                                 },
                                 // B. Réception du vote d'un autre nœud
