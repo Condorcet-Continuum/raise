@@ -29,7 +29,11 @@ pub mod http_types {
 }
 
 pub mod p2p_types {
-    // --- Identité et Adressage ---
+    pub use libp2p::swarm::NetworkBehaviour as InternalDerive;
+    pub use libp2p::{
+        connection_limits, gossipsub, identity, kad, request_response, StreamProtocol,
+    }; // Pour la macro
+       // --- Identité et Adressage ---
     /// 🤖 IA NOTE : Identité cryptographique locale du nœud (génération de clés Ed25519).
     pub use libp2p::identity as P2pIdentity;
     /// 🤖 IA NOTE : Format d'adresse réseau composable (ex: "/ip4/127.0.0.1/tcp/8080").
@@ -38,6 +42,8 @@ pub mod p2p_types {
     pub use libp2p::PeerId as P2pPeerId;
 
     // --- Cœur du Réseau (Swarm & Transport) ---
+    /// 🤖 IA NOTE : Énumération de tous les événements produits par le Swarm (connexions, messages, erreurs).
+    pub use libp2p::swarm::SwarmEvent as P2pSwarmEvent; // 🎯 L'ajout indispensable !
     /// 🤖 IA NOTE : Le gestionnaire central du réseau P2P qui orchestre les connexions.
     pub use libp2p::Swarm as P2pSwarm;
     /// 🤖 IA NOTE : Constructeur pour initialiser le P2pSwarm.
@@ -56,8 +62,17 @@ pub mod p2p_types {
     pub use libp2p::request_response as P2pRequestResponse;
     /// 🤖 IA NOTE : Trait requis pour combiner plusieurs comportements réseau (Kad, Gossip).
     pub use libp2p::swarm::NetworkBehaviour as P2pNetworkBehaviourTrait;
+    /// 🤖 IA NOTE : Alias pour la macro de dérivation du comportement réseau.
+    /// Permet d'implémenter automatiquement la gestion des événements P2P.
+    pub use libp2p::swarm::NetworkBehaviour as P2pBehaviour; // 🎯 L'alias sémantique strict !
     /// 🤖 IA NOTE : Identifiant de protocole réseau (ex: "/raise/core/1.0.0").
     pub use libp2p::StreamProtocol as P2pStreamProtocol;
+
+    // --- Sécurité & Multiplexage ---
+    /// 🤖 IA NOTE : Protocole de chiffrement pour sécuriser le tunnel P2P (Noise).
+    pub use libp2p::noise as P2pNoise;
+    /// 🤖 IA NOTE : Protocole de multiplexage pour faire passer plusieurs flux sur une seule connexion TCP (Yamux).
+    pub use libp2p::yamux as P2pYamux;
 }
 
 // --- Exports Métier Haut Niveau ---

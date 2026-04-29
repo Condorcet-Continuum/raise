@@ -1,6 +1,6 @@
 // FICHIER : src-tauri/src/blockchain/bridge/mod.rs
 
-use crate::blockchain::storage::commit::ArcadiaCommit;
+use crate::blockchain::storage::commit::MentisCommit;
 use crate::json_db::storage::StorageEngine;
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 use crate::AppState;
@@ -34,26 +34,24 @@ impl<'a> ArcadiaBridge<'a> {
     }
 
     /// Traite un nouveau commit blockchain : Persistance physique (DB) puis synchronisation logique (Modèle).
-    pub async fn process_new_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
-        // 1. Persistance physique dans la JSON-DB avec Match strict
-        match self.db_adapter.apply_commit(commit).await {
-            Ok(_) => (),
-            Err(e) => raise_error!(
-                "ERR_BRIDGE_DB_PERSISTENCE_FAILED",
-                error = e.to_string(),
-                context = json_value!({ "commit_id": commit.id })
-            ),
+    pub async fn process_new_commit(&self, commit: &MentisCommit) -> RaiseResult<()> {
+        // 1. Persistance physique garantie (ACID via TransactionManager)
+        self.db_adapter.apply_commit(commit).await?;
+
+        // 2. Synchronisation logique dans le ProjectModel (Mémoire)
+        // 🎯 FIX MACRO : On respecte la signature ($key, $context)
+        if let Err(e) = self.model_sync.sync_commit(commit).await {
+            user_error!(
+                "ERR_BRIDGE_RAM_SYNC_FAILED",
+                json_value!({
+                    "commit_id": commit.id,
+                    "technical_error": e.to_string(),
+                    "hint": "La DB est à jour, mais la mémoire est désynchronisée. Un rechargement de l'UI peut être nécessaire."
+                })
+            );
         }
 
-        // 2. Synchronisation logique dans le ProjectModel
-        match self.model_sync.sync_commit(commit).await {
-            Ok(_) => Ok(()),
-            Err(e) => raise_error!(
-                "ERR_BRIDGE_MODEL_SYNC_FAILED",
-                error = e.to_string(),
-                context = json_value!({ "commit_id": commit.id })
-            ),
-        }
+        Ok(())
     }
 }
 
@@ -64,36 +62,26 @@ impl<'a> ArcadiaBridge<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
+    use crate::blockchain::storage::commit::{MentisCommit, Mutation, MutationOp};
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::model_engine::types::ProjectModel;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::model_engine::types::{ArcadiaElement, ProjectModel};
+    use crate::utils::testing::DbSandbox;
 
     /// Test existant : Cycle complet Blockchain -> DB -> Mémoire
     #[async_test]
     async fn test_bridge_full_cycle_logic() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
+        let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
 
         // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
         let sys_mgr = CollectionsManager::new(
-            &sandbox.db,
+            &sandbox.storage,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
 
         // A. Création du schéma générique via URI dynamique
-        let _ = sys_mgr.create_collection("schemas", "").await;
-        sys_mgr
-            .insert_raw(
-                "schemas",
-                &json_value!({
-                    "_id": "v1/db/generic.schema.json",
-                    "type": "jsonschema",
-                    "content": {}
-                }),
-            )
-            .await?;
+        DbSandbox::mock_db(&sys_mgr).await?;
 
         let schema_uri = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
@@ -102,28 +90,36 @@ mod tests {
 
         // B. On crée les collections cibles
         sys_mgr.create_collection("components", &schema_uri).await?;
-        sys_mgr
-            .create_collection("system_elements", &schema_uri)
-            .await?;
 
         let app_state = AppState {
             model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
         };
 
-        let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);
+        let bridge = ArcadiaBridge::new(&sandbox.storage, &app_state);
+
+        // 🎯 FIX PAYLOAD : On utilise la même technique robuste que dans model_sync.rs
+        let default_element = ArcadiaElement::default();
+        let mut payload =
+            json::serialize_to_value(&default_element).expect("Sérialisation échouée");
+
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("id".to_string(), json_value!("urn:sa:radar-01"));
+            obj.insert("@id".to_string(), json_value!("urn:sa:radar-01"));
+
+            obj.insert("kind".to_string(), json_value!("SystemComponent"));
+            obj.insert("@type".to_string(), json_value!("SystemComponent"));
+            obj.insert("type".to_string(), json_value!("SystemComponent"));
+
+            obj.insert("name".to_string(), json_value!("Radar System"));
+        }
 
         let mutation = Mutation {
             element_id: "urn:sa:radar-01".into(),
             operation: MutationOp::Create,
-            payload: json_value!({
-                "id": "urn:sa:radar-01",
-                "@type": "SystemComponent",
-                "type": "SystemComponent",
-                "name": "Radar System"
-            }),
+            payload,
         };
 
-        let commit = ArcadiaCommit {
+        let commit = MentisCommit {
             id: "tx_123".into(),
             parent_hash: None,
             author: "dev".into(),
@@ -154,15 +150,15 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience face à un domaine système invalide (Mount Point Error)
     #[async_test]
     async fn test_bridge_resilience_on_invalid_mount_point() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
+        let sandbox = DbSandbox::new().await?;
         let app_state = AppState {
             model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
         };
 
         // Simulation d'une configuration corrompue (Domaine inexistant)
-        let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);
+        let bridge = ArcadiaBridge::new(&sandbox.storage, &app_state);
 
-        let commit = ArcadiaCommit {
+        let commit = MentisCommit {
             id: "tx_fail".into(),
             parent_hash: None,
             author: "tester".into(),
@@ -181,12 +177,12 @@ mod tests {
 
     #[async_test]
     async fn test_bridge_is_ready() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
+        let sandbox = DbSandbox::new().await?;
         let app_state = AppState {
             model: SharedRef::new(AsyncMutex::new(ProjectModel::default())),
         };
 
-        let bridge = ArcadiaBridge::new(&sandbox.db, &app_state);
+        let bridge = ArcadiaBridge::new(&sandbox.storage, &app_state);
         assert!(bridge.model_sync.is_ready());
         Ok(())
     }

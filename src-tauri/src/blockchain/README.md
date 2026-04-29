@@ -65,7 +65,7 @@ pub struct FabricConfig {
     /// Nom du channel Fabric (ex: "raise-channel").
     pub channel: String,
 
-    /// Nom du chaincode par défaut (ex: "arcadia-chaincode").
+    /// Nom du chaincode par défaut (ex: "Mentis-chaincode").
     pub chaincode: String,
 }
 
@@ -152,7 +152,6 @@ sequenceDiagram
 Ce fichier `mod.rs` est la fondation. Voici les fonctionnalités prévues dans les sous-modules (`fabric/` et `vpn/`) :
 
 - [ ] **Fabric** : Parsing du `connection_profile` (YAML) pour extraire les certificats TLS.
-- [ ] **Fabric** : Implémentation réelle de `submit_transaction` via gRPC (tonic).
 - [ ] **VPN** : Parsing de la sortie de la commande `innernet` pour récupérer l'IP réelle et les pairs connectés.
 - [ ] **State** : Ajout d'un `FabricState` similaire au `InnernetState` pour mettre en cache la connexion gRPC.
 

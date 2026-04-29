@@ -145,7 +145,7 @@ impl WhisperEngine {
 
         let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
         unsafe {
-            std::ptr::copy_nonoverlapping(
+            memory_copy_fast(
                 mel_bytes.as_ptr() as *const f32,
                 mel_filters.as_mut_ptr(),
                 mel_filters.len(),

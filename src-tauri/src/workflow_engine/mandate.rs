@@ -427,8 +427,7 @@ mod tests {
                     ast: Some(json_value!({ "not_an_operator": 123 })),
                 }]
             },
-            // 🎯 FIX : Un JSON brut 100% conforme pour tester la désérialisation
-            ..serde_json::from_str(r#"{"handle":"test","name":"Test","meta":{"mandator_id":"00000000-0000-0000-0000-000000000000","status":"ACTIVE","version":"1.0"},"governance":{"strategy":"SAFETY_FIRST","condorcetWeights":{}},"hardLogic":{"vetos":[]},"observability":{"heartbeatMs":100}}"#).unwrap()
+            ..json::deserialize_from_str(r#"{"handle":"test","name":"Test","meta":{"mandator_id":"00000000-0000-0000-0000-000000000000","status":"ACTIVE","version":"1.0"},"governance":{"strategy":"SAFETY_FIRST","condorcetWeights":{}},"hardLogic":{"vetos":[]},"observability":{"heartbeatMs":100}}"#).unwrap()
         };
 
         let results = mandate.analyze_vetos();

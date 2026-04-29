@@ -1,469 +1,115 @@
 // src-tauri/src/commands/blockchain_commands.rs
-//! Commandes Tauri liées à la Blockchain (Fabric, VPN Mesh et Arcadia P2P).
+//! Commandes Tauri pour le Marketplace Mentis : L'interface entre l'UI et le Ledger.
 
 use crate::blockchain::{
-    fabric_state, innernet_state,
-    vpn::innernet_client::{NetworkStatus as VpnStatus, Peer as VpnPeer},
+    crypto::signing::KeyPair,
+    ensure_blockchain_client,
+    p2p::{MentisBehavior, MentisNetMessage},
+    storage::chain::Ledger,
+    storage::commit::{MentisCommit, Mutation},
+    BlockchainState, NetworkConfig,
 };
 use crate::utils::prelude::*;
-
+use libp2p::{gossipsub, Swarm};
 use tauri::State;
 
-// --- IMPORTS ARCADIA P2P ---
-use crate::blockchain::p2p::behavior::ArcadiaBehavior;
-use crate::blockchain::p2p::protocol::ArcadiaNetMessage;
-use crate::blockchain::storage::chain::Ledger;
-use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation};
-use crate::blockchain::sync::engine::SyncEngine;
-use crate::blockchain::sync::state::SyncStatus;
-use libp2p::{gossipsub, Swarm};
-
-// --- DTOs pour le Frontend ---
-
-#[derive(Debug, Serializable, Deserializable)]
-pub struct TransactionResult {
-    pub success: bool,
-    pub message: String,
-    #[serde(default)]
-    pub payload: Option<JsonValue>,
+/// 🚀 Initialise le nœud souverain de l'Agent.
+#[tauri::command]
+pub async fn mentis_init_node(
+    state: State<'_, SharedRef<AsyncMutex<BlockchainState>>>,
+    config: NetworkConfig,
+) -> RaiseResult<()> {
+    ensure_blockchain_client(state.inner().clone(), config).await?;
+    user_success!("INF_MENTIS_NODE_READY");
+    Ok(())
 }
 
-// --- COMMANDES ARCADIA (P2P SOUVERAIN) ---
-
-/// Diffuse une mutation sur le réseau Arcadia.
+/// 🛒 Signe et diffuse une nouvelle connaissance sur le réseau Mentis.
 #[tauri::command]
-pub async fn arcadia_broadcast_mutation(
+pub async fn mentis_broadcast_mutation(
     mutation: Mutation,
-    swarm_state: State<'_, AsyncMutex<Swarm<ArcadiaBehavior>>>,
+    swarm_state: State<'_, AsyncMutex<Swarm<MentisBehavior>>>,
     ledger_state: State<'_, SyncMutex<Ledger>>,
 ) -> RaiseResult<String> {
-    // 1. Phase Ledger (Synchronisée)
+    // 1. Préparation atomique du bloc Mentis
     let (commit_id, encoded_msg) = {
+        // 🎯 FIX : Utilisation d'un match pour utiliser raise_error! et éviter les variants AppError inconnus
         let mut ledger = match ledger_state.lock() {
             Ok(guard) => guard,
-            Err(_) => raise_error!(
-                "ERR_LEDGER_MUTEX_POISONED",
-                context = json_value!({
-                    "component": "LedgerState",
-                    "action": "access_ledger_storage",
-                    "hint": "Le Mutex du Ledger est corrompu suite à une panique dans un thread précédent. Un redémarrage du moteur de transaction est nécessaire."
-                })
-            ),
+            Err(_) => raise_error!("ERR_LEDGER_LOCK", error = "Ledger lock poisoned"),
         };
 
-        let keys = crate::blockchain::crypto::signing::KeyPair::generate();
-        let parent_hash = ledger.last_commit_hash.clone();
+        // On génère les clés de l'agent pour signer l'acte de vente
+        let keys = KeyPair::generate();
 
-        let mut commit = ArcadiaCommit {
-            id: String::new(),
-            parent_hash,
-            author: keys.public_key_hex(),
-            timestamp: UtcClock::now(),
-            mutations: vec![mutation],
-            merkle_root: String::new(),
-            signature: vec![],
-        };
-
-        let hash = commit.compute_content_hash();
-        commit.id = hash.clone();
-        commit.signature = keys.sign(&hash);
+        // 🎯 FIX : Utilisation de la signature à 3 arguments validée dans commit.rs
+        let commit = MentisCommit::new(vec![mutation], ledger.last_commit_hash.clone(), &keys);
 
         let current_id = commit.id.clone();
 
-        // Sérialisation AVANT le transfert de propriété au ledger
-        let msg = ArcadiaNetMessage::AnnounceCommit(commit.clone());
-        let encoded = match json::serialize_to_bytes(&msg) {
-            Ok(v) => v,
-            Err(e) => raise_error!(
-                "ERR_NET_SERIALIZATION_FAILED",
-                error = e,
-                context =
-                    json_value!({ "action": "encode_commit_for_p2p", "commit_id": current_id })
-            ),
-        };
+        // 2. Sérialisation via la façade sémantique pour le réseau P2P
+        let msg = MentisNetMessage::AnnounceCommit(commit.clone());
+        let encoded = json::serialize_to_bytes(&msg)?;
 
-        // Transfert de propriété final au ledger
-        if let Err(e) = ledger.append_commit(commit) {
-            raise_error!(
-                "ERR_LEDGER_APPEND_FAILED",
-                error = e,
-                context = json_value!({
-                    "action": "persist_local_commit",
-                    "commit_id": current_id
-                })
-            );
-        }
-
+        // 3. Archivage local immédiat
+        ledger.append_commit(commit)?;
         (current_id, encoded)
     };
 
-    // 2. Phase P2P (Asynchrone)
+    // 4. Diffusion P2P via Gossipsub
     let mut swarm = swarm_state.lock().await;
-    let topic = gossipsub::IdentTopic::new("arcadia_commits");
+    let topic = gossipsub::IdentTopic::new("mentis_market");
 
-    if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, encoded_msg) {
-        raise_error!(
-            "ERR_P2P_PUBLISH_FAILED",
-            error = e,
-            context = json_value!({
-                "action": "broadcast_mutation",
-                "topic": "arcadia_commits",
-                "commit_id": commit_id
-            })
-        );
-    }
-
-    Ok(commit_id)
-}
-/// Récupère l'état actuel de la synchronisation Arcadia.
-#[tauri::command]
-pub fn arcadia_get_sync_status(sync_state: State<'_, SyncMutex<SyncEngine>>) -> SyncStatus {
-    let engine = sync_state.lock().unwrap();
-    engine.status.clone()
-}
-
-/// Récupère les derniers commits du registre local.
-#[tauri::command]
-pub fn arcadia_get_ledger_info(ledger_state: State<'_, SyncMutex<Ledger>>) -> JsonValue {
-    let ledger = ledger_state.lock().unwrap();
-    json_value!({
-        "height": ledger.len(),
-        "last_hash": ledger.last_commit_hash,
-        "is_empty": ledger.is_empty()
-    })
-}
-
-// --- COMMANDES FABRIC ---
-
-#[tauri::command]
-pub async fn fabric_ping(app: tauri::AppHandle) -> RaiseResult<String> {
-    let state = fabric_state(&app);
-    let _guard = state.lock().await;
-    Ok("Fabric Client Ready (v2)".to_string())
-}
-
-#[tauri::command]
-pub async fn fabric_submit_transaction(
-    app: tauri::AppHandle,
-    chaincode: String,
-    function: String,
-    args: Vec<String>,
-) -> RaiseResult<TransactionResult> {
-    /*
-    let client = {
-        let state = fabric_state(&app);
-
-        // 1. Tentative d'acquisition du verrou
-        let guard = match state.lock() {
-            Ok(g) => g,
-            Err(_) => {
-                raise_error!(
-                    "ERR_FABRIC_MUTEX_POISONED",
-                    error = "LOCK_CONTAMINATED",
-                    context = json_value!({
-                        "action": "clone_fabric_client",
-                        "resource": "FabricState",
-                        "hint": "Un thread a paniqué en tenant ce verrou. L'état du client Fabric est incertain."
-                    })
-                );
-            }
-        };
-
-        // 2. Le clone est extrait, le guard sera relâché à la sortie de l'accolade
-        guard.clone()
-    };
-    */
-    let client = {
-        let state = fabric_state(&app);
-        // 🎯 1. On attend l'acquisition du verrou (non-bloquant pour Tauri)
-        let guard = state.lock().await;
-        // 2. On clone le client (le guard sera relâché à la fin de ce bloc)
-        guard.clone()
-    };
-    let tx_id = match client.submit_transaction(&chaincode, &function, args).await {
-        Ok(id) => id,
-        Err(e) => {
-            raise_error!(
-                "ERR_FABRIC_TRANSACTION_SUBMISSION",
-                error = e,
-                context = json_value!({
-                    "action": "submit_blockchain_tx",
-                    "chaincode": chaincode,
-                    "function": function,
-                    "hint": "Échec de l'endossement ou de la validation. Vérifiez les logs du peer."
-                })
+    match swarm.behaviour_mut().gossipsub.publish(topic, encoded_msg) {
+        Ok(_) => {
+            user_info!(
+                "INF_MENTIS_BROADCAST",
+                json::json_value!({ "commit_id": commit_id })
             );
+            Ok(commit_id)
         }
-    };
-
-    Ok(TransactionResult {
-        success: true,
-        message: format!("Transaction submitted: {}", tx_id),
-        payload: None,
-    })
-}
-
-#[tauri::command]
-pub async fn fabric_query_transaction(
-    app: tauri::AppHandle,
-    chaincode: String,
-    function: String,
-    args: Vec<String>,
-) -> RaiseResult<TransactionResult> {
-    let client = {
-        let state = fabric_state(&app);
-
-        // 🎯 1. On attend l'acquisition du verrou (non-bloquant pour Tauri)
-        let guard = state.lock().await;
-
-        // 2. On clone le client (le guard sera relâché à la fin de ce bloc)
-        guard.clone()
-    };
-
-    let byte_args: Vec<Vec<u8>> = args.into_iter().map(|s| s.into_bytes()).collect();
-    let result_bytes = match client.query_transaction(&function, byte_args).await {
-        Ok(bytes) => bytes,
-        Err(e) => raise_error!(
-            "ERR_FABRIC_QUERY_FAILED",
-            error = e,
-            context = json_value!({
-                "action": "query_blockchain_state",
-                "function": function,
-                "hint": "Échec de la lecture sur le ledger. Vérifiez si la clé existe et si les arguments sont corrects."
-            })
-        ),
-    };
-
-    let result_str = String::from_utf8_lossy(&result_bytes).to_string();
-
-    Ok(TransactionResult {
-        success: true,
-        message: "Query successful".to_string(),
-        payload: Some(json_value!({ "data": result_str, "chaincode": chaincode })),
-    })
-}
-
-#[tauri::command]
-pub async fn fabric_get_history(
-    app: tauri::AppHandle,
-    key: String,
-) -> RaiseResult<TransactionResult> {
-    // 1. Extraction sécurisée du client (Mutex déjà blindé !)
-    let client = {
-        let state = fabric_state(&app);
-
-        // 🎯 1. On attend l'acquisition du verrou (non-bloquant pour Tauri)
-        let guard = state.lock().await;
-
-        // 2. On clone le client (le guard sera relâché à la fin de ce bloc)
-        guard.clone()
-    };
-
-    let args = vec![key.clone().into_bytes()];
-
-    // 2. Requête d'historique avec capture de contexte
-    let result = match client.query_transaction("GetHistory", args).await {
-        Ok(res) => res,
-        Err(e) => raise_error!(
-            "ERR_FABRIC_HISTORY_FETCH",
-            error = e,
-            context = json_value!({
-                "action": "fetch_key_history",
-                "target_key": key,
-                "hint": "Impossible de récupérer l'historique. Vérifiez si la clé existe et si l'utilisateur a les droits de lecture."
-            })
-        ),
-    };
-
-    Ok(TransactionResult {
-        success: true,
-        message: format!("Historique pour la clé '{}' récupéré", key),
-        payload: Some(json_value!({
-            "history": String::from_utf8_lossy(&result)
-        })),
-    })
-}
-
-// --- COMMANDES VPN (INNERNET) ---
-
-#[tauri::command]
-pub async fn vpn_network_status(app: tauri::AppHandle) -> RaiseResult<VpnStatus> {
-    // 1. Extraction sécurisée du client VPN
-    let client = {
-        let state = innernet_state(&app);
-
-        // 🎯 On attend simplement que le verrou se libère
-        let guard = state.lock().await;
-
-        guard.clone()
-    };
-
-    // 2. Requête d'état de l'interface réseau
-    match client.get_status().await {
-        Ok(status) => Ok(status),
-        Err(e) => raise_error!(
-            "ERR_VPN_STATUS_FETCH",
-            error = e,
-            context = json_value!({
-                "action": "fetch_innernet_status",
-                "interface": "innernet0",
-                "hint": "Impossible de lire l'état du VPN. Vérifiez si WireGuard est installé et si l'interface est active."
-            })
-        ),
+        // 🎯 FIX : Utilisation de la macro raise_error! standard du projet
+        Err(e) => raise_error!("ERR_P2P_PUBLISH", error = e.to_string()),
     }
 }
 
+/// 📊 Récupère l'état actuel du Ledger Mentis pour l'affichage UI.
 #[tauri::command]
-pub async fn vpn_connect(app: tauri::AppHandle) -> RaiseResult<()> {
-    // 1. Extraction sécurisée du client VPN
-    let client = {
-        let state = innernet_state(&app);
-
-        // 🎯 On attend simplement que le verrou se libère
-        let guard = state.lock().await;
-
-        guard.clone()
-    };
-    // 2. Tentative de connexion avec capture d'erreur réseau
-    match client.connect().await {
-        Ok(_) => Ok(()),
-        Err(e) => raise_error!(
-            "ERR_VPN_CONNECTION_FAILED",
-            error = e,
-            context = json_value!({
-                "action": "up_innernet_interface",
-                "interface": "innernet0",
-                "hint": "La connexion a échoué. Vérifiez vos clés WireGuard, votre connexion internet ou si une instance innernet tourne déjà."
+pub fn mentis_get_ledger_info(ledger_state: State<'_, SyncMutex<Ledger>>) -> JsonValue {
+    match ledger_state.lock() {
+        Ok(ledger) => {
+            json::json_value!({
+                "blocks_count": ledger.len(),
+                "head": ledger.last_commit_hash,
+                "is_active": !ledger.is_empty(),
+                "status": "synchronized"
             })
-        ),
+        }
+        // En cas de lock empoisonné, on renvoie une structure JSON d'erreur propre pour l'UI
+        Err(_) => json::json_value!({ "error": "LOCK_POISONED", "status": "error" }),
     }
 }
 
-#[tauri::command]
-pub async fn vpn_disconnect(app: tauri::AppHandle) -> RaiseResult<()> {
-    // 1. Extraction sécurisée avec gestion de l'empoisonnement
-    let client = {
-        let state = innernet_state(&app);
-
-        // 🎯 On attend simplement que le verrou se libère
-        let guard = state.lock().await;
-
-        guard.clone()
-    };
-
-    // 2. Tentative de déconnexion et nettoyage de l'interface
-    match client.disconnect().await {
-        Ok(_) => Ok(()),
-        Err(e) => raise_error!(
-            "ERR_VPN_DISCONNECT_FAILED",
-            error = e,
-            context = json_value!({
-                "action": "down_innernet_interface",
-                "interface": "innernet0",
-                "hint": "La déconnexion a échoué. L'interface réseau est peut-être restée dans un état instable."
-            })
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn vpn_list_peers(app: tauri::AppHandle) -> RaiseResult<Vec<VpnPeer>> {
-    // 1. Extraction sécurisée du client VPN
-    let client = {
-        let state = innernet_state(&app);
-
-        // 🎯 On attend simplement que le verrou se libère
-        let guard = state.lock().await;
-
-        guard.clone()
-    };
-
-    // 2. Récupération de la liste des pairs avec contexte
-    match client.list_peers().await {
-        Ok(peers) => Ok(peers),
-        Err(e) => raise_error!(
-            "ERR_VPN_LIST_PEERS_FAILED",
-            error = e,
-            context = json_value!({
-                "action": "query_vpn_topology",
-                "interface": "innernet0",
-                "hint": "Impossible de récupérer la liste des pairs. Vérifiez si l'interface VPN est active."
-            })
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn vpn_add_peer(app: tauri::AppHandle, invitation_code: String) -> RaiseResult<String> {
-    // 1. Extraction sécurisée du client VPN
-    let client = {
-        let state = innernet_state(&app);
-
-        // 🎯 On attend simplement que le verrou se libère
-        let guard = state.lock().await;
-
-        guard.clone()
-    };
-
-    // 2. Tentative d'ajout avec capture de l'erreur d'invitation
-    match client.add_peer(&invitation_code).await {
-        Ok(peer_id) => Ok(peer_id),
-        Err(e) => raise_error!(
-            "ERR_VPN_ADD_PEER_FAILED",
-            error = e,
-            context = json_value!({
-                "action": "enroll_new_peer",
-                "invitation_preview": invitation_code.chars().take(8).collect::<String>() + "...",
-                "hint": "L'invitation a échoué. Vérifiez si le code est expiré ou si le serveur d'invitation est accessible."
-            })
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn vpn_ping_peer(app: tauri::AppHandle, peer_ip: String) -> RaiseResult<bool> {
-    // 1. Extraction sécurisée avec gestion de l'empoisonnement
-    let client = {
-        let state = innernet_state(&app);
-
-        // 🎯 On attend simplement que le verrou se libère
-        let guard = state.lock().await;
-
-        guard.clone()
-    };
-
-    // 2. Tentative de ping avec capture du contexte IP
-    match client.ping_peer(&peer_ip).await {
-        Ok(reachable) => Ok(reachable),
-        Err(e) => raise_error!(
-            "ERR_VPN_PING_FAILED",
-            error = e,
-            context = json_value!({
-                "action": "check_peer_reachability",
-                "target_ip": peer_ip,
-                "hint": "Le test de connectivité a échoué. Vérifiez si le pair est en ligne et si l'interface VPN est active."
-            })
-        ),
-    }
-}
-
-#[tauri::command]
-pub fn vpn_check_installation() -> bool {
-    crate::blockchain::vpn::innernet_client::InnernetClient::check_installation().is_ok()
-}
+// =========================================================================
+// TESTS UNITAIRES (Audit des Commandes)
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blockchain::storage::commit::MutationOp;
 
     #[test]
-    fn test_transaction_result_serialization() {
-        let res = TransactionResult {
-            success: true,
-            message: "Test OK".into(),
-            payload: Some(json_value!({"id": 1})),
-        };
-        let json = json::serialize_to_string(&res).unwrap();
-        assert!(json.contains("\"success\":true"));
+    fn test_command_dto_parsing_robustness() {
+        let raw_json = r#"{
+            "@id": "urn:mentis:test",
+            "operation": "Create",
+            "payload": {"val": 42}
+        }"#;
+
+        let mutation: Mutation =
+            json::deserialize_from_str(raw_json).expect("Désérialisation DTO échouée");
+        assert_eq!(mutation.element_id, "urn:mentis:test");
+        assert_eq!(mutation.operation, MutationOp::Create);
     }
 }

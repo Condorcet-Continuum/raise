@@ -1,11 +1,12 @@
 // src-tauri/src/blockchain/sync/delta.rs
+//! Calcul des écarts de données (diff) pour la synchronisation optimisée.
 
 use crate::blockchain::storage::commit::Mutation;
 use crate::utils::prelude::*;
 
-/// Représente l'écart de données (diff) entre deux points de la chaîne.
+/// Représente l'écart de données (diff) entre deux points de la chaîne Mentis.
 #[derive(Debug, Serializable, Deserializable, Clone, Default)]
-pub struct ArcadiaDelta {
+pub struct MentisDelta {
     /// Liste des mutations nécessaires pour passer de l'état A à l'état B.
     pub patch: Vec<Mutation>,
     /// Le hash de départ (base) pour lequel ce delta est valide.
@@ -14,7 +15,7 @@ pub struct ArcadiaDelta {
     pub to_hash: String,
 }
 
-impl ArcadiaDelta {
+impl MentisDelta {
     /// Crée un nouvel objet de delta.
     pub fn new(from_hash: Option<String>, to_hash: String) -> Self {
         Self {
@@ -40,7 +41,9 @@ impl ArcadiaDelta {
     }
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -49,10 +52,10 @@ mod tests {
 
     #[test]
     fn test_delta_creation() {
-        let mut delta = ArcadiaDelta::new(Some("hash_old".into()), "hash_new".into());
+        let mut delta = MentisDelta::new(Some("hash_old".into()), "hash_new".into());
 
         let muta = Mutation {
-            element_id: "urn:pa:comp1".into(),
+            element_id: "urn:mentis:comp1".into(),
             operation: MutationOp::Update,
             payload: json_value!({"status": "active"}),
         };
@@ -61,7 +64,7 @@ mod tests {
 
         assert_eq!(delta.len(), 1);
 
-        // Vérification sécurisée du hash de départ sans déplacement
+        // Vérification sécurisée du hash de départ
         assert_eq!(delta.from_hash.as_deref(), Some("hash_old"));
         assert_eq!(delta.to_hash, "hash_new");
         assert!(!delta.is_empty());
@@ -69,7 +72,7 @@ mod tests {
 
     #[test]
     fn test_delta_default_state() {
-        let delta = ArcadiaDelta::default();
+        let delta = MentisDelta::default();
         assert!(delta.is_empty());
         assert!(delta.from_hash.is_none());
         assert_eq!(delta.to_hash, "");

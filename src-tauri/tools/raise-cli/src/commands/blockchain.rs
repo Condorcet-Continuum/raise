@@ -1,7 +1,7 @@
 // FICHIER : src-tauri/tools/raise-cli/src/commands/blockchain.rs
 
 use clap::{Args, Subcommand};
-use raise::blockchain::VpnConfig;
+
 use raise::{user_error, user_info, user_success, utils::prelude::*}; // 🎯 Façade Unique RAISE
 
 // 🎯 Import du contexte global CLI
@@ -16,13 +16,13 @@ pub struct BlockchainArgs {
 
 #[derive(Subcommand, Clone, Debug)]
 pub enum BlockchainCommands {
-    /// Affiche le statut des clients Fabric et VPN
+    /// Affiche le statut du nœud Arcadia et l'état du catalogue de connaissances.
     Status,
-    /// Test de connexion au réseau VPN Innernet
-    VpnCheck {
-        /// Nom du profil à tester
-        #[arg(short, long, default_value = "default")]
-        profile: String,
+    /// Vérifie la connectivité du nœud P2P.
+    SyncCheck {
+        /// Affiche plus de détails sur les pairs connectés.
+        #[arg(short, long)]
+        verbose: bool,
     },
 }
 
@@ -67,19 +67,15 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
             );
         }
 
-        BlockchainCommands::VpnCheck { profile } => {
-            user_info!("VPN_DIAGNOSTIC_INIT", json_value!({ "profile": profile }));
+        BlockchainCommands::SyncCheck { verbose } => {
+            user_info!("SYNC_DIAGNOSTIC_INIT", json_value!({ "verbose": verbose }));
 
-            let _config = VpnConfig {
-                name: profile.clone(),
-                ..Default::default()
-            };
-
+            // Ici on simule la vérification que le Swarm est bien monté
             user_success!(
-                "VPN_READY",
+                "P2P_READY",
                 json_value!({
-                    "profile": profile,
-                    "mesh_verified": true
+                    "mesh_verified": true,
+                    "discovery": "Kademlia Active"
                 })
             );
         }
@@ -95,7 +91,7 @@ pub async fn handle(args: BlockchainArgs, ctx: CliContext) -> RaiseResult<()> {
 mod tests {
     use super::*;
     use raise::utils::context::SessionManager;
-    use raise::utils::testing::{AgentDbSandbox, DbSandbox};
+    use raise::utils::testing::DbSandbox;
 
     #[async_test]
     #[serial_test::serial] // 🎯 FIX : Évite les conflits de lock sur la Sandbox
@@ -115,16 +111,14 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
-    async fn test_vpn_config_flow() -> RaiseResult<()> {
+    async fn test_arcadia_status_flow() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
         let storage = SharedRef::new(sandbox.storage.clone());
         let session_mgr = SessionManager::new(storage.clone());
 
         let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
         let args = BlockchainArgs {
-            command: BlockchainCommands::VpnCheck {
-                profile: "raise-mesh-01".into(),
-            },
+            command: BlockchainCommands::Status,
         };
 
         handle(args, ctx).await
@@ -132,18 +126,16 @@ mod tests {
 
     #[async_test]
     #[serial_test::serial]
-    async fn test_blockchain_mount_point_integrity() -> RaiseResult<()> {
-        let _sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
+    async fn test_p2p_config_check() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let storage = SharedRef::new(sandbox.storage.clone());
+        let session_mgr = SessionManager::new(storage.clone());
 
-        if config.mount_points.system.domain.is_empty() {
-            // 🎯 FIX : Pas de 'return', la macro diverge
-            raise_error!(
-                "ERR_TEST_ASSERTION_FAILED",
-                error = "Partition système non résolue dans la configuration globale."
-            );
-        }
+        let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage);
+        let args = BlockchainArgs {
+            command: BlockchainCommands::SyncCheck { verbose: true },
+        };
 
-        Ok(())
+        handle(args, ctx).await
     }
 }

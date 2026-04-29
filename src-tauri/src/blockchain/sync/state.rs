@@ -1,27 +1,31 @@
 // src-tauri/src/blockchain/sync/state.rs
+//! État de synchronisation du nœud Mentis (State Machine).
 
 use crate::utils::prelude::*;
 
+/// Représente l'état actuel du nœud dans le réseau P2P.
 #[derive(Debug, Serializable, Deserializable, Clone, PartialEq)]
 pub enum SyncStatus {
-    /// Le nœud vient de démarrer et cherche des pairs.
+    /// Le nœud vient de démarrer et cherche d'autres pairs (Kademlia Bootstrap).
     Initializing,
-    /// Le nœud est en train de télécharger des commits manquants.
+    /// Le nœud est en train de télécharger et d'appliquer des commits manquants.
     Syncing { progress: f32, target_hash: String },
-    /// Le nœud est à jour avec le quorum détecté.
+    /// Le nœud est parfaitement à jour avec le quorum du réseau.
     UpToDate,
-    /// Erreur de synchronisation (ex: fork non résolu).
+    /// Erreur critique empêchant la synchronisation (ex: fork non résolu, corruption).
     Error(String),
 }
 
-/// Implémentation par défaut pour faciliter l'initialisation des structures parentes.
+/// Implémentation par défaut pour faciliter l'initialisation au lancement de l'application.
 impl Default for SyncStatus {
     fn default() -> Self {
         Self::Initializing
     }
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {

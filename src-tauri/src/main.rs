@@ -9,7 +9,7 @@ use raise::utils::{context, prelude::*};
 use tauri::Manager;
 
 // --- IMPORTS RAISE ---
-use raise::blockchain::{ConnectionProfile, FabricClient};
+use raise::blockchain::BlockchainState;
 use raise::commands::{
     ai_commands, blockchain_commands, codegen_commands, cognitive_commands, dl_commands,
     genetics_commands, gnn_commands, json_db_commands, model_commands, rules_commands,
@@ -187,23 +187,9 @@ fn main() {
             app.manage(DlState::new());
             app.manage(GnnState::new());
 
-            // BLOCKCHAIN
-            raise::blockchain::ensure_innernet_state(app.handle(), "default");
-            let default_fabric_profile = ConnectionProfile {
-                name: "pending".into(),
-                version: "1.0.0".into(),
-                client: raise::blockchain::fabric::config::ClientConfig {
-                    organization: "none".into(),
-                    connection: None,
-                },
-                organizations: UnorderedMap::new(),
-                peers: UnorderedMap::new(),
-                certificate_authorities: UnorderedMap::new(),
-            };
-            app.manage(SharedRef::new(AsyncMutex::new(FabricClient::from_config(
-                default_fabric_profile,
-            ))));
-            raise::blockchain::p2p::service::init_arcadia_network(app.handle().clone());
+            // BLOCKCHAIN (Nouveau modèle unifié)
+            // On remplace Fabric et VPN par un état blockchain unique et vide au boot.
+            app.manage(SharedRef::new(AsyncMutex::new(BlockchainState::default())));
 
             // ====================================================================
             // 7. 🧠 LE NOYAU (KERNEL) : SÉQUENCE DE BOOT STRICTE ET UNIFIÉE
@@ -270,20 +256,9 @@ fn main() {
             cognitive_commands::cognitive_load_plugin,
             cognitive_commands::cognitive_run_plugin,
             cognitive_commands::cognitive_list_plugins,
-            blockchain_commands::fabric_ping,
-            blockchain_commands::fabric_submit_transaction,
-            blockchain_commands::fabric_query_transaction,
-            blockchain_commands::fabric_get_history,
-            blockchain_commands::vpn_network_status,
-            blockchain_commands::vpn_connect,
-            blockchain_commands::vpn_disconnect,
-            blockchain_commands::vpn_list_peers,
-            blockchain_commands::vpn_add_peer,
-            blockchain_commands::vpn_ping_peer,
-            blockchain_commands::vpn_check_installation,
-            blockchain_commands::arcadia_broadcast_mutation,
-            blockchain_commands::arcadia_get_sync_status,
-            blockchain_commands::arcadia_get_ledger_info,
+            blockchain_commands::mentis_init_node,
+            blockchain_commands::mentis_broadcast_mutation,
+            blockchain_commands::mentis_get_ledger_info,
             genetics_commands::run_architecture_optimization,
             genetics_commands::debug_genetics_ping,
             codegen_commands::generate_source_code,

@@ -1,11 +1,11 @@
 // src-tauri/src/blockchain/bridge/model_sync.rs
 
-use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
+use crate::blockchain::storage::commit::{MentisCommit, Mutation, MutationOp};
 use crate::model_engine::types::{ArcadiaElement, ProjectModel};
 use crate::utils::prelude::*;
 use crate::AppState;
 
-/// Synchroniseur responsable de la mise à jour du modèle symbolique en mémoire.
+/// Synchroniseur responsable de la mise à jour du modèle symbolique en mémoire (Pure Graph).
 pub struct ModelSync<'a> {
     app_state: &'a AppState,
 }
@@ -15,8 +15,8 @@ impl<'a> ModelSync<'a> {
         Self { app_state }
     }
 
-    /// Applique les mutations d'un commit au ProjectModel global.
-    pub async fn sync_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
+    /// Applique les mutations d'un commit au ProjectModel global en mémoire.
+    pub async fn sync_commit(&self, commit: &MentisCommit) -> RaiseResult<()> {
         let mut model_guard = self.app_state.model.lock().await;
 
         for mutation in &commit.mutations {
@@ -25,23 +25,27 @@ impl<'a> ModelSync<'a> {
         Ok(())
     }
 
+    /// Applique une mutation individuelle sur le graphe en mémoire.
     fn apply_mutation(&self, model: &mut ProjectModel, mutation: &Mutation) -> RaiseResult<()> {
         match mutation.operation {
             MutationOp::Create | MutationOp::Update => {
-                let element: ArcadiaElement =
-                    match json::deserialize_from_value(mutation.payload.clone()) {
-                        Ok(el) => el,
-                        Err(e) => raise_error!(
+                // 🎯 RUST-FIRST : Match explicite sur la désérialisation
+                match json::deserialize_from_value::<ArcadiaElement>(mutation.payload.clone()) {
+                    Ok(element) => {
+                        self.upsert_element(model, element)?;
+                    }
+                    Err(e) => {
+                        // 🎯 FIX MACRO : Utilisation directe, sans `return Err()`
+                        raise_error!(
                             "ERR_SYNC_PAYLOAD_INVALID",
-                            error = e,
+                            error = format!("Impossible de désérialiser ArcadiaElement : {}", e),
                             context = json_value!({
                                 "element_id": mutation.element_id,
                                 "action": "deserialize_mutation_payload"
                             })
-                        ),
-                    };
-
-                self.upsert_element(model, element)?;
+                        );
+                    }
+                }
             }
             MutationOp::Delete => {
                 self.delete_element(model, &mutation.element_id)?;
@@ -50,7 +54,7 @@ impl<'a> ModelSync<'a> {
         Ok(())
     }
 
-    /// 🎯 PURE GRAPH : Insertion ou mise à jour dynamique
+    /// 🎯 PURE GRAPH : Insertion ou mise à jour dynamique.
     fn upsert_element(&self, model: &mut ProjectModel, element: ArcadiaElement) -> RaiseResult<()> {
         // On détermine la destination à partir du type (kind) de l'élément
         let (layer, col) = self.map_kind_to_location(&element.kind);
@@ -78,7 +82,8 @@ impl<'a> ModelSync<'a> {
         Ok(())
     }
 
-    /// 🎯 PURE GRAPH : Recherche et suppression transversale dans toutes les couches
+    /// 🎯 PURE GRAPH : Recherche et suppression transversale dans toutes les couches.
+    /// FIX IDEMPOTENCE : Si l'élément n'existe pas, l'opération réussit silencieusement.
     fn delete_element(&self, model: &mut ProjectModel, id: &str) -> RaiseResult<()> {
         for collections in model.layers.values_mut() {
             for vec in collections.values_mut() {
@@ -89,13 +94,15 @@ impl<'a> ModelSync<'a> {
             }
         }
 
-        crate::raise_error!(
-            "ERR_SYNC_ELEMENT_NOT_FOUND",
-            error = format!("Élément '{}' introuvable pour suppression.", id)
+        // 🎯 FIX : On ne lève plus d'erreur stricte. L'absence de la donnée est le résultat attendu.
+        user_trace!(
+            "ℹ️ [ModelSync] Suppression ignorée : '{}' déjà absent de la RAM.",
+            id
         );
+        Ok(())
     }
 
-    /// Helper pour router les nouveaux éléments vers les couches par défaut
+    /// Helper pour router les nouveaux éléments vers les couches par défaut.
     fn map_kind_to_location(&self, kind: &str) -> (&'static str, &'static str) {
         if kind.contains("OperationalActor") {
             ("oa", "actors")
@@ -121,7 +128,9 @@ impl<'a> ModelSync<'a> {
     }
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -138,22 +147,41 @@ mod tests {
         let state = create_test_state();
         let sync = ModelSync::new(&state);
 
+        let default_element = ArcadiaElement::default();
+        let mut payload =
+            json::serialize_to_value(&default_element).expect("Sérialisation échouée");
+
+        // 🎯 FIX ALIASING JSON-LD : On injecte toutes les variantes possibles du champ type/id
+        // pour être certains que Serde les attrape, peu importe les #[serde(rename)] de types.rs
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("id".to_string(), json_value!("urn:sa:comp1"));
+            obj.insert("@id".to_string(), json_value!("urn:sa:comp1"));
+
+            obj.insert("kind".to_string(), json_value!("SystemComponent"));
+            obj.insert("@type".to_string(), json_value!("SystemComponent"));
+            obj.insert("type".to_string(), json_value!("SystemComponent"));
+
+            obj.insert("name".to_string(), json_value!("Radar Unit"));
+        }
+
         let mutation = Mutation {
             element_id: "urn:sa:comp1".into(),
             operation: MutationOp::Create,
-            payload: json_value!({
-                "id": "urn:sa:comp1",
-                "type": "SystemComponent",
-                "name": "Radar Unit"
-            }),
+            payload,
         };
 
         sync.apply_mutation(&mut *state.model.lock().await, &mutation)
             .unwrap();
 
         let model = state.model.lock().await;
+
+        // Vérification stricte
         let components = model.get_collection("sa", "components");
-        assert_eq!(components.len(), 1);
+        assert_eq!(
+            components.len(),
+            1,
+            "L'élément n'a pas été routé dans la bonne couche (sa/components)"
+        );
         assert_eq!(components[0].name.as_str(), "Radar Unit");
     }
 
@@ -162,16 +190,23 @@ mod tests {
         let state = create_test_state();
         let sync = ModelSync::new(&state);
 
+        let default_element = ArcadiaElement::default();
+        let mut payload = json::serialize_to_value(&default_element).unwrap();
+
+        // 🎯 FIX ALIASING : Même sécurité pour l'injection directe en RAM
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("id".to_string(), json_value!("urn:la:ecu"));
+            obj.insert("@id".to_string(), json_value!("urn:la:ecu"));
+            obj.insert("kind".to_string(), json_value!("LogicalComponent"));
+            obj.insert("@type".to_string(), json_value!("LogicalComponent"));
+        }
+        let element: ArcadiaElement = json::deserialize_from_value(payload).unwrap();
+
         let mut model = state.model.lock().await;
-        model.add_element(
-            "la",
-            "components",
-            ArcadiaElement {
-                id: "urn:la:ecu".into(),
-                kind: "LogicalComponent".into(),
-                ..Default::default()
-            },
-        );
+        model.add_element("la", "components", element);
+
+        // On s'assure qu'il est bien là avant de le supprimer !
+        assert_eq!(model.get_collection("la", "components").len(), 1);
         drop(model);
 
         let mutation = Mutation {
@@ -184,6 +219,51 @@ mod tests {
             .unwrap();
 
         let model = state.model.lock().await;
-        assert!(model.get_collection("la", "components").is_empty());
+        assert!(
+            model.get_collection("la", "components").is_empty(),
+            "L'élément n'a pas été supprimé"
+        );
+    }
+
+    #[async_test]
+    async fn test_delete_idempotence_pure_graph() {
+        let state = create_test_state();
+        let sync = ModelSync::new(&state);
+
+        let mutation = Mutation {
+            element_id: "urn:ghost:404".into(),
+            operation: MutationOp::Delete,
+            payload: json_value!({}),
+        };
+
+        // L'élément n'existe pas en mémoire. Cela ne doit PAS renvoyer d'erreur.
+        let result = sync.apply_mutation(&mut *state.model.lock().await, &mutation);
+        assert!(
+            result.is_ok(),
+            "La suppression d'un fantôme doit être idempotente et réussir silencieusement."
+        );
+    }
+
+    #[async_test]
+    async fn test_invalid_payload_rejection() {
+        let state = create_test_state();
+        let sync = ModelSync::new(&state);
+
+        // Un payload qui n'est pas compatible avec ArcadiaElement
+        let mutation = Mutation {
+            element_id: "urn:error:01".into(),
+            operation: MutationOp::Create,
+            payload: json_value!(["je", "suis", "un", "tableau"]),
+        };
+
+        let result = sync.apply_mutation(&mut *state.model.lock().await, &mutation);
+        assert!(
+            result.is_err(),
+            "Le modèle doit rejeter un payload qui ne correspond pas à ArcadiaElement."
+        );
+
+        if let Err(e) = result {
+            assert!(e.to_string().contains("ERR_SYNC_PAYLOAD_INVALID"));
+        }
     }
 }

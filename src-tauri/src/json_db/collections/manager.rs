@@ -1204,9 +1204,8 @@ impl<'a> CollectionsManager<'a> {
     }
 
     fn compute_document_checksum(&self, doc: &JsonValue) -> String {
-        use sha2::{Digest, Sha256};
         let content = json::serialize_to_bytes(doc).unwrap_or_default();
-        let mut hasher = Sha256::new();
+        let mut hasher = CryptoSha256::new();
         hasher.update(content);
         hex::encode(hasher.finalize())
     }

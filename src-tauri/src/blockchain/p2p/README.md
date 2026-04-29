@@ -12,9 +12,9 @@ Ce réseau circule exclusivement à l'intérieur du tunnel **VPN Mesh (Innernet)
 graph TD
     subgraph "Nœud Raise (Instance A)"
         ME[Model Engine] --> CM[Blockchain Commit]
-        CM --> SW[libp2p Swarm]
+        CM --> SW[p2p Swarm]
 
-        subgraph "libp2p Stack"
+        subgraph "p2p Stack"
             SW --> GS[Gossipsub: Diffusion Mutations]
             SW --> KD[Kademlia DHT: Localisation Data]
             SW --> RR[Req/Resp: Sync Différentielle]
@@ -28,7 +28,7 @@ graph TD
     end
 
     subgraph "Nœud Raise (Instance B)"
-        VPN <==> SW_B[libp2p Swarm B]
+        VPN <==> SW_B[p2p Swarm B]
         SW_B --> GS_B[Gossipsub]
         GS_B --> RS_B[Rules Engine: Validation]
     end
@@ -40,7 +40,7 @@ graph TD
 
 ## Architecture Technique
 
-Le module s'appuie sur la stack **libp2p**, le standard de l'industrie pour les réseaux décentralisés en Rust.
+Le module s'appuie sur la stack **p2p**, le standard de l'industrie pour les réseaux décentralisés en Rust.
 
 ### Composants clés
 

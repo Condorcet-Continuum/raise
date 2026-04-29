@@ -1,84 +1,83 @@
 // src-tauri/src/blockchain/bridge/db_adapter.rs
 
-use crate::blockchain::storage::commit::{ArcadiaCommit, Mutation, MutationOp};
-use crate::json_db::collections::manager::CollectionsManager;
+use crate::blockchain::storage::commit::{MentisCommit, MutationOp};
 use crate::json_db::storage::StorageEngine;
-use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
+use crate::json_db::transactions::manager::TransactionManager;
+use crate::json_db::transactions::TransactionRequest;
+use crate::utils::prelude::*;
 
 /// Adaptateur responsable de l'application des commits blockchain dans la JSON-DB.
-/// Assure la synchronisation entre le registre distribué et le graphe de connaissance local.
+/// Assure la synchronisation ACID entre le registre distribué et le stockage local.
 pub struct DbAdapter<'a> {
-    manager: CollectionsManager<'a>,
+    storage: &'a StorageEngine,
+    space: String,
+    db: String,
 }
 
 impl<'a> DbAdapter<'a> {
     /// Crée un nouvel adaptateur pour un espace et une base de données spécifiques.
     pub fn new(storage: &'a StorageEngine, space: &str, db: &str) -> Self {
         Self {
-            manager: CollectionsManager::new(storage, space, db),
+            storage,
+            space: space.to_string(),
+            db: db.to_string(),
         }
     }
 
-    /// Applique l'intégralité d'un commit Arcadia dans la base de données locale.
-    pub async fn apply_commit(&self, commit: &ArcadiaCommit) -> RaiseResult<()> {
+    /// Applique l'intégralité d'un commit Mentis de manière ATOMIQUE (ACID).
+    pub async fn apply_commit(&self, commit: &MentisCommit) -> RaiseResult<()> {
+        let tm = TransactionManager::new(self.storage, &self.space, &self.db);
+        let mut requests = Vec::new();
+
         for mutation in &commit.mutations {
-            match self.apply_mutation(mutation).await {
-                Ok(_) => (),
-                Err(e) => raise_error!(
-                    "ERR_BLOCKCHAIN_COMMIT_APPLY_FAILED",
-                    error = e.to_string(),
-                    context = json_value!({ "element_id": mutation.element_id })
-                ),
+            let collection = self.resolve_collection(&mutation.element_id, &mutation.payload)?;
+
+            match mutation.operation {
+                MutationOp::Create | MutationOp::Update => {
+                    let mut data = mutation.payload.clone();
+
+                    match data.as_object_mut() {
+                        Some(obj) => {
+                            obj.insert(
+                                "_blockchain_sync".to_string(),
+                                json_value!({
+                                    "sync_at": UtcClock::now().to_rfc3339(),
+                                    "commit_id": commit.id,
+                                    "op": format!("{:?}", mutation.operation)
+                                }),
+                            );
+                        }
+                        None => raise_error!(
+                            "ERR_BLOCKCHAIN_PAYLOAD_INVALID",
+                            error = "Le payload de la mutation doit être un objet JSON valide.",
+                            context = json_value!({ "element_id": mutation.element_id })
+                        ),
+                    }
+
+                    requests.push(TransactionRequest::Upsert {
+                        collection,
+                        id: Some(mutation.element_id.clone()),
+                        handle: None,
+                        document: data,
+                    });
+                }
+                MutationOp::Delete => {
+                    requests.push(TransactionRequest::Delete {
+                        collection,
+                        id: mutation.element_id.clone(),
+                    });
+                }
             }
         }
-        Ok(())
-    }
 
-    /// Traduit une mutation individuelle en opération de stockage via le CollectionsManager.
-    async fn apply_mutation(&self, mutation: &Mutation) -> RaiseResult<()> {
-        let collection = self.resolve_collection(&mutation.element_id, &mutation.payload)?;
-
-        match mutation.operation {
-            MutationOp::Create | MutationOp::Update => {
-                // On prépare les données en injectant l'ID et les métadonnées blockchain
-                let mut data = mutation.payload.clone();
-
-                match data.as_object_mut() {
-                    Some(obj) => {
-                        obj.insert(
-                            "_id".to_string(),
-                            JsonValue::String(mutation.element_id.clone()),
-                        );
-                        obj.insert(
-                            "_blockchain_sync".to_string(),
-                            json_value!({
-                                "sync_at": UtcClock::now().to_rfc3339(),
-                                "op": format!("{:?}", mutation.operation)
-                            }),
-                        );
-                    }
-                    None => raise_error!(
-                        "ERR_BLOCKCHAIN_PAYLOAD_INVALID",
-                        error = "Le payload de la mutation doit être un objet JSON valide."
-                    ),
-                }
-
-                // L'upsert garantit l'idempotence et déclenche la validation de schéma
-                match self.manager.upsert_document(&collection, data).await {
-                    Ok(_) => Ok(()),
-                    Err(e) => raise_error!("ERR_DB_UPSERT_FAILED", error = e.to_string()),
-                }
-            }
-            MutationOp::Delete => {
-                match self
-                    .manager
-                    .delete_document(&collection, &mutation.element_id)
-                    .await
-                {
-                    Ok(_) => Ok(()),
-                    Err(e) => raise_error!("ERR_DB_DELETE_FAILED", error = e.to_string()),
-                }
-            }
+        // Exécution atomique via le moteur JSON_DB
+        match tm.execute_smart(requests).await {
+            Ok(_) => Ok(()),
+            Err(e) => raise_error!(
+                "ERR_BLOCKCHAIN_COMMIT_APPLY_FAILED",
+                error = format!("Échec transactionnel du commit : {}", e),
+                context = json_value!({ "commit_id": commit.id })
+            ),
         }
     }
 
@@ -89,31 +88,29 @@ impl<'a> DbAdapter<'a> {
             return Ok(self.map_type_to_collection(kind));
         }
 
-        // 2. Détection par préfixe d'URN (Fallback déterministe)
+        // 2. Détection par préfixe d'URN
         if element_id.starts_with("urn:oa:") {
-            return Ok("operational_elements".to_string());
+            return Ok("actors".to_string());
         }
         if element_id.starts_with("urn:sa:") {
-            return Ok("system_elements".to_string());
+            return Ok("components".to_string());
         }
         if element_id.starts_with("urn:la:") {
-            return Ok("logical_elements".to_string());
+            return Ok("components".to_string());
         }
         if element_id.starts_with("urn:pa:") {
-            return Ok("physical_elements".to_string());
+            return Ok("components".to_string());
         }
 
-        raise_error!(
-            "ERR_DB_COLLECTION_RESOLUTION_FAIL",
-            error = format!(
-                "Impossible de mapper l'ID '{}' vers une collection physique.",
-                element_id
-            ),
-            context = json_value!({ "element_id": element_id })
-        )
+        // 🎯 FIX ANTI-FORK : Si on ne reconnait pas l'URN, on ne crashe pas. On isole.
+        user_warn!(
+            "⚠️ [Bridge] Type inconnu pour {}, assignation à 'elements_orphans'",
+            element_id
+        );
+        Ok("elements_orphans".to_string())
     }
 
-    /// Mappe les types Arcadia sémantiques vers les noms de collections physiques.
+    /// Mappe les types Mentis sémantiques vers les noms de collections physiques.
     fn map_type_to_collection(&self, kind: &str) -> String {
         match kind {
             "OperationalActor" | "OperationalEntity" => "actors".to_string(),
@@ -127,105 +124,113 @@ impl<'a> DbAdapter<'a> {
 }
 
 // =========================================================================
-// TESTS UNITAIRES (Validation Mount Points & Résilience)
+// TESTS UNITAIRES
 // =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blockchain::storage::commit::MutationOp;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::blockchain::storage::commit::Mutation;
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::testing::DbSandbox;
 
-    /// Test existant : Validation de la logique Upsert
     #[async_test]
-    async fn test_db_adapter_upsert_logic() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
+    async fn test_db_adapter_apply_commit_success() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
+        let storage = &sandbox.storage;
 
-        // 🎯 FIX MOUNT POINTS : Utilisation du domaine système configuré
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
-        let adapter = DbAdapter::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
+        // Préparation de la collection via le manager
+        let col_mgr = CollectionsManager::new(storage, space, db);
+        DbSandbox::mock_db(&col_mgr).await?;
+        col_mgr
+            .create_collection(
+                "actors",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
 
-        let mutation = Mutation {
-            element_id: "urn:oa:actor-001".to_string(),
-            operation: MutationOp::Create,
-            payload: json_value!({
-                "@type": "OperationalActor",
-                "name": "Pilot"
-            }),
+        let adapter = DbAdapter::new(storage, space, db);
+
+        let commit = MentisCommit {
+            id: "tx_123".to_string(),
+            parent_hash: None,
+            author: "author_01".to_string(),
+            timestamp: UtcClock::now(),
+            mutations: vec![Mutation {
+                element_id: "urn:oa:actor-001".to_string(),
+                operation: MutationOp::Create,
+                payload: json_value!({
+                    "@type": "OperationalActor",
+                    "name": "Pilot"
+                }),
+            }],
+            merkle_root: "root".to_string(),
+            signature: vec![],
         };
 
-        let schema_uri = format!(
-            "db://{}/{}/schemas/v1/db/generic.schema.json",
-            config.mount_points.system.domain, config.mount_points.system.db
-        );
+        match adapter.apply_commit(&commit).await {
+            Ok(_) => {}
+            Err(e) => panic!("L'application du commit a échoué : {:?}", e),
+        }
 
-        manager.create_collection("actors", &schema_uri).await?;
-
-        // Application de la mutation
-        adapter.apply_mutation(&mutation).await?;
-
-        // Vérification via le manager (persistance confirmée)
-        let doc = match manager.get_document("actors", "urn:oa:actor-001").await? {
-            Some(d) => d,
-            None => panic!("Le document aurait dû être persisté par l'adapter"),
-        };
-
+        // Vérification de la persistance
+        let doc = col_mgr
+            .get("actors", "urn:oa:actor-001")
+            .await?
+            .expect("Le document devrait exister");
         assert_eq!(doc["name"], "Pilot");
         assert!(doc.get("_blockchain_sync").is_some());
+
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience face à un payload invalide (non-objet)
     #[async_test]
-    async fn test_db_adapter_resilience_invalid_payload() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-        let adapter = DbAdapter::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
+    async fn test_db_adapter_invalid_payload_rejection() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
+        let adapter = DbAdapter::new(&sandbox.storage, space, db);
 
-        let mutation = Mutation {
-            element_id: "urn:oa:fail".to_string(),
-            operation: MutationOp::Create,
-            payload: json_value!(["not", "an", "object"]),
+        let commit = MentisCommit {
+            id: "tx_fail".to_string(),
+            parent_hash: None,
+            author: "author_01".to_string(),
+            timestamp: UtcClock::now(),
+            mutations: vec![Mutation {
+                element_id: "urn:test:01".to_string(),
+                operation: MutationOp::Create,
+                payload: json_value!(["not", "an", "object"]), // Array au lieu de Object
+            }],
+            merkle_root: "".to_string(),
+            signature: vec![],
         };
 
-        let result = adapter.apply_mutation(&mutation).await;
-        match result {
-            Err(AppError::Structured(err)) => {
-                assert_eq!(err.code, "ERR_BLOCKCHAIN_PAYLOAD_INVALID");
-                Ok(())
+        match adapter.apply_commit(&commit).await {
+            Ok(_) => panic!("L'adaptateur aurait dû rejeter un payload non-objet"),
+            Err(e) => {
+                let err_str = e.to_string();
+                assert!(err_str.contains("ERR_BLOCKCHAIN_PAYLOAD_INVALID"));
             }
-            _ => panic!("L'adapter aurait dû lever ERR_BLOCKCHAIN_PAYLOAD_INVALID"),
         }
+        Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Inférence Mount Point (System Domain)
     #[async_test]
-    async fn test_db_adapter_mount_point_resolution() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
+    async fn test_db_adapter_fallback_orphan_urn() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let space = &sandbox.config.mount_points.system.domain;
+        let db = &sandbox.config.mount_points.system.db;
+        let adapter = DbAdapter::new(&sandbox.storage, space, db);
 
-        let adapter = DbAdapter::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
+        // Une URN qui ne matche aucun préfixe connu et sans @type
+        let payload = json_value!({ "data": "unknown" });
 
-        // Vérifie que l'adapter pointe bien vers la partition système configurée
-        assert_eq!(adapter.manager.space, config.mount_points.system.domain);
-        assert_eq!(adapter.manager.db, config.mount_points.system.db);
+        match adapter.resolve_collection("urn:unknown:999", &payload) {
+            Ok(col) => assert_eq!(col, "elements_orphans", "Doit fallback sur les orphelins"),
+            Err(_) => panic!("Ne doit plus lever d'erreur sur un type inconnu"),
+        }
         Ok(())
     }
 }

@@ -1,83 +1,64 @@
 // src-tauri/src/blockchain/p2p/behavior.rs
+//! Comportement réseau p2p (Behaviour) combinant Kademlia, Gossipsub et Request-Response.
+
+use crate::blockchain::p2p::protocol::{MentisNetMessage, MentisResponse};
 use crate::utils::prelude::*;
 
-use crate::blockchain::p2p::protocol::{ArcadiaNetMessage, ArcadiaResponse};
-use libp2p::connection_limits;
-use libp2p::gossipsub;
-use libp2p::kad;
-use libp2p::request_response;
-use libp2p::swarm::NetworkBehaviour;
-use libp2p::{identity, StreamProtocol};
-
-/// Le comportement réseau combiné pour Raise (Arcadia Network).
-#[derive(NetworkBehaviour)]
-pub struct ArcadiaBehavior {
-    /// Kademlia pour la découverte des pairs et la table de hachage distribuée.
-    pub kademlia: kad::Behaviour<kad::store::MemoryStore>,
-
-    /// Gossipsub pour la diffusion massive des commits et des votes.
-    pub gossipsub: gossipsub::Behaviour,
-
-    /// Request-Response pour les échanges directs (sync de chaîne, requêtes spécifiques).
-    pub request_response: request_response::cbor::Behaviour<ArcadiaNetMessage, ArcadiaResponse>,
-
-    /// LIMITE DE CONNEXIONS
-    pub limits: connection_limits::Behaviour,
+/// Définition de la stack comportementale de Mentis.
+#[derive(P2pBehaviour)]
+pub struct MentisBehavior {
+    pub kademlia: P2pKademlia::Behaviour<P2pKademlia::store::MemoryStore>,
+    pub gossipsub: P2pGossipSub::Behaviour,
+    pub request_response: P2pRequestResponse::cbor::Behaviour<MentisNetMessage, MentisResponse>,
+    pub limits: P2pConnectionLimits::Behaviour,
 }
 
-impl ArcadiaBehavior {
-    /// Initialise un nouveau comportement réseau avec les clés locales.
-    pub fn new(local_key: identity::Keypair) -> RaiseResult<Self> {
+impl MentisBehavior {
+    /// Initialise la stack comportementale du réseau Mentis.
+    pub fn new(local_key: P2pIdentity::Keypair) -> RaiseResult<Self> {
         let peer_id = local_key.public().to_peer_id();
 
-        // 1. Configuration de Kademlia : Stockage en mémoire pour Raise.
-        let store = kad::store::MemoryStore::new(peer_id);
-        let kademlia = kad::Behaviour::new(peer_id, store);
+        // 1. Kademlia : Pour la découverte et le routage des pairs
+        let store = P2pKademlia::store::MemoryStore::new(peer_id);
 
-        // 2. Configuration de Gossipsub : Authentification des messages requise.
-        let gossipsub_config = match gossipsub::ConfigBuilder::default().build() {
-            Ok(cfg) => cfg,
-            Err(e) => raise_error!(
-                "ERR_P2P_GOSSIPSUB_CONFIG",
-                error = e,
-                context = json_value!({
-                    "action": "build_gossipsub_config",
-                    "layer": "libp2p_network",
-                    "hint": "Vérifiez les paramètres de validation du protocole ou les limites de taille de message."
-                })
-            ),
+        // On passe directement notre protocole privé au constructeur `new`.
+        let kad_config = P2pKademlia::Config::new(P2pStreamProtocol::new("/mentis/kad/1.0.0"));
+        let kademlia = P2pKademlia::Behaviour::with_config(peer_id, store, kad_config);
+
+        // 2. GossipSub : Pour la diffusion rapide des blocs et des votes
+        let g_config: P2pGossipSub::Config = match P2pGossipSub::ConfigBuilder::default()
+            // 🎯 FIX PERFORMANCE : On autorise des messages jusqu'à 10 Mo pour les gros commits
+            .max_transmit_size(10 * 1024 * 1024)
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => raise_error!("ERR_P2P_GOSSIP_CONFIG", error = e.to_string()),
         };
 
-        let gossipsub = match gossipsub::Behaviour::new(
-            gossipsub::MessageAuthenticity::Signed(local_key),
-            gossipsub_config,
+        let gossipsub = match P2pGossipSub::Behaviour::new(
+            P2pGossipSub::MessageAuthenticity::Signed(local_key.clone()), // .clone() peut être requis selon l'impl de la clé
+            g_config,
         ) {
-            Ok(behaviour) => behaviour,
-            Err(e) => raise_error!(
-                "ERR_P2P_BEHAVIOUR_INIT",
-                error = e,
-                context = json_value!({
-                    "action": "initialize_gossipsub_behaviour",
-                    "authenticity": "Signed",
-                    "hint": "Échec de l'initialisation du comportement réseau. Vérifiez la validité de la clé locale (PeerId)."
-                })
-            ),
+            Ok(b) => b,
+            Err(e) => raise_error!("ERR_P2P_GOSSIP_INIT", error = e.to_string()),
         };
 
-        // 3. Configuration Request-Response : Utilisation du protocole CBOR pour Arcadia.
-        let request_response = request_response::cbor::Behaviour::new(
+        // 3. Request-Response : Pour les requêtes ciblées (Synchronisation d'un bloc manquant)
+        let request_response = P2pRequestResponse::cbor::Behaviour::new(
             [(
-                StreamProtocol::new("/arcadia/sync/1.0.0"),
-                request_response::ProtocolSupport::Full,
+                P2pStreamProtocol::new("/mentis/sync/1.0.0"),
+                P2pRequestResponse::ProtocolSupport::Full,
             )],
-            request_response::Config::default(),
+            P2pRequestResponse::Config::default(),
         );
 
-        let limits = connection_limits::Behaviour::new(
-            connection_limits::ConnectionLimits::default()
-                .with_max_established_per_peer(Some(2))
-                .with_max_established_incoming(Some(50))
-                .with_max_established_outgoing(Some(50)),
+        // 4. Connection Limits : Protection Anti-DDoS basique
+        let limits = P2pConnectionLimits::Behaviour::new(
+            P2pConnectionLimits::ConnectionLimits::default()
+                .with_max_pending_incoming(Some(50))
+                .with_max_pending_outgoing(Some(50))
+                .with_max_established_incoming(Some(100))
+                .with_max_established_outgoing(Some(100)),
         );
 
         Ok(Self {
@@ -89,35 +70,22 @@ impl ArcadiaBehavior {
     }
 }
 
-// --- TESTS UNITAIRES ---
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libp2p::identity;
 
     #[test]
-    fn test_behavior_initialization() {
-        let local_key = identity::Keypair::generate_ed25519();
-        let behavior = ArcadiaBehavior::new(local_key);
-
+    fn test_mentis_behavior_init_robustness() {
+        // Utilisation de l'alias d'identité du prelude
+        let key = P2pIdentity::Keypair::generate_ed25519();
+        let behavior = MentisBehavior::new(key);
         assert!(
             behavior.is_ok(),
-            "Le behavior devrait s'initialiser correctement avec les protocoles Arcadia"
+            "Le comportement réseau doit s'initialiser sans erreur"
         );
-    }
-
-    #[test]
-    fn test_behavior_peer_id_consistency() {
-        let local_key = identity::Keypair::generate_ed25519();
-
-        // Initialisation du behavior
-        let behavior = ArcadiaBehavior::new(local_key).expect("L'initialisation a échoué");
-
-        // CORRECTION : Suppression de la variable inutilisée 'expected_peer_id'
-        // pour éliminer le warning 'unused_variable'.
-        // Le test valide ici la capacité à instancier la structure complète.
-        drop(behavior);
-        assert!(true);
     }
 }

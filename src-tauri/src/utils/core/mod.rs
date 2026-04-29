@@ -39,6 +39,10 @@ pub use std::time::Instant as TimeInstant;
 /// 🤖 IA NOTE : Alias pour std::ptr::eq. Permet de vérifier si deux références pointent vers la même adresse mémoire.
 pub use std::ptr::eq as is_same_reference;
 
+/// 🤖 IA NOTE : Extrait l'identifiant unique (badge) d'une variante d'énumération.
+/// Permet de comparer si deux instances d'un enum sont du même type sans comparer leurs données.
+pub use std::mem::discriminant as VariantMarker; // 🎯 L'alias sémantique RAISE
+
 /// 🤖 IA NOTE : Trait permettant de créer une instance d'un type à partir d'une chaîne de caractères.
 pub use std::str::FromStr as Parsable; // 🎯 L'alias sémantique pour FromStr
 
@@ -123,6 +127,13 @@ pub use std::future::Future as AsyncFuture; // 🎯 L'alias du moteur asynchrone
 /// 🤖 IA NOTE : Alias pour std::pin::Pin. Garantit qu'une structure de données asynchrone
 /// ne sera pas déplacée en mémoire pendant son exécution.
 pub use std::pin::Pin as Pinned; // 🎯 L'alias de sécurité mémoire
+
+// --- CRYPTOGRAPHIE & SÉCURITÉ (AI-Ready) ---
+/// 🤖 IA NOTE : Trait requis pour manipuler les opérations de hashage (.update(), .finalize()).
+pub use sha2::Digest as CryptoDigest;
+
+/// 🤖 IA NOTE : Moteur de hashage cryptographique SHA-256 (256-bit).
+pub use sha2::Sha256 as CryptoSha256;
 
 // =========================================================================
 // SYNC, RUNTIME & OWNERSHIP (Façade AI-Ready)

@@ -29,6 +29,8 @@ pub use crate::utils::core::{
     CalendarDate,
     CalendarDuration,
     CowData,
+    CryptoDigest,
+    CryptoSha256,
     DataStreamPeekable, // 🎯 Pour l'anticipation (lookahead)
     Eq,
     // Formatage Sémantique
@@ -67,7 +69,8 @@ pub use crate::utils::core::{
     UniqueId,     // 🎯 Alias de uuid::Uuid
     UtcClock,     // 🎯 Alias de chrono::Utc
     UtcTimestamp, // 🎯 Alias de chrono::DateTime<Utc>
-    MATH_PI,      // 🎯 La constante fondamentale
+    VariantMarker,
+    MATH_PI, // 🎯 La constante fondamentale
 };
 
 // --- 2. I/O, FS & SYSTÈME ---
@@ -159,15 +162,37 @@ pub use crate::utils::inference::{
 // --- 5. RÉSEAU & CONNECTIVITÉ ---
 pub use crate::utils::network::http_types::{
     run_http_server, HttpClient, HttpClientBuilder, HttpJsonPayload, HttpRouter, HttpStatusCode,
+    HttpTcpListener,
 };
 
 pub use crate::utils::network::p2p_types::{
-    P2pConnectionLimits, P2pGossipSub, P2pIdentity, P2pKademlia, P2pMultiaddr, P2pPeerId, P2pSwarm,
+    connection_limits,
+    gossipsub,
+    identity,
+    kad,
+    request_response,
+    P2pBehaviour,
+    P2pConnectionLimits,
+    P2pGossipSub,
+    P2pIdentity,
+    P2pKademlia,
+    P2pMultiaddr,
+    P2pNetworkBehaviourTrait, // 🎯 Requis pour les implémentations de protocoles[cite: 11]
+    P2pNoise,
+    P2pPeerId,
+    P2pRequestResponse, // 🎯 Pour les échanges directs de messages[cite: 11]
+    P2pStreamProtocol,  // 🎯 Pour l'identification des flux[cite: 11]
+    P2pSwarm,
+    P2pSwarmBuilder, // 🎯 Pour la configuration fine du Swarm[cite: 11]
+    P2pSwarmEvent,
+    P2pTransportTrait,
+    P2pYamux,
+    StreamProtocol,
 };
 
 pub use crate::utils::network::{
-    get_client, get_string_async, post_authenticated_async, post_json_with_retry_async,
-    start_local_api_async,
+    build_p2p_node_async, get_client, get_string_async, post_authenticated_async,
+    post_json_with_retry_async, start_local_api_async,
 };
 
 // --- 6. MACROS & OBSERVABILITÉ (Exports Racine) ---

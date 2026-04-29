@@ -1,112 +1,116 @@
 // src-tauri/src/blockchain/sync/engine.rs
+//! Moteur de synchronisation Mentis : Répond aux requêtes de synchronisation des autres nœuds.
 
-use crate::blockchain::p2p::protocol::ArcadiaNetMessage;
+use crate::blockchain::p2p::protocol::{MentisNetMessage, MentisResponse};
 use crate::blockchain::storage::chain::Ledger;
-use crate::blockchain::sync::state::SyncStatus;
+use crate::utils::prelude::*;
 
-/// Moteur de réconciliation de la chaîne Arcadia.
+/// Le moteur de synchronisation Mentis.
 pub struct SyncEngine {
-    pub status: SyncStatus,
-}
-
-impl Default for SyncEngine {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Référence partagée vers le registre local (Ledger).
+    ledger: SharedRef<SyncMutex<Ledger>>,
 }
 
 impl SyncEngine {
-    /// Initialise le moteur de synchronisation dans l'état Initializing.
-    pub fn new() -> Self {
-        Self {
-            status: SyncStatus::Initializing,
-        }
+    /// Crée une nouvelle instance du moteur de synchronisation.
+    pub fn new(ledger: SharedRef<SyncMutex<Ledger>>) -> Self {
+        Self { ledger }
     }
 
-    /// Compare notre dernier commit avec celui d'un pair pour décider de la marche à suivre.
-    /// Retourne une requête réseau si une synchronisation est nécessaire.
-    pub fn reconcile(
-        &mut self,
-        local_ledger: &Ledger,
-        remote_last_hash: Option<String>,
-    ) -> Option<ArcadiaNetMessage> {
-        let local_hash = local_ledger.last_commit_hash.clone();
-
-        // Cas 1 : Les chaînes sont identiques (ou les deux sont vides)
-        if remote_last_hash == local_hash {
-            self.status = SyncStatus::UpToDate;
-            return None;
-        }
-
-        // Cas 2 : Le pair distant a une tête de chaîne différente
-        match remote_last_hash {
-            Some(hash) => {
-                // Le distant a un commit que nous n'avons pas ou est sur un fork.
-                // On passe en état Syncing et on demande le commit manquant.
-                self.status = SyncStatus::Syncing {
-                    progress: 0.0,
-                    target_hash: hash.clone(),
+    /// Traite une requête de synchronisation ciblée et génère la réponse MentisResponse.
+    pub fn process_sync_request(
+        &self,
+        req: &MentisNetMessage,
+    ) -> RaiseResult<Option<MentisResponse>> {
+        match req {
+            // 🔍 Un pair demande quel est notre dernier hash
+            MentisNetMessage::RequestLatestHash => {
+                let guard = match self.ledger.lock() {
+                    Ok(g) => g,
+                    Err(_) => raise_error!("ERR_SYNC_LEDGER_LOCK", error = "Ledger lock poisoned"),
                 };
-                Some(ArcadiaNetMessage::RequestCommit { commit_hash: hash })
-            }
-            None => {
-                // Le distant est vide alors que nous avons des données (ou inversement géré par Cas 1).
-                // On reste Idle ou UpToDate par rapport à ce pair.
-                self.status = SyncStatus::UpToDate;
-                None
-            }
-        }
-    }
 
-    /// Met à jour l'état de synchronisation manuellement.
-    pub fn set_status(&mut self, new_status: SyncStatus) {
-        self.status = new_status;
+                user_trace!(
+                    "TRC_SYNC_LATEST_HASH",
+                    json_value!({ "latest": guard.last_commit_hash })
+                );
+                Ok(Some(MentisResponse::LatestHash(
+                    guard.last_commit_hash.clone(),
+                )))
+            }
+
+            // 📥 Un pair demande un commit spécifique qu'il lui manque
+            MentisNetMessage::RequestCommit { commit_hash } => {
+                let _guard = match self.ledger.lock() {
+                    Ok(g) => g,
+                    Err(_) => raise_error!("ERR_SYNC_LEDGER_LOCK", error = "Ledger lock poisoned"),
+                };
+
+                user_trace!("TRC_SYNC_GET_COMMIT", json_value!({ "hash": commit_hash }));
+
+                // TODO: Appeler guard.get_commit(commit_hash) quand l'API Ledger le permettra.
+                // Pour l'instant, on simule que le commit n'est pas trouvé.
+                Ok(Some(MentisResponse::CommitNotFound))
+            }
+
+            // Les messages de diffusion (AnnounceCommit, SubmitVote) sont ignorés ici,
+            // ils sont traités en amont par le ConsensusEngine dans service.rs.
+            _ => Ok(None),
+        }
     }
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES (Audit du Moteur de Synchronisation)
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blockchain::storage::chain::Ledger;
 
     #[test]
-    fn test_sync_reconcile_up_to_date() {
-        let mut engine = SyncEngine::new();
-        let mut ledger = Ledger::new();
-        ledger.last_commit_hash = Some("hash1".to_string());
+    fn test_sync_engine_request_latest_hash() {
+        let ledger = SharedRef::new(SyncMutex::new(Ledger::new()));
+        let engine = SyncEngine::new(ledger.clone());
 
-        let decision = engine.reconcile(&ledger, Some("hash1".to_string()));
+        let req = MentisNetMessage::RequestLatestHash;
+        let response = engine.process_sync_request(&req).unwrap();
 
-        assert!(decision.is_none());
-        assert_eq!(engine.status, SyncStatus::UpToDate);
+        // Un ledger neuf n'a pas de hash de tête
+        assert_eq!(response, Some(MentisResponse::LatestHash(None)));
     }
 
     #[test]
-    fn test_sync_request_missing_commit() {
-        let mut engine = SyncEngine::new();
-        let ledger = Ledger::new(); // Ledger vide
+    fn test_sync_engine_request_commit() {
+        let ledger = SharedRef::new(SyncMutex::new(Ledger::new()));
+        let engine = SyncEngine::new(ledger);
 
-        let decision = engine.reconcile(&ledger, Some("remote_hash".to_string()));
+        let req = MentisNetMessage::RequestCommit {
+            commit_hash: "123".into(),
+        };
+        let response = engine.process_sync_request(&req).unwrap();
 
-        if let Some(ArcadiaNetMessage::RequestCommit { commit_hash }) = decision {
-            assert_eq!(commit_hash, "remote_hash");
-        } else {
-            panic!("Le moteur de synchronisation devrait générer une RequestCommit");
-        }
+        // Par défaut, le mock renvoie CommitNotFound
+        assert_eq!(response, Some(MentisResponse::CommitNotFound));
     }
 
     #[test]
-    fn test_sync_with_empty_remote() {
-        let mut engine = SyncEngine::new();
-        let mut ledger = Ledger::new();
-        ledger.last_commit_hash = Some("local_hash".to_string());
+    fn test_sync_engine_ignores_gossip() {
+        let ledger = SharedRef::new(SyncMutex::new(Ledger::new()));
+        let engine = SyncEngine::new(ledger);
 
-        // Le pair distant n'a rien (None)
-        let decision = engine.reconcile(&ledger, None);
+        // Un message SubmitVote ne doit pas générer de réponse de synchronisation
+        let vote = crate::blockchain::consensus::vote::Vote {
+            commit_id: "abc".into(),
+            voter: "xyz".into(),
+            signature: vec![],
+        };
+        let req = MentisNetMessage::SubmitVote(vote);
 
-        assert!(decision.is_none());
-        assert_eq!(engine.status, SyncStatus::UpToDate);
+        let response = engine.process_sync_request(&req).unwrap();
+        assert_eq!(
+            response, None,
+            "Les messages Gossip doivent être ignorés par le SyncEngine"
+        );
     }
 }

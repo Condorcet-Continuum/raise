@@ -1,7 +1,9 @@
 // src-tauri/src/blockchain/consensus/leader.rs
-//! Logique de sélection du Leader pour le cycle de consensus Arcadia.
+//! Logique de sélection du Leader pour le cycle de consensus Mentis.
 
+use crate::blockchain::crypto::hashing::calculate_hash;
 use crate::blockchain::vpn::Peer;
+use crate::utils::prelude::*;
 
 /// Gère l'élection du leader basé sur la liste des pairs du mesh.
 pub struct LeaderElection {
@@ -16,23 +18,36 @@ impl LeaderElection {
         }
     }
 
-    /// Sélectionne un leader de manière déterministe à partir de la liste des pairs.
-    /// Utilise un round-robin basé sur l'index du bloc via un tri alphabétique des clés.
+    /// Sélectionne un leader de manière déterministe et résiliente au "Churn" (déconnexions).
+    /// Utilise l'algorithme de Rendezvous Hashing (Highest Random Weight).
     pub fn select_leader(&mut self, peers: &[Peer], block_index: u64) -> Option<String> {
         if peers.is_empty() {
+            self.current_leader_key = None;
             return None;
         }
 
-        // Tri déterministe des pairs par clé publique pour la cohérence inter-nœuds.
-        let mut sorted_peers: Vec<String> = peers.iter().map(|p| p.public_key.clone()).collect();
-        sorted_peers.sort();
+        let mut highest_score = String::new();
+        let mut selected_leader = None;
 
-        // Sélection par modulo (Round-Robin)
-        let index = (block_index % sorted_peers.len() as u64) as usize;
-        let leader = sorted_peers.get(index).cloned();
+        // 🎯 FIX ANTI-FORK : Calcul d'un score cryptographique unique pour chaque pair
+        for peer in peers {
+            let payload = json_value!({
+                "block_index": block_index,
+                "pubkey": peer.public_key
+            });
 
-        self.current_leader_key = leader.clone();
-        leader
+            // On génère le hash (le score aléatoire mais déterministe)
+            let score = calculate_hash(&payload);
+
+            // Le pair avec le score le plus élevé gagne l'élection pour ce bloc précis
+            if selected_leader.is_none() || score > highest_score {
+                highest_score = score;
+                selected_leader = Some(peer.public_key.clone());
+            }
+        }
+
+        self.current_leader_key = selected_leader.clone();
+        selected_leader
     }
 
     /// Vérifie si une clé donnée est celle du leader actuel.
@@ -48,7 +63,9 @@ impl Default for LeaderElection {
     }
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES (Audit de Résilience P2P)
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -67,33 +84,58 @@ mod tests {
     }
 
     #[test]
-    fn test_deterministic_leader_selection() {
+    fn test_rendezvous_hashing_stability() {
         let mut election = LeaderElection::new();
-        let peers = vec![mock_peer("key_C"), mock_peer("key_A"), mock_peer("key_B")];
+        let peer_a = mock_peer("pubkey_A");
+        let peer_b = mock_peer("pubkey_B");
+        let peer_c = mock_peer("pubkey_C");
 
-        // Pour l'index 0, après tri (A, B, C), le leader doit être "key_A"
-        let leader_0 = election.select_leader(&peers, 0);
-        assert_eq!(leader_0, Some("key_A".into()));
-        assert!(election.is_leader("key_A"));
+        let peers_full = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
 
-        // Pour l'index 1, le leader doit être "key_B"
-        let leader_1 = election.select_leader(&peers, 1);
-        assert_eq!(leader_1, Some("key_B".into()));
+        // On détermine le leader pour le bloc 100
+        let leader_full = election.select_leader(&peers_full, 100).unwrap();
 
-        // Pour l'index 3 (modulo), on revient à "key_A"
-        let leader_3 = election.select_leader(&peers, 3);
-        assert_eq!(leader_3, Some("key_A".into()));
+        // 🎯 FIX DU TEST : On trouve un nœud qui N'EST PAS le leader pour simuler sa déconnexion
+        let loser_key = peers_full
+            .iter()
+            .find(|p| p.public_key != leader_full)
+            .unwrap()
+            .public_key
+            .clone();
+
+        // On retire ce perdant du réseau
+        let peers_reduced: Vec<Peer> = peers_full
+            .into_iter()
+            .filter(|p| p.public_key != loser_key)
+            .collect();
+
+        let leader_reduced = election.select_leader(&peers_reduced, 100).unwrap();
+
+        // Le leader DOIT rester le même.
+        assert_eq!(
+            leader_full, leader_reduced,
+            "La déconnexion d'un pair perdant ne doit pas altérer le leader du bloc en cours"
+        );
     }
 
     #[test]
-    fn test_default_impl() {
-        let election = LeaderElection::default();
+    fn test_leader_election_determinism() {
+        let mut election1 = LeaderElection::new();
+        let mut election2 = LeaderElection::new();
+
+        let peers = vec![mock_peer("key_A"), mock_peer("key_B"), mock_peer("key_C")];
+
+        // Deux nœuds différents sur le réseau calculant l'élection doivent converger
+        let leader1 = election1.select_leader(&peers, 42);
+        let leader2 = election2.select_leader(&peers, 42);
+
+        assert_eq!(leader1, leader2, "Le consensus n'est pas déterministe");
+    }
+
+    #[test]
+    fn test_default_impl_and_empty_peers() {
+        let mut election = LeaderElection::default();
         assert!(election.current_leader_key.is_none());
-    }
-
-    #[test]
-    fn test_empty_peers() {
-        let mut election = LeaderElection::new();
-        assert_eq!(election.select_leader(&vec![], 0), None);
+        assert_eq!(election.select_leader(&vec![], 10), None);
     }
 }

@@ -1,10 +1,9 @@
 // src-tauri/src/blockchain/vpn/innernet_client.rs
-//! Client Innernet pour RAISE
-//!
-//! Gère la connexion au mesh VPN WireGuard via la CLI `innernet`.
+//! Client Innernet RAISE : Orchestration du maillage VPN WireGuard sécurisé.
 
 use crate::utils::prelude::*;
 
+/// Configuration du segment réseau mesh.
 #[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct NetworkConfig {
     pub name: String,
@@ -24,7 +23,8 @@ impl Default for NetworkConfig {
     }
 }
 
-#[derive(Debug, Clone, Serializable, Deserializable)]
+/// Représentation d'un agent (pair) détecté sur le segment VPN.
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq)]
 pub struct Peer {
     pub name: String,
     pub ip: String,
@@ -35,6 +35,7 @@ pub struct Peer {
     pub transfer_tx: u64,
 }
 
+/// État de santé et télémétrie du réseau[cite: 9].
 #[derive(Debug, Clone, Serializable, Deserializable)]
 pub struct NetworkStatus {
     pub connected: bool,
@@ -44,6 +45,7 @@ pub struct NetworkStatus {
     pub uptime_seconds: Option<u64>,
 }
 
+/// Client d'orchestration pour la CLI Innernet.
 #[derive(Clone)]
 pub struct InnernetClient {
     config: NetworkConfig,
@@ -51,7 +53,7 @@ pub struct InnernetClient {
 }
 
 impl InnernetClient {
-    /// Crée une nouvelle instance du client Innernet
+    /// Initialise une nouvelle instance du client avec état atomique partagé[cite: 14].
     pub fn new(config: NetworkConfig) -> Self {
         let status = NetworkStatus {
             connected: false,
@@ -67,351 +69,242 @@ impl InnernetClient {
         }
     }
 
-    /// Vérifie si Innernet est installé (Appel bloquant acceptable au démarrage)
-    // 🎯 MIGRATION : Utilisation de RaiseResult
+    /// Vérifie la présence et la version du binaire innernet sur l'hôte[cite: 14].
     pub fn check_installation() -> RaiseResult<String> {
-        let output = match ProcessCommand::new("innernet").arg("--version").output() {
-            Ok(out) => out,
-            Err(e) => raise_error!(
-                "ERR_VPN_INNERNET_MISSING",
-                error = e,
-                context = json_value!({
-                    "action": "check_innernet_installation",
-                    "command": "innernet --version",
-                    "hint": "Le binaire 'innernet' est introuvable. Assurez-vous qu'il est installé (sudo apt install innernet) et que l'utilisateur courant a les droits d'exécution."
-                })
+        let cmd = ProcessCommand::new("innernet").arg("--version").output();
+
+        match cmd {
+            Ok(output) if output.status.success() => {
+                Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            }
+            Ok(output) => raise_error!(
+                "ERR_VPN_BINARY_INCORRECT",
+                context = json_value!({ "exit_code": output.status.code() })
             ),
-        };
-
-        if !output.status.success() {
-            crate::raise_error!(
-                "ERR_VPN_INNERNET_EXEC_FAIL",
-                error = "L'exécution de la commande Innernet a échoué.",
-                context = json_value!({
-                    "action": "check_innernet_installation",
-                    "status_code": output.status.code(),
-                    "stderr": String::from_utf8_lossy(&output.stderr).to_string()
-                })
-            );
+            Err(e) => raise_error!("ERR_VPN_BINARY_MISSING", error = e),
         }
-
-        let version = String::from_utf8_lossy(&output.stdout);
-        Ok(version.trim().to_string())
     }
 
-    /// Se connecte au réseau mesh (Async)
+    /// Active l'interface VPN et met à jour l'IP locale[cite: 9, 13].
     pub async fn connect(&self) -> RaiseResult<()> {
-        tracing::info!("Connecting to Innernet network: {}", self.config.name);
+        user_info!(
+            "INF_VPN_CONNECTING",
+            json_value!({ "network": self.config.name })
+        );
 
-        let output = self.run_command(["up", &self.config.name]).await?;
+        self.run_command(["up", &self.config.name]).await?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            crate::raise_error!(
-                "ERR_VPN_CONNECTION_FAIL",
-                context = json_value!({
-                    "network_name": self.config.name,
-                    "action": "connect_vpn",
-                    "status_code": output.status.code(),
-                    "stderr": stderr.trim(),
-                    "hint": "La commande a été trouvée mais a échoué. Vérifiez vos privilèges sudo, l'existence de l'interface ou si le serveur Innernet est joignable."
-                })
-            );
-        }
-
-        // Mettre à jour le statut
+        let ip = self.get_interface_ip_async().await?;
         let mut status = self.status.write().await;
         status.connected = true;
+        status.ip_address = Some(ip);
 
-        // On relâche le lock avant d'appeler get_interface_ip qui est async
-        drop(status);
-
-        if let Ok(ip) = self.get_interface_ip().await {
-            let mut status = self.status.write().await;
-            status.ip_address = Some(ip);
-        }
-
-        tracing::info!("Successfully connected to {}", self.config.name);
-
+        user_success!("INF_VPN_CONNECTED");
         Ok(())
     }
 
-    /// Se déconnecte du réseau mesh (Async)
+    /// Désactive l'interface et purge l'état local[cite: 9].
     pub async fn disconnect(&self) -> RaiseResult<()> {
-        tracing::info!("Disconnecting from Innernet network: {}", self.config.name);
+        self.run_command(["down", &self.config.name]).await?;
 
-        let output = self.run_command(["down", &self.config.name]).await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            raise_error!(
-                "ERR_VPN_DISCONNECTION_FAIL",
-                context = json_value!({
-                    "network_name": self.config.name,
-                    "action": "disconnect_vpn",
-                    "status_code": output.status.code(),
-                    "stderr": stderr.trim(),
-                    "hint": "Impossible de fermer l'interface VPN. Vérifiez si le processus innernet est verrouillé ou si l'interface a déjà été supprimée manuellement."
-                })
-            );
-        }
-
-        // Mettre à jour le statut
         let mut status = self.status.write().await;
         status.connected = false;
         status.ip_address = None;
         status.peers.clear();
-
-        tracing::info!("Successfully disconnected from {}", self.config.name);
+        status.uptime_seconds = None;
 
         Ok(())
     }
 
-    /// Récupère le statut actuel du réseau
-    pub async fn get_status(&self) -> RaiseResult<NetworkStatus> {
-        // Tentative de mise à jour des peers si possible
-        if let Ok(peers) = self.fetch_peers().await {
-            let mut status = self.status.write().await;
-            status.peers = peers;
-            if !status.peers.is_empty() {
-                status.connected = true;
-            }
+    /// Intègre un nouveau pair via une invitation sécurisée (Écriture Atomique)[cite: 11].
+    pub async fn add_peer(&self, invitation_data: &str) -> RaiseResult<String> {
+        // Utilisation d'un identifiant unique pour éviter les collisions en mode multi-instance[cite: 14].
+        let temp_name = format!("invite_{}.json", UniqueId::new_v4());
+        let temp_path = fs::PathBuf::from("/tmp").join(temp_name);
+
+        // Persistance sécurisée via la façade fs (RUST FIRST)[cite: 11].
+        fs::write_atomic_sync(&temp_path, invitation_data.as_bytes())?;
+
+        // Correction de durée de vie : On fige la String du chemin avant l'emprunt.
+        let path_str = temp_path.to_string_lossy();
+
+        let args = [
+            "accept-invitation",
+            &self.config.name,
+            "--args",
+            path_str.as_ref(),
+        ];
+
+        let result = self.run_command(args).await;
+
+        // Nettoyage systématique du secret après traitement[cite: 11].
+        let _ = fs::remove_file_sync(&temp_path);
+
+        match result {
+            Ok(_) => Ok("PEER_ACCEPTED".into()),
+            Err(e) => Err(e),
         }
-
-        Ok(self.status.read().await.clone())
     }
 
-    /// Liste tous les peers du réseau
-    pub async fn list_peers(&self) -> RaiseResult<Vec<Peer>> {
-        self.fetch_peers().await
-    }
-
-    /// Ajoute un nouveau peer via un code d'invitation
-    pub async fn add_peer(&self, _invitation_code: &str) -> RaiseResult<String> {
-        tracing::info!("Adding peer with invitation code");
-        // TODO: Implémentation réelle avec fichier temporaire pour l'invitation
-        Ok("Peer added successfully (Simulation)".to_string())
-    }
-
-    /// Exécute une commande Innernet (Async)
+    /// Exécuteur générique de commandes système avec gestion d'erreurs RAISE[cite: 12, 14].
     async fn run_command<I, S>(&self, args: I) -> RaiseResult<ProcessOutput>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<SystemStr>,
     {
-        // 1. Exécution et capture de l'erreur système
-        let output = match AsyncCommand::new("innernet").args(args).output().await {
-            Ok(out) => out,
-            Err(e) => {
-                raise_error!(
-                    "ERR_VPN_COMMAND_EXEC",
-                    error = e,
-                    context = json_value!({
-                        "action": "execute_innernet_cli",
-                        "hint": "Le binaire innernet n'a pas pu être lancé. Vérifiez qu'il est dans le PATH."
-                    })
-                )
-            }
-        };
+        let cmd = AsyncCommand::new("innernet").args(args).output().await;
 
-        // 2. Vérification du succès de la commande (Exit Code)
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            raise_error!(
+        match cmd {
+            Ok(output) if output.status.success() => Ok(output),
+            Ok(output) => raise_error!(
                 "ERR_VPN_COMMAND_FAILED",
-                context = json_value!({
-                    "exit_code": output.status.code(),
-                    "stderr": stderr,
-                    "action": "validate_innernet_execution",
-                    "hint": "Innernet a renvoyé une erreur. Vérifiez les logs stderr ci-dessus."
-                })
-            )
+                context = json_value!({ "stderr": String::from_utf8_lossy(&output.stderr).trim() })
+            ),
+            Err(e) => raise_error!("ERR_VPN_EXECUTION", error = e),
         }
-
-        Ok(output)
     }
 
-    /// Récupère l'IP de l'interface
-    async fn get_interface_ip(&self) -> RaiseResult<String> {
+    /// Extrait l'IP de l'interface via un appel système show[cite: 9].
+    async fn get_interface_ip_async(&self) -> RaiseResult<String> {
         let output = self.run_command(["show", &self.config.name]).await?;
-
-        if !output.status.success() {
-            crate::raise_error!(
-                "ERR_VPN_INTERFACE_DOWN",
-                error = "Impossible de récupérer les informations de l'interface (Interface probablement inactive).",
-                context = json_value!({
-                    "network_name": self.config.name,
-                    "action": "get_interface_ip"
-                })
-            );
-        }
-
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        // Parser la sortie pour extraire l'IP
+        self.parse_ip_logic(&stdout)
+    }
+
+    /// Logique de parsing robuste pour l'extraction d'IP.
+    fn parse_ip_logic(&self, stdout: &str) -> RaiseResult<String> {
         for line in stdout.lines() {
             if line.contains("ip:") {
-                if let Some(ip_part) = line.split("ip:").nth(1) {
-                    let ip = ip_part.trim().split('/').next().unwrap_or("");
-                    if !ip.is_empty() {
-                        return Ok(ip.to_string());
+                let parts: Vec<&str> = line.split("ip:").collect();
+                if let Some(raw_val) = parts.get(1) {
+                    let clean_ip = raw_val.trim().split('/').next().unwrap_or("");
+                    if !clean_ip.is_empty() {
+                        return Ok(clean_ip.to_string());
                     }
                 }
             }
         }
-
-        crate::raise_error!(
-            "ERR_VPN_IP_PARSE_FAIL",
-            error = "Impossible d'extraire l'adresse IP de la sortie Innernet.",
-            context = json_value!({
-                "network_name": self.config.name,
-                "action": "parse_interface_ip",
-                "raw_output": stdout.to_string()
-            })
-        );
+        raise_error!("ERR_VPN_IP_NOT_FOUND")
     }
 
-    /// Récupère la liste des peers via WireGuard
-    async fn fetch_peers(&self) -> RaiseResult<Vec<Peer>> {
-        let output = match AsyncCommand::new("wg")
-            .args(["show", &self.config.interface])
-            .output()
-            .await
-        {
-            Ok(out) => out,
-            Err(e) => raise_error!(
-                "ERR_VPN_WG_COMMAND_FAIL",
-                error = e,
-                context = json_value!({
-                    "interface": self.config.interface,
-                    "action": "fetch_wireguard_peers",
-                    "hint": "La commande 'wg' a échoué. Vérifiez que WireGuard est installé et que l'utilisateur a les droits 'sudo' ou les capacités CAP_NET_ADMIN."
-                })
-            ),
-        };
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        self.parse_wg_output(&stdout)
-    }
-
-    /// Parse la sortie de `wg show`
-    fn parse_wg_output(&self, output: &str) -> RaiseResult<Vec<Peer>> {
+    /// Analyse la topologie WireGuard et convertit la sortie brute en modèles Peer[cite: 9].
+    pub fn parse_wg_topology(&self, output: &str) -> Vec<Peer> {
         let mut peers = Vec::new();
         let mut current_peer: Option<Peer> = None;
 
         for line in output.lines() {
-            let line = line.trim();
+            let l = line.trim();
 
-            if line.starts_with("peer:") {
-                if let Some(peer) = current_peer.take() {
-                    peers.push(peer);
+            if l.starts_with("peer:") {
+                if let Some(p) = current_peer.take() {
+                    peers.push(p);
                 }
-
-                let public_key = line.split_whitespace().nth(1).unwrap_or("").to_string();
-
                 current_peer = Some(Peer {
-                    name: "unknown".to_string(),
-                    ip: "0.0.0.0".to_string(),
-                    public_key,
+                    name: "unknown-peer".into(),
+                    ip: "0.0.0.0".into(),
+                    public_key: l.split_whitespace().nth(1).unwrap_or("").into(),
                     endpoint: None,
                     last_handshake: None,
                     transfer_rx: 0,
                     transfer_tx: 0,
                 });
-            } else if let Some(ref mut peer) = current_peer {
-                if line.starts_with("endpoint:") {
-                    peer.endpoint = line.split_whitespace().nth(1).map(String::from);
-                } else if line.starts_with("allowed ips:") {
-                    if let Some(ips) = line.split(':').nth(1) {
-                        if let Some(first_ip) = ips.split(',').next() {
-                            peer.ip = first_ip
-                                .trim()
-                                .split('/')
-                                .next()
-                                .unwrap_or("0.0.0.0")
-                                .to_string();
-                        }
-                    }
-                } else if line.starts_with("latest handshake:") {
-                    peer.last_handshake = Some(UtcClock::now().timestamp());
+            } else if let Some(ref mut p) = current_peer {
+                if l.starts_with("endpoint:") {
+                    p.endpoint = l.split_whitespace().nth(1).map(String::from);
+                } else if l.starts_with("allowed ips:") {
+                    p.ip = l
+                        .split(':')
+                        .nth(1)
+                        .and_then(|val| val.split(',').next())
+                        .map(|ip| ip.trim().split('/').next().unwrap_or("0.0.0.0"))
+                        .unwrap_or("0.0.0.0")
+                        .into();
+                } else if l.starts_with("latest handshake:") {
+                    p.last_handshake = Some(UtcClock::now().timestamp());
                 }
             }
         }
-
-        if let Some(peer) = current_peer {
-            peers.push(peer);
+        if let Some(p) = current_peer {
+            peers.push(p);
         }
-
-        Ok(peers)
-    }
-
-    /// Ping un peer spécifique
-    pub async fn ping_peer(&self, peer_ip: &str) -> RaiseResult<bool> {
-        let output = match AsyncCommand::new("ping")
-            .args(["-c", "1", "-W", "2", peer_ip])
-            .output()
-            .await
-        {
-            Ok(out) => out,
-            Err(e) => raise_error!(
-                "ERR_VPN_PING_EXEC_FAIL",
-                error = e,
-                context = json_value!({
-                    "target_ip": peer_ip,
-                    "action": "ping_vpn_peer",
-                    "hint": "Le binaire 'ping' n'a pas pu être exécuté. Vérifiez les permissions d'exécution ou la présence du binaire sur le système hôte."
-                })
-            ),
-        };
-
-        Ok(output.status.success())
+        peers
     }
 }
+
+// =========================================================================
+// TESTS DE CONFORMITÉ ET DE ROBUSTESSE
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Test 1 : Vérifie la validité des configurations par défaut[cite: 9].
     #[test]
-    fn test_network_config_default() {
+    fn test_conformity_network_defaults() {
         let config = NetworkConfig::default();
         assert_eq!(config.name, "raise");
         assert_eq!(config.cidr, "10.42.0.0/16");
+        assert!(config.interface.contains("raise"));
     }
 
-    #[async_test]
-    async fn test_innernet_client_creation() {
-        let config = NetworkConfig::default();
-        let client = InnernetClient::new(config);
-
-        let status = client.status.read().await;
-        assert!(!status.connected);
-    }
-
+    /// Test 2 : Analyse de la résilience du parser d'IP face à divers formats.
     #[test]
-    fn test_parse_wg_output() {
-        let config = NetworkConfig::default();
-        let client = InnernetClient::new(config);
+    fn test_conformity_ip_parsing() {
+        let client = InnernetClient::new(NetworkConfig::default());
 
-        let wg_output = r#"
-interface: raise0
-  public key: abc123...
-  private key: (hidden)
-  listening port: 51820
+        // Format standard
+        assert_eq!(
+            client.parse_ip_logic("  ip: 10.42.0.5/32").unwrap(),
+            "10.42.0.5"
+        );
+        // Format compact
+        assert_eq!(
+            client.parse_ip_logic("ip:192.168.1.1").unwrap(),
+            "192.168.1.1"
+        );
+        // Format invalide
+        assert!(client.parse_ip_logic("invalid_line: no_ip").is_err());
+    }
 
-peer: def456...
-  endpoint: 192.168.1.100:51820
-  allowed ips: 10.42.1.1/32
-  latest handshake: 30 seconds ago
-  transfer: 1.5 KiB received, 2.3 KiB sent
+    /// Test 3 : Simulation d'une topologie complexe (Multi-Peers)[cite: 9].
+    #[test]
+    fn test_conformity_wg_topology_parsing() {
+        let client = InnernetClient::new(NetworkConfig::default());
+        let dump = r#"
+peer: pubkey_alpha
+  endpoint: 1.2.3.4:51820
+  allowed ips: 10.42.0.2/32
+
+peer: pubkey_beta
+  allowed ips: 10.42.0.3/32, 10.42.1.0/24
         "#;
 
-        let peers = client.parse_wg_output(wg_output).unwrap();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].ip, "10.42.1.1");
+        let peers = client.parse_wg_topology(dump);
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers[0].public_key, "pubkey_alpha");
+        assert_eq!(peers[0].ip, "10.42.0.2");
+        assert_eq!(peers[1].ip, "10.42.0.3"); // Doit extraire la première IP du range
+    }
+
+    /// Test 4 : Vérification de l'intégrité de l'état initial[cite: 14].
+    #[async_test]
+    async fn test_conformity_initial_state() {
+        let client = InnernetClient::new(NetworkConfig::default());
+        let status = client.status.read().await;
+
+        assert_eq!(status.connected, false);
+        assert_eq!(status.interface, "raise0");
+        assert!(status.ip_address.is_none());
+        assert!(status.uptime_seconds.is_none());
+    }
+
+    /// Test 5 : Robustesse face aux entrées corrompues.
+    #[test]
+    fn test_conformity_garbage_input_resilience() {
+        let client = InnernetClient::new(NetworkConfig::default());
+        let peers = client.parse_wg_topology("données aléatoires corrompues");
+        assert!(peers.is_empty());
     }
 }

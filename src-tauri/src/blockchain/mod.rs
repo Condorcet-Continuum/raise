@@ -1,131 +1,93 @@
 // src-tauri/src/blockchain/mod.rs
-//! Point d'entrée du module Blockchain.
-//!
-//! Agit comme une façade pour :
-//! 1. La gestion des erreurs unifiée via `error::BlockchainError`.
-//! 2. Le client Hyperledger Fabric réel (`fabric`).
-//! 3. Le client VPN Innernet réel (`vpn`).
-//! 4. La gestion de l'état global (State) pour l'application Tauri.
+//! Module racine Mentis : Orchestration du réseau de connaissance.
 
 use crate::utils::prelude::*;
-use tauri::{AppHandle, Manager, Runtime, State};
 
-// Exposition publique des sous-modules
-pub mod bridge;
-pub mod consensus;
-pub mod crypto;
-pub mod fabric;
-pub mod p2p;
-pub mod storage;
-pub mod sync;
-pub mod vpn;
+// --- ARBORESCENCE ---
+pub mod bridge; // Adaptateur JsonDB
+pub mod client; // Client P2P Principal
+pub mod consensus; // Quorum & Votes
+pub mod crypto; // Hashing & Signatures
+pub mod p2p; // Transport (p2p)
+pub mod storage; // Ledger & Commits
+pub mod sync; // Synchronisation Delta
+pub mod vpn; // Maillage privé (Innernet)
 
-// Réexportations stratégiques pour le moteur Arcadia
-pub use consensus::ArcadiaConsensus;
-pub use p2p::swarm::create_swarm;
+// --- CONTRAT DE VALEUR ---
+#[async_interface]
+pub trait ValueGateway: Send + Sync {
+    async fn verify_payment(&self, commit_id: &str, buyer: &str) -> RaiseResult<bool>;
+    async fn trigger_payout(&self, commit_id: &str, seller: &str) -> RaiseResult<()>;
+}
+
+// --- RÉEXPORTATIONS STRATÉGIQUES ---
+pub use client::{BlockchainClient, NetworkConfig};
+pub use consensus::ConsensusEngine as MentisConsensus;
 pub use storage::chain::Ledger;
-pub use storage::commit::ArcadiaCommit;
-pub use sync::SyncEngine;
+pub use storage::commit::{MentisCommit, Mutation, MutationOp};
 
-// --- RÉ-EXPORTS ---
-
-pub use self::fabric::client::FabricClient;
-pub use self::fabric::config::ConnectionProfile;
-
-// On ré-exporte le client VPN et sa config (NetworkConfig renommé en VpnConfig pour la clarté)
-pub use self::vpn::innernet_client::{InnernetClient, NetworkConfig as VpnConfig};
-
-// =============================================================================
-//  GESTION DES ÉTATS TAURI (SHARED STATE)
-// =============================================================================
-
-/// Type alias pour le client Fabric partagé
-pub type SharedFabricClient = SharedRef<AsyncMutex<FabricClient>>;
-/// Type alias pour le client VPN partagé
-pub type SharedInnernetClient = SharedRef<AsyncMutex<InnernetClient>>;
-
-// --- HELPERS D'ACCÈS ---
-
-/// Helper pour récupérer le client Innernet depuis une commande Tauri.
-pub fn innernet_state<R: Runtime>(app: &AppHandle<R>) -> State<'_, SharedInnernetClient> {
-    app.state::<SharedInnernetClient>()
+/// État global injecté dans Tauri.
+#[derive(Debug, Clone, Default)]
+pub struct BlockchainState {
+    pub client: Option<SharedRef<AsyncMutex<BlockchainClient>>>,
 }
 
-/// Helper pour récupérer le client Fabric depuis une commande Tauri.
-pub fn fabric_state<R: Runtime>(app: &AppHandle<R>) -> State<'_, SharedFabricClient> {
-    app.state::<SharedFabricClient>()
-}
+/// Initialise le client Mentis de manière unique (Singleton).
+pub async fn ensure_blockchain_client(
+    state: SharedRef<AsyncMutex<BlockchainState>>,
+    config: NetworkConfig,
+) -> RaiseResult<SharedRef<AsyncMutex<BlockchainClient>>> {
+    let mut guard = state.lock().await;
 
-// --- INITIALISATION ---
-
-/// Initialise le client Innernet dans le state Tauri.
-pub fn ensure_innernet_state<R: Runtime>(app: &AppHandle<R>, default_profile: impl Into<String>) {
-    if app.try_state::<SharedInnernetClient>().is_none() {
-        let profile_name = default_profile.into();
-
-        // CORRECTION CLIPPY : Initialisation directe au lieu de reassignment
-        let vpn_config = VpnConfig {
-            name: profile_name.clone(),
-            ..Default::default()
-        };
-
-        let client = InnernetClient::new(vpn_config);
-
-        tracing::info!(
-            "🔒 [Blockchain] Initialisation State Innernet (profil: {})",
-            profile_name
-        );
-        app.manage(SharedRef::new(AsyncMutex::new(client)));
+    // Si le client existe déjà, on retourne son clone (pointe vers la même instance)
+    if let Some(ref client) = guard.client {
+        return Ok(client.clone());
     }
+
+    // Sinon, création et stockage
+    let client = BlockchainClient::new(config);
+    let shared = SharedRef::new(AsyncMutex::new(client));
+
+    guard.client = Some(shared.clone());
+
+    user_success!("INF_MENTIS_READY");
+    Ok(shared)
 }
 
-/// Initialise un client Fabric vide (en attente de chargement de profil).
-pub fn ensure_fabric_state<R: Runtime>(app: &AppHandle<R>) {
-    if app.try_state::<SharedFabricClient>().is_none() {
-        let empty_profile = ConnectionProfile {
-            name: "pending".into(),
-            version: "1.0".into(),
-            client: self::fabric::config::ClientConfig {
-                organization: "unknown".into(),
-                connection: None,
-            },
-            organizations: UnorderedMap::new(),
-            peers: UnorderedMap::new(),
-            certificate_authorities: UnorderedMap::new(),
-        };
-
-        let client = FabricClient::from_config(empty_profile);
-        app.manage(SharedRef::new(AsyncMutex::new(client)));
-    }
-}
+// =========================================================================
+// TESTS DE CONFORMITÉ (Audit Global Mentis)
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_vpn_config_initialization() {
-        // Test de la logique d'initialisation propre
-        let config = VpnConfig {
-            name: "test-mesh".to_string(),
-            ..Default::default()
+    /// Test 1 : Vérification de la persistance du Singleton.
+    #[async_test]
+    async fn test_mentis_singleton_persistence() {
+        let state = SharedRef::new(AsyncMutex::new(BlockchainState::default()));
+        let config = NetworkConfig {
+            node_name: "node-test".into(),
+            bootnodes: vec![],
         };
-        assert_eq!(config.name, "test-mesh");
+
+        let c1 = ensure_blockchain_client(state.clone(), config.clone())
+            .await
+            .unwrap();
+        let c2 = ensure_blockchain_client(state, config).await.unwrap();
+
+        // 🎯 FIX : Utilisation de ptr_eq pour comparer les adresses sur le TAS (Heap)
+        // et non les adresses des variables sur la PILE (Stack).
+        assert!(
+            SharedRef::ptr_eq(&c1, &c2),
+            "Le client BlockchainClient doit être physiquement le même (Singleton)."
+        );
     }
 
+    /// Test 2 : Vérification de l'interface de consensus.
     #[test]
-    fn test_fabric_client_reexport() {
-        let profile = ConnectionProfile {
-            name: "test".into(),
-            version: "1.0".into(),
-            client: self::fabric::config::ClientConfig {
-                organization: "Org1".into(),
-                connection: None,
-            },
-            organizations: UnorderedMap::new(),
-            peers: UnorderedMap::new(),
-            certificate_authorities: UnorderedMap::new(),
-        };
-        let _client = FabricClient::from_config(profile);
+    fn test_consensus_alias_integrity() {
+        let engine = MentisConsensus::new(5);
+        assert_eq!(engine.default_quorum, 5);
     }
 }

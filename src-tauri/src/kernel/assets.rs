@@ -65,7 +65,7 @@ mod tests {
     use super::*;
     use crate::utils::testing::AgentDbSandbox;
 
-    /// Helper local qui respecte ABSOLUMENT la façade Raise (Aucun `std::fs`)
+    /// Helper local qui respecte ABSOLUMENT la façade Raise
     fn touch_test_file(path: &Path) -> RaiseResult<()> {
         if let Some(parent) = path.parent() {
             fs::ensure_dir_sync(parent)?;

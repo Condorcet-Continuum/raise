@@ -1,84 +1,54 @@
 // src-tauri/src/blockchain/p2p/swarm.rs
+//! Configuration et assemblage du Swarm p2p (Transport + Sécurité + Multiplexage).
+//! Récrit pour utiliser exclusivement la façade (prelude) du projet Raise.
+
+use crate::blockchain::p2p::behavior::MentisBehavior;
 use crate::utils::prelude::*;
 
-use crate::blockchain::p2p::behavior::ArcadiaBehavior;
-use libp2p::{identity, noise, tcp, yamux, Swarm, SwarmBuilder};
+/// Crée et configure le Swarm réseau pour le nœud local.
+pub async fn create_swarm(
+    local_key: P2pIdentity::Keypair,
+) -> RaiseResult<P2pSwarm<MentisBehavior>> {
+    // 1. Initialisation de la stack comportementale (Kademlia, Gossipsub, etc.)
+    let behavior = MentisBehavior::new(local_key.clone())?;
 
-/// Crée et configure un Swarm libp2p pour le réseau Raise.
-/// Le Swarm combine le transport (TCP + Noise + Yamux) et le comportement (ArcadiaBehavior).
-pub async fn create_swarm(local_key: identity::Keypair) -> RaiseResult<Swarm<ArcadiaBehavior>> {
-    // Initialisation du comportement Arcadia (Kademlia + Gossipsub + ReqResp)
-    let behavior = ArcadiaBehavior::new(local_key.clone())?;
-
-    // Construction du Swarm avec la pile technologique Arcadia
-    // 1. Configuration du Transport (TCP + Noise + Yamux)
-    let swarm_with_transport = SwarmBuilder::with_existing_identity(local_key)
+    // 2. Configuration du transport (TCP sécurisé et multiplexé)
+    // L'utilisation de `with_existing_identity` et `with_tokio` est la norme absolue pour p2p moderne.
+    let transport = match P2pSwarmBuilder::with_existing_identity(local_key)
         .with_tokio()
         .with_tcp(
-            tcp::Config::default(),
-            noise::Config::new,
-            yamux::Config::default,
-        );
-
-    let transport_builder = match swarm_with_transport {
-        Ok(builder) => builder,
-        Err(e) => raise_error!(
-            "ERR_P2P_TRANSPORT_CONFIG",
-            error = e,
-            context = json_value!({
-                "action": "build_p2p_transport",
-                "stack": "TCP/Noise/Yamux",
-                "hint": "Échec de la configuration de la pile de transport. Vérifiez les dépendances Noise/Yamux."
-            })
-        ),
+            Default::default(),
+            P2pNoise::Config::new, // Résolution absolue (comme dans utils/network/p2p.rs)
+            P2pYamux::Config::default, // Résolution absolue
+        ) {
+        Ok(t) => t,
+        Err(e) => raise_error!("ERR_P2P_TRANSPORT", error = e.to_string()),
     };
 
-    // 2. Injection du Behaviour et Build final
-    let swarm = match transport_builder.with_behaviour(|_| behavior) {
-        Ok(builder) => {
-            // On configure et on build ici
-            builder
-                .with_swarm_config(|cfg| {
-                    cfg.with_idle_connection_timeout(TimeDuration::from_secs(60))
-                })
-                .build()
-        }
-        Err(e) => raise_error!(
-            "ERR_P2P_SWARM_BEHAVIOUR_INJECTION",
-            error = e,
-            context = json_value!({
-                "action": "inject_behaviour_into_swarm",
-                "component": "NetworkBehavior",
-                "hint": "L'injection du comportement réseau a échoué. Vérifiez la compatibilité des protocoles sélectionnés."
-            })
-        ),
+    // 3. Assemblage final
+    let swarm = match transport.with_behaviour(|_| behavior) {
+        Ok(b) => b.build(),
+        Err(e) => raise_error!("ERR_P2P_SWARM_BUILD", error = e.to_string()),
     };
 
     Ok(swarm)
 }
 
-// --- TESTS UNITAIRES ---
+// ============================================================================
+// TESTS UNITAIRES
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libp2p::identity;
 
     #[async_test]
-    async fn test_swarm_creation() {
-        let local_key = identity::Keypair::generate_ed25519();
-        let swarm_result = create_swarm(local_key).await;
-
+    async fn test_mentis_swarm_creation_robustness() {
+        // 🎯 FIX: Utilisation de l'identité via la façade
+        let key = P2pIdentity::Keypair::generate_ed25519();
         assert!(
-            swarm_result.is_ok(),
-            "Le Swarm devrait être créé sans erreur avec la pile Arcadia (TCP/Noise/Yamux)"
+            create_swarm(key).await.is_ok(),
+            "Le Swarm doit s'initialiser correctement avec la stack Mentis"
         );
-
-        // CORRECTION : Suppression du 'mut' car l'instance du swarm n'est pas modifiée.
-        let swarm = swarm_result.expect("Échec de l'obtention du Swarm");
-
-        // Vérification que le PeerId local est correctement dérivé
-        let peer_id_str = swarm.local_peer_id().to_string();
-        assert!(!peer_id_str.is_empty());
     }
 }

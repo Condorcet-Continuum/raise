@@ -1,132 +1,103 @@
 // src-tauri/src/blockchain/storage/chain.rs
+//! Registre local (Ledger) Mentis : Assure le stockage et le chaînage cryptographique des commits.
 
-use crate::blockchain::storage::commit::ArcadiaCommit;
-
+use crate::blockchain::storage::commit::MentisCommit;
 use crate::utils::prelude::*;
 
 #[derive(Debug, Serializable, Deserializable, Default)]
 pub struct Ledger {
-    /// Index des commits par leur hash (ID).
-    pub commits: UnorderedMap<String, ArcadiaCommit>,
-    /// Hash du dernier commit validé (la tête de la chaîne).
+    /// Stockage brut des commits indexés par leur ID.
+    pub commits: UnorderedMap<String, MentisCommit>,
+    /// Pointeur vers la tête de la chaîne (Head).
     pub last_commit_hash: Option<String>,
 }
 
 impl Ledger {
-    /// Crée un nouveau registre vide.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Ajoute un commit à la chaîne locale après vérification de sa validité.
-    pub fn append_commit(&mut self, commit: ArcadiaCommit) -> RaiseResult<()> {
-        // 1. Vérification de la signature et de l'intégrité
-        if !commit.verify() {
-            // 🛡️ Alerte de sécurité : Intégrité compromise
-            raise_error!(
-                "ERR_COMMIT_INTEGRITY_FAILED",
-                context = json_value!({
-                    "commit_id": commit.id,
-                    "author": commit.author,
-                    "timestamp": commit.timestamp,
-                    "action": "verify_commit_signature",
-                    "hint": "La signature cryptographique ne correspond pas au contenu du commit. Le fichier a peut-être été modifié manuellement ou corrompu lors du transfert."
-                })
-            );
-        }
-
-        // 2. Vérification du chaînage (continuité)
-        if commit.parent_hash != self.last_commit_hash {
-            raise_error!(
-                "ERR_BLOCKCHAIN_PARENT_HASH_MISMATCH",
-                error = format!(
-                    "Rupture de continuité : le parent attendu est {:?}, mais le commit pointe vers {:?}",
-                    self.last_commit_hash, commit.parent_hash
-                ),
-                context = json_value!({
-                    "expected_parent_hash": self.last_commit_hash,
-                    "received_parent_hash": commit.parent_hash,
-                    "action": "verify_commit_chain_continuity",
-                    "hint": "Le commit soumis est désynchronisé (fork ou commit orphelin). Le nœud doit resynchroniser son état avec le reste du réseau."
-                })
-            );
-        }
-
-        // 3. Insertion dans le registre
-        let commit_id = commit.id.clone();
-        self.last_commit_hash = Some(commit_id.clone());
-        self.commits.insert(commit_id, commit);
-
-        Ok(())
-    }
-
-    /// Récupère un commit spécifique par son hash.
-    pub fn get_commit(&self, hash: &str) -> Option<&ArcadiaCommit> {
-        self.commits.get(hash)
-    }
-
-    /// Retourne le nombre total de commits dans le registre.
     pub fn len(&self) -> usize {
         self.commits.len()
     }
 
-    /// Indique si le registre est vide (requis par Clippy quand len() est présent).
     pub fn is_empty(&self) -> bool {
         self.commits.is_empty()
     }
+
+    /// Ajoute un commit au registre de manière sécurisée.
+    pub fn append_commit(&mut self, commit: MentisCommit) -> RaiseResult<()> {
+        // 1. Vérification cryptographique absolue (Intégrité & Signature)
+        if !commit.verify() {
+            raise_error!("ERR_MENTIS_INTEGRITY", error = "INVALID_SIGNATURE");
+        }
+
+        // 2. 🎯 FIX : Vérification de la continuité de la chaîne (Anti-Fork)
+        if let Some(ref last_hash) = self.last_commit_hash {
+            if commit.parent_hash.as_ref() != Some(last_hash) {
+                raise_error!(
+                    "ERR_MENTIS_CHAIN_BROKEN",
+                    error = "Le parent_hash ne correspond pas à la tête du Ledger local.",
+                    context = json_value!({
+                        "expected_parent": last_hash,
+                        "received_parent": commit.parent_hash
+                    })
+                );
+            }
+        } else if commit.parent_hash.is_some() {
+            // Cas du Genesis Block : Si le ledger local est vide, le premier commit reçu
+            // ne doit idéalement pas avoir de parent, ou alors c'est qu'il nous manque l'historique.
+            raise_error!(
+                "ERR_MENTIS_MISSING_HISTORY",
+                error = "Le registre local est vide, impossible de raccrocher un bloc avec parent."
+            );
+        }
+
+        // 3. Intégration
+        let id = commit.id.clone();
+        self.last_commit_hash = Some(id.clone());
+        self.commits.insert(id, commit);
+
+        Ok(())
+    }
 }
 
-// --- TESTS UNITAIRES ---
+// =========================================================================
+// TESTS UNITAIRES
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::blockchain::crypto::signing::KeyPair;
-    use crate::blockchain::storage::commit::{Mutation, MutationOp};
 
-    fn create_mock_commit(keys: &KeyPair, parent: Option<String>) -> ArcadiaCommit {
-        let mut commit = ArcadiaCommit {
-            id: String::new(),
-            parent_hash: parent,
-            author: keys.public_key_hex(),
-            timestamp: UtcClock::now(),
-            mutations: vec![Mutation {
-                element_id: "urn:test:1".to_string(),
-                operation: MutationOp::Create,
-                payload: json_value!({"type": "Test"}),
-            }],
-            merkle_root: "root".to_string(),
-            signature: vec![],
-        };
-        let hash = commit.compute_content_hash();
-        commit.id = hash.clone();
-        commit.signature = keys.sign(&hash);
-        commit
+    #[test]
+    fn test_ledger_methods() {
+        let l = Ledger::new();
+        assert_eq!(l.len(), 0);
+        assert!(l.is_empty());
     }
 
     #[test]
-    fn test_ledger_basics() {
-        let mut ledger = Ledger::new();
-        assert!(ledger.is_empty());
-
-        let keys = KeyPair::generate();
-        let c1 = create_mock_commit(&keys, None);
-        ledger.append_commit(c1).unwrap();
-
-        assert!(!ledger.is_empty());
-        assert_eq!(ledger.len(), 1);
-    }
-
-    #[test]
-    fn test_ledger_append_valid_chain() {
+    fn test_ledger_chain_continuity() {
         let mut ledger = Ledger::new();
         let keys = KeyPair::generate();
 
-        let c1 = create_mock_commit(&keys, None);
-        let c1_hash = c1.id.clone();
-        ledger.append_commit(c1).unwrap();
+        // 1. Genesis Commit (Valide)
+        let c1 = MentisCommit::new(vec![], None, &keys);
+        let id1 = c1.id.clone();
+        assert!(ledger.append_commit(c1).is_ok());
 
-        let c2 = create_mock_commit(&keys, Some(c1_hash));
+        // 2. Commit suivant légitime (Valide)
+        let c2 = MentisCommit::new(vec![], Some(id1.clone()), &keys);
         assert!(ledger.append_commit(c2).is_ok());
+
+        // 3. Commit Forké (Doit être rejeté)
+        let c3_fork = MentisCommit::new(vec![], Some("mauvais_parent".into()), &keys);
+        let result = ledger.append_commit(c3_fork);
+        assert!(
+            result.is_err(),
+            "Le Ledger doit rejeter un bloc qui brise la chaîne."
+        );
     }
 }
