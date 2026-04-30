@@ -950,7 +950,15 @@ impl<'a> TransactionManager<'a> {
                     );
                 }
             };
-            validator.compute_then_validate(doc)?;
+
+            let compute_ctx = crate::rules_engine::compute::ComputeContext {
+                document: doc.clone(),
+                collection_name: collection.to_string(),
+                db_name: target_db,
+                space_name: target_space,
+            };
+
+            validator.compute_then_validate(doc, &compute_ctx).await?;
         }
         Ok(())
     }
@@ -1171,6 +1179,7 @@ fn json_merge(a: &mut JsonValue, b: JsonValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::testing::mock::insert_mock_db;
     use crate::utils::testing::DbSandbox;
 
     async fn create_dataset_file(
@@ -1474,7 +1483,7 @@ mod tests {
 
         let perm_doc =
             json_value!({ "_id": "uuid-ext-perm-999", "handle": "perm_model_engine_update_sa" });
-        ext_col_mgr.insert_raw("permissions", &perm_doc).await?;
+        insert_mock_db(&ext_col_mgr, "permissions", &perm_doc).await?;
 
         // 🏠 2. INITIALISATION LOCALE
         let local_domain = "_system";
@@ -1501,7 +1510,7 @@ mod tests {
             .await?;
 
         let user_doc = json_value!({ "_id": "uuid-db-user-123", "handle": "admin" });
-        local_col_mgr.insert_raw("users", &user_doc).await?;
+        insert_mock_db(&local_col_mgr, "users", &user_doc).await?;
 
         let tm = TransactionManager::new(storage, local_domain, local_db);
         let reqs = vec![

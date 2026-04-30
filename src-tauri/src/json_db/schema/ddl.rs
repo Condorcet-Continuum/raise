@@ -55,7 +55,18 @@ impl<'a> DdlHandler<'a> {
             SchemaRegistry::from_uri(&mgr.storage.config, schema_uri, &mgr.space, &mgr.db).await?;
         let validator =
             crate::json_db::schema::SchemaValidator::compile_with_registry(schema_uri, &reg)?;
-        validator.compute_then_validate(&mut tx.document)?;
+
+        let compute_ctx = crate::rules_engine::compute::ComputeContext {
+            document: tx.document.clone(),
+            collection_name: "_system".to_string(), // C'est le fichier système !
+            db_name: mgr.db.clone(),
+            space_name: mgr.space.clone(),
+        };
+
+        // On passe le contexte au validateur
+        validator
+            .compute_then_validate(&mut tx.document, &compute_ctx)
+            .await?;
 
         // Création physique du dossier racine de la base
         let created = crate::json_db::storage::file_storage::create_db(
@@ -641,8 +652,8 @@ impl<'a> DdlHandler<'a> {
         bootstrapper.run(source_space, source_db).await
     }
 
-    /// 🎯 Enregistre une ontologie fondamentale (DDL) dans l'index de la base de données.
-    /// Cela définit les connaissances "en dur" (Code Génétique) nécessaires au Cerveau Sémantique.
+    /// Enregistre une ontologie fondamentale (DDL) dans l'index de la base de données.
+    /// Cela définit les connaissances (Code Génétique) nécessaires au Cerveau Sémantique.
     pub async fn register_ontology(
         &self,
         namespace: &str,
@@ -651,31 +662,48 @@ impl<'a> DdlHandler<'a> {
     ) -> RaiseResult<()> {
         let mgr = self.manager;
 
-        // 1. On prend le verrou global pour protéger le fichier _system.json
+        // 1. Verrou et Jeton
         let lock = mgr.storage.get_index_lock(&mgr.space, &mgr.db)?;
         let guard = lock.lock().await;
-
-        // 2. On génère le Jeton de Transaction Système
         let mut tx = mgr.begin_system_tx(&guard).await?;
 
-        // 3. On s'assure que le bloc "ontologies" existe bien
         if tx.document.get("ontologies").is_none() {
             tx.document["ontologies"] = json_value!({});
         }
 
-        // 4. On injecte la définition stricte exigée par primitive-types.schema.json
         if let Some(ontologies) = tx.document["ontologies"].as_object_mut() {
-            ontologies.insert(
-                namespace.to_string(),
-                json_value!({
-                    "uri": uri,
-                    "version": version,
-                    "imports": [] // Résolus dynamiquement par le graphe
-                }),
-            );
+            let new_entry = json_value!({
+                "uri": uri,
+                "version": version,
+                "imports": [] // Résolus dynamiquement par le graphe[cite: 28]
+            });
+
+            if let Some(existing) = ontologies.get_mut(namespace) {
+                if let Some(arr) = existing.as_array_mut() {
+                    // Cas A : C'est déjà un tableau. On ajoute si l'URI n'existe pas.
+                    let exists = arr
+                        .iter()
+                        .any(|item| item.get("uri").and_then(|v| v.as_str()) == Some(uri));
+                    if !exists {
+                        arr.push(new_entry);
+                    }
+                } else {
+                    // Cas B (Migration) : C'était un objet unique, on le transforme en tableau.
+                    let old_entry = existing.clone();
+                    let old_uri = old_entry.get("uri").and_then(|v| v.as_str());
+                    if old_uri != Some(uri) {
+                        *existing = json_value!([old_entry, new_entry]);
+                    } else {
+                        *existing = json_value!([new_entry]); // Même URI, on convertit juste
+                    }
+                }
+            } else {
+                // Cas C : Première insertion pour ce namespace (Création d'un tableau)
+                ontologies.insert(namespace.to_string(), json_value!([new_entry]));
+            }
         }
 
-        // 6. On commit la transaction (sauvegarde sur disque et libération du verrou)
+        // 2. Commit sur disque[cite: 28]
         tx.commit().await?;
 
         Ok(())
@@ -690,6 +718,7 @@ impl<'a> DdlHandler<'a> {
 mod tests {
     use super::*;
     use crate::utils::io::fs;
+    use crate::utils::testing::mock::insert_mock_db;
     use crate::utils::testing::mock::DbSandbox;
 
     /// 🧪 TEST 1 : Création et Suppression d'un Schéma (Disque + Index)
@@ -877,52 +906,44 @@ mod tests {
         );
         let ddl = DdlHandler::new(&manager);
 
-        // 1. Mutation génétique : On enregistre l'ontologie fondamentale Arcadia
-        ddl.register_ontology(
-            "arcadia",
-            "db://_system/bootstrap/schemas/v2/system/db/arcadia.jsonld",
-            "1.1.0",
-        )
-        .await?;
+        // 🎯 FIX : Utiliser des espaces de noms fictifs pour ne pas interférer avec le bootstrap de la Sandbox
+        let test_ns = "test_family";
 
-        // 🔍 Vérification du séquençage
+        // 1. Enregistrement initial (Création du tableau)
+        ddl.register_ontology(test_ns, "db://_system/test/onto-core.jsonld", "1.0.0")
+            .await?;
+
         let mut sys_doc = manager.load_index().await?;
-        assert!(
-            sys_doc.get("ontologies").is_some(),
-            "Le bloc ontologies doit avoir été créé dans l'index"
-        );
+        let entries = sys_doc["ontologies"][test_ns]
+            .as_array()
+            .expect("Doit être un tableau");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["uri"], "db://_system/test/onto-core.jsonld");
 
-        let arcadia_entry = &sys_doc["ontologies"]["arcadia"];
-        assert_eq!(
-            arcadia_entry["uri"],
-            "db://_system/bootstrap/schemas/v2/system/db/arcadia.jsonld"
-        );
-        assert_eq!(arcadia_entry["version"], "1.1.0");
-        assert!(
-            arcadia_entry["imports"].as_array().unwrap().is_empty(),
-            "Le tableau d'imports doit être vide par défaut"
-        );
+        // 2. Test d'étanchéité : Espace de noms différent
+        ddl.register_ontology("test_other", "db://_system/test/onto-other.jsonld", "1.0.0")
+            .await?;
 
-        // 2. Test d'étanchéité : On enregistre une seconde ontologie (RAISE)
-        // Cela permet de vérifier qu'on n'écrase pas le bloc complet, mais qu'on l'enrichit.
-        ddl.register_ontology(
-            "raise",
-            "db://_system/bootstrap/schemas/v2/system/db/raise.jsonld",
-            "1.1.0",
-        )
-        .await?;
+        // 3. 🎯 Ajout d'une ontologie fille dans la MÊME famille
+        ddl.register_ontology(test_ns, "db://_system/test/onto-extended.jsonld", "1.0.0")
+            .await?;
 
         // 🔍 Vérification finale
         sys_doc = manager.load_index().await?;
-        assert!(
-            sys_doc["ontologies"].get("arcadia").is_some(),
-            "L'ontologie Arcadia a été accidentellement écrasée !"
+
+        let final_entries = sys_doc["ontologies"][test_ns].as_array().unwrap();
+        assert_eq!(
+            final_entries.len(),
+            2,
+            "La famille de test doit contenir 2 ontologies"
         );
-        assert!(
-            sys_doc["ontologies"].get("raise").is_some(),
-            "L'ontologie RAISE n'a pas été ajoutée correctement."
+        assert_eq!(
+            final_entries[1]["uri"],
+            "db://_system/test/onto-extended.jsonld"
         );
-        assert_eq!(sys_doc["ontologies"]["raise"]["version"], "1.1.0");
+
+        let other_final = sys_doc["ontologies"]["test_other"].as_array().unwrap();
+        assert_eq!(other_final.len(), 1);
 
         Ok(())
     }
@@ -1019,7 +1040,7 @@ mod tests {
         let created = ddl.create_db_with_schema(&schema_uri).await?;
         assert!(created, "La base de données doit être créée");
 
-        // 🎯 FIX : Création explicite de la collection _ontologies avant l'insertion
+        // Création explicite de la collection _ontologies avant l'insertion
         mgr.create_collection(
             "_ontologies",
             "db://_system/_system/schemas/v1/db/generic.schema.json",
@@ -1028,15 +1049,12 @@ mod tests {
 
         // 2. On insère une ontologie cible avec un ID physique fixe
         let expected_uuid = "uuid-physique-core-001";
-        mgr.insert_raw(
-            "_ontologies",
-            &json_value!({
-                "_id": expected_uuid,
-                "handle": "onto-raise-core",
-                "name": "Ontologie RAISE Core"
-            }),
-        )
-        .await?;
+        let doc_onto = &json_value!({
+            "_id": expected_uuid,
+            "handle": "onto-raise-core",
+            "name": "Ontologie RAISE Core"
+        });
+        insert_mock_db(&mgr, "_ontologies", doc_onto).await?;
 
         // 3. ACTION : On tente de modifier @context avec un SmartLink (chaîne brute)
         let input_link = "ref:_ontologies:handle:onto-raise-core";

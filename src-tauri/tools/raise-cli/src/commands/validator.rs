@@ -81,7 +81,16 @@ pub async fn handle(args: ValidatorArgs, ctx: CliContext) -> RaiseResult<()> {
     let validator = SchemaValidator::compile_with_registry(&full_uri, &registry)
         .map_err(|e| build_error!("SCHEMA_COMPILATION_FAILED", error = e))?;
 
-    match validator.compute_then_validate(&mut doc) {
+    let compute_ctx = raise::rules_engine::compute::ComputeContext {
+        document: doc.clone(),
+        collection_name: "cli_validation".to_string(), // Nom générique pour un test CLI
+        db_name: ctx.active_db.clone(),
+        space_name: ctx.active_domain.clone(),
+    };
+    match validator
+        .compute_then_validate(&mut doc, &compute_ctx)
+        .await
+    {
         Ok(_) => {
             user_success!("VALIDATOR_SUCCESS", json_value!({"status": "passed"}));
             if let Some(id) = doc.get("_id") {

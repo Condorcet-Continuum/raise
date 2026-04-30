@@ -742,6 +742,7 @@ impl<'a> QueryEngine<'a> {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::testing::mock::insert_mock_db;
     use crate::utils::testing::DbSandbox;
 
     // Mock Provider Async
@@ -792,18 +793,11 @@ mod tests {
             )
             .await?;
 
-        manager
-            .insert_raw(
-                "users",
-                &json_value!({"_id": "1", "age": 20, "role": "user"}),
-            )
-            .await?;
-        manager
-            .insert_raw(
-                "users",
-                &json_value!({"_id": "2", "age": 30, "role": "admin"}),
-            )
-            .await?;
+        let doc1 = &json_value!({"_id": "1", "age": 20, "role": "user"});
+        insert_mock_db(&manager, "users", doc1).await?;
+
+        let doc2 = &json_value!({"_id": "2", "age": 30, "role": "admin"});
+        insert_mock_db(&manager, "users", doc2).await?;
 
         let query = Query {
             collection: "users".into(),
@@ -844,9 +838,8 @@ mod tests {
             )
             .await?;
 
-        manager
-            .insert_raw("docs", &json_value!({"_id": "1", "tags": ["rust", "code"]}))
-            .await?;
+        let doc1 = &json_value!({"_id": "1", "tags": ["rust", "code"]});
+        insert_mock_db(&manager, "docs", doc1).await?;
 
         let query = Query {
             collection: "docs".into(),
@@ -887,12 +880,11 @@ mod tests {
             )
             .await?;
 
-        manager
-            .insert_raw("users", &json_value!({"_id": "1", "role": "admin"}))
-            .await?;
-        manager
-            .insert_raw("users", &json_value!({"_id": "2", "role": "user"}))
-            .await?;
+        let doc1 = &json_value!({"_id": "1", "role": "admin"});
+        insert_mock_db(&manager, "users", doc1).await?;
+
+        let doc2 = &json_value!({"_id": "2", "role": "user"});
+        insert_mock_db(&manager, "users", doc2).await?;
 
         let mut idx_map = UnorderedMap::new();
         idx_map.insert("role".to_string(), vec!["1".to_string()]);
@@ -973,24 +965,12 @@ mod tests {
             .await?;
 
         // On insère 3 documents avec des niveaux de sensibilité différents
-        manager
-            .insert_raw(
-                "missions",
-                &json_value!({"_id": "1", "status": "PUBLIC", "owner": "bob"}),
-            )
-            .await?;
-        manager
-            .insert_raw(
-                "missions",
-                &json_value!({"_id": "2", "status": "CONFIDENTIAL", "owner": "alice"}),
-            )
-            .await?;
-        manager
-            .insert_raw(
-                "missions",
-                &json_value!({"_id": "3", "status": "SECRET", "owner": "eve"}),
-            )
-            .await?;
+        let doc1 = &json_value!({"_id": "1", "status": "PUBLIC", "owner": "bob"});
+        insert_mock_db(&manager, "missions", doc1).await?;
+        let doc2 = &json_value!({"_id": "2", "status": "CONFIDENTIAL", "owner": "alice"});
+        insert_mock_db(&manager, "missions", doc2).await?;
+        let doc3 = &json_value!({"_id": "3", "status": "SECRET", "owner": "eve"});
+        insert_mock_db(&manager, "missions", doc3).await?;
 
         // 🛡️ AST RLS : L'utilisateur n'a le droit de voir QUE les missions publiques
         let rls_ast = Expr::Eq(vec![
@@ -1037,25 +1017,12 @@ mod tests {
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
             .await?;
-
-        manager
-            .insert_raw(
-                "missions",
-                &json_value!({"_id": "1", "status": "PUBLIC", "owner": "bob"}),
-            )
-            .await?;
-        manager
-            .insert_raw(
-                "missions",
-                &json_value!({"_id": "2", "status": "CONFIDENTIAL", "owner": "alice"}),
-            )
-            .await?;
-        manager
-            .insert_raw(
-                "missions",
-                &json_value!({"_id": "3", "status": "SECRET", "owner": "eve"}),
-            )
-            .await?;
+        let doc1 = &json_value!({"_id": "1", "status": "PUBLIC", "owner": "bob"});
+        insert_mock_db(&manager, "missions", doc1).await?;
+        let doc2 = &json_value!({"_id": "2", "status": "CONFIDENTIAL", "owner": "alice"});
+        insert_mock_db(&manager, "missions", doc2).await?;
+        let doc3 = &json_value!({"_id": "3", "status": "SECRET", "owner": "eve"});
+        insert_mock_db(&manager, "missions", doc3).await?;
 
         // 🛡️ AST RLS : Fusion de rôles (ex: Le rôle "Visiteur" OU le rôle "Propriétaire")
         // L'utilisateur peut voir la mission SI elle est PUBLIC *OU* SI l'owner c'est "alice"

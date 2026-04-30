@@ -450,6 +450,7 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
                 }
             }
         }
+
         JsondbCommands::Import { collection, path } => {
             let json: JsonValue = fs::read_json_async(&path).await?;
             let docs = if let Some(arr) = json.as_array() {
@@ -459,10 +460,22 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
             };
             let count = docs.len();
             for doc in docs {
-                col_mgr.insert_with_schema(&collection, doc).await?;
+                match col_mgr.upsert_document(&collection, doc).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        user_warn!(
+                            "JSONDB_IMPORT_PARTIAL_FAIL",
+                            json_value!({
+                                "error": e.to_string(),
+                                "hint": "L'import de ce document a échoué. Le script continue."
+                            })
+                        );
+                    }
+                }
             }
             user_success!("JSONDB_IMPORT_SUCCESS", json_value!({ "count": count }));
         }
+
         JsondbCommands::ImportSchemas {
             source_domain,
             source_db,

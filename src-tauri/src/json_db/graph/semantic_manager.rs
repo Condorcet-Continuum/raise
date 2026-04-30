@@ -134,46 +134,14 @@ impl<'a> SemanticManager<'a> {
     // OPÉRATIONS DML : MANIPULATION DU GRAPHE DE CONNAISSANCES
     // =========================================================================
 
-    /// Insère un nœud sémantique après validation stricte (Opération DML).
+    /// Insère un nœud sémantique en s'appuyant sur l'intelligence de la base.
+    /// L'hydratation (x_compute), le Lazy Loading et la validation sont délégués
+    /// au cycle de vie de `insert_with_schema`.
     pub async fn insert_semantic_node(
         &self,
         collection: &str,
-        mut node: JsonValue,
+        node: JsonValue, // 🎯 Le document entre tel que fourni par le client
     ) -> RaiseResult<JsonValue> {
-        // 1. Résolution automatique du contexte (Ma proposition précédente)
-        // On détecte la couche via le nom de la collection (ex: pa_components -> pa)
-        let layer_prefix = collection.split('_').next().unwrap_or("data");
-        self.apply_mbse_context(&mut node, layer_prefix)?;
-
-        // 🎯 2. Création du processeur SYNCHRONISÉ avec le contexte
-        let processor = JsonLdProcessor::new()?.with_doc_context(&node)?;
-
-        // 3. Contrat de base JSON-LD
-        if let Err(e) = processor.validate_required_fields(&node, &["@id", "@type"]) {
-            raise_error!(
-                "ERR_SEMANTIC_VALIDATION_FAIL",
-                error = e,
-                context = json_value!({"collection": collection})
-            );
-        }
-
-        // 4. Validation Ontologique Stricte
-        // On étend en RAM uniquement pour vérifier que l'élément est légal
-        if let Some(type_uri) = processor.get_primary_type(&node) {
-            let expanded_type = processor.context_manager().expand_term(&type_uri);
-            if !VocabularyRegistry::global()?.has_class(&expanded_type) {
-                raise_error!(
-                    "ERR_SEMANTIC_UNKNOWN_TYPE",
-                    error = format!(
-                        "Le type '{}' n'appartient pas à l'ontologie.",
-                        expanded_type
-                    ),
-                    context = json_value!({"collection": collection, "provided_type": type_uri})
-                );
-            }
-        }
-
-        // 5. Persistance via le Muscle
         self.db_manager.insert_with_schema(collection, node).await
     }
 
@@ -194,19 +162,6 @@ impl<'a> SemanticManager<'a> {
             Err(e) => raise_error!("ERR_DB_READ_FAIL", error = e),
         }
     }
-
-    /// Helper privé pour injecter les métadonnées MBSE sans effort pour l'IA.
-    fn apply_mbse_context(&self, node: &mut JsonValue, layer: &str) -> RaiseResult<()> {
-        if let Some(obj) = node.as_object_mut() {
-            if !obj.contains_key("@context") {
-                let registry = VocabularyRegistry::global()?;
-                if let Some(ctx) = registry.get_context_for_layer(layer) {
-                    obj.insert("@context".to_string(), ctx);
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 // =========================================================================
@@ -216,6 +171,7 @@ impl<'a> SemanticManager<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::testing::mock::insert_mock_db;
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
     const GENERIC_SCHEMA: &str = "db://_system/_system/schemas/v1/db/generic.schema.json";
 
@@ -347,16 +303,12 @@ mod tests {
         let semantic_mgr = SemanticManager::new(&db_mgr)?;
         bootstrap_test_ontologies(&semantic_mgr).await?; // 🎯 FIX
 
-        db_mgr
-            .insert_raw(
-                "la_functions",
-                &json_value!({
-                    "_id": "uuid-logic-calc-001",
-                    "handle": "calc_logic",
-                    "@type": "la:LogicalFunction"
-                }),
-            )
-            .await?;
+        let doc_la = &json_value!({
+            "_id": "uuid-logic-calc-001",
+            "handle": "calc_logic",
+            "@type": "la:LogicalFunction"
+        });
+        insert_mock_db(&db_mgr, "la_functions", doc_la).await?;
 
         let component = json_value!({
             "@id": "processor-01",
@@ -378,14 +330,22 @@ mod tests {
         let db_mgr = CollectionsManager::new(&sandbox.db, "test", "db");
         let semantic_mgr = SemanticManager::new(&db_mgr)?;
 
+        // Ce nœud est un fantôme absolu : pas de $schema, pas de @type, pas de @id.
         let ghost_node = json_value!({ "name": "Anonymous" });
+
+        // On l'envoie dans une collection qui n'a pas été déclarée avec create_collection
         let result = semantic_mgr
             .insert_semantic_node("generic", ghost_node)
             .await;
 
         assert!(result.is_err());
+
         match result {
-            Err(AppError::Structured(err)) => assert_eq!(err.code, "ERR_SEMANTIC_VALIDATION_FAIL"),
+            Err(AppError::Structured(err)) => {
+                // 🎯 FIX : Le gatekeeper est désormais le gestionnaire de schémas,
+                // et non plus le SemanticManager. C'est la validation "Zéro Dette".
+                assert_eq!(err.code, "ERR_DB_STRICT_SCHEMA_REQUIRED");
+            }
             _ => panic!("Type d'erreur incorrect"),
         }
         Ok(())

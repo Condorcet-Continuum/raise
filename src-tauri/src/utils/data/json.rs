@@ -110,7 +110,33 @@ pub fn deserialize_from_yaml<T: DeserializableOwned>(content: &str) -> RaiseResu
         }
     }
 }
+/// Parcourt récursivement un JsonValue et remplace une sous-chaîne par une autre
+/// dans toutes les valeurs de type String (idéal pour réécrire les URI absolues).
+pub fn replace_uri_in_json(value: &mut JsonValue, search_str: &str, replace_str: &str) {
+    match value {
+        // Si c'est une chaîne, on fait le remplacement
+        JsonValue::String(s)
+            if s.contains(search_str) => {
+                *s = s.replace(search_str, replace_str);
+            }
+                |
 
+        // Si c'est un tableau, on plonge dans chaque élément
+        JsonValue::Array(arr) => {
+            for item in arr.iter_mut() {
+                replace_uri_in_json(item, search_str, replace_str);
+            }
+        }
+        // Si c'est un objet, on plonge dans chaque valeur
+        JsonValue::Object(obj) => {
+            for (_, val) in obj.iter_mut() {
+                replace_uri_in_json(val, search_str, replace_str);
+            }
+        }
+        // Pour les nombres, booléens et null, on ne fait rien
+        _ => {}
+    }
+}
 // --- TESTS UNITAIRES ---
 #[cfg(test)]
 mod tests {

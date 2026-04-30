@@ -5,6 +5,7 @@ use async_recursion::async_recursion;
 use crate::json_db::collections::manager::{CollectionsManager, SystemIndexTx};
 use crate::json_db::schema::ddl::DdlHandler;
 use crate::json_db::schema::SchemaRegistry;
+use crate::utils::data::json::replace_uri_in_json;
 use crate::utils::prelude::*;
 
 pub struct SchemaBootstrapper<'a> {
@@ -238,7 +239,6 @@ impl<'a> SchemaBootstrapper<'a> {
             return Ok(0);
         }
 
-        // 🎯 On ouvre le Jeton pour toute la durée de l'import
         let lock = self
             .manager
             .storage
@@ -250,13 +250,21 @@ impl<'a> SchemaBootstrapper<'a> {
             tx.document["schemas"] = json_value!({});
         }
 
-        // 🎯 On passe le jeton à la boucle récursive
+        let source_prefix = format!("db://{}/{}/", legacy_space, legacy_db);
+        let target_prefix = format!("db://{}/{}/", self.manager.space, self.manager.db);
+
         let count = self
-            .scan_recursive(&mut tx, &legacy_dir, &legacy_dir)
+            .scan_recursive(
+                &mut tx,
+                &legacy_dir,
+                &legacy_dir,
+                &source_prefix,
+                &target_prefix,
+            )
             .await?;
 
         if count > 0 {
-            tx.commit().await?; // On sauvegarde le tout à la fin
+            tx.commit().await?;
             user_info!(
                 "BOOTSTRAP_SCHEMAS_SUCCESS",
                 json_value!({"schemas_injected": count})
@@ -272,6 +280,8 @@ impl<'a> SchemaBootstrapper<'a> {
         tx: &mut SystemIndexTx<'_>,
         root_dir: &Path,
         current_dir: &Path,
+        source_prefix: &str,
+        target_prefix: &str,
     ) -> RaiseResult<usize> {
         let mut count = 0;
         let ddl = DdlHandler::new(self.manager);
@@ -280,15 +290,17 @@ impl<'a> SchemaBootstrapper<'a> {
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if entry.file_type().await?.is_dir() {
-                // 🎯 On fait transiter le jeton
-                count += self.scan_recursive(tx, root_dir, &path).await?;
+                // 🎯 On fait transiter le jeton et les préfixes
+                count += self
+                    .scan_recursive(tx, root_dir, &path, source_prefix, target_prefix)
+                    .await?;
             } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 let content = fs::read_to_string_async(&path).await?;
-                if let Ok(schema_json) = json::deserialize_from_str::<JsonValue>(&content) {
+                if let Ok(mut schema_json) = json::deserialize_from_str::<JsonValue>(&content) {
+                    replace_uri_in_json(&mut schema_json, source_prefix, target_prefix);
                     if let Ok(rel_path) = path.strip_prefix(root_dir) {
                         let rel_str = rel_path.to_string_lossy().replace('\\', "/");
 
-                        // 🎯 On passe le jeton à l'ouvrier
                         if ddl.create_schema(tx, &rel_str, schema_json).await.is_ok() {
                             count += 1;
                         }

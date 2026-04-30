@@ -16,6 +16,7 @@ async fn schema_instantiate_validate_minimal() -> RaiseResult<()> {
         .expect("❌ Impossible de charger le registre des schémas depuis la DB");
 
     // Construction de l'URI du schéma (Format SSOT)
+    let collection_name = "mock_actors";
     let root_uri = "db://_system/_system/schemas/v1/mock/actors.schema.json".to_string();
 
     // Vérification de présence dans le registre
@@ -47,9 +48,34 @@ async fn schema_instantiate_validate_minimal() -> RaiseResult<()> {
     });
 
     // 4. Exécution du cycle complet : Calcul des x_props + Validation
-    validator
-        .compute_then_validate(&mut doc)
-        .expect("❌ Le cycle compute_then_validate a échoué pour le document minimal");
+    // 🎯 Instanciation du contexte pour le test (Zero Dette)
+    let compute_ctx = raise::rules_engine::compute::ComputeContext {
+        document: doc.clone(),
+        collection_name: collection_name.to_string(),
+        db_name: env.db.clone(),
+        space_name: env.space.clone(),
+    };
+
+    // 4. Exécution du cycle complet : Calcul des x_props + Validation
+    // 🎯 On passe le contexte ici !
+    match validator
+        .compute_then_validate(&mut doc, &compute_ctx)
+        .await
+    {
+        Ok(_) => (),
+        Err(e) => {
+            raise_error!(
+                "ERR_DB_COMPUTE_VALIDATE_FAIL",
+                error = e,
+                context = json_value!({
+                    "collection": collection_name,
+                    "root_uri": root_uri,
+                    "action": "execute_schema_logic",
+                    "hint": "Échec de l'hydratation dynamique. Vérifiez les opérateurs x_compute dans actors.schema.json."
+                })
+            );
+        }
+    }
 
     // 5. Vérifications finales de persistance des métadonnées
     assert!(

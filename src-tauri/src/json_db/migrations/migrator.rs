@@ -270,6 +270,7 @@ impl<'a> Migrator<'a> {
 mod tests {
     use super::*;
     use crate::json_db::migrations::{Migration, MigrationStep};
+    use crate::utils::testing::mock::insert_mock_db;
     use crate::utils::testing::DbSandbox;
 
     #[async_test]
@@ -305,7 +306,7 @@ mod tests {
         assert!(mig_docs.is_ok());
 
         let user_doc = json_value!({ "_id": "user_1", "name": "Alice" });
-        migrator.manager.insert_raw("users", &user_doc).await?;
+        insert_mock_db(&migrator.manager, "users", &user_doc).await?;
 
         let m2 = Migration {
             id: "m2".to_string(),
@@ -374,11 +375,8 @@ mod tests {
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
             .await?;
-
-        migrator
-            .manager
-            .insert_raw("products", &json_value!({"_id": "p1", "cost": 100}))
-            .await?;
+        let doc_product = &json_value!({"_id": "p1", "cost": 100});
+        insert_mock_db(&migrator.manager, "products", doc_product).await?;
 
         let m_rename = Migration {
             id: "rename_01".to_string(),

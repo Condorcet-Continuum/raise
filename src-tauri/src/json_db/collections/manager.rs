@@ -231,6 +231,16 @@ impl<'a> CollectionsManager<'a> {
         collection: &str,
         id_or_handle: &str,
     ) -> RaiseResult<Option<JsonValue>> {
+        // 1. Protection "Fail-Fast"
+        let col_path = self
+            .storage
+            .config
+            .db_collection_path(&self.space, &self.db, collection);
+        if !col_path.exists() {
+            return Ok(None);
+        }
+
+        // 2. Recherche Physique directe par ID (Rapide O(1))
         if let Ok(Some(doc)) = self
             .storage
             .read_document(&self.space, &self.db, collection, id_or_handle)
@@ -239,6 +249,7 @@ impl<'a> CollectionsManager<'a> {
             return Ok(Some(doc));
         }
 
+        // 3. Recherche Logique par Handle via Index (Rapide O(log N))
         let mut query = Query::new(collection);
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
@@ -249,10 +260,29 @@ impl<'a> CollectionsManager<'a> {
         });
         query.limit = Some(1);
 
+        // Si le QueryEngine réussit, on renvoie le résultat.
         if let Ok(result) = QueryEngine::new(self).execute_query(query).await {
-            return Ok(result.documents.into_iter().next());
+            if let Some(doc) = result.documents.into_iter().next() {
+                return Ok(Some(doc));
+            }
         }
 
+        // 4. FALLBACK PHYSIQUE ULTIME
+        if let Ok(mut entries) = fs::read_dir_async(&col_path).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    if path.file_name().and_then(|s| s.to_str()) == Some("_meta.json") {
+                        continue;
+                    }
+                    if let Ok(content) = fs::read_json_async::<JsonValue>(&path).await {
+                        if content.get("handle").and_then(|v| v.as_str()) == Some(id_or_handle) {
+                            return Ok(Some(content));
+                        }
+                    }
+                }
+            }
+        }
         Ok(None)
     }
 
@@ -393,7 +423,15 @@ impl<'a> CollectionsManager<'a> {
         }
 
         if let Ok(validator) = SchemaValidator::compile_with_registry(&schema_uri, &reg) {
-            if let Err(e) = validator.compute_then_validate(doc) {
+            // 🎯 Création du contexte pour l'index système
+            let compute_ctx = crate::rules_engine::compute::ComputeContext {
+                document: doc.clone(),
+                collection_name: "_system".to_string(),
+                db_name: self.db.clone(),
+                space_name: self.space.clone(),
+            };
+
+            if let Err(e) = validator.compute_then_validate(doc, &compute_ctx).await {
                 user_warn!(
                     "WRN_SYSTEM_INDEX_INVALID_RECOVER",
                     json_value!({
@@ -616,6 +654,22 @@ impl<'a> CollectionsManager<'a> {
             ),
         };
 
+        if let Some(handle) = doc.get("handle").and_then(|v| v.as_str()) {
+            if let Ok(Some(existing_doc)) = self.get_document(collection, handle).await {
+                let existing_id = existing_doc
+                    .get("_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if existing_id != _id {
+                    raise_error!(
+                        "ERR_DB_DUPLICATE_HANDLE",
+                        error = format!("Violation d'intégrité : Le handle '{}' existe déjà dans la collection '{}'.", handle, collection),
+                        context = json_value!({ "existing_id": existing_id, "new_id": _id })
+                    );
+                }
+            }
+        }
+
         let meta_path = self
             .storage
             .config
@@ -724,8 +778,8 @@ impl<'a> CollectionsManager<'a> {
             .get("_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let handle_opt = data.get("handle").cloned();
-        let name_opt = data.get("name").cloned();
+        let handle_opt = data.get("handle").and_then(|v| v.as_str());
+        let name_opt = data.get("name").and_then(|v| v.as_str());
 
         if id_opt.is_none() && handle_opt.is_none() && name_opt.is_none() {
             raise_error!(
@@ -740,28 +794,41 @@ impl<'a> CollectionsManager<'a> {
 
         let mut target_id = None;
 
+        // 1. Recherche par _id
         if let Some(ref id) = id_opt {
             if let Ok(Some(_)) = self.get_document(collection, id).await {
                 target_id = Some(id.clone());
             }
         }
 
+        // 2. Recherche par Handle (Via le nouveau get_document sécurisé)
         if target_id.is_none() {
-            let search_param = if let Some(v) = handle_opt {
-                Some(("handle", v))
-            } else {
-                name_opt.map(|v| ("name", v))
-            };
+            if let Some(handle) = handle_opt {
+                if let Some(existing_doc) = self.get_document(collection, handle).await? {
+                    if let Some(found_id) = existing_doc.get("_id").and_then(|v| v.as_str()) {
+                        target_id = Some(found_id.to_string());
+                    }
+                }
+            }
+        }
 
-            if let Some((field, value)) = search_param {
-                let mut query = Query::new(collection);
-                query.filter = Some(QueryFilter {
-                    operator: FilterOperator::And,
-                    conditions: vec![Condition::eq(field, value)],
-                });
-                query.limit = Some(1);
+        // 3. Recherche par Name (Fallback)
+        if target_id.is_none() {
+            if let Some(name) = name_opt {
+                let col_path =
+                    self.storage
+                        .config
+                        .db_collection_path(&self.space, &self.db, collection);
+                if col_path.exists() {
+                    let mut query = Query::new(collection);
+                    query.filter = Some(QueryFilter {
+                        operator: FilterOperator::And,
+                        conditions: vec![Condition::eq("name", json_value!(name))],
+                    });
+                    query.limit = Some(1);
 
-                if let Ok(result) = QueryEngine::new(self).execute_query(query).await {
+                    // 🎯 FIX : Propagation de l'erreur
+                    let result = QueryEngine::new(self).execute_query(query).await?;
                     if let Some(existing_doc) = result.documents.first() {
                         if let Some(found_id) = existing_doc.get("_id").and_then(|v| v.as_str()) {
                             target_id = Some(found_id.to_string());
@@ -778,10 +845,7 @@ impl<'a> CollectionsManager<'a> {
             }
             None => {
                 let doc = self.insert_with_schema(collection, data).await?;
-                let new_id = doc
-                    .get("_id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| build_error!("ERR_DB_UPSERT_FAIL", error = "ID non généré"))?;
+                let new_id = doc.get("_id").and_then(|v| v.as_str()).unwrap();
                 Ok(format!("Created: {}", new_id))
             }
         }
@@ -865,7 +929,14 @@ impl<'a> CollectionsManager<'a> {
             }
 
             let validator = SchemaValidator::compile_with_registry(uri, &reg)?;
-            validator.compute_then_validate(doc)?;
+            let compute_ctx = crate::rules_engine::compute::ComputeContext {
+                document: doc.clone(),
+                collection_name: collection.to_string(),
+                db_name: self.db.clone(),
+                space_name: self.space.clone(),
+            };
+
+            validator.compute_then_validate(doc, &compute_ctx).await?;
 
             if let Some(obj) = doc.as_object_mut() {
                 let ws_id = AppConfig::get()
@@ -895,7 +966,7 @@ impl<'a> CollectionsManager<'a> {
             );
         }
 
-        if let Err(e) = self.apply_semantic_logic(doc, resolved_uri.as_deref()) {
+        if let Err(e) = self.apply_semantic_logic(doc).await {
             raise_error!(
                 "ERR_AI_SEMANTIC_VALIDATION_FAIL",
                 error = e.to_string(),
@@ -911,53 +982,108 @@ impl<'a> CollectionsManager<'a> {
         Ok(())
     }
 
-    fn apply_semantic_logic(
-        &self,
-        doc: &mut JsonValue,
-        schema_uri: Option<&str>,
-    ) -> RaiseResult<()> {
-        let layer_hint = if let Some(uri) = schema_uri {
-            if uri.contains("/oa/") {
-                Some("oa")
-            } else if uri.contains("/sa/") {
-                Some("sa")
-            } else if uri.contains("/la/") {
-                Some("la")
-            } else if uri.contains("/pa/") {
-                Some("pa")
-            } else if uri.contains("/epbs/") {
-                Some("epbs")
-            } else if uri.contains("/data/") {
-                Some("data")
+    // Applique la logique sémantique avec Résolution Ontologique en Cascade (Lazy Loading)
+    pub(crate) async fn apply_semantic_logic(&self, doc: &mut JsonValue) -> RaiseResult<()> {
+        let mut prefix_opt = None;
+
+        // 🎯 ÉTAPE 1 : Détection de l'intention sémantique
+        // On cherche un préfixe dans le(s) type(s) déclaré(s) (ex: "raise" dans "raise:User")
+        if let Some(t) = doc.get("@type") {
+            let type_str = if let Some(s) = t.as_str() {
+                Some(s)
+            } else if let Some(arr) = t.as_array() {
+                arr.first().and_then(|v| v.as_str()) // On prend le type primaire
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
-        if let Some(obj) = doc.as_object_mut() {
-            if !obj.contains_key("@context") {
-                let registry = VocabularyRegistry::global()?;
-
-                if let Some(layer) = layer_hint {
-                    if let Some(layer_ctx) = registry.get_context_for_layer(layer) {
-                        obj.insert("@context".to_string(), layer_ctx);
-                    } else {
-                        let defaults = registry.get_default_context();
-                        if let Ok(val) = json::serialize_to_value(defaults) {
-                            obj.insert("@context".to_string(), val);
-                        }
-                    }
-                } else {
-                    let defaults = registry.get_default_context();
-                    if let Ok(val) = json::serialize_to_value(defaults) {
-                        obj.insert("@context".to_string(), val);
+            if let Some(s) = type_str {
+                if let Some((p, _)) = s.split_once(':') {
+                    if p != "http" && p != "urn" {
+                        prefix_opt = Some(p.to_string());
                     }
                 }
             }
         }
 
+        // 🎯 ÉTAPE 2 : Résolution en Cascade et Chargement RCU
+        if let Some(prefix) = prefix_opt {
+            let registry = VocabularyRegistry::global()?;
+
+            // Si l'ontologie n'est pas encore en RAM, on déclenche la recherche
+            if registry.get_context_for_layer(&prefix).is_none() {
+                let mut ontology_doc = None;
+
+                // --- NIVEAU 1 : L'Index Local (_system.json) ---[cite: 6]
+                if let Ok(sys_idx) = self.load_index().await {
+                    if let Some(uri) = sys_idx
+                        .get("ontologies")
+                        .and_then(|o| o.get(&prefix))
+                        .and_then(|p| p.get("uri"))
+                        .and_then(|u| u.as_str())
+                    {
+                        // On parse le lien intelligent (ex: db://_system/master/collections/_ontologies/handle/onto-raise-core)[cite: 4, 6]
+                        if let Some(SmartLink::Absolute {
+                            space,
+                            db,
+                            col,
+                            val,
+                            ..
+                        }) = parse_smart_link(uri)
+                        {
+                            let target_mgr = CollectionsManager::new(self.storage, space, db);
+                            // get_document cherche par _id ou handle nativement
+                            if let Ok(Some(doc)) = target_mgr.get_document(col, val).await {
+                                ontology_doc = Some(doc);
+                            }
+                        }
+                    }
+                }
+
+                // --- NIVEAU 2 & 3 : Fallback Global (Catalogue puis Partition Système) ---
+                if ontology_doc.is_none() {
+                    // On tente la convention de nommage métier (ex: onto-raise-core)[cite: 6]
+                    let handle = format!("onto-{}-core", prefix);
+                    if let Ok(Some((_, _, doc))) =
+                        self.find_global_document("_ontologies", &handle).await
+                    {
+                        ontology_doc = Some(doc);
+                    } else {
+                        // Fallback sur la convention système ancienne (ex: ontology_raise)[cite: 12]
+                        let alt_handle = format!("ontology_{}", prefix);
+                        if let Ok(Some((_, _, doc))) =
+                            self.find_global_document("_ontologies", &alt_handle).await
+                        {
+                            ontology_doc = Some(doc);
+                        }
+                    }
+                }
+
+                // --- HYDRATATION EN RAM ---[cite: 11]
+                if let Some(onto) = ontology_doc {
+                    registry.load_layer_from_json(&prefix, &onto).await?;
+                } else {
+                    user_warn!(
+                        "WRN_ONTOLOGY_RESOLUTION_FAIL",
+                        json_value!({
+                            "prefix": prefix,
+                            "hint": "Le Cerveau sémantique n'a pas pu localiser la définition de ce préfixe."
+                        })
+                    );
+                }
+            }
+
+            // 🎯 ÉTAPE 3 : Injection du @context (Si le schéma x_compute ne l'a pas fait)
+            if let Some(obj) = doc.as_object_mut() {
+                if !obj.contains_key("@context") {
+                    if let Some(ctx) = registry.get_context_for_layer(&prefix) {
+                        obj.insert("@context".to_string(), ctx);
+                    }
+                }
+            }
+        }
+
+        // 🎯 ÉTAPE 4 : Validation Stricte par le Cerveau (Identique mais optimisé)[cite: 4, 10]
         let has_type = doc.get("@type").is_some()
             || doc
                 .get("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
@@ -970,11 +1096,9 @@ impl<'a> CollectionsManager<'a> {
                 let registry = VocabularyRegistry::global()?;
                 let mut expanded_type = processor.context_manager().expand_term(&type_uri);
 
+                // Double expansion si on a une CURIE complexe (ex: "raise:User")
                 if !VocabularyRegistry::is_iri(&expanded_type) && expanded_type.contains(':') {
-                    let deep_expanded = processor.context_manager().expand_term(&expanded_type);
-                    if VocabularyRegistry::is_iri(&deep_expanded) {
-                        expanded_type = deep_expanded;
-                    }
+                    expanded_type = processor.context_manager().expand_term(&expanded_type);
                 }
 
                 if !registry.has_class(&expanded_type) {
@@ -984,12 +1108,6 @@ impl<'a> CollectionsManager<'a> {
                         expanded_type, type_uri
                     );
                 }
-            } else {
-                // On ne panique pas, on informe ou on ignore si ce n'est pas critique
-                user_debug!(
-                    "WRN_SEMANTIC_TYPE_MISSING",
-                    json_value!({"action": "check_integrity"})
-                );
             }
         }
         Ok(())
@@ -1358,6 +1476,7 @@ fn resolve_refs_recursive<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::testing::mock::insert_mock_db;
     use crate::utils::testing::DbSandbox;
 
     #[async_test]
@@ -1429,7 +1548,7 @@ mod tests {
             .await?;
 
         let doc = json_value!({ "_id": "user_123", "name": "Test User" });
-        manager.insert_raw("users", &doc).await?;
+        insert_mock_db(&manager, "users", &doc).await?;
 
         let result = manager.get_document("users", "user_123").await?;
         assert!(result.is_some());
@@ -1455,7 +1574,7 @@ mod tests {
 
         for i in 0..100 {
             let doc = json_value!({ "_id": i.to_string(), "val": i });
-            manager.insert_raw("items", &doc).await?;
+            insert_mock_db(&manager, "items", &doc).await?;
         }
 
         let ids: Vec<String> = vec!["10", "20", "50", "80", "99"]
@@ -1488,9 +1607,8 @@ mod tests {
             )
             .await?;
 
-        manager
-            .insert_raw("items", &json_value!({ "_id": "1", "val": "A" }))
-            .await?;
+        let item_doc = &json_value!({ "_id": "1", "val": "A" });
+        insert_mock_db(&manager, "items", &item_doc).await?;
 
         let ids = vec!["1".to_string(), "999".to_string()];
         let result = manager.read_many("items", &ids).await;
@@ -1649,8 +1767,8 @@ mod tests {
         let doc_alice = json_value!({ "_id": "u_100", "name": "Alice" });
         let doc_bob = json_value!({ "_id": "u_200", "name": "Bob" });
 
-        manager.insert_raw("users", &doc_alice).await?;
-        manager.insert_raw("users", &doc_bob).await?;
+        insert_mock_db(&manager, "users", &doc_alice).await?;
+        insert_mock_db(&manager, "users", &doc_bob).await?;
 
         manager
             .delete_identity("users", EntityIdentity::Id("u_100".to_string()))
@@ -1705,11 +1823,9 @@ mod tests {
         fs::remove_file_async(&sys_path).await?;
 
         let doc = json_value!({ "_id": "1", "name": "Test Fail Fast" });
-        let res = manager.insert_raw("users", &doc).await;
-
+        let res = insert_mock_db(&manager, "users", &doc).await;
         assert!(res.is_err());
         if let Err(e) = res {
-            // 🎯 FIX : On attend l'erreur critique légitime de l'index système.
             assert!(e.to_string().contains("ERR_DB_SYSTEM_INDEX_NOT_FOUND"));
         }
 
@@ -1730,7 +1846,7 @@ mod tests {
             .await?;
 
         let doc = json_value!({ "_id": "u1", "name": "Alice" });
-        manager.insert_raw("users", &doc).await?;
+        insert_mock_db(&manager, "users", &doc).await?;
 
         let index = manager.load_index().await?;
         let items = match index["collections"]["users"]["items"].as_array() {
@@ -1803,17 +1919,12 @@ mod tests {
         // 2. Insertion d'un document avec un UUID fixe
         let expected_uuid = "uuid-physique-1234";
         let handle = "svc_test_ref";
-        manager
-            .insert_raw(
-                "services",
-                &json_value!({
-                    "_id": expected_uuid,
-                    "handle": handle,
-                    "name": "Service de Test"
-                }),
-            )
-            .await?;
-
+        let doc_service = &json_value!({
+            "_id": expected_uuid,
+            "handle": handle,
+            "name": "Service de Test"
+        });
+        insert_mock_db(&manager, "services", &doc_service).await?;
         // 3. Test de résolution
         let smart_link = format!("ref:services:handle:{}", handle);
         let resolved = manager.resolve_single_reference(&smart_link).await?;
@@ -1841,18 +1952,14 @@ mod tests {
         sys_mgr.create_collection("databases", schema_uri).await?;
 
         // Injection d'un domaine et d'une base de données distante
-        sys_mgr
-            .insert_raw(
-                "domains",
-                &json_value!({
-                    "_id": "dom_archive", "handle": "archive_domain", "status": "active"
-                }),
-            )
-            .await?;
+        let doc_domain =
+            &json_value!({"_id": "dom_archive", "handle": "archive_domain", "status": "active"});
+        insert_mock_db(&sys_mgr, "domains", &doc_domain).await?;
 
-        sys_mgr.insert_raw("databases", &json_value!({
+        let doc_db = &json_value!({
             "_id": "db_archive", "handle": "history_db", "domain_id": "dom_archive", "status": "active"
-        })).await?;
+        });
+        insert_mock_db(&sys_mgr, "databases", &doc_db).await?;
 
         // 2. Création des données dans la base distante
         let remote_mgr = CollectionsManager::new(&sandbox.storage, "archive_domain", "history_db");
@@ -1860,15 +1967,10 @@ mod tests {
         remote_mgr
             .create_collection("global_items", schema_uri)
             .await?;
-        remote_mgr
-            .insert_raw(
-                "global_items",
-                &json_value!({
-                    "_id": "g_123", "handle": "my_global_item", "status": "archived"
-                }),
-            )
-            .await?;
-
+        let doc_gitem = &json_value!({
+            "_id": "g_123", "handle": "my_global_item", "status": "archived"
+        });
+        insert_mock_db(&remote_mgr, "global_items", &doc_gitem).await?;
         // 3. Test de la recherche globale depuis la base principale
         let result = sys_mgr
             .find_global_document("global_items", "my_global_item")
@@ -1912,16 +2014,12 @@ mod tests {
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
             .await?;
-        sys_mgr
-            .insert_raw(
-                "locales",
-                &json_value!({
-                    "_id": "fr",
-                    "handle": "fr",
-                    "value": "Bonjour"
-                }),
-            )
-            .await?;
+        let doc_locale = &json_value!({
+            "_id": "fr",
+            "handle": "fr",
+            "value": "Bonjour"
+        });
+        insert_mock_db(&sys_mgr, "locales", &doc_locale).await?;
 
         // 2. TARGET : On crée un manager sur une base métier TOTALEMENT ISOLÉE
         // Cette base n'est pas déclarée dans le catalogue 'databases'
@@ -1943,6 +2041,62 @@ mod tests {
         assert_eq!(found_domain, *sys_domain);
         assert_eq!(found_db, *sys_db);
         assert_eq!(doc["value"], "Bonjour");
+
+        Ok(())
+    }
+    #[async_test]
+    #[serial_test::serial]
+    async fn test_manager_physical_fallback_prevents_duplicates() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let manager = CollectionsManager::new(&sandbox.storage, "space_test", "db_test");
+        DbSandbox::mock_db(&manager).await?;
+
+        // 1. Création de la collection
+        manager
+            .create_collection(
+                "users",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
+
+        // 2. Insertion du premier document (Setup : insert_mock_db est parfait ici)
+        let doc1 = json_value!({ "_id": "u1", "handle": "agent_smith", "name": "Alice" });
+        insert_mock_db(&manager, "users", &doc1).await?;
+
+        // 3. 💣 CORRUPTION VOLONTAIRE
+        let idx_path = sandbox
+            .storage
+            .config
+            .db_collection_path(&manager.space, &manager.db, "users")
+            .join("indexes")
+            .join("handle.idx");
+
+        if idx_path.exists() {
+            crate::utils::io::fs::remove_file_async(&idx_path).await?;
+        }
+        manager.remove_item_from_index("users", "u1").await?;
+
+        // 4. L'ÉPREUVE DU FEU : Tentative d'insertion d'un doublon
+        let doc2 = json_value!({ "_id": "u2", "handle": "agent_smith", "name": "Bob" });
+
+        // 🎯 FIX : On utilise `insert_raw` car c'est la méthode stricte de production.
+        // On VEUT que le moteur hurle au doublon !
+        let res = manager.insert_raw("users", &doc2).await;
+
+        // 5. VALIDATION DE LA FORTERESSE
+        assert!(
+            res.is_err(),
+            "FAIL CRITIQUE : Le moteur a laissé passer un doublon !"
+        );
+
+        if let Err(crate::utils::core::error::AppError::Structured(err)) = res {
+            assert_eq!(
+                err.code, "ERR_DB_DUPLICATE_HANDLE",
+                "Le moteur a bloqué l'insertion, mais avec la mauvaise erreur."
+            );
+        } else {
+            panic!("Type d'erreur inattendu renvoyé par insert_raw.");
+        }
 
         Ok(())
     }

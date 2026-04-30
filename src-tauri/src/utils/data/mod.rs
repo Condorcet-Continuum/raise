@@ -1,6 +1,5 @@
 // FICHIER : src-tauri/src/utils/data/mod.rs
 
-pub mod compute;
 pub mod config;
 pub mod json;
 

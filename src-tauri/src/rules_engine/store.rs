@@ -233,6 +233,7 @@ mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::rules_engine::ast::Expr;
+    use crate::utils::testing::mock::insert_mock_db;
     use crate::utils::testing::AgentDbSandbox;
 
     #[async_test]
@@ -333,13 +334,8 @@ mod tests {
         manager
             .create_collection("_system_rules", &schema_uri)
             .await?;
-
-        manager
-            .insert_raw(
-                "_system_rules",
-                &json_value!({ "_id": "bad_rule", "expr": { "not_an_expr": true } }),
-            )
-            .await?;
+        let doc_rules = &json_value!({ "_id": "bad_rule", "expr": { "not_an_expr": true } });
+        insert_mock_db(&manager, "_system_rules", doc_rules).await?;
 
         let mut store = RuleStore::new(&manager);
         store.sync_from_db().await?;

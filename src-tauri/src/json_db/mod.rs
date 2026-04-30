@@ -17,6 +17,7 @@ pub mod test_utils {
     use crate::json_db::storage::JsonDbConfig;
     use crate::utils::data::config::{BOOTSTRAP_DB, BOOTSTRAP_DOMAIN};
     use crate::utils::prelude::*;
+    use crate::utils::testing::mock::insert_mock_db;
     use crate::utils::testing::DbSandbox;
 
     static TEST_LOGGER_INIT: StaticCell<()> = StaticCell::new();
@@ -90,16 +91,12 @@ pub mod test_utils {
         );
         manager.create_collection("dapps", &generic_schema).await?;
 
-        manager
-            .insert_raw(
-                "dapps",
-                &json_value!({
-                    "_id": "raise-core",
-                    "handle": "raise_core",
-                    "plugin_config": { "rust_package_name": "raise_core" }
-                }),
-            )
-            .await?;
+        let doc_dapp = &json_value!({
+            "_id": "raise-core",
+            "handle": "raise_core",
+            "plugin_config": { "rust_package_name": "raise_core" }
+        });
+        insert_mock_db(&manager, "dapps", doc_dapp).await?;
 
         Ok(())
     }

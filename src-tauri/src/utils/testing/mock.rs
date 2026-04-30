@@ -230,6 +230,22 @@ pub async fn bootstrap_system_index(
     Ok(())
 }
 
+pub async fn insert_mock_db(
+    manager: &CollectionsManager<'_>,
+    collection: &str,
+    doc: &JsonValue,
+) -> RaiseResult<()> {
+    // On tente l'insertion brute
+    if let Err(e) = manager.insert_raw(collection, doc).await {
+        // En cas de collision concurrentielle, on l'avale silencieusement
+        if !e.to_string().contains("ERR_DB_DUPLICATE_HANDLE") {
+            // Si c'est une vraie erreur inattendue, on la fait remonter
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
 pub fn create_default_test_config() -> AppConfig {
     let mut paths = UnorderedMap::new();
     let tmp = RuntimeEnv::temp_dir();
@@ -654,34 +670,24 @@ pub async fn inject_mock_component(
     );
 
     manager.create_collection("services", &schema_uri).await?;
-    let _ = manager
-        .insert_raw(
-            "services",
-            &json_value!({
-                "_id": service_id_physical,
-                "handle": "svc_ai"
-            }),
-        )
-        .await;
+    let mock_service = &json_value!({
+        "_id": service_id_physical,
+        "handle": "svc_ai"
+    });
+    insert_mock_db(manager, "services", mock_service).await?;
 
     manager.create_collection("components", &schema_uri).await?;
-    let _ = manager
-        .insert_raw(
-            "components",
-            &json_value!({
-                "_id": format!("ref:components:handle:{}", real_handle),
-                "handle": real_handle,
-                "status": "active"
-            }),
-        )
-        .await;
+    let mock_components = &json_value!({
+        "_id": format!("ref:components:handle:{}", real_handle),
+        "handle": real_handle,
+        "status": "active"
+    });
+    insert_mock_db(manager, "components", mock_components).await?;
 
     manager
         .create_collection("service_configs", &schema_uri)
         .await?;
-
     let config_id = format!("cfg_{}_test", real_handle);
-
     let final_doc = json_value!({
         "_id": config_id.clone(),
         "handle": config_id,
@@ -694,7 +700,7 @@ pub async fn inject_mock_component(
         "service_settings": settings
     });
 
-    match manager.insert_raw("service_configs", &final_doc).await {
+    match insert_mock_db(manager, "service_configs", &final_doc).await {
         Ok(_) => Ok(()),
         Err(e) => raise_error!(
             "ERR_TEST_MOCK_INJECTION_FAILED",
@@ -1031,8 +1037,7 @@ pub async fn inject_system_ontologies(manager: &CollectionsManager<'_>) -> Raise
             { "@id": "raise:belongsToDapp", "@type": "owl:ObjectProperty" }
         ]
     });
-
-    let _ = manager.insert_raw("_ontologies", &raise_onto).await;
+    insert_mock_db(manager, "_ontologies", &raise_onto).await?;
 
     // 4. Inscription DDL dans le Jeton Système
     let ddl = DdlHandler::new(manager);
@@ -1104,7 +1109,7 @@ impl DbSandbox {
             )
             .await;
 
-        // 🎯 FIX ZÉRO DETTE : On injecte la collection et la dApp 'raise_core'
+        // On injecte la collection et la dApp 'raise_core'
         // pour que TransactionManager::resolve_all_refs ne panique pas !
         let _ = mgr
             .create_collection(
@@ -1112,12 +1117,12 @@ impl DbSandbox {
                 &format!("{}/schemas/v1/db/generic.schema.json", base_uri),
             )
             .await;
-        let _ = mgr
-            .insert_raw(
-                "dapps",
-                &json_value!({"_id": "mock-dapp-raise-core", "handle": "raise_core"}),
-            )
-            .await;
+
+        let mock_dapp_doc = json_value!({
+            "_id": "mock-dapp-raise-core",
+            "handle": "raise_core"
+        });
+        insert_mock_db(&mgr, "dapps", &mock_dapp_doc).await?;
 
         inject_system_ontologies(&mgr).await?;
 
@@ -1143,12 +1148,13 @@ impl DbSandbox {
                 &format!("{}/schemas/v1/db/generic.schema.json", base_uri),
             )
             .await?;
-        manager
-            .insert_raw(
-                "dapps",
-                &json_value!({"_id": "mock-dapp-raise-core", "handle": "raise_core"}),
-            )
-            .await?;
+
+        let mock_dapp_doc = json_value!({
+            "_id": "mock-dapp-raise-core",
+            "handle": "raise_core"
+        });
+
+        insert_mock_db(manager, "dapps", &mock_dapp_doc).await?;
 
         inject_system_ontologies(manager).await?;
 
@@ -1287,9 +1293,8 @@ impl AgentDbSandbox {
                     "url": "http://127.0.0.1:9999/mock_api"
                 }
             });
-            let _ = temp_manager
-                .insert_raw("service_configs", &config_doc)
-                .await;
+
+            insert_mock_db(&temp_manager, "service_configs", &config_doc).await?;
         }
 
         // 🎯 INITIALISATION / RÉCUPÉRATION DU MOTEUR PARTAGÉ

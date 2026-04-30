@@ -781,7 +781,10 @@ fn smart_number(n: f64) -> JsonValue {
     }
 }
 
-fn resolve_path<'a>(context: &'a JsonValue, path: &str) -> RaiseResult<CowData<'a, JsonValue>> {
+pub(crate) fn resolve_path<'a>(
+    context: &'a JsonValue,
+    path: &str,
+) -> RaiseResult<CowData<'a, JsonValue>> {
     let mut current = context;
     if path.is_empty() {
         return Ok(CowData::Borrowed(current));

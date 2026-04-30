@@ -2,6 +2,7 @@
 
 pub mod analyzer;
 pub mod ast;
+pub mod compute;
 pub mod evaluator;
 pub mod store;
 

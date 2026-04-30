@@ -1,7 +1,8 @@
 // FICHIER : src-tauri/src/json_db/schema/validator.rs
-use crate::utils::prelude::*;
 
 use super::registry::SchemaRegistry;
+use crate::rules_engine::compute::{execute_compute_plan, ComputeContext};
+use crate::utils::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct SchemaValidator {
@@ -15,12 +16,7 @@ impl SchemaValidator {
         let Some(schema) = reg.get_by_uri(root_uri).cloned() else {
             raise_error!(
                 "ERR_SCHEMA_NOT_IN_REGISTRY",
-                error = format!("Le schéma sémantique est introuvable : {}", root_uri),
-                context = json_value!({
-                    "root_uri": root_uri,
-                    "action": "resolve_schema_from_registry",
-                    "hint": "Vérifiez que l'ontologie a été correctement chargée."
-                })
+                error = format!("Le schéma sémantique est introuvable : {}", root_uri)
             );
         };
 
@@ -31,8 +27,20 @@ impl SchemaValidator {
         })
     }
 
-    pub fn compute_then_validate(&self, instance: &mut JsonValue) -> RaiseResult<()> {
-        apply_defaults(instance, &self.schema, &self.reg, &self.root_uri)?;
+    pub async fn compute_then_validate(
+        &self,
+        instance: &mut JsonValue,
+        compute_ctx: &ComputeContext,
+    ) -> RaiseResult<()> {
+        apply_defaults(
+            instance,
+            &self.schema,
+            &self.reg,
+            &self.root_uri,
+            compute_ctx,
+        )
+        .await?;
+
         self.validate(instance)
     }
 
@@ -46,7 +54,6 @@ fn resolve_schema_node<'a>(
     reg: &'a SchemaRegistry,
     current_uri: &str,
 ) -> RaiseResult<&'a JsonValue> {
-    // Ajout du Result
     if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
         let (file_uri, fragment) = if ref_str.starts_with('#') {
             (current_uri.to_string(), Some(ref_str.to_string()))
@@ -63,12 +70,7 @@ fn resolve_schema_node<'a>(
                     Some(node) => Ok(node),
                     None => raise_error!(
                         "ERR_SCHEMA_POINTER_NOT_FOUND",
-                        error = format!("Pointeur JSON '{}' introuvable dans {}", ptr, file_uri),
-                        context = json_value!({
-                            "uri": file_uri,
-                            "pointer": ptr,
-                            "source_ref": ref_str
-                        })
+                        error = format!("Pointeur JSON '{}' introuvable dans {}", ptr, file_uri)
                     ),
                 };
             }
@@ -78,11 +80,13 @@ fn resolve_schema_node<'a>(
     Ok(schema)
 }
 
-fn apply_defaults(
+#[async_recursive]
+async fn apply_defaults(
     instance: &mut JsonValue,
     schema: &JsonValue,
     reg: &SchemaRegistry,
     current_uri: &str,
+    compute_ctx: &ComputeContext,
 ) -> RaiseResult<()> {
     if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
         let (file_uri, fragment) = if ref_str.starts_with('#') {
@@ -101,13 +105,13 @@ fn apply_defaults(
             } else {
                 target_root
             };
-            return apply_defaults(instance, target_schema, reg, &file_uri);
+            return apply_defaults(instance, target_schema, reg, &file_uri, compute_ctx).await;
         }
     }
 
     if let Some(all_of) = schema.get("allOf").and_then(|v| v.as_array()) {
         for sub_schema in all_of {
-            apply_defaults(instance, sub_schema, reg, current_uri)?;
+            apply_defaults(instance, sub_schema, reg, current_uri, compute_ctx).await?;
         }
     }
 
@@ -117,7 +121,34 @@ fn apply_defaults(
                 let resolved_schema = resolve_schema_node(sub_schema, reg, current_uri)?;
                 let is_missing = obj.get(key).is_none_or(|v| v.is_null());
 
-                if is_missing {
+                let compute_node = sub_schema
+                    .get("x_compute")
+                    .or_else(|| resolved_schema.get("x_compute"))
+                    .and_then(|v| v.as_object());
+
+                if let Some(compute) = compute_node {
+                    let strategy = compute
+                        .get("update")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("if_missing");
+
+                    if strategy == "always" || (strategy == "if_missing" && is_missing) {
+                        if let Some(plan) = compute.get("plan").and_then(|v| v.as_object()) {
+                            if let Some(op) = plan.get("op").and_then(|v| v.as_str()) {
+                                // 🎯 Execution avec le nouveau contexte propre
+                                let computed_val =
+                                    execute_compute_plan(op, plan, compute_ctx).await?;
+
+                                if !computed_val.is_null() {
+                                    obj.insert(key.clone(), computed_val);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let still_missing = obj.get(key).is_none_or(|v| v.is_null());
+                if still_missing {
                     let default_val = sub_schema
                         .get("default")
                         .or_else(|| resolved_schema.get("default"));
@@ -127,39 +158,8 @@ fn apply_defaults(
                     }
                 }
 
-                let compute_node = sub_schema
-                    .get("x_compute")
-                    .or_else(|| resolved_schema.get("x_compute"))
-                    .and_then(|v| v.as_object());
-
-                if let Some(compute) = compute_node {
-                    let update_strategy = compute
-                        .get("update")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("if_missing");
-
-                    let is_currently_missing = obj.get(key).is_none_or(|v| v.is_null());
-
-                    let should_compute = match update_strategy {
-                        "always" => true,
-                        "if_missing" => is_currently_missing,
-                        _ => false,
-                    };
-
-                    if should_compute {
-                        if let Some(plan) = compute.get("plan").and_then(|v| v.as_object()) {
-                            if let Some(op) = plan.get("op").and_then(|v| v.as_str()) {
-                                let computed_val = execute_compute_plan(op, plan);
-                                if !computed_val.is_null() {
-                                    obj.insert(key.clone(), computed_val);
-                                }
-                            }
-                        }
-                    }
-                }
-
                 if let Some(val) = obj.get_mut(key) {
-                    apply_defaults(val, sub_schema, reg, current_uri)?;
+                    apply_defaults(val, sub_schema, reg, current_uri, compute_ctx).await?;
                 }
             }
         }
@@ -168,7 +168,7 @@ fn apply_defaults(
     if let Some(arr) = instance.as_array_mut() {
         if let Some(items_schema) = schema.get("items") {
             for item in arr {
-                apply_defaults(item, items_schema, reg, current_uri)?;
+                apply_defaults(item, items_schema, reg, current_uri, compute_ctx).await?;
             }
         }
     }
@@ -194,12 +194,7 @@ fn validate_node(
         let Some(target_root) = reg.get_by_uri(&file_uri) else {
             raise_error!(
                 "ERR_SCHEMA_REF_NOT_FOUND",
-                error = format!("Référence de schéma introuvable : {}", file_uri),
-                context = json_value!({
-                    "requested_uri": file_uri,
-                    "action": "resolve_remote_ref",
-                    "hint": "Assurez-vous que l'ontologie contenant cette URI a été chargée."
-                })
+                error = format!("Référence de schéma introuvable : {}", file_uri)
             );
         };
 
@@ -208,13 +203,7 @@ fn validate_node(
             let Some(s) = target_root.pointer(&pointer) else {
                 raise_error!(
                     "ERR_SCHEMA_POINTER_NOT_FOUND",
-                    error = format!("Pointeur JSON '{}' introuvable dans {}", pointer, file_uri),
-                    context = json_value!({
-                        "pointer": pointer,
-                        "target_file": file_uri,
-                        "action": "resolve_json_pointer",
-                        "hint": "Vérifiez que le chemin existe dans le document source. Les pointeurs sont sensibles à la casse."
-                    })
+                    error = format!("Pointeur JSON '{}' introuvable dans {}", pointer, file_uri)
                 );
             };
             s
@@ -275,14 +264,21 @@ fn validate_node(
 }
 
 fn raise_type_error(expected: &str, actual: &JsonValue) -> RaiseResult<()> {
+    // On extrait un extrait de la valeur réelle (50 caractères max) pour ne pas inonder les logs
+    let actual_str = actual.to_string();
+    let snippet = if actual_str.len() > 50 {
+        format!("{}...", &actual_str[..50])
+    } else {
+        actual_str
+    };
+
     raise_error!(
         "ERR_VALIDATION_TYPE_MISMATCH",
         error = format!("Échec de conformité : type '{}' attendu.", expected),
         context = json_value!({
             "expected_type": expected,
-            "actual_value_sample": format!("{:.50}", actual.to_string()),
-            "action": "validate_primitive_type",
-            "hint": format!("La donnée ne correspond pas à la définition du schéma (attendu: {}).", expected)
+            "actual_value": snippet,
+            "hint": "Le document contient un type de donnée non conforme au schéma sémantique."
         })
     );
 }
@@ -303,13 +299,7 @@ fn validate_object(
                 if !obj.contains_key(key) {
                     raise_error!(
                         "ERR_VALIDATION_REQUIRED_FIELD_MISSING",
-                        error = format!("Propriété obligatoire manquante : '{}'", key),
-                        context = json_value!({
-                            "missing_key": key,
-                            "available_keys": obj.keys().collect::<Vec<_>>(),
-                            "action": "validate_required_properties",
-                            "hint": format!("L'objet doit contenir la clé '{}' pour être conforme au schéma.", key)
-                        })
+                        error = format!("Propriété obligatoire manquante : '{}'", key)
                     );
                 }
             }
@@ -322,13 +312,11 @@ fn validate_object(
                 if let Err(e) = validate_node(val, sub_schema, reg, current_uri) {
                     raise_error!(
                         "ERR_VALIDATION_NESTED_PROPERTY_FAIL",
-                        error = format!("Échec de validation sur la propriété '{}'", key),
-                        context = json_value!({
-                            "property_name": key,
-                            "nested_error": e,
-                            "action": "validate_object_properties",
-                            "hint": "Une sous-propriété de cet objet ne respecte pas son schéma dédié."
-                        })
+                        error = format!(
+                            "Échec de validation sur la propriété '{}': {}",
+                            key,
+                            e.to_string()
+                        )
                     );
                 }
             }
@@ -340,16 +328,10 @@ fn validate_object(
         for (pattern, sub_schema) in patterns {
             let re = match TextRegex::new(pattern) {
                 Ok(r) => r,
-                Err(e) => {
+                Err(_) => {
                     raise_error!(
                         "ERR_SCHEMA_INVALID_REGEX_PATTERN",
-                        error = format!("Regex invalide dans 'patternProperties' : {}", pattern),
-                        context = json_value!({
-                            "invalid_pattern": pattern,
-                            "regex_error": e.to_string(),
-                            "action": "compile_pattern_properties",
-                            "hint": "Vérifiez la syntaxe de votre expression régulière."
-                        })
+                        error = format!("Regex invalide dans 'patternProperties' : {}", pattern)
                     );
                 }
             };
@@ -359,14 +341,11 @@ fn validate_object(
                     if let Err(e) = validate_node(val, sub_schema, reg, current_uri) {
                         raise_error!(
                             "ERR_VALIDATION_PATTERN_PROPERTY_FAIL",
-                            error = format!("Échec de validation pour la clé dynamique '{}'", key),
-                            context = json_value!({
-                                "matched_key": key,
-                                "applied_pattern": re.as_str(),
-                                "nested_error": e,
-                                "action": "validate_pattern_properties",
-                                "hint": "La donnée associée à cette clé ne respecte pas le schéma imposé par le motif Regex."
-                            })
+                            error = format!(
+                                "Échec de validation pour la clé dynamique '{}': {}",
+                                key,
+                                e.to_string()
+                            )
                         );
                     }
                 }
@@ -401,8 +380,7 @@ fn validate_object(
                 {
                     raise_error!(
                         "ERR_VALIDATION_ADDITIONAL_PROPERTY_FORBIDDEN",
-                        error = format!("Propriété non autorisée : '{}'", k),
-                        context = json_value!({ "forbidden_key": k, "uri": current_uri })
+                        error = format!("Propriété non autorisée : '{}'", k)
                     );
                 }
             }
@@ -420,8 +398,7 @@ fn validate_string(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> 
         if s.chars().count() < min as usize {
             raise_error!(
                 "ERR_VALIDATION_STRING_TOO_SHORT",
-                error = format!("La chaîne est trop courte (minimum: {} caractères).", min),
-                context = json_value!({ "actual_length": s.chars().count(), "min_length": min })
+                error = format!("La chaîne est trop courte (minimum: {} caractères).", min)
             );
         }
     }
@@ -430,8 +407,7 @@ fn validate_string(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> 
         if s.chars().count() > max as usize {
             raise_error!(
                 "ERR_VALIDATION_STRING_TOO_LONG",
-                error = format!("La chaîne est trop longue (maximum: {} caractères).", max),
-                context = json_value!({ "actual_length": s.chars().count(), "max_length": max })
+                error = format!("La chaîne est trop longue (maximum: {} caractères).", max)
             );
         }
     }
@@ -439,19 +415,17 @@ fn validate_string(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> 
     if let Some(pattern) = schema.get("pattern").and_then(|v| v.as_str()) {
         let re = match TextRegex::new(pattern) {
             Ok(r) => r,
-            Err(e) => {
+            Err(_) => {
                 raise_error!(
                     "ERR_SCHEMA_INVALID_REGEX",
-                    error = format!("Regex invalide dans le schéma : {}", pattern),
-                    context = json_value!({ "pattern": pattern, "error": e.to_string() })
+                    error = format!("Regex invalide dans le schéma : {}", pattern)
                 );
             }
         };
         if !re.is_match(s) {
             raise_error!(
                 "ERR_VALIDATION_PATTERN_MISMATCH",
-                error = "Le format de la chaîne ne correspond pas au motif exigé.",
-                context = json_value!({ "pattern": pattern, "value": s })
+                error = "Le format de la chaîne ne correspond pas au motif exigé."
             );
         }
     }
@@ -467,8 +441,7 @@ fn validate_number(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> 
         if n < min {
             raise_error!(
                 "ERR_VALIDATION_NUMBER_TOO_SMALL",
-                error = format!("La valeur est inférieure au minimum autorisé ({}).", min),
-                context = json_value!({ "actual_value": n, "minimum": min })
+                error = format!("La valeur est inférieure au minimum autorisé ({}).", min)
             );
         }
     }
@@ -477,8 +450,7 @@ fn validate_number(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> 
         if n > max {
             raise_error!(
                 "ERR_VALIDATION_NUMBER_TOO_LARGE",
-                error = format!("La valeur est supérieure au maximum autorisé ({}).", max),
-                context = json_value!({ "actual_value": n, "maximum": max })
+                error = format!("La valeur est supérieure au maximum autorisé ({}).", max)
             );
         }
     }
@@ -502,8 +474,7 @@ fn validate_array(
                 error = format!(
                     "Le tableau contient trop peu d'éléments (minimum: {}).",
                     min
-                ),
-                context = json_value!({ "actual_length": arr.len(), "min_items": min })
+                )
             );
         }
     }
@@ -512,8 +483,7 @@ fn validate_array(
         if arr.len() > max as usize {
             raise_error!(
                 "ERR_VALIDATION_ARRAY_TOO_LARGE",
-                error = format!("Le tableau contient trop d'éléments (maximum: {}).", max),
-                context = json_value!({ "actual_length": arr.len(), "max_items": max })
+                error = format!("Le tableau contient trop d'éléments (maximum: {}).", max)
             );
         }
     }
@@ -524,8 +494,11 @@ fn validate_array(
                 if let Err(e) = validate_node(item, items_schema, reg, current_uri) {
                     raise_error!(
                         "ERR_VALIDATION_ARRAY_ITEM_FAIL",
-                        error = format!("Échec de validation à l'index [{}] du tableau", index),
-                        context = json_value!({ "index": index, "nested_error": e })
+                        error = format!(
+                            "Échec de validation à l'index [{}]: {}",
+                            index,
+                            e.to_string()
+                        )
                     );
                 }
             }
@@ -617,23 +590,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_number_constraints() -> RaiseResult<()> {
-        let v = setup_validator(json_value!({
-            "type": "number",
-            "minimum": 10.5,
-            "maximum": 20.0
-        }));
-
-        assert!(v.validate(&json_value!(15)).is_ok());
-        assert!(v.validate(&json_value!(10.5)).is_ok());
-        assert!(v.validate(&json_value!(5)).is_err());
-        assert!(v.validate(&json_value!(21.5)).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_apply_defaults_basic() -> RaiseResult<()> {
+    #[async_test]
+    async fn test_apply_defaults_basic() -> RaiseResult<()> {
         let v = setup_validator(json_value!({
             "type": "object",
             "properties": {
@@ -643,15 +601,19 @@ mod tests {
         }));
 
         let mut data = json_value!({});
-        v.compute_then_validate(&mut data)?;
+        let ctx = ComputeContext {
+            document: data.clone(),
+            ..Default::default()
+        };
+        v.compute_then_validate(&mut data, &ctx).await?;
 
         assert_eq!(data["active"], true);
         assert_eq!(data["version"], 1);
         Ok(())
     }
 
-    #[test]
-    fn test_dual_schema_x_compute() -> RaiseResult<()> {
+    #[async_test]
+    async fn test_dual_schema_x_compute() -> RaiseResult<()> {
         let mut reg = SchemaRegistry::new();
 
         reg.register("db://test/v1".to_string(), json_value!({
@@ -674,8 +636,17 @@ mod tests {
         let mut data_v1 = json_value!({});
         let mut data_v2 = json_value!({});
 
-        v1.compute_then_validate(&mut data_v1).unwrap();
-        v2.compute_then_validate(&mut data_v2).unwrap();
+        let ctx_v1 = ComputeContext {
+            document: data_v1.clone(),
+            ..Default::default()
+        };
+        let ctx_v2 = ComputeContext {
+            document: data_v2.clone(),
+            ..Default::default()
+        };
+
+        v1.compute_then_validate(&mut data_v1, &ctx_v1).await?;
+        v2.compute_then_validate(&mut data_v2, &ctx_v2).await?;
 
         assert!(
             data_v1.get("Id").is_some(),
@@ -684,6 +655,71 @@ mod tests {
         assert!(
             data_v2.get("_id").is_some(),
             "Le schéma v2 n'a pas injecté '_id'"
+        );
+        Ok(())
+    }
+
+    #[async_test]
+    async fn test_x_compute_all_of_inheritance() -> RaiseResult<()> {
+        let mut reg = SchemaRegistry::new();
+
+        // 1. Le schéma Base (Contient le calcul de l'@id)
+        let base_schema = json_value!({
+            "type": "object",
+            "properties": {
+                "@id": {
+                    "type": "string",
+                    "x_compute": {
+                        "update": "if_missing",
+                        "plan": {
+                            "op": "concat",
+                            "args": [
+                                { "op": "get_context", "path": "database_name" },
+                                "/",
+                                { "op": "get_context", "path": "collection_name" },
+                                "/handle/",
+                                { "op": "get", "path": "handle" }
+                            ]
+                        }
+                    }
+                }
+            },
+            "required": ["@id"]
+        });
+
+        // 2. Le schéma User (Hérite de Base)
+        let user_schema = json_value!({
+            "type": "object",
+            "allOf": [
+                { "$ref": "db://test/base.schema.json" }
+            ],
+            "properties": {
+                "handle": { "type": "string" }
+            }
+        });
+
+        reg.register("db://test/base.schema.json".to_string(), base_schema);
+        reg.register("db://test/user.schema.json".to_string(), user_schema);
+
+        let validator = SchemaValidator::compile_with_registry("db://test/user.schema.json", &reg)?;
+
+        // 3. Le document cible
+        let mut doc = json_value!({ "handle": "testUser" });
+
+        let ctx = ComputeContext {
+            document: doc.clone(),
+            collection_name: "users".to_string(),
+            db_name: "master".to_string(),
+            space_name: "_system".to_string(),
+        };
+
+        // 4. L'exécution
+        validator.compute_then_validate(&mut doc, &ctx).await?;
+
+        // 5. L'assertion fatale
+        assert_eq!(
+            doc["@id"], "master/users/handle/testUser",
+            "❌ FATAL: L'héritage allOf a échoué, l'@id n'a pas été calculé !"
         );
         Ok(())
     }

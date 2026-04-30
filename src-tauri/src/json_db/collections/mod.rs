@@ -85,7 +85,19 @@ pub async fn insert_with_schema(
             })
         );
     }
-    validator.compute_then_validate(&mut doc)?;
+
+    // 🎯 Création du contexte léger pour la façade
+    let compute_ctx = crate::rules_engine::compute::ComputeContext {
+        document: doc.clone(),
+        collection_name: collection_name.clone(),
+        db_name: db.to_string(),
+        space_name: space.to_string(),
+    };
+
+    // 🎯 Appel avec le nouveau contexte
+    validator
+        .compute_then_validate(&mut doc, &compute_ctx)
+        .await?;
 
     let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
         raise_error!(
@@ -109,18 +121,8 @@ pub async fn insert_raw(
     collection_name: &str,
     doc: &JsonValue,
 ) -> RaiseResult<()> {
-    let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
-        raise_error!(
-            "ERR_DB_DOCUMENT_ID_MISSING",
-            error = "Document invalide : le champ '_id' est manquant ou n'est pas une chaîne de caractères.",
-            context = json_value!({
-                "expected_field": "_id",
-                "available_keys": doc.as_object().map(|m| m.keys().collect::<Vec<_>>()),
-                "action": "document_identity_check"
-            })
-        );
-    };
-    collection::create_document(storage, space, db, collection_name, id, doc).await
+    let manager = CollectionsManager::new(storage, space, db);
+    manager.insert_raw(collection_name, doc).await
 }
 
 pub async fn update_with_schema(
@@ -134,9 +136,21 @@ pub async fn update_with_schema(
     let root_uri = reg.uri(schema_rel);
     let validator = SchemaValidator::compile_with_registry(&root_uri, &reg)?;
 
-    validator.compute_then_validate(&mut doc)?;
-
     let collection_name = collection_from_schema_rel(schema_rel);
+
+    // 🎯 Création du contexte léger
+    let compute_ctx = crate::rules_engine::compute::ComputeContext {
+        document: doc.clone(),
+        collection_name: collection_name.clone(),
+        db_name: db.to_string(),
+        space_name: space.to_string(),
+    };
+
+    // 🎯 Appel avec le nouveau contexte
+    validator
+        .compute_then_validate(&mut doc, &compute_ctx)
+        .await?;
+
     let Some(id) = doc.get("_id").and_then(|v| v.as_str()) else {
         raise_error!(
             "ERR_DB_DOCUMENT_ID_MISSING",
