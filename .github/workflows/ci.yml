@@ -7,200 +7,72 @@ on:
   pull_request:
     branches: [ "main" ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   DEBIAN_FRONTEND: noninteractive
 
 jobs:
-  # ------------------------------------------------------------------
-  # JOB 1 : QUALITÉ DU CODE (Lint & Test)
-  # ------------------------------------------------------------------
-  quality-check:
-    name: 🛡️ Quality & Tests
+  quality-and-build:
+    name: 🏭 Industrial Build & Quality
     runs-on: ubuntu-latest
     steps:
-      # --- NETTOYAGE DISQUE ---
-      - name: 🧹 Free Disk Space
-        run: |
-          echo "Espace libre avant :" && df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker system prune -af
-          echo "Espace libre après :" && df -h
-      # ------------------------
-
       - uses: actions/checkout@v4
 
-      # CORRECTION : Ajout de 'clang', 'mold' et 'libasound2-dev' pour l'audio
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            libssl-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            xvfb \
-            clang \
-            mold \
-            libasound2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            clang mold libasound2-dev
 
-      - name: Install Rust (Stable)
+      # Utilise automatiquement rust-toolchain.toml
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown, wasm32-wasip1
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24.13.1'
-          cache: 'npm'
+      # Étape 1 : Quality Gate (Lint, Format, Test)
+      - name: Run Quality Gate
+        run: make check
 
-      # Si src-wasm dépend du code modifié, assurez-vous qu'il est à jour, sinon on laisse tel quel.
-      - name: Build WASM Core
-        run: |
-          cd src-wasm
-          ./build.sh
+      # Étape 2 : Build complet (WASM, SBOM, Release)
+      - name: Build and SBOM
+        run: make build
 
-      # --- CORRECTIONS MAJEURES ICI : CIBLAGE DU DOSSIER SRC-TAURI ---
-      
-      - name: Check Formatting
-        working-directory: src-tauri
-        run: cargo fmt --all -- --check
-      
-      - name: Lint with Clippy
-        working-directory: src-tauri
-        run: cargo clippy -- -D warnings
-
-      - name: Run Headless Tests
-        working-directory: src-tauri
-        # xvfb est requis pour certains tests Tauri qui initialisent le contexte graphique
-        run: xvfb-run cargo test
-
-  # ------------------------------------------------------------------
-  # JOB 2 : SBOM
-  # ------------------------------------------------------------------
-  sbom:
-    name: 🔍 Generate SBOMs
-    runs-on: ubuntu-latest 
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-cyclonedx
-        run: cargo install cargo-cyclonedx
-      
-      - name: Generate Rust SBOM
-        working-directory: src-tauri
-        # On génère le fichier à la racine du workspace pour le retrouver facilement après
-        run: cargo cyclonedx --format json --all > ../sbom-rust.cdx.json
-
-      - name: Generate Filesystem SBOM (Syft)
-        uses: anchore/sbom-action@v0
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: "sbom-fs.cdx.json"
-      
-      - name: Upload SBOMs
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sboms
-          path: "*.cdx.json"
+          name: raise-artifacts
+          path: |
+            target/release/
+            sbom-rust.cdx.json
           retention-days: 5
 
-  # ------------------------------------------------------------------
-  # JOB 3 : BUILD & RELEASE
-  # ------------------------------------------------------------------
-  build-release:
-    name: 📦 Build, Checksum & Release
-    needs: [quality-check, sbom]
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+  release:
+    name: 🚀 Publish Release
+    needs: quality-and-build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      # --- NETTOYAGE DISQUE ---
-      - name: 🧹 Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker system prune -af
-      # ------------------------
-
-      - uses: actions/checkout@v4
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev \
-            build-essential libssl-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev \
-            clang mold libasound2-dev
-
-      - name: Setup Tools (Node & Rust)
-        uses: actions/setup-node@v4
-        with: { node-version: 24, cache: 'npm' }
-      
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: 'wasm32-unknown-unknown,wasm32-wasip1' }
-
-      - name: Build WASM Core
-        run: cd src-wasm && ./build.sh
-
-      # Attention : Si le frontend TypeScript casse à cause des changements backend,
-      # cette étape échouera. Pour l'instant on laisse, car nécessaire pour le bundle.
-      - name: Install & Build Frontend
-        run: |
-          npm ci
-          npm run build 
-
-      - name: Build Tauri App (Native)
-        uses: tauri-apps/tauri-action@v0
-        id: tauri-build
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
         with:
-          args: --target x86_64-unknown-linux-gnu
+          name: raise-artifacts
+          path: release_out
 
-      - name: Retrieve SBOMs
-        uses: actions/download-artifact@v4
-        with:
-          name: sboms
-          path: release_out/sboms
-
-      - name: Prepare Artifacts & Checksums
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Prepare Checksums
         run: |
-          mkdir -p release_out
-          cp src-tauri/target/release/bundle/deb/*.deb release_out/ 2>/dev/null || true
-          cp src-tauri/target/release/bundle/appimage/*.AppImage release_out/ 2>/dev/null || true
-          
           cd release_out
-          echo "Generating SHA256 Checksums..."
           sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
 
       - name: Publish Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            release_out/*.deb
-            release_out/*.AppImage
-            release_out/sboms/*.cdx.json
-            release_out/SHA256SUMS.txt
+            release_out/*
           draft: true
           generate_release_notes: true

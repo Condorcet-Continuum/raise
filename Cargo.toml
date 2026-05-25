@@ -1,5 +1,9 @@
 [workspace]
-members = ["src-tauri", "src-tauri/tools/raise-cli"]
+members = [
+    "crates/raise-core",
+    "crates/raise-edge",
+    "crates/raise-desktop",
+    "crates/raise-cli"]
 exclude = ["src-wasm", "wasm-modules"]
 resolver = "2"
 
@@ -16,7 +20,7 @@ serde_json = { version = "1.0", features = ["preserve_order"] }
 wasm-bindgen = "0.2"
 thiserror = "2.0.17"
 anyhow = "1.0"
-wasmtime = "43.0.0"
+wasmtime = "45.0.0"
 
 # Profils valables pour tout le workspace (évitent les warnings)
 [profile.dev]

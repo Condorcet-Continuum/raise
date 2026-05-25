@@ -1,0 +1,49 @@
+[package]
+name = "raise-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# On dit à Cargo que l'exécutable s'appelle "raise" (comme avant)
+[[bin]]
+name = "raise"
+path = "src/main.rs"
+
+[dependencies]
+# 1. On importe le cerveau
+raise-core = { path = "../raise-core" }
+
+# 2. On importe Tauri (Interface graphique)
+tauri = { version = "2.0.0-rc", features = [] }
+tauri-plugin-dialog = "2.0.0-rc"
+tauri-plugin-fs = "2.0.0-rc"
+tauri-plugin-shell = "2.0.0-rc"
+serde_json.workspace = true
+
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+
+# --- BLOCKCHAIN (Fabric & VPN) ---
+libp2p = { version = "0.56", features = [
+    "kad",
+    "gossipsub",
+    "request-response",
+    "cbor",
+    "macros",
+    "tcp",
+    "noise",
+    "yamux",
+    "dns",
+    "tokio",
+] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+serial_test = "3.0"
+
+# Les dépendances lourdes (CUDA, OpenCV, etc.) sont autorisées ici,
+# car ce code tourne sur le Ryzen !
+# [features]
+# cuda = ["candle-core/cuda"]

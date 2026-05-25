@@ -1,0 +1,46 @@
+[package]
+name = "raise-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Gestion d'erreurs
+anyhow = "1"
+thiserror = "2.0.18"
+
+# Parsing d'arguments (Cœur du CLI)
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# Sérialisation / JSON
+serde.workspace = true
+serde_json.workspace = true
+
+# Environnement & Logs
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
+
+# parsing du Shell Global
+shell-words = "1.1"
+rustyline = "18.0.0"
+
+# Runtime Async
+tokio = { version = "1", features = ["full"] }
+
+# Utilitaires
+uuid = { version = "1", features = ["v4"] }
+dirs = "6.0.0"
+
+# 🎯 LE NOUVEAU PONT : On pointe vers la bibliothèque métier
+raise-core = { path = "../raise-core" }
+
+[features]
+default = []
+cuda = ["raise-core/cuda"]
+
+[dev-dependencies]
+serial_test = "3.4.0"
+tempfile = "3.25.0"
+
+
