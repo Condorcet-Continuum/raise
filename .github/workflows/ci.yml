@@ -39,6 +39,17 @@ jobs:
       - name: Install SBOM Tool (cargo-cyclonedx)
         run: cargo install cargo-cyclonedx
 
+      - name: Seed Air-Gap AI Assets (BGE-Small)
+        run: |
+          mkdir -p ~/raise_domain/_system/ai-assets/embeddings/bge-small
+          cd ~/raise_domain/_system/ai-assets/embeddings/bge-small
+          curl -sSLO https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx
+          curl -sSLO https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/config.json
+          curl -sSLO https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer.json
+          curl -sSLO https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer_config.json
+          curl -sSLO https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/special_tokens_map.json
+
+
       # Étape 1 : Quality Gate (Lint, Format, Test)
       - name: Run Quality Gate
         run: make check
