@@ -10,16 +10,41 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-    /// Initialise le store documentaire (collection `chat_sessions`)
+    /// Initialise le store documentaire (collection `chat_sessions` ou définie dans les settings)
     pub async fn new(manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
-        let collection_name = "chat_sessions".to_string();
-        let app_config = AppConfig::get();
+        // 🎯 GOUVERNANCE STRICTE : Vérification de l'activation du composant
+        let _settings = match AppConfig::get_runtime_settings(
+            manager,
+            "ref:components:handle:ai_memory_store",
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_MEMORY_STORE_INIT_REJECTED",
+                error = e.to_string(),
+                context = json_value!({"action": "memory_store_init", "hint": "Le composant ai_memory_store est-il actif et configuré dans le catalogue système ?"})
+            ),
+        };
 
-        // 🎯 FIX MOUNT POINTS : Utilisation du domaine système pour le schéma de session
-        let schema_uri = format!(
-            "db://{}/{}/schemas/v2/agents/memory/chat_session.schema.json",
-            app_config.mount_points.system.domain, app_config.mount_points.system.db
-        );
+        // 🎯 ZÉRO DETTE ABSOLUE : Aucun fallback codé en dur dans le binaire.
+        // Si l'architecte système a oublié de configurer le nom de la collection, on crashe !
+        let collection_name = match _settings.get("collection_name").and_then(|v| v.as_str()) {
+            Some(name) => name.to_string(),
+            None => raise_error!(
+                "ERR_MEMORY_STORE_CONFIG_INVALID",
+                error = "Le paramètre 'collection_name' est strictement requis mais absent de la configuration."
+            ),
+        };
+
+        // Zéro fallback pour le schéma non plus.
+        let schema_uri = match _settings.get("schema_uri").and_then(|v| v.as_str()) {
+            Some(uri) => uri.to_string(),
+            None => raise_error!(
+                "ERR_MEMORY_STORE_CONFIG_INVALID",
+                error = "Le paramètre 'schema_uri' est strictement requis mais absent de la configuration."
+            ),
+        };
 
         // Tentative de création de la collection (ignorée si elle existe déjà)
         if let Err(e) = manager
@@ -127,6 +152,56 @@ mod tests {
     use super::*;
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
+    /// 🎯 HELPER ZÉRO DETTE : Injecte l'autorisation requise dans la base de données de test
+    async fn inject_mock_memory_config(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        // 🎯 FIX ZÉRO DETTE : On calcule l'URI attendue via les Mount Points système
+        let session_schema_uri = format!(
+            "db://{}/{}/schemas/v2/agents/memory/chat_session.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        // 1. CRÉATION DU COMPOSANT
+        let _ = manager
+            .create_collection("components", &generic_schema_uri)
+            .await;
+        manager
+            .upsert_document(
+                "components",
+                json_value!({
+                    "_id": "comp_memory_id",
+                    "handle": "ai_memory_store",
+                    "name": "Chat Memory Store"
+                }),
+            )
+            .await?;
+
+        // 2. CRÉATION DE LA CONFIGURATION
+        let _ = manager
+            .create_collection("service_configs", &generic_schema_uri)
+            .await;
+        manager
+            .upsert_document(
+                "service_configs",
+                json_value!({
+                    "_id": "mock_memory_cfg",
+                    "component_id": "ref:components:handle:ai_memory_store",
+                    "service_settings": {
+                        "collection_name": "chat_sessions",
+                        "schema_uri": session_schema_uri
+                    }
+                }),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     #[async_test]
     async fn test_memory_store_lifecycle() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
@@ -141,6 +216,9 @@ mod tests {
 
         // 🎯 FIX : Utiliser le mock de la sandbox (v1) au lieu de l'init de prod (v2)
         DbSandbox::mock_db(&manager).await?;
+
+        // 🎯 FIX : Déblocage de la gouvernance pour memory_store
+        inject_mock_memory_config(&manager).await?;
 
         // 🎯 Match strict sur la création du store
         let store = match MemoryStore::new(&manager).await {

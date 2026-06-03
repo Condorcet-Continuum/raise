@@ -22,11 +22,27 @@ struct CollectionState {
 
 impl NativeLocalStore {
     /// Initialise le store vectoriel avec le périphérique spécifié.
-    pub fn new(_path: &Path, device: &ComputeHardware) -> Self {
-        Self {
+    pub async fn new(
+        manager: &CollectionsManager<'_>,
+        device: &ComputeHardware,
+    ) -> RaiseResult<Self> {
+        let _settings = match AppConfig::get_runtime_settings(
+            manager,
+            "ref:components:handle:ai_graph_store",
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_AI_STORE_INIT_REJECTED",
+                error = e.to_string(),
+                context = json_value!({"action": "native_store_init", "hint": "Le composant ai_graph_store est-il actif et configuré ?"})
+            ),
+        };
+        Ok(Self {
             device: device.clone(),
             state: AsyncRwLock::new(UnorderedMap::new()),
-        }
+        })
     }
 
     /// 🎯 RÉSOLUTION DÉTERMINISTE : Les tenseurs mémoires sont rangés dans la partition "tensors" de la DB.
@@ -35,8 +51,9 @@ impl NativeLocalStore {
             .storage
             .config
             .db_root(&manager.space, &manager.db)
-            .join("tensors")
-            .join(col)
+            .join("collections") // On cible le dossier collections de la DB
+            .join(col) // On entre dans le dossier de la collection (ex: raise_knowledge_base)
+            .join("tensors") // On crée le sous-dossier dédié à l'IA
     }
 
     /// 🎯 LAZY LOADING : Charge les tenseurs depuis le SSD vers le ComputeHardware uniquement sur demande.
@@ -166,32 +183,34 @@ impl NativeLocalStore {
     /// Scanne le répertoire des tenseurs pour identifier les collections existantes
     /// et préparer le Lazy Loading sans saturer la VRAM immédiatement.
     pub async fn load(&self, manager: &CollectionsManager<'_>) -> RaiseResult<()> {
-        // Résolution du chemin racine des tenseurs pour cette DB
-        let tensors_root = manager
+        // Résolution du chemin racine des collections pour cette DB
+        let collections_root = manager
             .storage
             .config
             .db_root(&manager.space, &manager.db)
-            .join("tensors");
+            .join("collections");
 
-        if !fs::exists_async(&tensors_root).await {
+        if !fs::exists_async(&collections_root).await {
             return Ok(());
         }
 
-        // 🎯 FIX : read_dir_async nécessite une variable mutable pour le flux asynchrone
-        let mut entries = fs::read_dir_async(&tensors_root).await?;
+        let mut entries = fs::read_dir_async(&collections_root).await?;
         let mut state = self.state.write().await;
 
-        // 🎯 FIX : Boucle asynchrone idiomatique Tokio
         while let Ok(Some(entry)) = entries.next_entry().await {
-            // Lecture asynchrone des métadonnées du fichier/dossier
             if let Ok(file_type) = entry.file_type().await {
                 if file_type.is_dir() {
                     let col_name = entry.file_name().to_string_lossy().to_string();
 
-                    // On pré-initialise l'état pour le Lazy Loading (vector_matrix est None)
-                    state
-                        .entry(col_name)
-                        .or_insert_with(CollectionState::default);
+                    // 🎯 Vérification : La collection contient-elle un dossier "tensors" ?
+                    let tensor_dir = collections_root.join(&col_name).join("tensors");
+
+                    if fs::exists_async(&tensor_dir).await {
+                        // On pré-initialise l'état pour le Lazy Loading (vector_matrix est None)
+                        state
+                            .entry(col_name)
+                            .or_insert_with(CollectionState::default);
+                    }
                 }
             }
         }
@@ -200,6 +219,7 @@ impl NativeLocalStore {
             "INF_VECTOR_STORE_DISCOVERY",
             json_value!({
                 "space": manager.space,
+                "db": manager.db,
                 "collections_discovered": state.len()
             })
         );
@@ -430,7 +450,7 @@ mod tests {
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_full_search_with_metadata_filter() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
@@ -442,7 +462,8 @@ mod tests {
         );
         DbSandbox::mock_db(&manager).await?;
 
-        let store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
+        // 🎯 FIX : On passe le manager et on .await?
+        let store = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
         let col = "tech_resilient";
         store.init_collection(&manager, col, 2).await?;
 
@@ -466,7 +487,7 @@ mod tests {
     }
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_persistence_mount_point_integrity() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
@@ -480,7 +501,7 @@ mod tests {
 
         let col = "persistence_test";
         {
-            let store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
+            let store = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
             store.init_collection(&manager, col, 2).await?;
             let rec = MemoryRecord {
                 id: "P1".into(),
@@ -491,7 +512,7 @@ mod tests {
             store.add_documents(&manager, col, vec![rec]).await?;
         }
 
-        let new_store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
+        let new_store = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
         let res = new_store
             .search_similarity(&manager, col, &[1.0, 0.0], 1, 0.9, None)
             .await?;
@@ -500,9 +521,8 @@ mod tests {
         Ok(())
     }
 
-    ///   Validation du cycle de vie VRAM
     #[async_test]
-    #[serial_test::serial] // Protège contre les OOM croisés avec d'autres tests
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_unload_collection_vram_protection() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
@@ -514,12 +534,9 @@ mod tests {
         );
         DbSandbox::mock_db(&manager).await?;
 
-        let store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
+        let store = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
         let col = "test_vram_lifecycle";
 
-        // =====================================================================
-        // PHASE 1 : Initialisation et Chargement (VRAM = ACTIVE)
-        // =====================================================================
         store.init_collection(&manager, col, 2).await?;
         let rec = MemoryRecord {
             id: "vram_1".into(),
@@ -529,60 +546,32 @@ mod tests {
         };
         store.add_documents(&manager, col, vec![rec]).await?;
 
-        // PREUVE 1 : La matrice est bien en mémoire
         {
             let state = store.state.read().await;
-            assert!(
-                state.contains_key(col),
-                "FAIL: La collection DOIT être chargée en mémoire après un ajout."
-            );
+            assert!(state.contains_key(col));
         }
 
-        // =====================================================================
-        // PHASE 2 : Déchargement (VRAM = PURGÉE)
-        // =====================================================================
         store.unload_collection(col).await?;
 
-        // PREUVE 2 : La matrice a été détruite de la mémoire
         {
             let state = store.state.read().await;
-            assert!(
-                !state.contains_key(col),
-                "FATAL OOM RISK: La collection est toujours en VRAM après le unload_collection !"
-            );
+            assert!(!state.contains_key(col));
         }
 
-        // =====================================================================
-        // PHASE 3 : Résilience et Lazy-Loading (Le RAG attaque à nouveau)
-        // =====================================================================
-        // On effectue une recherche sur la collection déchargée.
-        // Le store DOIT comprendre qu'il doit la recharger silencieusement sans crasher.
         let res = store
             .search_similarity(&manager, col, &[1.0, 0.0], 1, 0.5, None)
             .await?;
 
-        // PREUVE 3 : Le rechargement automatique a fonctionné
-        assert_eq!(
-            res.len(),
-            1,
-            "FAIL: Le Lazy-Loading après un unload a échoué."
-        );
+        assert_eq!(res.len(), 1);
         assert_eq!(res[0].content, "Data Matrix");
 
-        // PREUVE 4 : La matrice est de retour en mémoire
         {
             let state = store.state.read().await;
-            assert!(
-                state.contains_key(col),
-                "FAIL: La collection devrait être de retour en RAM après une recherche."
-            );
+            assert!(state.contains_key(col));
         }
 
         Ok(())
     }
-    // =========================================================================
-    // 🎯 FIX ZÉRO DETTE : Tests du Cycle de Vie Global (Save / Load / Warm-up)
-    // =========================================================================
 
     #[async_test]
     #[serial_test::serial]
@@ -599,11 +588,8 @@ mod tests {
 
         let col_name = "test_lifecycle_sync";
 
-        // =====================================================================
-        // PHASE 1 : Création, Indexation et Sauvegarde (Simulation: App Active)
-        // =====================================================================
         {
-            let store1 = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
+            let store1 = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
             store1.init_collection(&manager, col_name, 2).await?;
 
             let rec = MemoryRecord {
@@ -613,53 +599,27 @@ mod tests {
                 vectors: Some(vec![1.0, 0.5]),
             };
             store1.add_documents(&manager, col_name, vec![rec]).await?;
-
-            // Flush explicite de la mémoire vers les Safetensors
             store1.save(&manager).await?;
-        } // `store1` est détruit ici. La VRAM est purgée. C'est l'équivalent d'un redémarrage.
+        }
 
-        // =====================================================================
-        // PHASE 2 : Découverte à froid (Simulation: App Redémarre)
-        // =====================================================================
-        let store2 = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
+        let store2 = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
+        assert!(store2.state.read().await.is_empty());
 
-        // Preuve 1 : Le Store démarre totalement vide (Sécurité VRAM respectée)
-        assert!(
-            store2.state.read().await.is_empty(),
-            "Le store devrait être vierge au démarrage."
-        );
-
-        // Découverte silencieuse des collections sur le disque
         store2.load(&manager).await?;
 
-        // Preuve 2 : Le Warm-up a fonctionné, MAIS la VRAM est toujours protégée
         {
             let state = store2.state.read().await;
-            assert!(
-                state.contains_key(col_name),
-                "FAIL: Le load() n'a pas découvert le dossier de la collection."
-            );
+            assert!(state.contains_key(col_name));
             if let Some(col_state) = state.get(col_name) {
-                assert!(
-                    col_state.vector_matrix.is_none(),
-                    "FATAL OOM RISK: Le load() a chargé les tenseurs en VRAM au lieu de faire du Lazy-Loading !"
-                );
+                assert!(col_state.vector_matrix.is_none());
             }
         }
 
-        // =====================================================================
-        // PHASE 3 : Reprise d'activité (Lazy-Loading déclenché par une requête)
-        // =====================================================================
         let res = store2
             .search_similarity(&manager, col_name, &[1.0, 0.5], 1, 0.9, None)
             .await?;
 
-        // Preuve 3 : Les données ont bien été restaurées depuis le SSD
-        assert_eq!(
-            res.len(),
-            1,
-            "Le Lazy-Loading n'a pas réussi à restaurer les documents."
-        );
+        assert_eq!(res.len(), 1);
         assert_eq!(res[0].content, "Donnée critique à sauvegarder");
 
         Ok(())
@@ -678,19 +638,11 @@ mod tests {
         );
         DbSandbox::mock_db(&manager).await?;
 
-        let store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
-
-        // Tenter un load sur une base de données complètement vierge (pas de dossier `tensors`)
+        let store = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
         let res = store.load(&manager).await;
 
-        assert!(
-            res.is_ok(),
-            "FAIL: Le chargement d'une base vierge devrait réussir silencieusement (No-Op)."
-        );
-        assert!(
-            store.state.read().await.is_empty(),
-            "L'état devrait rester vide."
-        );
+        assert!(res.is_ok());
+        assert!(store.state.read().await.is_empty());
 
         Ok(())
     }

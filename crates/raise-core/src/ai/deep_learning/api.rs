@@ -112,8 +112,9 @@ async fn fetch_model_metadata(
     let weights_path = domain_root
         .join(domain)
         .join(db)
-        .join("tensors")
-        .join(&col)
+        .join("collections") // 🎯 1. On entre d'abord dans la partition des collections
+        .join(&col) // 🎯 2. On cible le dossier de la collection spécifique
+        .join("tensors") // 🎯 3. On pointe vers son sous-dossier tensoriel
         .join(format!("{}.safetensors", model_id));
 
     // 5. ZÉRO SETUP : Auto-création résiliente du répertoire binaire
@@ -369,7 +370,9 @@ mod tests {
         let expected_path = domain_root
             .join(&config.mount_points.system.domain)
             .join(&config.mount_points.system.db)
-            .join("tensors/dl_models")
+            .join("collections") // 1. Partition des collections
+            .join("dl_models") // 2. Dossier de la collection spécifique
+            .join("tensors") // 3. Sous-dossier tensoriel
             .join(format!("{}.safetensors", model_id));
 
         assert!(

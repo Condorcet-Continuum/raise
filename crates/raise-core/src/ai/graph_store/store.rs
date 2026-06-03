@@ -46,7 +46,7 @@ impl GraphStore {
                 Ok(engine) => {
                     let device = AppConfig::device();
                     let v_dir = storage_path.join("vectors");
-                    let v_store = NativeLocalStore::new(&v_dir, device);
+                    let v_store = NativeLocalStore::new(manager, device).await?;
 
                     // Chargement résilient : si le store est absent, on continue à vide
                     if let Err(e) = v_store.load(manager).await {

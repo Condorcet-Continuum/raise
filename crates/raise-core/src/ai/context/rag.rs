@@ -1,4 +1,4 @@
-// FICHIER : src-tauri/src/ai/context/rag.rs
+// FICHIER : crates/raise-core/src/ai/context/rag.rs
 use crate::ai::memory::{native_store::NativeLocalStore, MemoryRecord, VectorStore};
 use crate::ai::nlp::{embeddings::EmbeddingEngine, splitting};
 use crate::json_db::collections::manager::CollectionsManager;
@@ -28,19 +28,40 @@ impl RagRetriever {
         storage_path: PathBuf,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
+        // 🎯 GOUVERNANCE STRICTE : Vérification de l'activation du composant RAG
+        let _settings = match AppConfig::get_runtime_settings(manager, "ref:components:handle:rag")
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_RAG_INIT_REJECTED",
+                error = e.to_string(),
+                context = json_value!({"action": "rag_init", "hint": "Le composant RAG est-il actif et configuré dans le catalogue système ?"})
+            ),
+        };
+
+        // 🎯 FIX ZÉRO DETTE : Le nom de la collection provient désormais du catalogue de gouvernance
+        let collection_name = _settings
+            .get("collection_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("raise_knowledge_base")
+            .to_string();
+
         // 🎯 Initialisation du moteur d'embeddings via le point de montage système
         let embedder = EmbeddingEngine::new(manager).await?;
 
-        let collection_name = "raise_knowledge_base".to_string();
-
         user_info!(
             "INF_RAG_NATIVEENGINE_INIT",
-            json_value!({"backend": "NATIVE_EMBEDDING", "device": "Native"})
+            json_value!({
+                "backend": "NATIVE_EMBEDDING",
+                "device": "Native",
+                "collection": collection_name
+            })
         );
 
         let device = ComputeHardware::Cpu;
         let store_dir = storage_path.join("vector_store");
-        let memory = NativeLocalStore::new(&store_dir, &device);
+        let memory = NativeLocalStore::new(manager, &device).await?;
 
         // 🎯 Rigueur : Passage du manager à l'infrastructure vectorielle
         memory
@@ -177,18 +198,93 @@ impl RagRetriever {
         Ok(context_str)
     }
 }
-
 // =========================================================================
 // TESTS UNITAIRES (Restauration intégrale + Nouveaux Tests)
 // =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     fn get_hf_lock() -> &'static AsyncMutex<()> {
         static LOCK: StaticCell<AsyncMutex<()>> = StaticCell::new();
         LOCK.get_or_init(|| AsyncMutex::new(()))
+    }
+
+    /// 🎯 HELPER ZÉRO DETTE : Injecte les autorisations et configurations requises
+    /// dans la base de données de test pour permettre le démarrage des moteurs IA.
+    async fn inject_mock_ai_configs(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+
+        // 🎯 FIX : On utilise le schéma générique permissif déjà fourni par DbSandbox !
+        let generic_schema_uri = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        // ----------------------------------------------------------------------
+        // 1. CRÉATION DES COMPOSANTS (Pour satisfaire l'intégrité référentielle)
+        // ----------------------------------------------------------------------
+        let _ = manager
+            .create_collection("components", &generic_schema_uri)
+            .await;
+
+        manager
+            .upsert_document(
+                "components",
+                json_value!({
+                    "_id": "comp_rag_id",
+                    "handle": "rag",
+                    "name": "RAG Engine"
+                }),
+            )
+            .await?;
+
+        manager
+            .upsert_document(
+                "components",
+                json_value!({
+                    "_id": "comp_store_id",
+                    "handle": "ai_graph_store",
+                    "name": "Vector Store"
+                }),
+            )
+            .await?;
+
+        // ----------------------------------------------------------------------
+        // 2. CRÉATION DES CONFIGURATIONS (Pointant vers les composants valides)
+        // ----------------------------------------------------------------------
+        let _ = manager
+            .create_collection("service_configs", &generic_schema_uri)
+            .await;
+
+        manager
+            .upsert_document(
+                "service_configs",
+                json_value!({
+                    "_id": "mock_rag_cfg",
+                    "component_id": "ref:components:handle:rag",
+                    "service_settings": {
+                        "collection_name": "raise_knowledge_base"
+                    }
+                }),
+            )
+            .await?;
+
+        manager
+            .upsert_document(
+                "service_configs",
+                json_value!({
+                    "_id": "mock_store_cfg",
+                    "component_id": "ref:components:handle:ai_graph_store",
+                    "service_settings": {
+                        "embedding_dim": 384
+                    }
+                }),
+            )
+            .await?;
+
+        Ok(())
     }
 
     #[async_test]
@@ -197,13 +293,13 @@ mod tests {
     async fn test_rag_engine_end_to_end() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
-
-        // 🎯 FIX MOUNT POINTS : Utilisation du domaine système de la sandbox
         let manager = CollectionsManager::new(
             &sandbox.db,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+        DbSandbox::mock_db(&manager).await?;
+        inject_mock_ai_configs(&manager).await?; // 🎯 FIX : Déblocage de la gouvernance
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
 
@@ -246,6 +342,8 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+        DbSandbox::mock_db(&manager).await?;
+        inject_mock_ai_configs(&manager).await?; // 🎯 FIX : Déblocage de la gouvernance
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
         rag.index_document(&manager, "Ceci parle de cuisine.", "chef.txt")
@@ -268,6 +366,8 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+        DbSandbox::mock_db(&manager).await?;
+        inject_mock_ai_configs(&manager).await?; // 🎯 FIX : Déblocage de la gouvernance
 
         {
             let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
@@ -275,7 +375,6 @@ mod tests {
                 .await?;
         }
 
-        // On recrée une instance pour vérifier le chargement depuis le disque
         let mut new_rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
         let context = new_rag
             .retrieve(&manager, "Est-ce que Zstd est rapide ?", 1)
@@ -296,6 +395,8 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+        DbSandbox::mock_db(&manager).await?;
+        inject_mock_ai_configs(&manager).await?; // 🎯 FIX : Déblocage de la gouvernance
 
         let mut rag = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await?;
         let long_text = "Data ".repeat(1000);
@@ -308,24 +409,32 @@ mod tests {
         Ok(())
     }
 
-    // 🎯 NOUVEAU TEST : Résilience face à un manager corrompu ou base manquante
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_rag_init_failure_handling() -> RaiseResult<()> {
         let _guard = get_hf_lock().lock().await;
         let sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
+
+        // 🎯 FIX : On sécurise la partition système (qui est ciblée par le Fallback)
+        let system_manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+        DbSandbox::mock_db(&system_manager).await?;
+        inject_mock_ai_configs(&system_manager).await?;
 
         // On crée un manager pointant vers un domaine inexistant
-        let manager = CollectionsManager::new(&sandbox.db, "void_space", "void_db");
+        let void_manager = CollectionsManager::new(&sandbox.db, "void_space", "void_db");
 
-        // Le système va tenter d'initialiser le RAG. Au lieu d'échouer,
-        // les sécurités "Zéro Dette" vont activer les modes dégradés et les fallbacks.
-        let result = RagRetriever::new_internal(sandbox.domain_root.clone(), &manager).await;
+        // Le Fallback Global Zéro Dette va rediriger la demande d'autorisation vers system_manager !
+        let result = RagRetriever::new_internal(sandbox.domain_root.clone(), &void_manager).await;
 
         assert!(
             result.is_ok(),
-            "L'initialisation doit réussir grâce aux fallbacks, même si la base ou le NLP sont absents."
+            "L'initialisation doit réussir grâce aux fallbacks globaux qui trouvent la config dans la base système."
         );
         Ok(())
     }

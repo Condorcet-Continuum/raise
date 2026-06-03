@@ -158,7 +158,6 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // 🎯 FIX : Ajout de None comme 3ème argument
         let client = LlmClient::new(
             &manager,
             sandbox.db.clone(),

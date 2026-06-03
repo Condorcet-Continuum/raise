@@ -5,11 +5,11 @@ use crate::utils::prelude::*;
 pub struct AssetResolver;
 
 impl AssetResolver {
-    /// Résout un fichier avec la logique stricte de fallback (Domaine/DB -> Shared System).
+    /// Résout un fichier avec la logique stricte de fallback (Domaine/DB -> Usine d'Assets).
     /// Nomenclature `_sync` car l'opération bloque le thread courant pour sonder le système de fichiers.
     pub fn resolve_ai_file_sync(
         primary_base_path: &Path,
-        asset_category_path: &str, // ex: "ai-assets/models"
+        asset_category_path: &str, // ex: "models" ou "ai-assets/models"
         filename: &str,
     ) -> Option<PathBuf> {
         let config = AppConfig::get();
@@ -20,20 +20,39 @@ impl AssetResolver {
             return Some(primary);
         }
 
-        // 2. Test du chemin partagé (Global _system)
-        let raise_domain_path = config
-            .get_path("PATH_RAISE_DOMAIN")
-            .unwrap_or_else(|| PathBuf::from("./raise_domain"));
+        // 2. Test du chemin partagé (Usine d'assets via PATH_RAISE_ASSET)
+        // On gère gracieusement le cas où la catégorie contient déjà "ai-assets/"
+        let relative_category = asset_category_path
+            .strip_prefix("ai-assets/")
+            .unwrap_or(asset_category_path);
 
-        let shared = raise_domain_path
-            .join("_system")
-            .join(asset_category_path)
-            .join(filename);
+        if let Some(factory_path) = config.get_path("PATH_RAISE_ASSET") {
+            let shared = factory_path.join(relative_category).join(filename);
 
-        if fs::exists_sync(&shared) {
-            return Some(shared);
+            if fs::exists_sync(&shared) {
+                return Some(shared);
+            }
+        } else {
+            // 🛡️ FALLBACK ZÉRO DETTE ABSOLU : On utilise les variables du .env pour la déduction
+            let raise_domain_path = config
+                .get_path("PATH_RAISE_DOMAIN")
+                .unwrap_or_else(|| PathBuf::from("./raise_domain"));
+
+            let asset_domain = crate::utils::core::RuntimeEnv::var("RAISE_ASSET_DOMAIN")
+                .unwrap_or_else(|_| "_system".to_string());
+            let asset_db = crate::utils::core::RuntimeEnv::var("RAISE_ASSET_DB")
+                .unwrap_or_else(|_| "ai-assets".to_string());
+
+            let shared = raise_domain_path
+                .join(asset_domain)
+                .join(asset_db)
+                .join(relative_category)
+                .join(filename);
+
+            if fs::exists_sync(&shared) {
+                return Some(shared);
+            }
         }
-
         // 3. Introuvable
         None
     }
@@ -44,14 +63,29 @@ impl AssetResolver {
         asset_category_path: &str,
         filename: &str,
     ) -> JsonValue {
-        let raise_domain_path = AppConfig::get()
-            .get_path("PATH_RAISE_DOMAIN")
-            .unwrap_or_else(|| PathBuf::from("./raise_domain"));
+        let config = AppConfig::get();
+        let relative_category = asset_category_path
+            .strip_prefix("ai-assets/")
+            .unwrap_or(asset_category_path);
+
+        let checked_shared = match config.get_path("PATH_RAISE_ASSET") {
+            Some(factory_path) => factory_path.join(relative_category).join(filename),
+            None => {
+                let raise_domain_path = config
+                    .get_path("PATH_RAISE_DOMAIN")
+                    .unwrap_or_else(|| PathBuf::from("./raise_domain"));
+                raise_domain_path
+                    .join("_system")
+                    .join("ai-assets")
+                    .join(relative_category)
+                    .join(filename)
+            }
+        };
 
         json_value!({
             "filename": filename,
             "checked_primary": primary_base_path.join(filename).to_string_lossy(),
-            "checked_shared": raise_domain_path.join("_system").join(asset_category_path).join(filename).to_string_lossy()
+            "checked_shared": checked_shared.to_string_lossy()
         })
     }
 }
@@ -84,15 +118,22 @@ mod tests {
         let primary_path = raise_domain_path
             .join("test_domain")
             .join("test_db")
-            .join("ai-assets");
-        let category = "ai-assets/models";
+            .join("models"); // Utilisation d'un sous-dossier standard
+        let category = "models";
         let filename = "qwen_test.gguf";
 
         let expected_primary = primary_path.join(filename);
-        let expected_shared = raise_domain_path
-            .join("_system")
-            .join(category)
-            .join(filename);
+
+        // On calcule où le test attend le shared fallback
+        let expected_shared = if let Some(factory_path) = config.get_path("PATH_RAISE_ASSET") {
+            factory_path.join(category).join(filename)
+        } else {
+            raise_domain_path
+                .join("_system")
+                .join("ai-assets")
+                .join(category)
+                .join(filename)
+        };
 
         // On crée les DEUX fichiers
         touch_test_file(&expected_primary)?;
@@ -124,15 +165,22 @@ mod tests {
         let primary_path = raise_domain_path
             .join("test_domain")
             .join("test_db")
-            .join("ai-assets");
+            .join("models");
+
+        // On teste avec le préfixe pour valider le nettoyage automatique de "ai-assets/"
         let category = "ai-assets/models";
         let filename = "whisper_test.bin";
 
         let expected_primary = primary_path.join(filename);
-        let expected_shared = raise_domain_path
-            .join("_system")
-            .join(category)
-            .join(filename);
+        let expected_shared = if let Some(factory_path) = config.get_path("PATH_RAISE_ASSET") {
+            factory_path.join("models").join(filename) // Le test valide que "models" est bien utilisé
+        } else {
+            raise_domain_path
+                .join("_system")
+                .join("ai-assets")
+                .join("models")
+                .join(filename)
+        };
 
         if fs::exists_sync(&expected_primary) {
             let _ = fs::remove_file_sync(&expected_primary);
@@ -159,10 +207,11 @@ mod tests {
     #[serial_test::serial]
     async fn test_resolver_file_not_found() -> RaiseResult<()> {
         let _sandbox = AgentDbSandbox::new().await?;
-        let raise_domain_path = AppConfig::get().get_path("PATH_RAISE_DOMAIN").unwrap();
+        let config = AppConfig::get();
+        let raise_domain_path = config.get_path("PATH_RAISE_DOMAIN").unwrap();
 
         let primary_path = raise_domain_path.join("ghost_domain").join("ghost_db");
-        let category = "ai-assets/ghost";
+        let category = "ghost_category";
         let filename = "ghost_model.gguf";
 
         let resolved = AssetResolver::resolve_ai_file_sync(&primary_path, category, filename);
@@ -178,6 +227,7 @@ mod tests {
     #[serial_test::serial]
     async fn test_resolver_missing_context_format() -> RaiseResult<()> {
         let _sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
 
         let primary_path = PathBuf::from("/mock/primary/path");
         let category = "ai-assets/models";
@@ -190,10 +240,14 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("/mock/primary/path/test.json"));
-        assert!(context["checked_shared"]
-            .as_str()
-            .unwrap()
-            .contains("_system/ai-assets/models/test.json"));
+
+        // Le chemin testé dépendra de si PATH_RAISE_ASSET est mocké ou non
+        let shared_str = context["checked_shared"].as_str().unwrap();
+        if config.get_path("PATH_RAISE_ASSET").is_some() {
+            assert!(shared_str.contains("models/test.json"));
+        } else {
+            assert!(shared_str.contains("_system/ai-assets/models/test.json"));
+        }
         Ok(())
     }
 }

@@ -24,8 +24,22 @@ impl Trainer {
         varmap: &NeuralWeightsMap,
     ) -> RaiseResult<Self> {
         // 1. Récupération des réglages dynamiques
-        let settings =
-            AppConfig::get_runtime_settings(manager, "ref:components:handle:ai_trainer").await?;
+        let settings = match AppConfig::get_runtime_settings(
+            manager,
+            "ref:components:handle:ai_dl_trainer",
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_TRAINER_INIT_REJECTED",
+                error = e.to_string(),
+                context = json_value!({
+                    "action": "trainer_init",
+                    "hint": "Le composant ai_dl_trainer est-il actif et configuré dans le catalogue système ?"
+                })
+            ),
+        };
 
         // 2. Désérialisation stricte
         let config: DeepLearningConfig = match json::deserialize_from_value(settings) {

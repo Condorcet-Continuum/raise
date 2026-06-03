@@ -173,17 +173,6 @@ fn main() -> RaiseResult<()> {
             terminate_process(0);
         }
         let storage = node_env.storage;
-        /*
-        let db_root = match config.get_path("PATH_RAISE_DOMAIN") {
-            Some(path) => path,
-            None => raise_error!(
-                "CLI_MISSING_PATH",
-                error = "PATH_RAISE_DOMAIN introuvable dans la config"
-            ),
-        };
-
-        let storage = SharedRef::new(StorageEngine::new(JsonDbConfig::new(db_root))?);
-        */
 
         // ---------------------------------------------------------
         // 🧠 INITIALISATION SÉMANTIQUE (Bootstrapping In-Index)
@@ -207,9 +196,8 @@ fn main() -> RaiseResult<()> {
         let session_mgr = context::SessionManager::new(storage.clone());
 
         // RÉSOLUTION DU CONTEXTE DE SIMULATION
-        let is_simulation = cli.simulate;
-        let sim_domain = cli.sim_domain.unwrap_or_else(|| "sim_mbse2".to_string());
-        let sim_db = cli.sim_db.unwrap_or_else(|| "sim_raise".to_string());
+        let sim_domain = cli.sim_domain.unwrap_or_else(|| "".to_string());
+        let sim_db = cli.sim_db.unwrap_or_else(|| "".to_string());
 
         // =========================================================
         // 🔍 PRE-FLIGHT CHECK : TRACAGE MÉMOIRE AVANT CHARGEMENT IA
@@ -277,7 +265,7 @@ fn main() -> RaiseResult<()> {
             active_domain,
             active_db,
             is_test_mode: false,
-            is_simulation,
+            is_simulation: false,
             sim_domain,
             sim_db,
         };
@@ -375,9 +363,21 @@ async fn run_global_shell(mut ctx: CliContext) -> RaiseResult<()> {
             ctx.sim_db = session.sim_db.clone();
         }
 
+        let sim_tag = if ctx.is_simulation { " 🧪SIM" } else { "" };
+        let display_domain = if ctx.is_simulation {
+            &ctx.sim_domain
+        } else {
+            &ctx.active_domain
+        };
+        let display_db = if ctx.is_simulation {
+            &ctx.sim_db
+        } else {
+            &ctx.active_db
+        };
+
         let prompt = format!(
-            "RAISE [{}@{}/{}]> ",
-            ctx.active_user, ctx.active_domain, ctx.active_db
+            "RAISE{} [{}@{}/{}]> ",
+            sim_tag, ctx.active_user, display_domain, display_db
         );
         let readline = rl.readline(&prompt);
 

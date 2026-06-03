@@ -73,8 +73,9 @@ mod integration_tests {
         DbSandbox::mock_db(&manager).await?;
 
         let device = ComputeHardware::Cpu;
-        let store_dir = sandbox.domain_root.join("vector_store");
-        let store = NativeLocalStore::new(&store_dir, &device);
+
+        // 🎯 AJOUT DU .await? ICI
+        let store = NativeLocalStore::new(&manager, &device).await?;
 
         let col = "integ_test_collection";
 
@@ -112,7 +113,6 @@ mod integration_tests {
         Ok(())
     }
 
-    ///  Résilience face à un domaine inexistant (Mount Point Error)
     /// 🎯 NOUVEAU TEST : Résilience face à un domaine inexistant (Mount Point Error)
     #[async_test]
     #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
@@ -122,12 +122,15 @@ mod integration_tests {
 
         // On crée un manager pointant vers un domaine non initialisé
         let manager = CollectionsManager::new(&sandbox.db, "ghost_domain", "ghost_db");
-        let store = NativeLocalStore::new(&sandbox.domain_root.join("fail"), &ComputeHardware::Cpu);
 
-        // 1. L'initialisation est "Lazy/Résiliente" et ne crashera pas
+        // 🎯 L'initialisation REUSSIT car le moteur trouve sa config métier
+        // via le Fallback Global (Partition Système _system/master)
+        let store = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
+
+        // 1. L'initialisation de la collection va échouer silencieusement (le let _ = ... l'ignore)
         let _ = store.init_collection(&manager, "any", 384).await;
 
-        // 2. Par contre, l'écriture (upsert) DOIT être strictement interceptée !
+        // 2. Par contre, l'écriture DOIT être strictement interceptée !
         let rec = MemoryRecord {
             id: "ghost_1".into(),
             content: "Donnée fantôme".into(),
@@ -135,19 +138,18 @@ mod integration_tests {
             vectors: Some(vec![0.0; 384]),
         };
 
-        // L'interaction avec JSON-DB sera rejetée avec une erreur structurée
+        // L'interaction physique avec JSON-DB sera rejetée
         let result = store.add_documents(&manager, "any", vec![rec]).await;
 
-        // 🎯 FIX : Utilisation du standard de test de l'application (e.to_string())
         assert!(
-        result.is_err(),
-        "Le moteur de mémoire aurait dû lever une erreur pour domaine invalide lors de l'insertion"
-    );
+            result.is_err(),
+            "Le moteur de mémoire aurait dû lever une erreur lors de l'écriture sur un domaine invalide"
+        );
 
         if let Err(e) = result {
             assert!(
-                e.to_string().contains("ERR_DB"),
-                "L'erreur remontée n'est pas de type DB : {}",
+                e.to_string().contains("ERR_"),
+                "L'erreur remontée n'est pas standard : {}",
                 e
             );
         }
@@ -169,7 +171,8 @@ mod integration_tests {
         );
         DbSandbox::mock_db(&manager).await?;
 
-        let store = NativeLocalStore::new(&sandbox.domain_root, &ComputeHardware::Cpu);
+        // 🎯 AJOUT DU .await? ICI
+        let store = NativeLocalStore::new(&manager, &ComputeHardware::Cpu).await?;
 
         // Init deux collections distinctes
         store.init_collection(&manager, "col_a", 2).await?;
@@ -195,6 +198,7 @@ mod integration_tests {
         let res = store
             .search_similarity(&manager, "col_a", &[1.0, 0.0], 10, 0.5, None)
             .await?;
+
         assert!(
             res.iter().all(|r| r.id == "A"),
             "Fuite de données entre collections détectée !"

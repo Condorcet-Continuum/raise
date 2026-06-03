@@ -126,7 +126,6 @@ impl RaiseHealthEngine {
     }
 
     /// Vérifie la présence physique des poids des modèles sur le disque
-    /// Vérifie la présence physique des poids des modèles sur le disque
     async fn verify_critical_assets(
         manager: &CollectionsManager<'_>,
         logs: &mut UnorderedMap<String, JsonValue>,
@@ -164,7 +163,6 @@ impl RaiseHealthEngine {
             ),
         };
 
-        // 🎯 LA CORRECTION EST ICI : On définit bien 3 éléments séparés (Label, Dossier, Fichier)
         let critical_files = vec![
             ("LLM_MODEL", "ai-assets/models", model_filename.as_str()),
             (
