@@ -80,6 +80,9 @@ pub use std::fmt::Debug as FmtDebug;
 // --- SYSTÈME DE COMPARAISON (AI-Ready) ---
 pub use std::cmp;
 
+/// 🤖 IA NOTE : Inverse l'ordre de tri naturel. Idéal avec `sort_by_key` pour les tris décroissants.
+pub use std::cmp::Reverse as ReverseOrder;
+
 /// 🤖 IA NOTE : Énumération pour le résultat d'une comparaison (Less, Equal, Greater).
 pub use std::cmp::Ordering as FmtOrdering;
 
@@ -113,6 +116,10 @@ pub use std::iter::Peekable as DataStreamPeekable;
 
 /// 🤖 IA NOTE : Un itérateur sur les caractères Unicode d'une chaîne.
 pub use std::str::Chars as TextChars;
+
+/// 🤖 IA NOTE : Un itérateur sur les caractères Unicode d'une chaîne et leurs positions (offsets en octets).
+/// Indispensable pour le parsing Zero-Copy.
+pub use std::str::CharIndices as TextCharIndices;
 
 pub use regex;
 

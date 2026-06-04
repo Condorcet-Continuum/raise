@@ -14,6 +14,7 @@ use crate::{raise_error, user_info, user_success, user_warn};
 // 🧬 TAXONOMIE INDUSTRIELLE (Les 8 Partitions Physiques)
 // ==============================================================================
 
+// @raise-handle: enum:IndustrialPhase [id: 74952fa4]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndustrialPhase {
     System,
@@ -26,6 +27,7 @@ pub enum IndustrialPhase {
     Operation,
 }
 
+// @raise-handle: impl:IndustrialPhase [id: 919e58a6]
 impl IndustrialPhase {
     pub const ALL: [IndustrialPhase; 8] = [
         Self::System,
@@ -39,7 +41,9 @@ impl IndustrialPhase {
     ];
 }
 
+// @raise-handle: impl:IndustrialPhase_FmtDisplay [id: d2fd2c63]
 impl FmtDisplay for IndustrialPhase {
+    // @raise-handle: fn:fmt [id: bfacc3eb]
     fn fmt(&self, f: &mut FmtCursor<'_>) -> FmtResult {
         let name = match self {
             Self::System => "system",
@@ -59,12 +63,15 @@ impl FmtDisplay for IndustrialPhase {
 // 🌍 GESTIONNAIRE DE NŒUD (L'Orchestrateur de Boot)
 // ==============================================================================
 
+// @raise-handle: struct:NodeEnvironment [id: 0e34a2ba]
 pub struct NodeEnvironment {
     pub storage: SharedRef<StorageEngine>,
     pub local_domain: String,
 }
 
+// @raise-handle: impl:NodeEnvironment [id: 5f751081]
 impl NodeEnvironment {
+    // @raise-handle: fn:boot_physical_node [id: a7a78d9c]
     pub async fn boot_physical_node() -> RaiseResult<(Self, bool)> {
         let config = AppConfig::get();
 
@@ -140,6 +147,7 @@ impl NodeEnvironment {
         ))
     }
 
+    // @raise-handle: fn:ensure_partition [id: c0ad67a8]
     async fn ensure_partition(
         storage: &SharedRef<StorageEngine>,
         domain: &str,
@@ -147,6 +155,10 @@ impl NodeEnvironment {
     ) -> RaiseResult<()> {
         let db_name = phase.to_string();
         let partition_path = storage.config.db_root(domain, &db_name);
+
+        // 🔍 FIX : Vérification de l'état "à froid" avant de faire quoi que ce soit
+        let sys_json_path = partition_path.join("_system.json");
+        let is_fresh_partition = !fs::exists_async(&sys_json_path).await;
 
         match fs::create_dir_all_async(&partition_path).await {
             Ok(_) => (),
@@ -181,7 +193,33 @@ impl NodeEnvironment {
 
         // 🎯 L'API native du CollectionsManager est respectée
         match manager.create_db_with_schema(&schema_uri).await {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // 🚀 INJECTION CONDITIONNELLE : Uniquement si la partition vient d'être créée !
+                if is_fresh_partition {
+                    let config = AppConfig::get();
+                    if let Some(factory_path) = config.get_path("PATH_RAISE_ASSET") {
+                        let partition_seeds_dir = factory_path.join("seeds").join(&db_name);
+
+                        if fs::exists_async(&partition_seeds_dir).await {
+                            user_info!(
+                                "PARTITION_SEEDS_START",
+                                json_value!({
+                                    "db": db_name,
+                                    "action": "Détection et injection du contexte initial de la partition"
+                                })
+                            );
+                            SystemBootstrapper::apply_seeds_to_db(
+                                &manager,
+                                domain,
+                                &db_name,
+                                &partition_seeds_dir,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                Ok(())
+            }
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("already initialized")
@@ -200,6 +238,7 @@ impl NodeEnvironment {
 // 🚀 MOTEUR D'ENSEMENCEMENT (Le "Seed Script" embarqué)
 // ==============================================================================
 
+// @raise-handle: struct:SystemBootstrapper [id: 4890fb0f]
 pub struct SystemBootstrapper<'a> {
     manager: CollectionsManager<'a>,
     config: &'static AppConfig,
@@ -207,7 +246,9 @@ pub struct SystemBootstrapper<'a> {
     db: String,
 }
 
+// @raise-handle: impl:SystemBootstrapper [id: 4e326727]
 impl<'a> SystemBootstrapper<'a> {
+    // @raise-handle: fn:new [id: 2669bd20]
     pub fn new(manager: CollectionsManager<'a>, domain: String, db: String) -> Self {
         Self {
             manager,
@@ -217,6 +258,7 @@ impl<'a> SystemBootstrapper<'a> {
         }
     }
 
+    // @raise-handle: fn:db_path [id: c3635f49]
     fn db_path(&self) -> RaiseResult<PathBuf> {
         let root = match self.config.get_path("PATH_RAISE_DOMAIN") {
             Some(p) => p,
@@ -228,6 +270,7 @@ impl<'a> SystemBootstrapper<'a> {
         Ok(root.join(&self.domain).join(&self.db))
     }
 
+    // @raise-handle: fn:extract_operation_documents [id: 8ae176f5]
     fn extract_operation_documents(raw: JsonValue) -> Vec<JsonValue> {
         let mut docs = Vec::new();
         if let Some(arr) = raw.as_array() {
@@ -260,9 +303,11 @@ impl<'a> SystemBootstrapper<'a> {
         vec![raw]
     }
 
-    fn reanchor_semantic_node(&self, doc: &mut JsonValue) {
-        let local_ontology = format!("db://{}/{}/ontologies/", self.domain, self.db);
-        let local_prefix = format!("db://{}/{}/", self.domain, self.db);
+    // 🎯 Abstraction statique pour le réancrage universel inter-domaines
+    // @raise-handle: fn:reanchor_node [id: 6d6f535c]
+    pub fn reanchor_node(doc: &mut JsonValue, domain: &str, db: &str) {
+        let local_ontology = format!("db://{}/{}/ontologies/", domain, db);
+        let local_prefix = format!("db://{}/{}/", domain, db);
 
         match doc {
             JsonValue::String(s) => {
@@ -297,21 +342,27 @@ impl<'a> SystemBootstrapper<'a> {
                     *doc = json_value!(new_s);
                 }
             }
-            // 🔄 Traversée récursive universelle (sans filtrage par clés)
+            // 🔄 Traversée récursive universelle
             JsonValue::Object(obj) => {
                 for (_, v) in obj.iter_mut() {
-                    self.reanchor_semantic_node(v);
+                    Self::reanchor_node(v, domain, db);
                 }
             }
             JsonValue::Array(arr) => {
                 for v in arr.iter_mut() {
-                    self.reanchor_semantic_node(v);
+                    Self::reanchor_node(v, domain, db);
                 }
             }
             _ => {}
         }
     }
 
+    // @raise-handle: fn:reanchor_semantic_node [id: 023f9266]
+    fn reanchor_semantic_node(&self, doc: &mut JsonValue) {
+        Self::reanchor_node(doc, &self.domain, &self.db);
+    }
+
+    // @raise-handle: fn:execute_if_needed [id: 77beaedb]
     pub async fn execute_if_needed(&self) -> RaiseResult<bool> {
         let db_path = match self.db_path() {
             Ok(p) => p,
@@ -410,6 +461,7 @@ impl<'a> SystemBootstrapper<'a> {
     // =========================================================================
     // 🎯 ÉTAPES 1 & 2 : Importation Cross-Domain et Émancipation Native
     // =========================================================================
+    // @raise-handle: fn:step_1_and_2_native_bootstrap [id: 1cb8b587]
     async fn step_1_and_2_native_bootstrap(&self) -> RaiseResult<()> {
         let asset_domain =
             RuntimeEnv::var("RAISE_ASSET_DOMAIN").unwrap_or_else(|_| "_system".to_string());
@@ -432,7 +484,6 @@ impl<'a> SystemBootstrapper<'a> {
         };
         let factory_index_path = factory_path.join("_system.json");
 
-        // On regénère l'index de l'usine s'il est manquant ou s'il n'a pas de $schema (ancienne version)
         let mut needs_factory_index = true;
         if fs::exists_async(&factory_index_path).await {
             if let Ok(idx) = fs::read_json_async::<JsonValue>(&factory_index_path).await {
@@ -495,7 +546,7 @@ impl<'a> SystemBootstrapper<'a> {
         }
 
         // =====================================================================
-        // 1. CRÉATION DE L'EMBRYON MASTER (Avec $schema certifié)
+        // 1. CRÉATION DE L'EMBRYON MASTER
         // =====================================================================
         if !fs::exists_async(&sys_json_path).await {
             user_info!(
@@ -525,7 +576,7 @@ impl<'a> SystemBootstrapper<'a> {
         }
 
         // =====================================================================
-        // 2. TRANSFERT DES SCHÉMAS (Via 2 Managers, Zéro Dette)
+        // 2. TRANSFERT DES SCHÉMAS
         // =====================================================================
         user_info!(
             "BOOT_IMPORT_SCHEMAS",
@@ -558,7 +609,6 @@ impl<'a> SystemBootstrapper<'a> {
                     asset_domain, asset_db, schema_version, schema_key
                 );
                 if let Ok(mut schema_json) = factory_mgr.get_schema_def(&schema_uri).await {
-                    // 🎯 MAGIE : On réécrit l'ADN pour qu'il pointe sur master AVANT de le sauvegarder
                     self.reanchor_semantic_node(&mut schema_json);
 
                     if let Err(e) = self
@@ -576,7 +626,7 @@ impl<'a> SystemBootstrapper<'a> {
         }
 
         // =====================================================================
-        // 3. L'ADOUBEMENT FINAL ET CALCUL SÉMANTIQUE (Le réveil du DDL)
+        // 3. L'ADOUBEMENT FINAL ET CALCUL SÉMANTIQUE
         // =====================================================================
         user_info!(
             "BOOT_EMANCIPATION",
@@ -595,7 +645,7 @@ impl<'a> SystemBootstrapper<'a> {
         }
 
         // =====================================================================
-        // 4. NETTOYAGE ULTIME & SYNCHRONISATION PHYSIQUE (Lazy Sync)
+        // 4. NETTOYAGE ULTIME & SYNCHRONISATION PHYSIQUE
         // =====================================================================
         let lock = self
             .manager
@@ -604,8 +654,6 @@ impl<'a> SystemBootstrapper<'a> {
         let guard = lock.lock().await;
         let mut tx = self.manager.begin_system_tx(&guard).await?;
 
-        // 🎯 FIX ULTIME : Le DDL vient d'injecter les collections par défaut depuis le schéma source.
-        // On repasse le mutateur sémantique sur l'intégralité du jeton pour écraser les restes de 'ai-assets' !
         self.reanchor_semantic_node(&mut tx.document);
 
         let bootstrapper =
@@ -619,6 +667,7 @@ impl<'a> SystemBootstrapper<'a> {
     // =========================================================================
     // 🎯 ÉTAPE 3 : Alignement strict sur le CLI (Importation des Ontologies)
     // =========================================================================
+    // @raise-handle: fn:step_3_import_and_register_ontologies [id: 9483a3e8]
     async fn step_3_import_and_register_ontologies(&self) -> RaiseResult<()> {
         let factory_path = match self.config.get_path("PATH_RAISE_ASSET") {
             Some(p) => p,
@@ -692,7 +741,7 @@ impl<'a> SystemBootstrapper<'a> {
         ];
 
         // =========================================================
-        // PHASE 1 : jsondb import (Délégation totale au CollectionsManager)
+        // PHASE 1 : jsondb import
         // =========================================================
         for (_, rel_path, handle, _) in &ontology_files {
             let file_path = ontologies_dir.join(rel_path);
@@ -729,7 +778,6 @@ impl<'a> SystemBootstrapper<'a> {
                     json_value!({ "count": count, "handle": handle })
                 );
 
-                // jsondb alter-db
                 if *handle == "onto-raise-core" {
                     self.manager
                         .alter_db(
@@ -758,7 +806,6 @@ impl<'a> SystemBootstrapper<'a> {
                     self.domain, self.db, handle
                 );
 
-                // 🎯 ALIGNEMENT STRICT : Appel métier suivi du log exact du CLI
                 self.manager
                     .register_ontology(namespace, &uri, version)
                     .await?;
@@ -773,8 +820,8 @@ impl<'a> SystemBootstrapper<'a> {
         Ok(())
     }
 
+    // @raise-handle: fn:step_4_import_locales [id: 57737955]
     async fn step_4_import_locales(&self) -> RaiseResult<()> {
-        // 🎯 FIX ZÉRO DETTE : On lit l'usine externe depuis le .env
         let factory_path = match self.config.get_path("PATH_RAISE_ASSET") {
             Some(p) => p,
             None => raise_error!(
@@ -825,8 +872,8 @@ impl<'a> SystemBootstrapper<'a> {
         Ok(())
     }
 
+    // @raise-handle: fn:step_5_import_seeds [id: 429f4114]
     async fn step_5_import_seeds(&self) -> RaiseResult<()> {
-        // 🎯 FIX ZÉRO DETTE : On lit l'usine externe depuis le .env
         let factory_path = match self.config.get_path("PATH_RAISE_ASSET") {
             Some(p) => p,
             None => raise_error!(
@@ -835,7 +882,6 @@ impl<'a> SystemBootstrapper<'a> {
             ),
         };
         let system_seeds_dir = factory_path.join("seeds").join(&self.db);
-
         if fs::exists_async(&system_seeds_dir).await {
             user_info!(
                 "BOOT_SYSTEM_SEEDS",
@@ -864,7 +910,14 @@ impl<'a> SystemBootstrapper<'a> {
         Ok(())
     }
 
-    async fn apply_seeds_from_dir(&self, seeds_dir: &Path) -> RaiseResult<()> {
+    // 🚀 Fonction universelle d'ingestion de seeds (partagée entre master et partitions physiques)
+    // @raise-handle: fn:apply_seeds_to_db [id: b0de23c5]
+    pub async fn apply_seeds_to_db(
+        manager: &CollectionsManager<'_>,
+        domain: &str,
+        db: &str,
+        seeds_dir: &Path,
+    ) -> RaiseResult<()> {
         let mut entries = match fs::read_dir_async(seeds_dir).await {
             Ok(e) => e,
             Err(err) => raise_error!("ERR_BOOT_SEEDS_READDIR", error = err),
@@ -885,7 +938,7 @@ impl<'a> SystemBootstrapper<'a> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            user_info!("BOOT_SEEDING", json_value!({"file": file_name}));
+            user_info!("BOOT_SEEDING", json_value!({"file": file_name, "db": db}));
 
             let mut operations: Vec<JsonValue> = match fs::read_json_async(&file_path).await {
                 Ok(ops) => ops,
@@ -911,13 +964,10 @@ impl<'a> SystemBootstrapper<'a> {
 
                     if op_type == "upsert" {
                         if let Some(document) = op_obj.get_mut("document") {
-                            self.reanchor_semantic_node(document);
+                            // Appel de l'algorithme d'ancrage universel statique
+                            Self::reanchor_node(document, domain, db);
 
-                            match self
-                                .manager
-                                .upsert_document(&collection, document.clone())
-                                .await
-                            {
+                            match manager.upsert_document(&collection, document.clone()).await {
                                 Ok(_) => (),
                                 Err(e) => raise_error!(
                                     "ERR_BOOT_SEED_UPSERT",
@@ -933,6 +983,11 @@ impl<'a> SystemBootstrapper<'a> {
         }
         Ok(())
     }
+
+    // @raise-handle: fn:apply_seeds_from_dir [id: 118374da]
+    async fn apply_seeds_from_dir(&self, seeds_dir: &Path) -> RaiseResult<()> {
+        Self::apply_seeds_to_db(&self.manager, &self.domain, &self.db, seeds_dir).await
+    }
 }
 
 // ==============================================================================
@@ -945,12 +1000,14 @@ mod tests {
     use crate::utils::core::async_test;
     use crate::utils::testing::mock::DbSandbox;
 
+    // @raise-handle: test:test_industrial_phase_taxonomy [id: c9c7aea0]
     #[test]
     fn test_industrial_phase_taxonomy() {
         assert_eq!(IndustrialPhase::System.to_string(), "system");
         assert_eq!(IndustrialPhase::Raise.to_string(), "raise");
     }
 
+    // @raise-handle: test:test_ensure_partition_idempotency [id: 14b8f180]
     #[async_test]
     #[serial_test::serial]
     async fn test_ensure_partition_idempotency() -> RaiseResult<()> {
@@ -967,6 +1024,7 @@ mod tests {
         Ok(())
     }
 
+    // @raise-handle: test:test_bootstrapper_early_exit_zero_debt [id: 1f12a181]
     #[async_test]
     #[serial_test::serial]
     async fn test_bootstrapper_early_exit_zero_debt() -> RaiseResult<()> {

@@ -196,8 +196,8 @@ fn main() -> RaiseResult<()> {
         let session_mgr = context::SessionManager::new(storage.clone());
 
         // RÉSOLUTION DU CONTEXTE DE SIMULATION
-        let sim_domain = cli.sim_domain.unwrap_or_else(|| "".to_string());
-        let sim_db = cli.sim_db.unwrap_or_else(|| "".to_string());
+        let sim_domain = cli.sim_domain.clone().unwrap_or_else(|| "".to_string());
+        let sim_db = cli.sim_db.clone().unwrap_or_else(|| "".to_string());
 
         // =========================================================
         // 🔍 PRE-FLIGHT CHECK : TRACAGE MÉMOIRE AVANT CHARGEMENT IA
@@ -279,11 +279,21 @@ fn main() -> RaiseResult<()> {
         } else {
             match ctx.session_mgr.start_session(&ctx.active_user).await {
                 Ok(session) => {
-                    ctx.active_domain = session.current_domain.clone();
-                    ctx.active_db = session.current_db.clone();
+                    if cli.domain.is_none() {
+                        ctx.active_domain = session.current_domain.clone();
+                    }
+                    if cli.db.is_none() {
+                        ctx.active_db = session.current_db.clone();
+                    }
+
                     ctx.is_simulation = session.is_simulation;
-                    ctx.sim_domain = session.sim_domain.clone();
-                    ctx.sim_db = session.sim_db.clone();
+
+                    if cli.sim_domain.is_none() {
+                        ctx.sim_domain = session.sim_domain.clone();
+                    }
+                    if cli.sim_db.is_none() {
+                        ctx.sim_db = session.sim_db.clone();
+                    }
                     user_info!(
                         "CLI_START_INITIALIZED",
                         json_value!({

@@ -65,6 +65,20 @@ fn resolve_active_context(model: &ProjectModel) -> (String, String) {
     }
 }
 
+//   Expose l'Auto-Tagging à travers la couche Service
+pub async fn auto_tag_code_file(path: &str) -> RaiseResult<usize> {
+    // Import du Reconciler Rust (Parseur AST Zero-Copy)
+    use crate::code_generator::reconcilers::rust::Reconciler;
+
+    match Reconciler::auto_tag_file(Path::new(path)).await {
+        Ok(count) => Ok(count),
+        Err(e) => raise_error!(
+            "ERR_CODEGEN_AUTOTAG_FAILED",
+            error = e.to_string(),
+            context = json_value!({"path": path})
+        ),
+    }
+}
 pub async fn ingest_code_file(
     path: &str,
     rule_engine: &RuleEngineState,

@@ -52,6 +52,7 @@ pub use crate::utils::core::{
     PartialEq,
     PartialOrd,
     Pinned,
+    ReverseOrder,
     SafeSize,
     // Concurrence & Mémoire (Alias RAISE)
     SharedRef,  // 🎯 Alias de Arc
@@ -60,6 +61,7 @@ pub use crate::utils::core::{
     SyncMutexGuard,
     SyncRwLock,
     SystemStr, // 🎯 Pour la compatibilité OS native
+    TextCharIndices,
     TextChars, // 🎯 Pour le découpage atomique du texte
     TextRegex,
     TextRegexError,

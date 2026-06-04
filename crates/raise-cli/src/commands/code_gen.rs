@@ -25,6 +25,9 @@ pub enum CodeGenCommands {
         #[arg(short, long)]
         out_dir: Option<String>,
     },
+    AutoTag {
+        path: String,
+    },
     Ingest {
         path: String,
     },
@@ -99,6 +102,32 @@ pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
                     "ERR_FORGE_GENERATE_FAILED",
                     error = e,
                     context = json_value!({"element_id": element_id})
+                ),
+            }
+        }
+
+        CodeGenCommands::AutoTag { path } => {
+            user_info!("CODE_AUTOTAG_START", json_value!({ "path": path }));
+
+            match raise_core::services::codegen_service::auto_tag_code_file(&path).await {
+                Ok(count) => {
+                    if count > 0 {
+                        // Le fichier est déjà formaté par le Reconciler à ce stade
+                        user_success!(
+                            "CODE_AUTOTAG_SUCCESS",
+                            json_value!({ "path": path, "tags_added": count })
+                        );
+                    } else {
+                        user_info!(
+                            "CODE_AUTOTAG_SKIPPED",
+                            json_value!({ "path": path, "hint": "Le fichier est déjà entièrement tagué." })
+                        );
+                    }
+                }
+                Err(e) => raise_error!(
+                    "ERR_CODE_AUTOTAG_FAILED",
+                    error = e,
+                    context = json_value!({"path": path})
                 ),
             }
         }
