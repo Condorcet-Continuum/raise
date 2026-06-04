@@ -5,7 +5,8 @@ use crate::utils::prelude::*;
 use crate::ai::llm::client::LlmClient;
 use crate::ai::world_model::NeuroSymbolicEngine;
 use crate::code_generator::CodeGeneratorService;
-use crate::json_db::storage::StorageEngine;
+use crate::json_db::collections::manager::CollectionsManager;
+use crate::json_db::storage::StorageEngine; // 🎯 FIX : Import requis
 
 /// Chemins structurels du projet RAISE
 #[derive(Clone)]
@@ -36,12 +37,22 @@ impl AgentContext {
         domain_root: PathBuf,
         dataset_root: PathBuf,
     ) -> RaiseResult<Self> {
+        // 🎯 RÉSILIENCE : On accède au catalogue système pour initialiser le générateur de code (Zéro Dette)
+        let config = AppConfig::get();
+        let sys_manager = CollectionsManager::new(
+            &db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        let codegen = CodeGeneratorService::new(domain_root.clone(), &sys_manager).await?;
+
         Ok(Self {
             agent_id: agent_id.to_string(),
             session_id: session_id.to_string(),
             db,
             llm,
-            codegen: SharedRef::new(CodeGeneratorService::new(domain_root.clone())),
+            codegen: SharedRef::new(codegen),
             world_engine,
             paths: AgentPaths {
                 domain_root,
@@ -69,7 +80,36 @@ impl AgentContext {
 mod tests {
     use super::*;
     use crate::json_db::collections::manager::CollectionsManager;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
+
+    /// 🎯 HELPER ZÉRO DETTE pour les tests des agents
+    async fn inject_mock_codegen_config(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        let _ = DbSandbox::mock_db(manager).await;
+        let _ = manager
+            .create_collection("components", &generic_schema)
+            .await;
+        let _ = manager
+            .create_collection("service_configs", &generic_schema)
+            .await;
+        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
+        manager.upsert_document("service_configs", json_value!({
+            "_id": "mock_codegen",
+            "component_id": "ref:components:handle:codegen_engine",
+            "service_settings": {
+                "format_on_save": true,
+                "strict_mode": true,
+                "semantic_routing": {
+                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() }
+                }
+            }
+        })).await?;
+        Ok(())
+    }
 
     #[async_test]
     #[serial_test::serial]
@@ -83,6 +123,8 @@ mod tests {
             &sandbox.config.mount_points.system.domain,
             &sandbox.config.mount_points.system.db,
         );
+
+        inject_mock_codegen_config(&manager).await?; // 🎯 Déblocage de l'IA
 
         // 🎯 Rigueur : Match sur la création du client LLM
         let llm = match LlmClient::new(
@@ -134,6 +176,8 @@ mod tests {
             &sandbox.config.mount_points.system.domain,
             &sandbox.config.mount_points.system.db,
         );
+
+        inject_mock_codegen_config(&manager).await?; // 🎯 Déblocage de l'IA
 
         let llm = match LlmClient::new(
             &manager,

@@ -14,6 +14,14 @@ pub struct RuleEngineState {
     pub model: AsyncMutex<ProjectModel>,
 }
 
+impl Default for RuleEngineState {
+    fn default() -> Self {
+        Self {
+            model: AsyncMutex::new(ProjectModel::default()),
+        }
+    }
+}
+
 /// Commande 1 : Tester une règle "à la volée" (Dry Run) - ASYNC
 /// Le frontend envoie une règle JSON et un contexte JSON (l'élément à tester).
 pub async fn dry_run_rule(rule: Rule, context: JsonValue) -> RaiseResult<JsonValue> {
@@ -150,6 +158,9 @@ mod tests {
     /// 🎯 NOUVEAU TEST : Résilience Fallback Mount Point
     #[async_test]
     async fn test_validate_model_mount_point_fallback() -> RaiseResult<()> {
+        // 🎯 FIX CRITIQUE : Initialiser le bac à sable en premier pour charger AppConfig en mémoire globale
+        let _sandbox = AgentDbSandbox::new().await?;
+
         let config = AppConfig::get();
 
         // Initialisation d'un état avec un nom de modèle invalide (force le fallback)

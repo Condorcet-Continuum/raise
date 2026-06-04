@@ -1,9 +1,18 @@
+// FICHIER : src-tauri/src/code_generator/graph.rs
+
 use crate::code_generator::models::CodeElement;
 use crate::utils::prelude::*;
 
+/// 🔄 États pour la simulation de la pile d'appels récursive
+enum DfsState {
+    Processing(String), // Première visite : on empile les dépendances
+    Processed(String),  // Visite de retour : dépendances résolues, on valide
+}
+
 /// 🧠 Ordonne les éléments de code pour garantir une compilation sans erreur.
+/// Algorithme : Tri topologique par DFS itératif (zéro risque de Stack Overflow).
 pub fn sort_elements_topologically(elements: Vec<CodeElement>) -> RaiseResult<Vec<CodeElement>> {
-    let mut sorted = Vec::new();
+    let mut sorted = Vec::with_capacity(elements.len());
     let mut visited = UniqueSet::new(); // Éléments totalement traités
     let mut visiting = UniqueSet::new(); // Éléments en cours (pour détection de cycle)
 
@@ -15,63 +24,66 @@ pub fn sort_elements_topologically(elements: Vec<CodeElement>) -> RaiseResult<Ve
 
     let handles: Vec<String> = elements_map.keys().cloned().collect();
 
-    for handle in handles {
-        dfs_visit(
-            &handle,
-            &mut elements_map,
-            &mut visited,
-            &mut visiting,
-            &mut sorted,
-        )?;
-    }
+    // Notre pile d'appels explicite allouée sur le tas
+    let mut stack = Vec::new();
 
-    Ok(sorted)
-}
+    for root_handle in handles {
+        if visited.contains(&root_handle) {
+            continue; // Déjà traité par une autre branche
+        }
 
-fn dfs_visit(
-    handle: &str,
-    elements: &mut UnorderedMap<String, CodeElement>,
-    visited: &mut UniqueSet<String>,
-    visiting: &mut UniqueSet<String>,
-    sorted: &mut Vec<CodeElement>,
-) -> RaiseResult<()> {
-    // 1. Détection de cycle (Ligne rouge sémantique)
-    if visiting.contains(handle) {
-        raise_error!(
-            "ERR_CODEGEN_CIRCULAR_DEPENDENCY",
-            error = format!("Cycle détecté impliquant l'élément : {}", handle),
-            context = json_value!({ "handle": handle })
-        );
-    }
+        stack.push(DfsState::Processing(root_handle));
 
-    // 2. Si déjà traité, on ignore
-    if visited.contains(handle) {
-        return Ok(());
-    }
+        while let Some(state) = stack.pop() {
+            match state {
+                DfsState::Processing(handle) => {
+                    if visited.contains(&handle) {
+                        continue;
+                    }
 
-    // 3. Marquage "en cours"
-    visiting.insert(handle.to_string());
+                    // 1. Détection de cycle (Ligne rouge sémantique)
+                    if visiting.contains(&handle) {
+                        raise_error!(
+                            "ERR_CODEGEN_CIRCULAR_DEPENDENCY",
+                            error = format!("Cycle détecté impliquant l'élément : {}", handle),
+                            context = json_value!({ "handle": handle })
+                        );
+                    }
 
-    // 4. Exploration des dépendances
-    if let Some(element) = elements.get(handle) {
-        let deps = element.dependencies.clone();
-        for dep_handle in deps {
-            // On ne visite la dépendance que si elle existe dans le scope actuel
-            if elements.contains_key(&dep_handle) {
-                dfs_visit(&dep_handle, elements, visited, visiting, sorted)?;
+                    // 2. Marquage "en cours d'exploration"
+                    visiting.insert(handle.clone());
+
+                    // 3. Empiler la phase de retour (Processed) POUR CE NŒUD
+                    // Elle sera dépilée APRES toutes ses dépendances
+                    stack.push(DfsState::Processed(handle.clone()));
+
+                    // 4. Exploration des dépendances
+                    if let Some(element) = elements_map.get(&handle) {
+                        // On utilise .rev() pour préserver l'ordre d'exploration exact
+                        // de l'ancienne version récursive (LIFO : le dernier empilé sera le premier dépilé)
+                        for dep_handle in element.dependencies.iter().rev() {
+                            if elements_map.contains_key(dep_handle) {
+                                stack.push(DfsState::Processing(dep_handle.clone()));
+                            }
+                        }
+                    }
+                }
+                DfsState::Processed(handle) => {
+                    // 5. Finalisation du nœud (Phase de remontée)
+                    visiting.remove(&handle);
+
+                    if !visited.contains(&handle) {
+                        visited.insert(handle.clone());
+                        if let Some(element) = elements_map.remove(&handle) {
+                            sorted.push(element);
+                        }
+                    }
+                }
             }
         }
     }
 
-    // 5. Finalisation du nœud
-    visiting.remove(handle);
-    visited.insert(handle.to_string());
-
-    if let Some(element) = elements.remove(handle) {
-        sorted.push(element);
-    }
-
-    Ok(())
+    Ok(sorted)
 }
 
 #[cfg(test)]
@@ -81,14 +93,11 @@ mod tests {
 
     fn create_mock_element(handle: &str, deps: Vec<&str>) -> CodeElement {
         CodeElement {
-            // 🎯 NOUVEAUX CHAMPS (Initialisation par défaut pour le mock)
             module_id: None,
             parent_id: None,
             attributes: vec![],
             docs: None,
             elements: vec![],
-
-            // Champs existants
             handle: handle.to_string(),
             element_type: CodeElementType::Function,
             visibility: Visibility::Public,

@@ -1,3 +1,5 @@
+// FICHIER : src-tauri/src/code_generator/diff.rs
+
 use crate::code_generator::models::CodeElement;
 use crate::utils::prelude::*;
 
@@ -18,33 +20,87 @@ pub struct DiffReport {
 pub struct DiffEngine;
 
 impl DiffEngine {
-    /// 🧹 Normalise une chaîne en supprimant tous les espaces blancs pour une comparaison stricte.
-    fn normalize_code(code: Option<&String>) -> String {
-        match code {
-            Some(c) => {
-                let mut result = String::with_capacity(c.len());
-                let mut in_string = false;
-                let mut prev_char = '\0';
+    /// 🧠 Canonise le code pour une comparaison sémantique.
+    /// Un mini-lexer qui ignore les espaces superflus et retire les commentaires,
+    /// tout en préservant l'espacement vital entre les mots-clés (ex: "pub fn").
+    fn canonicalize_code(code: Option<&String>) -> String {
+        let text = match code {
+            Some(c) => c,
+            None => return String::new(),
+        };
 
-                for ch in c.chars() {
-                    // On détecte l'entrée/sortie d'une chaîne de caractères
-                    if ch == '"' && prev_char != '\\' {
-                        in_string = !in_string;
-                    }
+        let mut result = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
 
-                    // On conserve le caractère si on est dans une chaîne, ou si ce n'est pas un espace
-                    if in_string || !ch.is_whitespace() {
-                        result.push(ch);
-                    }
-                    prev_char = ch;
+        let mut in_string = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let mut prev_char = '\0';
+        let mut last_pushed_is_space = false;
+
+        while let Some(ch) = chars.next() {
+            // 1. Gestion des contextes (Commentaires et Strings)
+            if in_line_comment {
+                if ch == '\n' {
+                    in_line_comment = false;
                 }
-                result
+                continue;
             }
-            None => String::new(),
+            if in_block_comment {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next(); // On consomme le '/'
+                    in_block_comment = false;
+                }
+                continue;
+            }
+            if !in_string {
+                if ch == '/' && chars.peek() == Some(&'/') {
+                    in_line_comment = true;
+                    chars.next(); // On consomme le second '/'
+                    continue;
+                }
+                if ch == '/' && chars.peek() == Some(&'*') {
+                    in_block_comment = true;
+                    chars.next(); // On consomme l'étoile
+                    continue;
+                }
+            }
+
+            // Bascule de chaîne (avec gestion naïve de l'échappement)
+            if ch == '"' && prev_char != '\\' {
+                in_string = !in_string;
+            }
+
+            // 2. Traitement du flux utile
+            if in_string {
+                result.push(ch);
+                last_pushed_is_space = false;
+            } else if ch.is_whitespace() {
+                // Compression de tous les espaces/retours chariots en un seul
+                if !last_pushed_is_space && !result.is_empty() {
+                    result.push(' ');
+                    last_pushed_is_space = true;
+                }
+            } else {
+                // Si on tombe sur un symbole structurel, on supprime l'espace qui le précède
+                let is_symbol = "{}()[]:;,.=+-*/<>!&|".contains(ch);
+                if last_pushed_is_space && is_symbol {
+                    result.pop();
+                }
+                result.push(ch);
+
+                // Astuce : si c'est un symbole, on fait "comme si" on avait mis un espace
+                // pour que le prochain espace réel soit ignoré par le bloc au-dessus.
+                last_pushed_is_space = is_symbol;
+            }
+            prev_char = ch;
         }
+
+        result.trim().to_string()
     }
+
     /// ⚖️ Compare les éléments du fichier avec ceux de la base de données.
-    /// Algorithme : O(N) via indexation sémantique.
+    /// Algorithme : O(N) via indexation sémantique et canonisation lexicale.
     pub fn compute_diff(
         from_file: Vec<CodeElement>,
         from_db: Vec<CodeElement>,
@@ -62,15 +118,15 @@ impl DiffEngine {
                     let mut has_changed = false;
                     let mut reasons = Vec::new();
 
-                    // 🎯 FIX : Comparaison canonisée ignorant les espaces
-                    if Self::normalize_code(file_el.body.as_ref())
-                        != Self::normalize_code(db_el.body.as_ref())
+                    // 🎯 Utilisation du nouveau moteur de canonisation
+                    if Self::canonicalize_code(file_el.body.as_ref())
+                        != Self::canonicalize_code(db_el.body.as_ref())
                     {
                         has_changed = true;
                         reasons.push("BODY_MODIFIED");
                     }
-                    if Self::normalize_code(Some(&file_el.signature))
-                        != Self::normalize_code(Some(&db_el.signature))
+                    if Self::canonicalize_code(Some(&file_el.signature))
+                        != Self::canonicalize_code(Some(&db_el.signature))
                     {
                         has_changed = true;
                         reasons.push("SIGNATURE_MODIFIED");
@@ -109,14 +165,11 @@ mod tests {
 
     fn mock_el(handle: &str, body: &str) -> CodeElement {
         CodeElement {
-            // 🎯 NOUVEAUX CHAMPS (Initialisation par défaut pour le mock)
             module_id: None,
             parent_id: None,
             attributes: vec![],
             docs: None,
             elements: vec![],
-
-            // Champs existants
             handle: handle.to_string(),
             element_type: CodeElementType::Function,
             visibility: Visibility::Public,
@@ -162,19 +215,35 @@ mod tests {
 
     #[test]
     fn test_diff_ignore_formatting() {
-        // Le Jumeau Numérique a une version compacte
         let db_state = vec![mock_el("fn:format", "{ let x=1; }")];
-
-        // Le fichier physique a été formaté par rustfmt avec des espaces et des sauts de ligne
         let file_state = vec![mock_el("fn:format", "{\n    let x = 1;\n}")];
 
         let results = DiffEngine::compute_diff(file_state, db_state).unwrap();
-
-        // Le DiffEngine doit ignorer ces changements purement cosmétiques
         assert_eq!(
             results.len(),
             0,
             "Les différences de formatage doivent être ignorées"
+        );
+    }
+
+    #[test]
+    fn test_diff_ignore_comments_and_preserve_keywords() {
+        // Le Jumeau a le code brut
+        let db_state = vec![mock_el("fn:logic", "{ let mut active = true; }")];
+
+        // Le fichier a été documenté par un humain
+        let file_state = vec![mock_el(
+            "fn:logic",
+            "{\n    // Activation du système\n    let mut active = true; /* TODO: refactor */ \n}",
+        )];
+
+        let results = DiffEngine::compute_diff(file_state, db_state).unwrap();
+
+        // Le DiffEngine doit ignorer les commentaires sans fusionner "let mut" en "letmut"
+        assert_eq!(
+            results.len(),
+            0,
+            "Les commentaires injectés ne doivent pas déclencher un faux positif"
         );
     }
 }

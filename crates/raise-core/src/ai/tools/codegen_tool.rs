@@ -20,18 +20,22 @@ pub struct CodeGenTool {
 
 impl CodeGenTool {
     /// Initialise l'outil de génération de code.
-    pub fn new(
+    pub async fn new(
         domain_root: PathBuf,
         db: SharedRef<StorageEngine>,
         space: &str,
         db_name: &str,
-    ) -> Self {
-        Self {
-            service: CodeGeneratorService::new(domain_root),
+    ) -> RaiseResult<Self> {
+        let manager = CollectionsManager::new(&db, space, db_name);
+        // 🎯 L'outil IA lit maintenant son propre routage !
+        let service = CodeGeneratorService::new(domain_root, &manager).await?;
+
+        Ok(Self {
+            service,
             db,
             space: space.to_string(),
             db_name: db_name.to_string(),
-        }
+        })
     }
 
     /// Récupère un composant Arcadia à travers les collections d'architecture.
@@ -111,7 +115,6 @@ impl McpTool for CodeGenTool {
             }
         };
 
-        // 1. Récupération et détection du langage avec Match strict
         let doc = match self.fetch_component(component_id).await {
             Ok(d) => d,
             Err(e) => return McpToolResult::error(call.id, &e.to_string()),
@@ -122,14 +125,12 @@ impl McpTool for CodeGenTool {
             Err(e) => return McpToolResult::error(call.id, &e.to_string()),
         };
 
-        // 2. Initialisation du module de code
         let name = doc["name"].as_str().unwrap_or("component");
         let mut module = match Module::new(name, PathBuf::from(format!("{}.rs", name))) {
             Ok(m) => m,
             Err(e) => return McpToolResult::error(call.id, &e.to_string()),
         };
 
-        // 3. Analyse sémantique et Tissage du code
         let analyzer = SemanticAnalyzer::new();
         let analysis = match analyzer.analyze(&doc) {
             Ok(a) => a,
@@ -144,7 +145,6 @@ impl McpTool for CodeGenTool {
             body: Some(" { println!(\"RAISE Execution Logic\"); } ".to_string()),
             dependencies: analysis.dependencies,
             metadata: analysis.metadata,
-            // 🎯 Nouveaux champs pour la topologie GNN/IA
             module_id: None,
             parent_id: None,
             attributes: vec![],
@@ -155,7 +155,6 @@ impl McpTool for CodeGenTool {
             elements: vec![],
         });
 
-        // 4. Persistance et formatage (Mount Point Resilience)
         match self.service.sync_module(module).await {
             Ok(path) => {
                 if lang == TargetLanguage::Rust {
@@ -178,10 +177,38 @@ impl McpTool for CodeGenTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::mock::AgentDbSandbox;
+    use crate::utils::testing::mock::{AgentDbSandbox, DbSandbox};
+
+    async fn inject_mock_codegen_config(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        let _ = DbSandbox::mock_db(manager).await;
+        let _ = manager
+            .create_collection("components", &generic_schema)
+            .await;
+        let _ = manager
+            .create_collection("service_configs", &generic_schema)
+            .await;
+        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
+        manager.upsert_document("service_configs", json_value!({
+            "_id": "mock_codegen",
+            "component_id": "ref:components:handle:codegen_engine",
+            "service_settings": {
+                "format_on_save": true,
+                "strict_mode": true,
+                "semantic_routing": {
+                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() }
+                }
+            }
+        })).await?;
+        Ok(())
+    }
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_codegen_tool_execution_flow() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
@@ -192,24 +219,28 @@ mod tests {
             &config.mount_points.system.db,
         );
 
+        inject_mock_codegen_config(&manager).await?;
+
         let comp_id = "test-comp-01";
         let generic_schema_uri = "db://_system/_system/schemas/v1/db/generic.schema.json";
 
         manager
             .create_collection("pa_components", generic_schema_uri)
             .await?;
+
+        // 🎯 FIX : Utilisation stricte du champ "type" pour l'analyseur MBSE
         manager
             .upsert_document(
                 "pa_components",
                 json_value!({
                     "_id": comp_id,
                     "name": "EngineController",
+                    "type": "PhysicalComponent",
                     "implementation": { "technology": "rust" }
                 }),
             )
             .await?;
 
-        // 🎯 RÉSILIENCE : On s'assure que le point de montage de génération existe
         let gen_path = sandbox.domain_root.join("src-gen");
         fs::ensure_dir_async(&gen_path).await?;
 
@@ -218,7 +249,8 @@ mod tests {
             sandbox.db.clone(),
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
-        );
+        )
+        .await?;
 
         let call = McpToolCall::new(
             "generate_component_code",
@@ -227,10 +259,7 @@ mod tests {
         let result = tool.execute(call).await;
 
         if result.is_error {
-            panic!(
-                "L'exécution de l'outil a échoué : {}",
-                result.content["error"]
-            );
+            panic!("L'exécution a échoué : {}", result.content["error"]);
         }
 
         assert!(result.content["path"]
@@ -241,11 +270,25 @@ mod tests {
     }
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_determine_language_logic() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
-        let tool = CodeGenTool::new(PathBuf::from("/tmp"), sandbox.db.clone(), "test", "test");
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+        inject_mock_codegen_config(&manager).await?;
+
+        let tool = CodeGenTool::new(
+            PathBuf::from("/tmp"),
+            sandbox.db.clone(),
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        )
+        .await?;
 
         let doc_rust = json_value!({ "implementation": { "technology": "rust" } });
         let doc_cpp = json_value!({ "implementation": { "technology": "cpp" } });
@@ -255,13 +298,26 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience face à une technologie non supportée
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_codegen_unsupported_technology() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
-        let tool = CodeGenTool::new(PathBuf::from("/tmp"), sandbox.db.clone(), "test", "test");
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+        inject_mock_codegen_config(&manager).await?;
+
+        let tool = CodeGenTool::new(
+            PathBuf::from("/tmp"),
+            sandbox.db.clone(),
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        )
+        .await?;
         let doc_fortran = json_value!({ "implementation": { "technology": "fortran" } });
 
         let result = tool.determine_language(&doc_fortran);
@@ -275,16 +331,25 @@ mod tests {
     }
 
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
     async fn test_fetch_component_error_handling() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+        inject_mock_codegen_config(&manager).await?;
+
         let tool = CodeGenTool::new(
             sandbox.domain_root.clone(),
             sandbox.db.clone(),
-            "void",
-            "void",
-        );
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        )
+        .await?;
 
         let result = tool.fetch_component("ghost_id").await;
         assert!(result.is_err());

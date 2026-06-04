@@ -236,6 +236,43 @@ mod tests {
     use crate::utils::testing::mock::{insert_mock_db, AgentDbSandbox};
     use crate::workflow_engine::critic::WorkflowCritic;
 
+    /// 🎯 HELPER : Injecte les autorisations système pour permettre à l'Orchestrateur
+    /// de s'initialiser dans le contexte des tests de cet outil.
+    async fn inject_ai_mocks(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        let session_schema_uri = format!(
+            "db://{}/{}/schemas/v2/agents/memory/chat_session.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        let _ = manager
+            .create_collection("components", &generic_schema)
+            .await;
+        let _ = manager
+            .create_collection("service_configs", &generic_schema)
+            .await;
+
+        manager
+            .upsert_document(
+                "components",
+                json_value!({ "_id": "ref:components:handle:rag", "handle": "rag" }),
+            )
+            .await?;
+        manager.upsert_document("service_configs", json_value!({ "_id": "mock_rag", "component_id": "ref:components:handle:rag", "service_settings": { "collection_name": "raise_knowledge_base" } })).await?;
+
+        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:ai_world_model", "handle": "ai_world_model" })).await?;
+        manager.upsert_document("service_configs", json_value!({ "_id": "mock_wm", "component_id": "ref:components:handle:ai_world_model", "service_settings": { "vocab_size": 1000, "active": true } })).await?;
+
+        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:ai_memory_store", "handle": "ai_memory_store" })).await?;
+        manager.upsert_document("service_configs", json_value!({ "_id": "mock_mem", "component_id": "ref:components:handle:ai_memory_store", "service_settings": { "max_history_tokens": 4096, "collection_name": "raise_conversation_history", "schema_uri": session_schema_uri, "active": true } })).await?;
+
+        Ok(())
+    }
+
     /// Seed mocké : Délègue l'intégralité de la création DDL et de l'insertion au Manager
     async fn seed_blender_tool(manager: &CollectionsManager<'_>, tool_id: &str) -> RaiseResult<()> {
         let generic_schema = format!(
@@ -251,7 +288,6 @@ mod tests {
         let input_id = "v2/agents/tools/blender_input.schema.json";
         let output_id = "v2/agents/tools/blender_output.schema.json";
 
-        // 1. 🎯 DDL NATIF : Création des schémas via le manager (Ils seront lus par get_schema_def !)
         manager
             .create_schema_def(
                 input_id,
@@ -282,11 +318,9 @@ mod tests {
         let input_uri = manager.build_schema_uri(input_id).await;
         let output_uri = manager.build_schema_uri(output_id).await;
 
-        // 2. 🎯 SATISFAIRE LE VALIDATEUR DB (Références)
         insert_mock_db(manager, "schemas", &json_value!({ "_id": input_id })).await?;
         insert_mock_db(manager, "schemas", &json_value!({ "_id": output_id })).await?;
 
-        // 3. 🎯 INJECTION DE L'OUTIL AVEC SES URIS
         insert_mock_db(
             manager,
             "mcp_tools",
@@ -328,9 +362,10 @@ mod tests {
         let tool_id = "tool:blender:test";
         let dataset_dir = sandbox.domain_root.join("dataset");
 
+        // 🎯 On injecte les mocks AI avant de démarrer l'orchestrateur !
+        inject_ai_mocks(&manager).await?;
         seed_blender_tool(&manager, tool_id).await?;
 
-        // 1. Initialisation : Si les URI manquent ou le fichier FS manque, ça plantera sec ici !
         let tool = BlenderTool::init(
             dataset_dir,
             &sandbox.db,
@@ -344,7 +379,6 @@ mod tests {
         assert!(tool.parameters_schema().get("properties").is_some());
         assert!(tool.output_schema().is_some());
 
-        // 2. Setup du HandlerContext
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone(), None)
             .await
             .unwrap();
@@ -357,7 +391,6 @@ mod tests {
             manager: &manager,
         };
 
-        // 3. Exécution
         let params = json_value!({
             "output_filename": "test.png",
             "defect_type": "saine",
@@ -386,6 +419,8 @@ mod tests {
         let tool_id = "tool:blender:test";
         let dataset_dir = sandbox.domain_root.join("dataset");
 
+        // 🎯 Injection vitale pour l'Orchestrateur
+        inject_ai_mocks(&manager).await?;
         seed_blender_tool(&manager, tool_id).await?;
 
         let tool = BlenderTool::init(

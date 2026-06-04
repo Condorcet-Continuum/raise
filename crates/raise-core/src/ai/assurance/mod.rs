@@ -174,9 +174,6 @@ pub async fn get_xai_frame(
 // =========================================================================
 // TESTS UNITAIRES (Rigueur Façade & Résilience)
 // =========================================================================
-// =========================================================================
-// TESTS UNITAIRES (Rigueur Façade & Résilience)
-// =========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +185,34 @@ mod tests {
     use crate::ai::llm::client::LlmClient;
     use crate::ai::world_model::NeuroSymbolicEngine;
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
+
+    /// 🎯 HELPER ZÉRO DETTE : Pour que l'AgentContext s'initialise correctement
+    async fn inject_mock_codegen_config(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        let _ = manager
+            .create_collection("components", &generic_schema)
+            .await;
+        let _ = manager
+            .create_collection("service_configs", &generic_schema)
+            .await;
+        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
+        manager.upsert_document("service_configs", json_value!({
+            "_id": "mock_codegen",
+            "component_id": "ref:components:handle:codegen_engine",
+            "service_settings": {
+                "format_on_save": true,
+                "strict_mode": true,
+                "semantic_routing": {
+                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() }
+                }
+            }
+        })).await?;
+        Ok(())
+    }
 
     struct MockCertifiedAgent;
     #[async_interface]
@@ -235,6 +260,9 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+
+        // 🎯 FIX CRITIQUE : Injection du catalogue métier pour le générateur de code
+        inject_mock_codegen_config(&sys_mgr).await?;
 
         let llm = LlmClient::new(
             &sys_mgr,

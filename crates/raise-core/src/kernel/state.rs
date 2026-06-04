@@ -82,13 +82,26 @@ impl RaiseKernelState {
         let root_path = config
             .get_path("PATH_RAISE_DOMAIN")
             .unwrap_or_else(|| PathBuf::from("./raise_domain"));
-        let code_gen_engine = CodeGeneratorService::new(root_path);
+
+        let code_gen_engine = match CodeGeneratorService::new(root_path, &sys_manager).await {
+            Ok(service) => {
+                user_success!("SUC_KERNEL_CODEGEN_READY");
+                Some(SharedRef::new(AsyncMutex::new(service)))
+            }
+            Err(e) => {
+                user_warn!(
+                    "WRN_KERNEL_CODEGEN_DEGRADED",
+                    json_value!({"error": e.to_string()})
+                );
+                None
+            }
+        };
 
         // 5. Retourne l'état global scellé
         Ok(Self {
             orchestrator: orchestrator_engine,
             native_llm: native_llm_engine,
-            code_generator: Some(SharedRef::new(AsyncMutex::new(code_gen_engine))),
+            code_generator: code_gen_engine,
         })
     }
 }
@@ -101,6 +114,34 @@ impl RaiseKernelState {
 mod tests {
     use super::*;
     use crate::utils::testing::AgentDbSandbox;
+
+    /// 🎯 HELPER ZÉRO DETTE
+    async fn inject_mock_codegen_config(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        let _ = manager
+            .create_collection("components", &generic_schema)
+            .await;
+        let _ = manager
+            .create_collection("service_configs", &generic_schema)
+            .await;
+        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
+        manager.upsert_document("service_configs", json_value!({
+            "_id": "mock_codegen",
+            "component_id": "ref:components:handle:codegen_engine",
+            "service_settings": {
+                "format_on_save": true,
+                "strict_mode": true,
+                "semantic_routing": {
+                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() }
+                }
+            }
+        })).await?;
+        Ok(())
+    }
 
     /// 🎯 TEST 1 : Résilience et Dégradation Gracieuse
     /// Vérifie que le Kernel s'allume même si les fichiers GGUF sont absents de la sandbox.
@@ -117,6 +158,9 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+
+        // 🎯 FIX CRITIQUE : On injecte la configuration Zéro Dette
+        inject_mock_codegen_config(&manager).await?;
 
         let mut llm_doc = manager
             .get_document("service_configs", "cfg_ai_llm_test")
@@ -151,8 +195,17 @@ mod tests {
     #[serial_test::serial]
     async fn test_kernel_memory_pointer_integrity() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
 
-        // 🎯 FIX : Utilisation directe de sandbox.db
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        // 🎯 FIX CRITIQUE : On injecte la configuration Zéro Dette
+        inject_mock_codegen_config(&manager).await?;
+
         let storage_ref = sandbox.db.clone();
 
         let kernel_primary = RaiseKernelState::boot(storage_ref).await?;

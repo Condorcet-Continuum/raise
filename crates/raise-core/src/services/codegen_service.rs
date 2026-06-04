@@ -9,19 +9,13 @@ use crate::model_engine::loader::ModelLoader;
 use crate::model_engine::transformers::{get_transformer, TransformationDomain};
 use crate::model_engine::types::ProjectModel;
 use crate::services::rules_service::RuleEngineState;
-use std::path::Path;
 
-/// Génère une représentation technique (Code, VHDL, Doc) pour un élément donné.
-/// Logique pure, libérée de Tauri.
 pub async fn generate_source_code(
-    element_id: &str,              // 🎯 OPTIMISATION : &str
-    domain: &str,                  // 🎯 OPTIMISATION : &str
-    rule_engine: &RuleEngineState, // 🎯 FIX : Référence pure Rust
-    storage: &StorageEngine,       // 🎯 FIX : Référence pure Rust
+    element_id: &str,
+    domain: &str,
+    rule_engine: &RuleEngineState,
+    storage: &StorageEngine,
 ) -> RaiseResult<JsonValue> {
-    let model_guard = rule_engine.model.lock().await;
-
-    // 1. Résolution du domaine de transformation via Match strict
     let target_domain = match domain.to_lowercase().as_str() {
         "software" | "code" | "rust" | "cpp" => TransformationDomain::Software,
         "hardware" | "vhdl" | "fpga" | "verilog" => TransformationDomain::Hardware,
@@ -34,23 +28,22 @@ pub async fn generate_source_code(
         }
     };
 
-    // 2. Récupération résiliente du contexte Space/DB
-    let (space, db) = resolve_active_context(&model_guard);
+    let (space, db) = {
+        let model_guard = rule_engine.model.lock().await;
+        resolve_active_context(&model_guard)
+    };
 
-    // 3. Initialisation et Indexation du Loader Dynamique
     let loader = ModelLoader::new(storage, &space, &db)?;
     if let Err(e) = loader.index_project().await {
         raise_error!("ERR_CODEGEN_INDEX_FAILED", error = e.to_string());
     }
 
-    // 4. Extraction et sérialisation
     let element = loader.get_element(element_id).await?;
     let element_json = match json::serialize_to_value(&element) {
         Ok(v) => v,
         Err(e) => raise_error!("ERR_CODEGEN_SERIALIZATION_FAILED", error = e.to_string()),
     };
 
-    // 5. Exécution de la transformation sémantique
     let transformer = get_transformer(target_domain);
     match transformer.transform(&element_json) {
         Ok(result) => Ok(result),
@@ -58,7 +51,6 @@ pub async fn generate_source_code(
     }
 }
 
-/// Résout l'espace et la base de données à partir du jumeau numérique en mémoire.
 fn resolve_active_context(model: &ProjectModel) -> (String, String) {
     let config = AppConfig::get();
     let parts: Vec<&str> = model.meta.name.split('/').collect();
@@ -66,7 +58,6 @@ fn resolve_active_context(model: &ProjectModel) -> (String, String) {
     if parts.len() >= 2 {
         (parts[0].to_string(), parts[1].to_string())
     } else {
-        // Fallback sur les Mount Points système configurés (SSOT)
         (
             config.mount_points.system.domain.clone(),
             config.mount_points.system.db.clone(),
@@ -74,50 +65,56 @@ fn resolve_active_context(model: &ProjectModel) -> (String, String) {
     }
 }
 
-/// Ingestion d'un fichier physique. Façade pure.
 pub async fn ingest_code_file(
-    path: &str, // 🎯 OPTIMISATION : &str
+    path: &str,
     rule_engine: &RuleEngineState,
     storage: &StorageEngine,
+    is_test_mode: bool,
 ) -> RaiseResult<usize> {
-    let model_guard = rule_engine.model.lock().await;
-    let (space, db) = resolve_active_context(&model_guard);
-    let manager = CollectionsManager::new(storage, &space, &db);
+    let (space, db) = {
+        let model_guard = rule_engine.model.lock().await;
+        resolve_active_context(&model_guard)
+    };
 
+    let manager = CollectionsManager::new(storage, &space, &db);
     let domain_root = AppConfig::get()
         .get_path("PATH_RAISE_DOMAIN")
         .unwrap_or_default();
-    let service = CodeGeneratorService::new(domain_root);
 
-    let prod_schema_uri = "db://_system/_system/schemas/v1/dapps/services/code_element.schema.json";
+    // 🎯 INITIALISATION SÉCURISÉE (Avec le catalogue)
+    let mut service = CodeGeneratorService::new(domain_root, &manager).await?;
+    if is_test_mode {
+        service = service.with_test_mode();
+    }
 
-    // 🎯 OPTIMISATION : Utilisation de Path::new() au lieu de créer un PathBuf
-    match service
-        .ingest_file(Path::new(path), &manager, prod_schema_uri)
-        .await
-    {
+    match service.ingest_file(Path::new(path), &manager).await {
         Ok(count) => Ok(count),
         Err(e) => raise_error!("ERR_CODEGEN_INGESTION_FAILED", error = e.to_string()),
     }
 }
 
-/// Matérialise le Jumeau Numérique sur le disque. Façade pure.
 pub async fn weave_code_file(
-    module_name: &str, // 🎯 OPTIMISATION : &str
-    path: &str,        // 🎯 OPTIMISATION : &str
+    module_name: &str,
+    path: &str,
     rule_engine: &RuleEngineState,
     storage: &StorageEngine,
+    is_test_mode: bool,
 ) -> RaiseResult<String> {
-    let model_guard = rule_engine.model.lock().await;
-    let (space, db) = resolve_active_context(&model_guard);
-    let manager = CollectionsManager::new(storage, &space, &db);
+    let (space, db) = {
+        let model_guard = rule_engine.model.lock().await;
+        resolve_active_context(&model_guard)
+    };
 
+    let manager = CollectionsManager::new(storage, &space, &db);
     let domain_root = AppConfig::get()
         .get_path("PATH_RAISE_DOMAIN")
         .unwrap_or_default();
-    let service = CodeGeneratorService::new(domain_root);
 
-    // 🎯 OPTIMISATION : Utilisation de Path::new()
+    let mut service = CodeGeneratorService::new(domain_root, &manager).await?;
+    if is_test_mode {
+        service = service.with_test_mode();
+    }
+
     match service
         .weave_file(module_name, Path::new(path), &manager)
         .await
@@ -127,32 +124,23 @@ pub async fn weave_code_file(
     }
 }
 
-// =========================================================================
-// TESTS UNITAIRES (Sans anti-pattern Default)
-// =========================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
     async fn inject_mock_mapping(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
         let generic_schema = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
-            manager.space, manager.db
+            config.mount_points.system.domain, config.mount_points.system.db
         );
         manager
             .create_collection("configs", &generic_schema)
             .await?;
-        manager
-            .upsert_document(
-                "configs",
-                json_value!({
-                    "_id": "ref:configs:handle:ontological_mapping",
-                    "search_spaces": [ { "layer": "la", "collection": "components" } ]
-                }),
-            )
-            .await?;
+        manager.upsert_document("configs", json_value!({
+            "_id": "ref:configs:handle:ontological_mapping", "search_spaces": [ { "layer": "la", "collection": "components" } ]
+        })).await?;
         Ok(())
     }
 

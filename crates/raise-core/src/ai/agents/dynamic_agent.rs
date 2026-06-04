@@ -213,6 +213,35 @@ mod tests {
     use crate::utils::core::error::AppError;
     use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
+    /// 🎯 HELPER ZÉRO DETTE : Pour que AgentContext s'initialise correctement
+    async fn inject_mock_codegen_config(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        let _ = DbSandbox::mock_db(manager).await;
+        let _ = manager
+            .create_collection("components", &generic_schema)
+            .await;
+        let _ = manager
+            .create_collection("service_configs", &generic_schema)
+            .await;
+        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
+        manager.upsert_document("service_configs", json_value!({
+            "_id": "mock_codegen",
+            "component_id": "ref:components:handle:codegen_engine",
+            "service_settings": {
+                "format_on_save": true,
+                "strict_mode": true,
+                "semantic_routing": {
+                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() }
+                }
+            }
+        })).await?;
+        Ok(())
+    }
+
     async fn setup_test_ctx(sandbox: &AgentDbSandbox) -> RaiseResult<AgentContext> {
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
@@ -220,6 +249,9 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+
+        // 🎯 FIX CRITIQUE : On prépare le catalogue système pour le générateur de code
+        inject_mock_codegen_config(&manager).await?;
 
         let llm = match LlmClient::new(
             &manager,
@@ -236,6 +268,7 @@ mod tests {
             Ok(we) => we,
             Err(e) => raise_error!("ERR_TEST_WM", error = e),
         });
+
         Ok(AgentContext::new(
             "test_agent",
             "sess_123",

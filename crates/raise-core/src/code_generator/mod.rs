@@ -1,6 +1,4 @@
-// =========================================================================
-//  RAISE CODE GENERATOR : AST Weaver Root Façade (V2 Strict)
-// =========================================================================
+// FICHIER : crates/raise-core/src/code_generator/mod.rs
 
 pub mod analyzers; // Analyse sémantique Arcadia
 pub mod diff; // Moteur de comparaison (Jumeau vs Physique)
@@ -14,27 +12,174 @@ pub mod utils; // Utilitaires mathématiques (String transformation)
 pub mod weaver; // Tissage unitaire des blocs de code
 
 use self::diff::{DiffAction, DiffEngine};
-use self::models::Module;
+use self::models::{Module, TargetLanguage};
 use self::module_weaver::ModuleWeaver;
+use self::reconcilers::markdown::DocReconciler;
 use self::reconcilers::rust::Reconciler as RustReconciler;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::query::{Query, QueryEngine};
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
+
+#[derive(Clone, Debug)]
+pub struct SemanticRoute {
+    pub aliases: Vec<String>,
+    pub collection: String,
+    pub schema_uri: String,
+}
 
 /// 🧠 Service central d'orchestration de la génération de code.
 /// Gère le cycle de vie bidirectionnel entre le Jumeau Numérique (DB) et le Code Physique (Disk).
 pub struct CodeGeneratorService {
     root_path: PathBuf,
     skip_compilation: bool,
+    pub semantic_routing: UnorderedMap<String, SemanticRoute>,
 }
 
 impl CodeGeneratorService {
-    /// Initialise le service avec un point de montage racine pour le code source.
-    pub fn new(root_path: PathBuf) -> Self {
-        Self {
+    /// Initialise le service avec un point de montage racine et charge sa configuration (Zéro Dette).
+    pub async fn new(root_path: PathBuf, manager: &CollectionsManager<'_>) -> RaiseResult<Self> {
+        let settings = match AppConfig::get_runtime_settings(
+            manager,
+            "ref:components:handle:codegen_engine",
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_CODEGEN_INIT_REJECTED",
+                error = e.to_string(),
+                context = json_value!({"action": "codegen_init", "hint": "Le composant codegen_engine est-il actif et configuré dans le catalogue système ?"})
+            ),
+        };
+
+        let routing_json = settings
+            .get("semantic_routing")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| {
+                build_error!(
+                    "ERR_CODEGEN_CONFIG_INVALID",
+                    error = "Le paramètre 'semantic_routing' est strictement requis."
+                )
+            })?;
+
+        let mut semantic_routing = UnorderedMap::new();
+        for (key, route) in routing_json {
+            let aliases = route
+                .get("aliases")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let collection = route
+                .get("collection")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let schema_uri = route
+                .get("schema_uri")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            semantic_routing.insert(
+                key.clone(),
+                SemanticRoute {
+                    aliases,
+                    collection,
+                    schema_uri,
+                },
+            );
+        }
+
+        Ok(Self {
             root_path,
             skip_compilation: false,
+            semantic_routing,
+        })
+    }
+
+    /// Résout dynamiquement la collection et le schéma cible (Fail-Fast)
+    pub fn get_route(&self, domain: &str) -> RaiseResult<(&str, &str)> {
+        let query = domain.to_lowercase();
+        for (key, route) in &self.semantic_routing {
+            if key == &query || route.aliases.iter().any(|a| a == &query) {
+                return Ok((&route.collection, &route.schema_uri));
+            }
         }
+        raise_error!(
+            "ERR_CODEGEN_UNSUPPORTED_DOMAIN",
+            error = format!(
+                "Le domaine sémantique '{}' n'est pas déclaré dans le catalogue.",
+                domain
+            )
+        )
+    }
+
+    /// 🚀 L'Agent Forgeron (Top-Down) : Génère un fichier physique à partir d'un élément du modèle.
+    pub async fn generate(
+        &self,
+        element_id: &str,
+        manager: &CollectionsManager<'_>,
+        lang: TargetLanguage,
+    ) -> RaiseResult<PathBuf> {
+        let domain = match lang {
+            TargetLanguage::Rust
+            | TargetLanguage::TypeScript
+            | TargetLanguage::Cpp
+            | TargetLanguage::Python => "software",
+            TargetLanguage::Verilog | TargetLanguage::Vhdl => "hardware",
+        };
+        let (collection, _) = self.get_route(domain)?;
+
+        let query = Query::new(collection);
+        let db_result = match QueryEngine::new(manager).execute_query(query).await {
+            Ok(res) => res,
+            Err(e) => raise_error!("ERR_CODEGEN_QUERY_FAILED", error = e.to_string()),
+        };
+
+        let mut found_doc = None;
+        for doc in db_result.documents {
+            if let Some(handle) = doc.get("handle").and_then(|v| v.as_str()) {
+                if handle == element_id {
+                    found_doc = Some(doc);
+                    break;
+                }
+            }
+        }
+
+        let doc = match found_doc {
+            Some(d) => d,
+            None => raise_error!(
+                "ERR_CODEGEN_ELEMENT_NOT_FOUND",
+                error = "Élément introuvable dans le graphe sémantique.",
+                context = json_value!({ "element_id": element_id, "collection": collection })
+            ),
+        };
+
+        let element: models::CodeElement = match json::deserialize_from_value(doc) {
+            Ok(e) => e,
+            Err(err) => raise_error!("ERR_CODEGEN_DESERIALIZATION", error = err.to_string()),
+        };
+
+        let ext = match lang {
+            TargetLanguage::Rust => "rs",
+            TargetLanguage::TypeScript => "ts",
+            TargetLanguage::Cpp => "cpp",
+            TargetLanguage::Verilog => "v",
+            TargetLanguage::Vhdl => "vhd",
+            TargetLanguage::Python => "py",
+        };
+
+        let safe_name = element_id.replace(':', "_");
+        let file_name = format!("{}.{}", safe_name, ext);
+        let target_path = PathBuf::from(&file_name);
+
+        let mut module = Module::new(&safe_name, target_path.clone())?;
+        module.elements.push(element);
+
+        self.sync_module(module).await
     }
 
     /// 📥 L'Agent d'Ingestion : Lit un fichier physique et peuple le Jumeau Numérique.
@@ -42,7 +187,6 @@ impl CodeGeneratorService {
         &self,
         path: &Path,
         manager: &CollectionsManager<'_>,
-        schema_uri: &str,
     ) -> RaiseResult<usize> {
         if !path.exists() {
             raise_error!(
@@ -52,26 +196,41 @@ impl CodeGeneratorService {
             );
         }
 
-        // 1. Extraction Lexicale via Reconciler
-        let elements = RustReconciler::parse_from_file(path).await?;
-
-        // 2. Préparation de la collection via Mount Point DB
-        let _ = manager.create_collection("code_elements", schema_uri).await;
-
-        // 3. Enrichissement et Persistance résiliente
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let mut ingested_count = 0;
-        for mut el in elements {
-            el.metadata
-                .insert("file_path".to_string(), path.to_string_lossy().to_string());
 
-            let json_el = match json::serialize_to_value(&el) {
-                Ok(v) => v,
-                Err(e) => raise_error!("ERR_CODEGEN_SERIALIZATION", error = e.to_string()),
-            };
+        match extension {
+            "rs" | "cpp" | "ts" => {
+                let (collection, schema_uri) = self.get_route("software")?;
+                let elements = RustReconciler::parse_from_file(path).await?;
+                let _ = manager.create_collection(collection, schema_uri).await;
 
-            match manager.upsert_document("code_elements", json_el).await {
-                Ok(_) => ingested_count += 1,
-                Err(e) => raise_error!("ERR_DB_WRITE_FAILED", error = e.to_string()),
+                for mut el in elements {
+                    el.metadata
+                        .insert("file_path".to_string(), path.to_string_lossy().to_string());
+                    let json_el = json::serialize_to_value(&el).unwrap();
+                    manager.upsert_document(collection, json_el).await?;
+                    ingested_count += 1;
+                }
+            }
+            "md" => {
+                let (collection, schema_uri) = self.get_route("doc")?;
+                let elements = DocReconciler::parse_from_file(path).await?;
+                let _ = manager.create_collection(collection, schema_uri).await;
+
+                for mut el in elements {
+                    el.metadata
+                        .insert("file_path".to_string(), path.to_string_lossy().to_string());
+                    let json_el = json::serialize_to_value(&el).unwrap();
+                    manager.upsert_document(collection, json_el).await?;
+                    ingested_count += 1;
+                }
+            }
+            _ => {
+                crate::user_warn!(
+                    "MSG_CODEGEN_UNSUPPORTED_EXT",
+                    json_value!({ "path": path.to_string_lossy(), "extension": extension })
+                );
             }
         }
 
@@ -85,7 +244,15 @@ impl CodeGeneratorService {
         path: &Path,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<PathBuf> {
-        let query = Query::new("code_elements");
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let domain = match extension {
+            "md" => "doc",
+            "json" => "schema",
+            _ => "software",
+        };
+        let (collection, _) = self.get_route(domain)?;
+
+        let query = Query::new(collection);
         let db_result = match QueryEngine::new(manager).execute_query(query).await {
             Ok(res) => res,
             Err(e) => raise_error!("ERR_CODEGEN_QUERY_FAILED", error = e.to_string()),
@@ -176,7 +343,6 @@ impl CodeGeneratorService {
 
         let _ = self.format_module(&full_path).await;
 
-        // 🎯 FIX: Variables inutilisées corrigées ici
         match self.check_workspace(&module.name).await {
             Ok(_) => (),
             Err(e) => {
@@ -456,6 +622,36 @@ mod tests {
 
     const TEST_SCHEMA: &str = "db://_system/_system/schemas/v1/db/generic.schema.json";
 
+    /// 🎯 HELPER ZÉRO DETTE
+    async fn inject_mock_codegen_config(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        let _ = DbSandbox::mock_db(manager).await;
+        let _ = manager
+            .create_collection("components", &generic_schema)
+            .await;
+        let _ = manager
+            .create_collection("service_configs", &generic_schema)
+            .await;
+        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
+        manager.upsert_document("service_configs", json_value!({
+            "_id": "mock_codegen",
+            "component_id": "ref:components:handle:codegen_engine",
+            "service_settings": {
+                "format_on_save": true,
+                "strict_mode": true,
+                "semantic_routing": {
+                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() },
+                    "doc": { "aliases": ["md"], "collection": "doc_elements", "schema_uri": generic_schema.clone() }
+                }
+            }
+        })).await?;
+        Ok(())
+    }
+
     #[async_test]
     async fn test_service_sync_flow_strict_ai_master() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
@@ -465,12 +661,16 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+        inject_mock_codegen_config(&manager).await?;
+
         manager
             .create_collection("code_elements", TEST_SCHEMA)
             .await?;
 
         let root = sandbox.storage.config.data_root.clone();
-        let service = CodeGeneratorService::new(root.clone()).with_test_mode();
+        let service = CodeGeneratorService::new(root.clone(), &manager)
+            .await?
+            .with_test_mode();
         let mut module = Module::new("ai_module", root.join("ai.rs"))?;
 
         module.elements.push(CodeElement {
@@ -489,9 +689,7 @@ mod tests {
         });
 
         service.sync_module(module.clone()).await?;
-        service
-            .ingest_file(&module.path, &manager, TEST_SCHEMA)
-            .await?;
+        service.ingest_file(&module.path, &manager).await?;
 
         let query = Query::new("code_elements");
         let result = QueryEngine::new(&manager).execute_query(query).await?;
@@ -504,16 +702,19 @@ mod tests {
     async fn test_service_ingest_file() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
-        let service =
-            CodeGeneratorService::new(sandbox.storage.config.data_root.clone()).with_test_mode();
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+        inject_mock_codegen_config(&manager).await?;
         manager
             .create_collection("code_elements", TEST_SCHEMA)
             .await?;
+
+        let service = CodeGeneratorService::new(sandbox.storage.config.data_root.clone(), &manager)
+            .await?
+            .with_test_mode();
 
         let file_path = sandbox.storage.config.data_root.join("test_ingest.rs");
         fs::write_async(
@@ -522,9 +723,7 @@ mod tests {
         )
         .await?;
 
-        let count = service
-            .ingest_file(&file_path, &manager, TEST_SCHEMA)
-            .await?;
+        let count = service.ingest_file(&file_path, &manager).await?;
         assert_eq!(count, 1);
 
         let query = Query::new("code_elements");
@@ -537,16 +736,19 @@ mod tests {
     async fn test_service_weave_file() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
-        let service =
-            CodeGeneratorService::new(sandbox.storage.config.data_root.clone()).with_test_mode();
         let manager = CollectionsManager::new(
             &sandbox.storage,
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+        inject_mock_codegen_config(&manager).await?;
         manager
             .create_collection("code_elements", TEST_SCHEMA)
             .await?;
+
+        let service = CodeGeneratorService::new(sandbox.storage.config.data_root.clone(), &manager)
+            .await?
+            .with_test_mode();
 
         let file_path = sandbox.storage.config.data_root.join("test_weave.rs");
         fs::write_async(
@@ -554,9 +756,7 @@ mod tests {
             "// @raise-handle: fn:test_weave\npub fn test_weave() {}",
         )
         .await?;
-        service
-            .ingest_file(&file_path, &manager, TEST_SCHEMA)
-            .await?;
+        service.ingest_file(&file_path, &manager).await?;
 
         let query = Query::new("code_elements");
         let mut doc = QueryEngine::new(&manager)
@@ -578,18 +778,18 @@ mod tests {
     #[async_test]
     async fn test_resilience_bad_mount_point() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
-        let service = CodeGeneratorService::new(sandbox.storage.config.data_root.clone());
+
+        // Le manager pointe vers une DB qui n'a pas la config de routage
         let manager = CollectionsManager::new(&sandbox.storage, "ghost_partition", "void_db");
 
-        let result = service
-            .ingest_file(Path::new("/tmp/ghost_file.rs"), &manager, TEST_SCHEMA)
-            .await;
+        let result =
+            CodeGeneratorService::new(sandbox.storage.config.data_root.clone(), &manager).await;
         match result {
             Err(AppError::Structured(err)) => {
-                assert_eq!(err.code, "ERR_CODEGEN_FILE_NOT_FOUND");
+                assert_eq!(err.code, "ERR_CODEGEN_INIT_REJECTED");
                 Ok(())
             }
-            _ => panic!("L'ingestion aurait dû lever ERR_CODEGEN_FILE_NOT_FOUND"),
+            _ => panic!("L'initialisation aurait dû échouer faute de configuration système."),
         }
     }
 
@@ -602,8 +802,8 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+        inject_mock_codegen_config(&manager).await?;
 
-        // 🎯 On prépare les collections
         manager.create_collection("services", TEST_SCHEMA).await?;
         manager.create_collection("components", TEST_SCHEMA).await?;
         manager.create_collection("modules", TEST_SCHEMA).await?;
@@ -611,16 +811,15 @@ mod tests {
         let root = sandbox.storage.config.data_root.clone();
         let src = root.join("src");
 
-        // 🎯 FIX : On crée un sous-répertoire 'core' pour que l'indexeur trouve
-        // un second service et ses modules.
         let core_dir = src.join("core");
         fs::ensure_dir_async(&core_dir).await?;
         fs::write_async(core_dir.join("mod.rs"), b"// raise").await?;
 
-        let service = CodeGeneratorService::new(root.clone()).with_test_mode();
+        let service = CodeGeneratorService::new(root.clone(), &manager)
+            .await?
+            .with_test_mode();
         let indexed = service.index_workspace(&root, &manager).await?;
 
-        // On s'attend maintenant à : 1 (Root) + 1 (Service core) + 1 (Module mod.rs) = 3
         assert!(indexed >= 2);
         Ok(())
     }

@@ -104,7 +104,7 @@ impl AiOrchestrator {
             &app_config.mount_points.system.db,
         );
 
-        //   Utilisation de llm_remote au lieu de l'ancien 'llm'
+        // Utilisation de llm_remote au lieu de l'ancien 'llm'
         let classifier = IntentClassifier::new(self.llm_remote.clone());
         let mut current_intent = classifier.classify(user_query).await;
         let mut current_agent_urn = current_intent.recommended_agent_id().to_string();
@@ -141,7 +141,7 @@ impl AiOrchestrator {
                 &current_agent_urn,
                 &global_session_id,
                 storage_arc.clone(),
-                self.llm_remote.clone(), // 🎯 FIX 3 : Utilisation de llm_remote
+                self.llm_remote.clone(),
                 self.world_engine.clone(),
                 domain_path.clone(),
                 dataset_path.clone(),
@@ -180,7 +180,7 @@ impl AiOrchestrator {
         self.session.add_user_message(query);
         let app_config = AppConfig::get();
         let manager = CollectionsManager::new(
-            self.storage.as_ref(), // 🎯 Fonctionne désormais sans problème car le stockage est obligatoire
+            self.storage.as_ref(),
             &app_config.mount_points.system.domain,
             &app_config.mount_points.system.db,
         );
@@ -300,6 +300,109 @@ mod tests {
         }
     }
 
+    /// 🎯  Injecte les configurations système requises par les moteurs IA
+    /// avant de les initialiser dans le bac à sable.
+    async fn inject_ai_mocks(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+        let config = AppConfig::get();
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        // 🎯 FIX : Calcul du schéma attendu par la mémoire
+        let session_schema_uri = format!(
+            "db://{}/{}/schemas/v2/agents/memory/chat_session.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        let _ = DbSandbox::mock_db(manager).await;
+
+        let _ = manager
+            .create_collection("components", &generic_schema)
+            .await;
+        let _ = manager
+            .create_collection("service_configs", &generic_schema)
+            .await;
+
+        // 1. Mock du RAG Retriever
+        manager
+            .upsert_document(
+                "components",
+                json_value!({
+                    "_id": "ref:components:handle:rag",
+                    "handle": "rag",
+                    "name": "RAG Engine"
+                }),
+            )
+            .await?;
+        manager
+            .upsert_document(
+                "service_configs",
+                json_value!({
+                    "_id": "mock_rag_cfg",
+                    "component_id": "ref:components:handle:rag",
+                    "service_settings": {
+                        "collection_name": "raise_knowledge_base"
+                    }
+                }),
+            )
+            .await?;
+
+        // 2. Mock du World Model (Neuro-Symbolique)
+        manager
+            .upsert_document(
+                "components",
+                json_value!({
+                    "_id": "ref:components:handle:ai_world_model",
+                    "handle": "ai_world_model",
+                    "name": "World Model Engine"
+                }),
+            )
+            .await?;
+        manager
+            .upsert_document(
+                "service_configs",
+                json_value!({
+                    "_id": "mock_wm_cfg",
+                    "component_id": "ref:components:handle:ai_world_model",
+                    "service_settings": {
+                        "vocab_size": 1000,
+                        "active": true
+                    }
+                }),
+            )
+            .await?;
+
+        // 3. Mock de la Mémoire Conversationnelle (Memory Store)
+        manager
+            .upsert_document(
+                "components",
+                json_value!({
+                    "_id": "ref:components:handle:ai_memory_store",
+                    "handle": "ai_memory_store",
+                    "name": "Conversation Memory Store"
+                }),
+            )
+            .await?;
+        manager
+            .upsert_document(
+                "service_configs",
+                json_value!({
+                    "_id": "mock_memory_cfg",
+                    "component_id": "ref:components:handle:ai_memory_store",
+                    "service_settings": {
+                        "max_history_tokens": 4096,
+                        "collection_name": "raise_conversation_history",
+                        "schema_uri": session_schema_uri, // 🎯 LE DERNIER FIX EST ICI
+                        "active": true
+                    }
+                }),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
@@ -314,7 +417,10 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // 1. TEST D'INITIALISATION RÉSILIENTE (🎯 FIX 5 : Ajout de None en 4ème argument)
+        // 🎯 On simule la présence des composants système
+        inject_ai_mocks(&manager).await?;
+
+        // 1. TEST D'INITIALISATION RÉSILIENTE
         let mut orch =
             AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone(), None)
                 .await?;
@@ -339,7 +445,6 @@ mod tests {
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience face à un World Model corrompu sur disque
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
@@ -352,6 +457,9 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
+
+        // 🎯 On simule la présence des composants système
+        inject_ai_mocks(&manager).await?;
 
         // Création d'un fichier Safetensors invalide (corrompu)
         let wm_dir = sandbox
@@ -366,7 +474,6 @@ mod tests {
         fs::write_async(wm_dir.join("world_model.safetensors"), b"CORRUPTED_DATA").await?;
 
         // L'orchestrateur doit détecter l'erreur, logger un Warning, et s'initialiser avec un modèle vierge
-        // 🎯 FIX 5 : Ajout de None en 4ème argument
         let orch = AiOrchestrator::new(ProjectModel::default(), &manager, sandbox.db.clone(), None)
             .await?;
         assert!(orch.world_engine.config.vocab_size > 0);
