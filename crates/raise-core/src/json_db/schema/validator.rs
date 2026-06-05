@@ -423,6 +423,7 @@ fn validate_string(instance: &JsonValue, schema: &JsonValue) -> RaiseResult<()> 
             }
         };
         if !re.is_match(s) {
+            dbg!(s);
             raise_error!(
                 "ERR_VALIDATION_PATTERN_MISMATCH",
                 error = "Le format de la chaîne ne correspond pas au motif exigé."

@@ -120,6 +120,7 @@ impl CodeGeneratorService {
     /// 🚀 L'Agent Forgeron (Top-Down) : Génère un fichier physique à partir d'un élément du modèle.
     pub async fn generate(
         &self,
+        module_doc: JsonValue, // 🎯 Uniformisation de la signature
         element_id: &str,
         manager: &CollectionsManager<'_>,
         lang: TargetLanguage,
@@ -172,78 +173,155 @@ impl CodeGeneratorService {
             TargetLanguage::Python => "py",
         };
 
-        let safe_name = element_id.replace(':', "_");
-        let file_name = format!("{}.{}", safe_name, ext);
-        let target_path = PathBuf::from(&file_name);
+        let path_str = module_doc
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let module_name = module_doc
+            .get("handle")
+            .and_then(|v| v.as_str())
+            .unwrap_or(element_id);
 
-        let mut module = Module::new(&safe_name, target_path.clone())?;
+        let target_path = if path_str.is_empty() {
+            PathBuf::from(&format!("{}.{}", element_id.replace(':', "_"), ext))
+        } else {
+            PathBuf::from(path_str)
+        };
+
+        let mut module = Module::new(module_name, target_path)?;
         module.elements.push(element);
 
         self.sync_module(module).await
     }
 
-    /// 📥 L'Agent d'Ingestion : Lit un fichier physique et peuple le Jumeau Numérique.
-    pub async fn ingest_file(
+    /// 📥 L'Agent d'Ingestion : Lit un fichier physique et peuple le Jumeau Numérique à partir du contexte module.
+    pub async fn ingest_module(
         &self,
-        path: &Path,
+        module_doc: JsonValue,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<usize> {
+        // 🎯 IMPORT OBLIGATOIRE POUR L'ARCHITECTURE ZERO DETTE
+        use crate::json_db::transactions::{manager::TransactionManager, TransactionRequest};
+
+        let path_str = match module_doc.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => raise_error!(
+                "ERR_CODEGEN_MODULE_NO_PATH",
+                error = "Le nœud module ne possède pas de chemin physique 'path'."
+            ),
+        };
+        let path = Path::new(path_str);
+
+        let module_id = match module_doc.get("_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => raise_error!(
+                "ERR_CODEGEN_INGESTION_REJECTED",
+                error = "L'ingestion a été avortée : '_id' invalide."
+            ),
+        };
+
         if !path.exists() {
             raise_error!(
                 "ERR_CODEGEN_FILE_NOT_FOUND",
-                error = "Le fichier source n'existe pas physiquement.",
-                context = json_value!({ "path": path.to_string_lossy() })
+                error = "Le fichier source n'existe pas physiquement."
             );
         }
 
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let mut ingested_count = 0;
 
-        match extension {
+        // 🎯 1. FACTORISATION : On récupère les éléments de manière agnostique
+        let (raw_elements, collection, schema_uri) = match extension {
             "rs" | "cpp" | "ts" => {
-                let (collection, schema_uri) = self.get_route("software")?;
-                let elements = RustReconciler::parse_from_file(path).await?;
-                let _ = manager.create_collection(collection, schema_uri).await;
+                let (col, uri) = self.get_route("software")?;
+                let els = RustReconciler::parse_from_file(path, module_id).await?;
 
-                for mut el in elements {
-                    el.metadata
-                        .insert("file_path".to_string(), path.to_string_lossy().to_string());
-                    let json_el = json::serialize_to_value(&el).unwrap();
-                    manager.upsert_document(collection, json_el).await?;
-                    ingested_count += 1;
-                }
+                // ⚠️ On map dynamiquement tes éléments métiers vers JsonValue
+                let json_els = els
+                    .into_iter()
+                    .map(|mut el| {
+                        el.metadata
+                            .insert("file_path".to_string(), path_str.to_string());
+                        crate::utils::data::json::serialize_to_value(&el).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+
+                (json_els, col, uri)
             }
             "md" => {
-                let (collection, schema_uri) = self.get_route("doc")?;
-                let elements = DocReconciler::parse_from_file(path).await?;
-                let _ = manager.create_collection(collection, schema_uri).await;
+                let (col, uri) = self.get_route("doc")?;
+                let els = DocReconciler::parse_from_file(path, module_id).await?;
 
-                for mut el in elements {
-                    el.metadata
-                        .insert("file_path".to_string(), path.to_string_lossy().to_string());
-                    let json_el = json::serialize_to_value(&el).unwrap();
-                    manager.upsert_document(collection, json_el).await?;
-                    ingested_count += 1;
-                }
+                let json_els = els
+                    .into_iter()
+                    .map(|mut el| {
+                        el.metadata
+                            .insert("file_path".to_string(), path_str.to_string());
+                        crate::utils::data::json::serialize_to_value(&el).unwrap()
+                    })
+                    .collect::<Vec<_>>();
+
+                (json_els, col, uri)
             }
             _ => {
                 crate::user_warn!(
                     "MSG_CODEGEN_UNSUPPORTED_EXT",
-                    json_value!({ "path": path.to_string_lossy(), "extension": extension })
+                    json_value!({ "path": path_str, "extension": extension })
                 );
+                return Ok(0);
             }
+        };
+
+        let _ = manager.create_collection(collection, schema_uri).await;
+
+        // 🎯  Traitement Transactionnel par Lot
+        let tx_mgr = TransactionManager::new(manager.storage, &manager.space, &manager.db);
+        let mut ops = Vec::new();
+
+        for json_el in raw_elements {
+            let handle = json_el
+                .get("handle")
+                .and_then(|h| h.as_str())
+                .map(|s| s.to_string());
+
+            // On délègue l'Upsert au moteur intelligent qui va résoudre les ref:... !
+            ops.push(TransactionRequest::Upsert {
+                collection: collection.to_string(),
+                id: None,
+                handle,
+                document: json_el,
+            });
+        }
+
+        let ingested_count = ops.len();
+        if ingested_count > 0 {
+            tx_mgr.execute_smart(ops).await?;
         }
 
         Ok(ingested_count)
     }
 
-    /// 📤 L'Agent Forgeron : Matérialise le Jumeau Numérique dans un fichier physique.
-    pub async fn weave_file(
+    /// 📤 L'Agent Forgeron (Tissage) : Reconstitue le fichier de code à partir de la DB.
+    pub async fn weave_module(
         &self,
-        module_name: &str,
-        path: &Path,
+        module_doc: JsonValue,
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<PathBuf> {
+        let path_str = match module_doc.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p.to_string(),
+            None => raise_error!(
+                "ERR_CODEGEN_MODULE_NO_PATH",
+                error = "Le nœud module ne possède pas de chemin physique 'path'."
+            ),
+        };
+        let module_name = match module_doc.get("handle").and_then(|v| v.as_str()) {
+            Some(h) => h.to_string(),
+            None => raise_error!(
+                "ERR_CODEGEN_MODULE_NO_HANDLE",
+                error = "Le nœud module ne possède pas de 'handle' sémantique."
+            ),
+        };
+
+        let path = Path::new(&path_str);
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let domain = match extension {
             "md" => "doc",
@@ -259,7 +337,6 @@ impl CodeGeneratorService {
         };
 
         let mut target_elements = Vec::new();
-        let path_str = path.to_string_lossy().to_string();
 
         for doc in db_result.documents {
             if let Some(meta) = doc.get("metadata") {
@@ -281,14 +358,19 @@ impl CodeGeneratorService {
             raise_error!(
                 "ERR_CODEGEN_NO_ELEMENTS_FOUND",
                 error = "Aucun élément trouvé en base pour ce fichier.",
-                context = json_value!({ "path": path_str })
+                context = json_value!({ "path": path_str, "module": module_name })
             );
         }
 
-        let mut module = Module::new(module_name, path.to_path_buf())?;
+        let mut module = Module::new(&module_name, path.to_path_buf())?;
         module.elements = target_elements;
 
         self.sync_module(module).await
+    }
+
+    /// 🧬 L'Agent d'Auto-Tagging : Injection et alignement des ancres AST.
+    pub async fn auto_tag_module(&self, module_doc: JsonValue) -> RaiseResult<usize> {
+        RustReconciler::auto_tag_module(&module_doc).await
     }
 
     /// 🔄 Synchronise un module sémantique avec le système de fichiers.
@@ -307,8 +389,8 @@ impl CodeGeneratorService {
                     return Err(e);
                 }
             }
-
-            let physical_elements = RustReconciler::parse_from_file(&full_path).await?;
+            let module_id = format!("ref:modules:handle:{}", module.name);
+            let physical_elements = RustReconciler::parse_from_file(&full_path, module_id).await?;
             let diffs = match DiffEngine::compute_diff(physical_elements, module.elements.clone()) {
                 Ok(d) => d,
                 Err(e) => raise_error!("ERR_CODEGEN_DIFF_FAILED", error = e.to_string()),
@@ -601,7 +683,8 @@ impl CodeGeneratorService {
     ) -> RaiseResult<usize> {
         let m_handle = self.generate_handle(file_path, root_path, prefix_handle);
         let mut doc = json_value!({
-            "@id": format!("ref:modules:handle:{}", m_handle), "@type": "Module", "handle": m_handle, "name": { "fr": Self::humanize(&file_path.file_stem().unwrap_or_default().to_string_lossy()) }, "service_id": service_id
+            "@id": format!("ref:modules:handle:{}", m_handle), "@type": "Module", "handle": m_handle, "name": { "fr": Self::humanize(&file_path.file_stem().unwrap_or_default().to_string_lossy()) }, "service_id": service_id,
+            "path": file_path.to_string_lossy().to_string() // 🎯 Essentiel pour le cycle sémantique !
         });
         if let Some(c) = component_id {
             doc["component_id"] = json_value!(c);
@@ -630,12 +713,16 @@ mod tests {
             config.mount_points.system.domain, config.mount_points.system.db
         );
         let _ = DbSandbox::mock_db(manager).await;
+
+        let _ = manager.create_collection("services", &generic_schema).await;
         let _ = manager
             .create_collection("components", &generic_schema)
             .await;
+        let _ = manager.create_collection("modules", &generic_schema).await;
         let _ = manager
             .create_collection("service_configs", &generic_schema)
             .await;
+
         manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
         manager.upsert_document("service_configs", json_value!({
             "_id": "mock_codegen",
@@ -689,7 +776,14 @@ mod tests {
         });
 
         service.sync_module(module.clone()).await?;
-        service.ingest_file(&module.path, &manager).await?;
+
+        let mock_module_doc = json_value!({
+            "_id": "ai_module",
+            "handle": "ai_module",
+            "path": module.path.to_string_lossy().to_string()
+        });
+
+        service.ingest_module(mock_module_doc, &manager).await?;
 
         let query = Query::new("code_elements");
         let result = QueryEngine::new(&manager).execute_query(query).await?;
@@ -699,7 +793,7 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_service_ingest_file() -> RaiseResult<()> {
+    async fn test_service_ingest_module() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
@@ -723,7 +817,13 @@ mod tests {
         )
         .await?;
 
-        let count = service.ingest_file(&file_path, &manager).await?;
+        let mock_module_doc = json_value!({
+            "_id": "test_ingest_mod",
+            "handle": "test_ingest_mod",
+            "path": file_path.to_string_lossy().to_string()
+        });
+
+        let count = service.ingest_module(mock_module_doc, &manager).await?;
         assert_eq!(count, 1);
 
         let query = Query::new("code_elements");
@@ -733,7 +833,7 @@ mod tests {
     }
 
     #[async_test]
-    async fn test_service_weave_file() -> RaiseResult<()> {
+    async fn test_service_weave_module() -> RaiseResult<()> {
         let sandbox = DbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
@@ -756,7 +856,16 @@ mod tests {
             "// @raise-handle: fn:test_weave\npub fn test_weave() {}",
         )
         .await?;
-        service.ingest_file(&file_path, &manager).await?;
+
+        let mock_module_doc = json_value!({
+            "_id": "test_weave_mod",
+            "handle": "test_weave_mod",
+            "path": file_path.to_string_lossy().to_string()
+        });
+
+        service
+            .ingest_module(mock_module_doc.clone(), &manager)
+            .await?;
 
         let query = Query::new("code_elements");
         let mut doc = QueryEngine::new(&manager)
@@ -767,9 +876,7 @@ mod tests {
         doc["body"] = json_value!("{ println!(\"AI was here\"); }");
         manager.upsert_document("code_elements", doc).await?;
 
-        let final_path = service
-            .weave_file("test_weave_mod", &file_path, &manager)
-            .await?;
+        let final_path = service.weave_module(mock_module_doc, &manager).await?;
         let final_code = fs::read_to_string_async(&final_path).await?;
         assert!(final_code.contains("AI was here"));
         Ok(())
@@ -804,9 +911,7 @@ mod tests {
         );
         inject_mock_codegen_config(&manager).await?;
 
-        manager.create_collection("services", TEST_SCHEMA).await?;
-        manager.create_collection("components", TEST_SCHEMA).await?;
-        manager.create_collection("modules", TEST_SCHEMA).await?;
+        // Les collections sont déjà créées par inject_mock_codegen_config
 
         let root = sandbox.storage.config.data_root.clone();
         let src = root.join("src");

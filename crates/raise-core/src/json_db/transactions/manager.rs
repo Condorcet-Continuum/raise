@@ -99,20 +99,32 @@ impl<'a> TransactionManager<'a> {
                     handle,
                     mut document,
                 } => {
-                    // 🎯 FIX
                     self.resolve_all_refs(&query_engine, &mut document, &prepared_ops)
                         .await?;
 
-                    let final_id = self
+                    let final_id = match self
                         .resolve_id(
                             &query_engine,
                             &collection,
-                            id,
-                            handle,
+                            id.clone(),
+                            handle.clone(),
                             Some(&document),
                             &prepared_ops,
                         )
-                        .await?;
+                        .await?
+                    {
+                        Some(found_id) => found_id,
+                        None => {
+                            let target = handle.as_deref().or(id.as_deref()).unwrap_or("unknown");
+                            raise_error!(
+                                "ERR_DB_IDENTITY_NOT_FOUND",
+                                error = format!(
+                                    "Aucune entité physique trouvée pour '{}' dans '{}'",
+                                    target, collection
+                                )
+                            );
+                        }
+                    };
                     prepared_ops.push(Operation::Update {
                         collection,
                         id: final_id,
@@ -162,10 +174,10 @@ impl<'a> TransactionManager<'a> {
                             Some(&document),
                             &prepared_ops,
                         )
-                        .await;
+                        .await?;
 
                     match resolution {
-                        Ok(existing_id) => {
+                        Some(existing_id) => {
                             // L'entité existe -> UPDATE
                             prepared_ops.push(Operation::Update {
                                 collection,
@@ -174,7 +186,7 @@ impl<'a> TransactionManager<'a> {
                                 document,
                             });
                         }
-                        Err(_) => {
+                        None => {
                             // L'entité n'existe pas -> INSERT
                             // 🎯 VERROU D'INTÉGRITÉ 2 : Injection de l'ID cible avant la préparation
                             // pour empêcher le x_compute (validator) de générer un ID divergent.
@@ -213,6 +225,45 @@ impl<'a> TransactionManager<'a> {
                         previous_document: None,
                     });
                 }
+
+                TransactionRequest::DeleteMany { query } => {
+                    let collection = query.collection.clone();
+
+                    // 1. Résolution via le QueryEngine (Applique automatiquement les règles RLS !)
+                    let result = query_engine.execute_query(query).await?;
+
+                    let found_count = result.documents.len();
+
+                    if found_count == 0 {
+                        crate::user_warn!(
+                            "TX_DELETE_MANY_EMPTY",
+                            crate::utils::data::json::json_value!({
+                                "collection": collection,
+                                "hint": "Le filtre SQL n'a ciblé aucun document. L'opération a été ignorée."
+                            })
+                        );
+                    } else {
+                        crate::user_info!(
+                            "TX_DELETE_MANY_PREPARED",
+                            crate::utils::data::json::json_value!({
+                                "collection": collection,
+                                "documents_to_delete": found_count
+                            })
+                        );
+                    }
+
+                    // 2. Dépliage en opérations atomiques (Zéro Dette pour le noyau)
+                    for doc in result.documents {
+                        if let Some(id_str) = doc.get("_id").and_then(|v| v.as_str()) {
+                            prepared_ops.push(Operation::Delete {
+                                collection: collection.clone(),
+                                id: id_str.to_string(),
+                                previous_document: None, // Sera peuplé par la phase de verrouillage
+                            });
+                        }
+                    }
+                }
+
                 TransactionRequest::InsertFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
 
@@ -241,7 +292,6 @@ impl<'a> TransactionManager<'a> {
                 TransactionRequest::UpdateFrom { collection, path } => {
                     let mut doc = self.load_dataset_file(&path).await?;
 
-                    // 🎯 FIX
                     self.resolve_all_refs(&query_engine, &mut doc, &prepared_ops)
                         .await?;
 
@@ -254,16 +304,32 @@ impl<'a> TransactionManager<'a> {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    let final_id = self
+                    let final_id = match self
                         .resolve_id(
                             &query_engine,
                             &collection,
-                            id_in_doc,
-                            handle,
+                            id_in_doc.clone(),
+                            handle.clone(),
                             Some(&doc),
                             &prepared_ops,
                         )
-                        .await?;
+                        .await?
+                    {
+                        Some(found_id) => found_id,
+                        None => {
+                            let target = handle
+                                .as_deref()
+                                .or(id_in_doc.as_deref())
+                                .unwrap_or("unknown");
+                            raise_error!(
+                                "ERR_DB_IDENTITY_NOT_FOUND",
+                                error = format!(
+                                    "Aucune entité physique trouvée pour '{}' dans '{}'",
+                                    target, collection
+                                )
+                            );
+                        }
+                    };
 
                     prepared_ops.push(Operation::Update {
                         collection,
@@ -297,10 +363,10 @@ impl<'a> TransactionManager<'a> {
                             Some(&doc),
                             &prepared_ops,
                         )
-                        .await;
+                        .await?;
 
                     match resolution {
-                        Ok(existing_id) => {
+                        Some(existing_id) => {
                             prepared_ops.push(Operation::Update {
                                 collection,
                                 id: existing_id,
@@ -308,7 +374,7 @@ impl<'a> TransactionManager<'a> {
                                 document: doc,
                             });
                         }
-                        Err(_) => {
+                        None => {
                             // Injection de l'identité sémantique comme ID technique cible
                             if let Some(tid) = semantic_id {
                                 if let Some(obj) = doc.as_object_mut() {
@@ -381,7 +447,7 @@ impl<'a> TransactionManager<'a> {
         handle: Option<String>,
         document: Option<&JsonValue>,
         pending_ops: &[Operation],
-    ) -> RaiseResult<String> {
+    ) -> RaiseResult<Option<String>> {
         // 1. Extraction des identités candidates
         let target_handle = handle.or_else(|| {
             document.and_then(|d| {
@@ -432,7 +498,7 @@ impl<'a> TransactionManager<'a> {
                 if c == collection {
                     if let Some(ref h) = target_handle {
                         if d.get("handle").and_then(|v| v.as_str()) == Some(h) {
-                            return Ok(op_id.clone());
+                            return Ok(Some(op_id.clone()));
                         }
                     }
                     if let Some(ref n) = target_name {
@@ -447,7 +513,7 @@ impl<'a> TransactionManager<'a> {
                             }
                         });
                         if d_name == Some(n.clone()) {
-                            return Ok(op_id.clone());
+                            return Ok(Some(op_id.clone()));
                         }
                     }
                 }
@@ -468,7 +534,7 @@ impl<'a> TransactionManager<'a> {
                     .flatten()
                     .is_some()
             {
-                return Ok(i.clone());
+                return Ok(Some(i.clone()));
             }
         }
 
@@ -499,7 +565,7 @@ impl<'a> TransactionManager<'a> {
                             .flatten()
                             .is_some()
                         {
-                            return Ok(id_to_check);
+                            return Ok(Some(id_to_check));
                         } else {
                             raise_error!(
                                 "ERR_DB_GHOST_ENTITY",
@@ -537,24 +603,14 @@ impl<'a> TransactionManager<'a> {
                             .flatten()
                             .is_some()
                         {
-                            return Ok(id_str.to_string());
+                            return Ok(Some(id_str.to_string()));
                         }
                     }
                 }
             }
         }
 
-        raise_error!(
-            "ERR_DB_IDENTITY_NOT_FOUND",
-            error = format!(
-                "Aucune entité physique trouvée pour '{}' dans '{}'",
-                target_handle
-                    .as_deref()
-                    .or(target_name.as_deref())
-                    .unwrap_or("unknown"),
-                collection
-            )
-        );
+        Ok(None)
     }
 
     pub async fn execute<F>(&self, op_block: F) -> RaiseResult<()>

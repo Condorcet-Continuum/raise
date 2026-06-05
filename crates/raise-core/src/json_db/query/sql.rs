@@ -4,8 +4,8 @@ use crate::utils::prelude::*;
 use crate::json_db::transactions::TransactionRequest;
 
 use sqlparser::ast::{
-    BinaryOperator, Expr, Insert, OrderByExpr, OrderByKind, Query as SqlQuery, SetExpr, Statement,
-    TableFactor, Value as SqlJsonValue,
+    BinaryOperator, Delete, Expr, FromTable, Insert, OrderByExpr, OrderByKind, Query as SqlQuery,
+    SetExpr, Statement, TableFactor, Value as SqlJsonValue,
 };
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -37,7 +37,7 @@ pub fn parse_sql(sql: &str) -> RaiseResult<SqlRequest> {
                     "action": "generate_sql_ast"
                 })
             )
-        } // Pas de virgule ou point-virgule nécessaire ici si c'est le dernier bras
+        }
     };
 
     if ast.len() != 1 {
@@ -62,6 +62,14 @@ pub fn parse_sql(sql: &str) -> RaiseResult<SqlRequest> {
             let tx = translate_insert(insert)?;
             Ok(SqlRequest::Write(tx))
         }
+
+        Statement::Delete(delete) => {
+            let query = translate_delete(delete)?;
+            Ok(SqlRequest::Write(vec![TransactionRequest::DeleteMany {
+                query,
+            }]))
+        }
+
         // Cas non supportés : Levée d'une erreur structurée
         unsupported => {
             raise_error!(
@@ -79,7 +87,6 @@ pub fn parse_sql(sql: &str) -> RaiseResult<SqlRequest> {
 }
 
 // --- TRADUCTION INSERT ---
-
 fn translate_insert(insert: &Insert) -> RaiseResult<Vec<TransactionRequest>> {
     let collection = insert.table.to_string();
 
@@ -205,6 +212,47 @@ fn translate_query(sql_query: &SqlQuery) -> RaiseResult<Query> {
             );
         }
     }
+}
+
+// --- TRADUCTION DELETE ---
+fn translate_delete(delete: &Delete) -> RaiseResult<Query> {
+    // Abstraction robuste pour s'adapter à sqlparser
+    let tables = match &delete.from {
+        FromTable::WithFromKeyword(t) => t,
+        FromTable::WithoutKeyword(t) => t,
+    };
+
+    if tables.is_empty() {
+        raise_error!(
+            "ERR_DB_SQL_DELETE_FROM_MISSING",
+            error = "Clause FROM manquante dans l'instruction DELETE."
+        );
+    }
+
+    let TableFactor::Table { name, .. } = &tables[0].relation else {
+        raise_error!(
+            "ERR_DB_SQL_DELETE_RELATION_UNSUPPORTED",
+            error = "La clause FROM est invalide ou utilise une structure non supportée."
+        );
+    };
+
+    let collection = name.to_string();
+
+    let filter = if let Some(selection) = &delete.selection {
+        Some(translate_expr(selection)?)
+    } else {
+        None
+    };
+
+    Ok(Query {
+        collection,
+        filter,
+        rls_policy: None,
+        sort: None,
+        limit: None,
+        offset: None,
+        projection: None,
+    })
 }
 
 // --- TRADUCTION SELECT ---
@@ -516,6 +564,66 @@ mod tests {
             SqlRequest::Read(q) => assert_eq!(q.collection, "users"),
             _ => panic!("Expected Read request"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_delete_with_where_clause() -> RaiseResult<()> {
+        let sql = "DELETE FROM sessions WHERE status = 'expired'";
+        let result = parse_sql(sql).unwrap();
+
+        match result {
+            SqlRequest::Write(ops) => {
+                assert_eq!(
+                    ops.len(),
+                    1,
+                    "Le DELETE doit générer exactement une opération d'écriture."
+                );
+
+                match &ops[0] {
+                    TransactionRequest::DeleteMany { query } => {
+                        assert_eq!(query.collection, "sessions");
+
+                        let filter = query
+                            .filter
+                            .as_ref()
+                            .expect("Le filtre WHERE n'a pas été traduit.");
+                        assert_eq!(filter.conditions.len(), 1);
+                        assert_eq!(filter.conditions[0].field, "status");
+                        assert_eq!(filter.conditions[0].value, json_value!("expired"));
+                    }
+                    _ => panic!("L'opération générée devrait être un DeleteMany."),
+                }
+            }
+            _ => panic!("Un DELETE doit être encapsulé dans une requête Write transactionnelle."),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_delete_all() -> RaiseResult<()> {
+        let sql = "DELETE FROM cache_entries";
+        let result = parse_sql(sql).unwrap();
+
+        match result {
+            SqlRequest::Write(ops) => {
+                assert_eq!(ops.len(), 1);
+
+                match &ops[0] {
+                    TransactionRequest::DeleteMany { query } => {
+                        assert_eq!(query.collection, "cache_entries");
+                        assert!(
+                            query.filter.is_none(),
+                            "Un DELETE sans WHERE ne doit pas avoir de filtre."
+                        );
+                    }
+                    _ => panic!("L'opération générée devrait être un DeleteMany."),
+                }
+            }
+            _ => panic!("Un DELETE doit être encapsulé dans une requête Write transactionnelle."),
+        }
+
         Ok(())
     }
 }

@@ -14,6 +14,27 @@
         "RUST_LOG": "debug,raise_core=trace" 
       },
       "preLaunchTask": "build raise-cli"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "🚀 Debug Raise CLI (Args)",
+      "program": "${workspaceFolder}/target/debug/raise-cli",
+      "args": [
+        "--domain", "_system",
+        "--db", "raise",
+        "code-gen",
+        "ingest",
+        "mod_kernel_environment_rs"
+      ],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"],
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug,raise_core=trace" 
+      },
+      "preLaunchTask": "build raise-cli"
     }
   ]
 }

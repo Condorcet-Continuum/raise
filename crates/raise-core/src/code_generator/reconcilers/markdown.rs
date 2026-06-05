@@ -8,7 +8,7 @@ pub struct DocReconciler;
 
 impl DocReconciler {
     /// 📂 Lit un fichier physique et délègue au parseur sémantique.
-    pub async fn parse_from_file(path: &Path) -> RaiseResult<Vec<DocElement>> {
+    pub async fn parse_from_file(path: &Path, module_id: String) -> RaiseResult<Vec<DocElement>> {
         let content = match fs::read_to_string_async(path).await {
             Ok(c) => c,
             Err(e) => raise_error!(
@@ -17,11 +17,11 @@ impl DocReconciler {
                 context = json_value!({ "action": "read_file_async", "path": path.display().to_string() })
             ),
         };
-        Self::parse_content(&content)
+        Self::parse_content(&content, module_id)
     }
 
     /// 🧠 Machine à états O(N) pour transformer le Markdown brut en Jumeau Numérique.
-    pub fn parse_content(content: &str) -> RaiseResult<Vec<DocElement>> {
+    pub fn parse_content(content: &str, module_id: String) -> RaiseResult<Vec<DocElement>> {
         let mut elements: Vec<DocElement> = Vec::new();
         let mut parent_stack: Vec<(u32, String)> = Vec::new(); // (Niveau, Handle)
         let mut current_section: Option<DocElement> = None;
@@ -53,7 +53,7 @@ impl DocReconciler {
                 if trimmed == "---" {
                     in_frontmatter = false;
                     elements.push(DocElement {
-                        module_id: None,
+                        module_id: Some(module_id.clone()),
                         parent_id: None,
                         element_type: DocElementType::Frontmatter,
                         handle: "frontmatter".to_string(),
@@ -109,7 +109,7 @@ impl DocReconciler {
                     }
 
                     elements.push(DocElement {
-                        module_id: None,
+                        module_id: Some(module_id.clone()),
                         parent_id,
                         element_type: el_type,
                         handle,
@@ -177,7 +177,7 @@ impl DocReconciler {
                 parent_stack.push((level, handle.clone()));
 
                 current_section = Some(DocElement {
-                    module_id: None,
+                    module_id: Some(module_id.clone()),
                     parent_id,
                     element_type: DocElementType::MarkdownSection,
                     handle,
@@ -200,7 +200,7 @@ impl DocReconciler {
             } else if !trimmed.is_empty() {
                 let handle = "intro".to_string();
                 current_section = Some(DocElement {
-                    module_id: None,
+                    module_id: Some(module_id.clone()),
                     parent_id: None,
                     element_type: DocElementType::MarkdownSection,
                     handle,
@@ -240,11 +240,11 @@ mod tests {
     #[test]
     fn test_doc_reconciler_full_hierarchy_optimized() {
         let content = "# Racine\n## A\n### A1\n```mermaid\ngraph TD; A-->B;\n```\n";
-        let elements = DocReconciler::parse_content(content).expect("Parsing failed");
+        let elements =
+            DocReconciler::parse_content(content, "mod_test_123".into()).expect("Parsing failed");
         assert!(elements.len() >= 4);
 
         let section_a = elements.iter().find(|e| e.handle == "a").unwrap();
-        // Vérifie que l'enfant 'a1' a bien été rattaché lors de l'assemblage final O(N)
         assert!(section_a.elements.contains(&"a1".to_string()));
     }
 
@@ -252,7 +252,7 @@ mod tests {
     fn test_doc_reconciler_frontmatter_parsing() {
         let content =
             "---\ntitle: Spécification Système\nversion: 1.2\n---\n# Introduction\nTexte.";
-        let elements = DocReconciler::parse_content(content).unwrap();
+        let elements = DocReconciler::parse_content(content, "mod_test_123".into()).unwrap();
 
         assert_eq!(elements[0].handle, "frontmatter");
         assert_eq!(elements[0].element_type, DocElementType::Frontmatter);
@@ -263,9 +263,8 @@ mod tests {
     #[test]
     fn test_doc_reconciler_duplicate_headings_resolution() {
         let content = "# Configuration\nTexte 1\n# Configuration\nTexte 2";
-        let elements = DocReconciler::parse_content(content).unwrap();
+        let elements = DocReconciler::parse_content(content, "mod_test_123".into()).unwrap();
 
-        // Le parseur doit générer un handle unique pour la seconde occurrence
         assert_eq!(elements[0].handle, "configuration");
         assert_eq!(elements[1].handle, "configuration_1");
     }
@@ -273,7 +272,7 @@ mod tests {
     #[test]
     fn test_doc_reconciler_orphan_intro() {
         let content = "Introduction sans titre.\n# Titre 1";
-        let elements = DocReconciler::parse_content(content).unwrap();
+        let elements = DocReconciler::parse_content(content, "mod_test_123".into()).unwrap();
 
         assert_eq!(elements[0].handle, "intro");
         assert_eq!(elements[1].handle, "titre_1");

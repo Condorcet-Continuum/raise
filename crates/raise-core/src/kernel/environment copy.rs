@@ -1,12 +1,4 @@
-// @raise-cartouche-start
-// ==============================================================================
-// 🧬 MODULE SÉMANTIQUE : mod_kernel_environment_rs [id: 9f57cb7d-9100-44fa-b64b-7921b7a05525]
-// 📁 CHEMIN PHYSIQUE   : crates/raise-core/src/kernel/environment.rs
-// 📅 SYNCHRONISATION   : 2026-06-05 16:54
-// 🤖 IA NOTE : Composant du Jumeau Numérique RAISE (Architecture Zéro Dette).
-// ⚠️ AUTO-GÉNÉRÉ : Les ancres sémantiques (@raise-handle) sont gérées par le CLI.
-// ==============================================================================
-// @raise-cartouche-end
+// FICHIER : crates/raise-core/src/kernel/environment.rs
 
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::{JsonDbConfig, StorageEngine};

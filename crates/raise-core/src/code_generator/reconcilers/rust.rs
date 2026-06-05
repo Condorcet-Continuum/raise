@@ -254,7 +254,7 @@ impl<'a> Lexer<'a> {
 pub struct Reconciler;
 
 impl Reconciler {
-    pub async fn parse_from_file(path: &Path) -> RaiseResult<Vec<CodeElement>> {
+    pub async fn parse_from_file(path: &Path, module_id: String) -> RaiseResult<Vec<CodeElement>> {
         let content = match fs::read_to_string_async(path).await {
             Ok(c) => c,
             Err(e) => raise_error!(
@@ -263,12 +263,53 @@ impl Reconciler {
                 context = json_value!({ "action": "read_file_async", "path": path.display().to_string() })
             ),
         };
-        Self::parse_content(&content)
+        Self::parse_content(&content, module_id)
     }
 
-    pub fn parse_content(content: &str) -> RaiseResult<Vec<CodeElement>> {
+    pub fn parse_content(content: &str, module_id: String) -> RaiseResult<Vec<CodeElement>> {
         let mut lexer = Lexer::new(content);
         let tokens = lexer.tokenize();
+
+        // =====================================================================
+        // 🕵️ EXTRACTION SILENCIEUSE DES DÉPENDANCES (Imports)
+        // =====================================================================
+        let mut file_dependencies = Vec::new();
+        let mut j = 0;
+        let mut current_brace_depth: usize = 0;
+
+        while j < tokens.len() {
+            match &tokens[j] {
+                Token::Symbol('{') => current_brace_depth += 1,
+                Token::Symbol('}') => current_brace_depth = current_brace_depth.saturating_sub(1),
+                Token::Ident(kw) if *kw == "use" && current_brace_depth == 0 => {
+                    let mut dep_str = String::new();
+                    let mut k = j + 1;
+                    while k < tokens.len() {
+                        match &tokens[k] {
+                            Token::Symbol(';') => break,
+                            Token::Symbol(c) => dep_str.push(*c),
+                            Token::Whitespace(_) => dep_str.push(' '),
+                            t => dep_str.push_str(t.as_str()),
+                        }
+                        k += 1;
+                    }
+
+                    // Nettoyage esthétique (retire les espaces superflus autour des ::)
+                    let clean_dep = dep_str
+                        .trim()
+                        .replace(" :: ", "::")
+                        .replace(":: ", "::")
+                        .replace(" ::", "::");
+
+                    file_dependencies.push(clean_dep);
+                    j = k; // On avance directement à la fin de l'import
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        // =====================================================================
+
         let mut elements = Vec::new();
         let mut i = 0;
 
@@ -290,8 +331,21 @@ impl Reconciler {
 
                     i += 1; // Pointe sur le début de l'élément (docs, attributs ou signature)
 
-                    // 🎯 FIX : On extrait l'élément, mais on ignore l'index de fin (_next_index)
-                    let (element, _next_index) = Self::extract_element(&handle, &tokens, i)?;
+                    // 🎯 FIX : On extrait l'élément mutablement pour pouvoir y injecter nos dépendances
+                    let (mut element, _next_index) =
+                        Self::extract_element(&handle, &tokens, i, module_id.clone())?;
+
+                    // 💉 INJECTION DES DÉPENDANCES
+                    // Le composant hérite des imports de niveau module pour son contexte IA
+                    if !file_dependencies.is_empty() {
+                        element
+                            .metadata
+                            .insert("raw_imports".to_string(), file_dependencies.join(","));
+                    }
+
+                    // Garantie absolue que le graphe relationnel natif est vierge à l'extraction
+                    element.dependencies.clear();
+
                     elements.push(element);
 
                     // 🚀 On laisse la boucle continuer naturellement à `i`.
@@ -309,6 +363,7 @@ impl Reconciler {
         handle: &str,
         tokens: &[Token],
         start_index: usize,
+        module_id: String,
     ) -> RaiseResult<(CodeElement, usize)> {
         let mut i = start_index;
         let mut docs = String::new();
@@ -459,7 +514,7 @@ impl Reconciler {
         }
 
         let element = CodeElement {
-            module_id: None,
+            module_id: Some(module_id),
             parent_id: None,
             element_type,
             handle: handle.to_string(),
@@ -480,24 +535,81 @@ impl Reconciler {
         Ok((element, i))
     }
 
-    /// 🚀 AUTO-TAGGING & GARBAGE COLLECTOR : Injecte, corrige et nettoie les ancres sémantiques.
-    pub async fn auto_tag_file(path: &Path) -> RaiseResult<usize> {
+    /// 🚀 AUTO-TAGGING & GARBAGE COLLECTOR : Injecte, corrige et nettoie les ancres sémantiques à partir d'un nœud MBSE.
+    pub async fn auto_tag_module(module_doc: &JsonValue) -> RaiseResult<usize> {
+        // --- 1. RÉSOLUTION SÉMANTIQUE ---
+        let handle = module_doc
+            .get("handle")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown_module");
+        let module_id = module_doc
+            .get("_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("no-id");
+        let path_str = match module_doc.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => raise_error!(
+                "ERR_RECONCILER_NO_PATH",
+                error = "Le module ne possède pas de chemin physique 'path'."
+            ),
+        };
+        let path = Path::new(path_str);
+
+        // --- 2. LECTURE DU FICHIER ---
         let content = match fs::read_to_string_async(path).await {
             Ok(c) => c,
             Err(e) => raise_error!(
                 "ERR_SYSTEM_IO",
                 error = e,
-                context = json_value!({ "action": "read_file_for_tagging", "path": path.display().to_string() })
+                context = json_value!({ "action": "read_module_for_tagging", "path": path_str })
             ),
         };
+
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+
+        // =========================================================================
+        // 📜 GESTION DU CARTOUCHE (Header Sémantique MBSE)
+        // =========================================================================
+        let sync_date = LocalClock::now().format("%Y-%m-%d %H:%M").to_string();
+
+        let expected_cartouche = format!(
+            "// @raise-cartouche-start\n\
+         // ==============================================================================\n\
+         // 🧬 MODULE SÉMANTIQUE : {} [id: {}]\n\
+         // 📁 CHEMIN PHYSIQUE   : {}\n\
+         // 📅 SYNCHRONISATION   : {}\n\
+         // 🤖 IA NOTE : Composant du Jumeau Numérique RAISE (Architecture Zéro Dette).\n\
+         // ⚠️ AUTO-GÉNÉRÉ : Les ancres sémantiques (@raise-handle) sont gérées par le CLI.\n\
+         // ==============================================================================\n\
+         // @raise-cartouche-end",
+            handle, module_id, path_str, sync_date
+        );
+
+        if let Some(start_idx) = content.find("// @raise-cartouche-start") {
+            if let Some(end_offset_relative) = content[start_idx..].find("// @raise-cartouche-end")
+            {
+                let end_idx = start_idx + end_offset_relative + "// @raise-cartouche-end".len();
+                let current_cartouche = &content[start_idx..end_idx];
+
+                if current_cartouche != expected_cartouche {
+                    let mut len_to_replace = end_idx - start_idx;
+                    if let Some(&b'\n') = content.as_bytes().get(end_idx) {
+                        len_to_replace += 1;
+                    }
+                    edits.push((
+                        start_idx,
+                        len_to_replace,
+                        format!("{}\n", expected_cartouche),
+                    ));
+                }
+            }
+        } else {
+            edits.push((0, 0, format!("{}\n\n", expected_cartouche)));
+        }
 
         let mut lexer = Lexer::new(&content);
         let tokens = lexer.tokenize();
 
-        // 🎯 L'Éditeur Chirurgical : (offset_binaire, longueur_à_remplacer, nouveau_texte)
-        let mut edits: Vec<(usize, usize, String)> = Vec::new();
-
-        // 🧹 Suivi pour le Garbage Collector
         let mut all_existing_tags: UniqueSet<usize> = UniqueSet::new();
         let mut used_tags: UniqueSet<usize> = UniqueSet::new();
 
@@ -513,7 +625,6 @@ impl Reconciler {
         let mut brace_depth: usize = 0;
         let mut element_start_idx = 0;
         let mut i = 0;
-
         let mut test_scope_depth: Option<usize> = None;
 
         while i < tokens.len() {
@@ -527,13 +638,11 @@ impl Reconciler {
                     }
                 }
                 Token::Symbol('}') => {
-                    // 🚪 Sortie de la zone de quarantaine
                     if let Some(depth) = test_scope_depth {
                         if brace_depth == depth + 1 {
                             test_scope_depth = None;
                         }
                     }
-
                     brace_depth = brace_depth.saturating_sub(1);
                     if brace_depth <= 1 && test_scope_depth.is_none() {
                         element_start_idx = i + 1;
@@ -543,7 +652,6 @@ impl Reconciler {
                     element_start_idx = i + 1;
                 }
                 Token::Ident(kw) => {
-                    // 🛡️ DÉTECTION DU MODULE DE TESTS
                     if *kw == "mod" {
                         let mut k = i + 1;
                         while k < tokens.len() {
@@ -559,11 +667,9 @@ impl Reconciler {
                     }
 
                     let is_target = match *kw {
-                        // Les structures de haut niveau ne sont taguées que hors des tests
                         "struct" | "enum" | "impl" | "trait" | "type" | "macro_rules" => {
                             brace_depth == 0 && test_scope_depth.is_none()
                         }
-                        // Les fonctions sont taguées si elles sont de niveau 1, OU de niveau 2 dans un mod tests
                         "fn" => {
                             brace_depth <= 1
                                 || (test_scope_depth.is_some()
@@ -573,7 +679,6 @@ impl Reconciler {
                     };
 
                     if is_target {
-                        // --- 1. EXTRACTION DU NOM (Avec support 'impl ... for ...') ---
                         let mut name = String::new();
                         let mut k = i + 1;
 
@@ -614,7 +719,6 @@ impl Reconciler {
                             }
                         }
 
-                        // --- 2. VÉRIFICATION & RÉCONCILIATION DU TAG ---
                         if !name.is_empty() {
                             let mut tag_type = match *kw {
                                 "fn" => "fn",
@@ -641,25 +745,20 @@ impl Reconciler {
                                 }
                             }
 
-                            // 🧬 GÉNÉRATION OU RÉCUPÉRATION DE L'ADN IMMUABLE (UUID)
                             let id_marker = if let Some(existing_c) = found_existing_tag {
                                 if let Some(start) = existing_c.find("[id: ") {
                                     if let Some(end) = existing_c[start..].find(']') {
-                                        // Le tag a déjà un ID, on le préserve coûte que coûte !
                                         existing_c[start..start + end + 1].to_string()
                                     } else {
                                         format!("[id: {}]", &UniqueId::new_v4().to_string()[0..8])
                                     }
                                 } else {
-                                    // Ancien tag sans ID, on le met à niveau
                                     format!("[id: {}]", &UniqueId::new_v4().to_string()[0..8])
                                 }
                             } else {
-                                // Nouveau tag, on génère un ID frais
                                 format!("[id: {}]", &UniqueId::new_v4().to_string()[0..8])
                             };
 
-                            // Le nom sert à l'humain, l'ID sert à la machine
                             let expected_tag_content =
                                 format!("// @raise-handle: {}:{} {}", tag_type, name, id_marker);
 
@@ -668,12 +767,10 @@ impl Reconciler {
                                     (existing_c.as_ptr() as usize) - (content.as_ptr() as usize);
                                 used_tags.insert(offset);
 
-                                // 🛠️ AUTO-CORRECTION: Le tag existe mais est désynchronisé (ex: renommage de la fonction)
                                 if existing_c != expected_tag_content {
                                     edits.push((offset, existing_c.len(), expected_tag_content));
                                 }
                             } else {
-                                // ➕ INJECTION: Aucun tag n'existe, on le crée
                                 let mut insert_token_idx = i;
                                 for (offset, token) in
                                     tokens[element_start_idx..i].iter().enumerate()
@@ -717,16 +814,14 @@ impl Reconciler {
             i += 1;
         }
 
-        // --- 3. GARBAGE COLLECTOR : Nettoyage des fantômes ---
+        // --- 3. GARBAGE COLLECTOR : Nettoyage des fantômes et anciennes scories ---
         for offset in all_existing_tags.iter() {
             if !used_tags.contains(offset) {
-                // Trouver la taille du tag orphelin pour l'effacer
                 for token in &tokens {
                     if let Token::LineComment(c) = token {
                         let t_offset = (c.as_ptr() as usize) - (content.as_ptr() as usize);
                         if t_offset == *offset {
                             let mut len_to_remove = c.len();
-                            // 🧹 On efface aussi le saut de ligne qui suit pour ne pas laisser de ligne vide
                             if let Some(&b'\n') = content.as_bytes().get(t_offset + len_to_remove) {
                                 len_to_remove += 1;
                             }
@@ -738,11 +833,31 @@ impl Reconciler {
             }
         }
 
-        // --- 4. APPLICATION DES ÉDITS IN-PLACE (Zéro Dette) ---
+        // 🧹 Éradication de l'ancien en-tête manuel
+        for token in &tokens {
+            if let Token::LineComment(c) = token {
+                if c.starts_with("// FICHIER") {
+                    let offset = (c.as_ptr() as usize) - (content.as_ptr() as usize);
+                    let mut len_to_remove = c.len();
+                    if let Some(&b'\n') = content.as_bytes().get(offset + len_to_remove) {
+                        len_to_remove += 1;
+                    }
+                    edits.push((offset, len_to_remove, String::new()));
+                }
+            }
+        }
+
+        // --- 4. APPLICATION DES ÉDITS IN-PLACE ---
         let edits_count = edits.len();
         if edits_count > 0 {
-            // On trie du bas vers le haut pour ne jamais fausser les offsets lors des remplacements
-            edits.sort_by_key(|k| ReverseOrder(k.0));
+            edits.sort_by(|a, b| {
+                let cmp = b.0.cmp(&a.0);
+                if cmp == FmtOrdering::Equal {
+                    b.1.cmp(&a.1)
+                } else {
+                    cmp
+                }
+            });
             let mut modified_content = content.clone();
 
             for (offset, len_to_remove, new_text) in edits {
@@ -788,7 +903,7 @@ pub async fn complex_logic() -> Result<(), Error> {
     let a = 1;
 }
 "#;
-        let elements = Reconciler::parse_content(code).unwrap();
+        let elements = Reconciler::parse_content(code, "test_module_id".to_string()).unwrap();
         assert_eq!(elements.len(), 1);
         let el = &elements[0];
 
@@ -817,7 +932,7 @@ fn trap() {
     let c = '{';
 }
 "#;
-        let elements = Reconciler::parse_content(code).unwrap();
+        let elements = Reconciler::parse_content(code, "test_module_id".to_string()).unwrap();
         assert_eq!(elements.len(), 1);
 
         let el = &elements[0];
@@ -841,7 +956,7 @@ fn raw_string_test() {
     let regex = r#"(?x) { \d+ }"#; 
 }
 "##;
-        let elements = Reconciler::parse_content(code).unwrap();
+        let elements = Reconciler::parse_content(code, "test_module_id".to_string()).unwrap();
         assert_eq!(
             elements.len(),
             1,
@@ -866,7 +981,7 @@ pub fn with_comment(
     println!("ok");
 }
 "#;
-        let elements = Reconciler::parse_content(code).unwrap();
+        let elements = Reconciler::parse_content(code, "test_module_id".to_string()).unwrap();
         assert_eq!(elements.len(), 1);
 
         let el = &elements[0];
@@ -886,10 +1001,12 @@ fn broken() {
     let a = 1;
 // Missing closing brace
 "#;
-        let result = Reconciler::parse_content(code);
+        // 🎯 FIX : Ajout de l'ID obligatoire pour satisfaire la signature stricte
+        let result = Reconciler::parse_content(code, "mod_test_broken".to_string());
+
         assert!(result.is_err(), "Devrait retourner une erreur RAISE");
 
-        if let Err(AppError::Structured(data)) = result {
+        if let Err(crate::utils::core::error::AppError::Structured(data)) = result {
             assert_eq!(data.code, "ERR_RECONCILER_UNBALANCED_BRACES");
         } else {
             panic!("Le type d'erreur n'est pas AppError::Structured");

@@ -437,16 +437,26 @@ pub async fn handle(args: JsondbArgs, ctx: CliContext) -> RaiseResult<()> {
         }
         JsondbCommands::Sql { query } => {
             use raise_core::json_db::query::sql::{parse_sql, SqlRequest};
-            let request =
-                parse_sql(&query).map_err(|e| build_error!("ERR_SQL_PARSE", error = e))?;
+
+            // 🎯 Pattern matching explicite et cohérent avec le reste du noyau
+            let request = match parse_sql(&query) {
+                Ok(req) => req,
+                Err(e) => raise_error!("ERR_SQL_PARSE", error = e),
+            };
+
+            // 🎯 L'architecture parfaite : le SQL est soit une lecture, soit une écriture transactionnelle.
             match request {
                 SqlRequest::Read(q) => {
                     let result = QueryEngine::new(&col_mgr).execute_query(q).await?;
                     println!("{}", json::serialize_to_string_pretty(&result.documents)?);
                 }
                 SqlRequest::Write(ops) => {
+                    // Les Insert, Update et notre nouveau DeleteMany passent tous par cette porte unifiée !
                     tx_mgr.execute_smart(ops).await?;
-                    user_success!("JSONDB_SQL_TX_SUCCESS", json_value!({}));
+                    user_success!(
+                        "JSONDB_SQL_TX_SUCCESS",
+                        json_value!({ "status": "transaction_committed" })
+                    );
                 }
             }
         }

@@ -43,7 +43,4 @@ tauri-build = { version = "2", features = [] }
 [dev-dependencies]
 serial_test = "3.0"
 
-# Les dépendances lourdes (CUDA, OpenCV, etc.) sont autorisées ici,
-# car ce code tourne sur le Ryzen !
-# [features]
-# cuda = ["candle-core/cuda"]
+ 

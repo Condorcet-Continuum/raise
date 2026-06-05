@@ -31,6 +31,9 @@ pub enum TransactionRequest {
         collection: String,
         id: String,
     },
+    DeleteMany {
+        query: crate::json_db::query::Query,
+    },
     InsertFrom {
         collection: String,
         path: String,

@@ -1,5 +1,6 @@
 use crate::utils::prelude::*;
 
+pub mod dependency_analyzer;
 pub mod semantic_analyzer;
 
 /// 📊 Résultat d'analyse simplifié pour alimenter le Weaver
