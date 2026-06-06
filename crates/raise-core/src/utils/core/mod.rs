@@ -30,6 +30,31 @@ pub use chrono::NaiveDate as CalendarDate;
 /// Ne pas confondre avec `TimeDuration` (std::time::Duration) utilisé pour les timeouts réseau/CPU.
 pub use chrono::Duration as CalendarDuration; // 🎯 L'alias sémantique strict !
 
+/// 🤖 IA NOTE : Parse une chaîne de caractères au format RFC3339 (ex: "2026-06-06T11:44:39Z")
+/// et la convertit de manière sécurisée en un `UtcTimestamp`.
+/// Centralise la gestion d'erreur temporelle pour éviter les fuites d'abstraction de la crate `chrono`.
+pub fn parse_system_time(s: &str) -> RaiseResult<UtcTimestamp> {
+    match chrono::DateTime::parse_from_rfc3339(s) {
+        Ok(dt) => Ok(dt.with_timezone(&chrono::Utc)),
+        Err(e) => {
+            // Utilisation de Box::new et respect strict des champs de StructuredData
+            Err(error::AppError::Structured(Box::new(
+                error::StructuredData {
+                    service: "core".to_string(),
+                    subdomain: "utils".to_string(),
+                    component: "TIME_PARSER".to_string(),
+                    code: "ERR_CORE_TIME_PARSING_FAILED".to_string(),
+                    message: "Échec de l'analyse du format temporel".to_string(),
+                    context: crate::utils::data::json::json_value!({
+                        "invalid_input": s,
+                        "technical_error": e.to_string()
+                    }),
+                },
+            )))
+        }
+    }
+}
+
 /// 🤖 IA NOTE : Alias pour std::time::Duration. À utiliser pour tous les timeouts et délais.
 pub use std::time::Duration as TimeDuration;
 

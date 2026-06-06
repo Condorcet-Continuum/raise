@@ -120,7 +120,7 @@ impl McpTool for CodeGenTool {
             Err(e) => return McpToolResult::error(call.id, &e.to_string()),
         };
 
-        let lang = match self.determine_language(&doc) {
+        let _lang = match self.determine_language(&doc) {
             Ok(l) => l,
             Err(e) => return McpToolResult::error(call.id, &e.to_string()),
         };
@@ -155,17 +155,18 @@ impl McpTool for CodeGenTool {
             elements: vec![],
         });
 
-        match self.service.sync_module(module).await {
-            Ok(path) => {
-                if lang == TargetLanguage::Rust {
-                    let _ = self.service.format_module(&path).await;
-                }
-                McpToolResult::success(call.id, json_value!({ "path": path.to_string_lossy() }))
+        match self.service.stage_module(module).await {
+            Ok(staged) => {
+                // Succès : Le fichier est généré et formaté en zone temporaire.
+                McpToolResult::success(
+                    call.id,
+                    json_value!({ "path": staged.temp_path.to_string_lossy() }),
+                )
             }
-            Err(e) => McpToolResult::error(
-                call.id,
-                &format!("Échec de la synchronisation disque : {}", e),
-            ),
+            Err(e) => {
+                // Échec : Le code généré est invalide ou l'I/O a échoué.
+                McpToolResult::error(call.id, &format!("Échec de la génération (Stage) : {}", e))
+            }
         }
     }
 }

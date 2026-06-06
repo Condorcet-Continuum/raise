@@ -15,14 +15,40 @@ impl<'a> DependencyAnalyzer<'a> {
     }
 
     /// 🧠 Parcourt un module spécifique pour transformer la syntaxe (raw_imports) en sémantique (dependencies)
-    pub async fn link_module(&self, collection: &str, module_id: &str) -> RaiseResult<usize> {
+    pub async fn link_module(
+        &self,
+        collection: &str,
+        module_handle_or_id: &str,
+    ) -> RaiseResult<usize> {
         let query_engine = QueryEngine::new(self.manager);
 
-        // 🎯 1. Isolation stricte : On ne récupère que les éléments du module cible
+        // 🎯 1. Traduction intelligente : Handle Logique -> UUID Physique
+        let mut module_query = Query::new("modules");
+        module_query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("handle", json_value!(module_handle_or_id))],
+        });
+
+        // Si on trouve le module, on extrait son _id, sinon on utilise la chaîne fournie en fallback
+        let target_module_id = match query_engine
+            .execute_query(module_query)
+            .await?
+            .documents
+            .first()
+        {
+            Some(doc) => doc
+                .get("_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(module_handle_or_id)
+                .to_string(),
+            None => module_handle_or_id.to_string(),
+        };
+
+        // 🎯 2. Isolation stricte : On ne récupère que les éléments du module cible
         let mut query = Query::new(collection);
         query.filter = Some(QueryFilter {
             operator: FilterOperator::And,
-            conditions: vec![Condition::eq("module_id", json_value!(module_id))],
+            conditions: vec![Condition::eq("module_id", json_value!(target_module_id))],
         });
 
         let result = query_engine.execute_query(query).await?;

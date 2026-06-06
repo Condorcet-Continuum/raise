@@ -29,10 +29,16 @@ pub enum CodeGenCommands {
     Ingest {
         module_handle: String,
     },
-    Weave {
+    LinkModule {
         module_handle: String,
     },
-    LinkModule {
+    Stage {
+        module_handle: String,
+    },
+    Commit {
+        staged_handle: String,
+    },
+    Weave {
         module_handle: String,
     },
 }
@@ -87,7 +93,6 @@ pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
                 })
             );
 
-            // 🎯 On passe distinctement le domaine cible et le domaine de l'espace de travail
             match codegen_service::generate_source_code(
                 &element_id,
                 target_domain_str,
@@ -157,6 +162,65 @@ pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
             }
         }
 
+        CodeGenCommands::LinkModule { module_handle } => {
+            user_info!("CODE_LINK_START", json_value!({ "module": module_handle }));
+
+            match codegen_service::link_module(
+                &module_handle,
+                &ctx.active_domain,
+                &ctx.active_db,
+                &ctx.storage,
+            )
+            .await
+            {
+                Ok(count) => user_success!(
+                    "CODE_LINK_SUCCESS",
+                    json_value!({ "relations_resolved": count, "module": module_handle })
+                ),
+                Err(e) => raise_error!("ERR_CODE_LINK_FAILED", error = e),
+            }
+        }
+
+        CodeGenCommands::Stage { module_handle } => {
+            match codegen_service::stage_module(
+                &module_handle,
+                &ctx.active_domain,
+                &ctx.active_db,
+                &ctx.storage,
+                ctx.is_test_mode,
+            )
+            .await
+            {
+                Ok(path) => user_success!("CODE_STAGE_SUCCESS", json_value!({"path": path})),
+                Err(e) => raise_error!(
+                    "ERR_STAGE_FAILED",
+                    error = e,
+                    context = json_value!({"module": module_handle})
+                ),
+            }
+        }
+
+        CodeGenCommands::Commit { staged_handle } => {
+            match codegen_service::commit_module(
+                &staged_handle,
+                &ctx.active_domain,
+                &ctx.active_db,
+                &ctx.storage,
+                ctx.is_test_mode,
+            )
+            .await
+            {
+                Ok(final_path) => {
+                    user_success!("CODE_COMMIT_SUCCESS", json_value!({"path": final_path}))
+                }
+                Err(e) => raise_error!(
+                    "ERR_COMMIT_FAILED",
+                    error = e,
+                    context = json_value!({"staged_handle": staged_handle})
+                ),
+            }
+        }
+
         CodeGenCommands::Weave { module_handle } => {
             user_info!("CODE_WEAVE_START", json_value!({ "module": module_handle }));
 
@@ -174,25 +238,6 @@ pub async fn handle(args: CodeGenArgs, ctx: CliContext) -> RaiseResult<()> {
                     json_value!({ "module": module_handle, "final_path": final_path })
                 ),
                 Err(e) => raise_error!("ERR_WEAVE_FAILED", error = e),
-            }
-        }
-
-        CodeGenCommands::LinkModule { module_handle } => {
-            user_info!("CODE_LINK_START", json_value!({ "module": module_handle }));
-
-            match codegen_service::link_module(
-                &module_handle,
-                &ctx.active_domain,
-                &ctx.active_db,
-                &ctx.storage,
-            )
-            .await
-            {
-                Ok(count) => user_success!(
-                    "CODE_LINK_SUCCESS",
-                    json_value!({ "relations_resolved": count, "module": module_handle })
-                ),
-                Err(e) => raise_error!("ERR_CODE_LINK_FAILED", error = e),
             }
         }
     }
@@ -340,8 +385,13 @@ mod tests {
                 "db://_system/_system/schemas/v1/db/generic.schema.json",
             )
             .await?;
+        manager
+            .create_collection(
+                "staged_contracts",
+                "db://_system/_system/schemas/v1/db/generic.schema.json",
+            )
+            .await?;
 
-        // 🎯 FIX : On déclare file_path et on crée le fichier physique en premier !
         let file_path = sandbox.storage.config.data_root.join("test_weave.rs");
         let initial_code = "// @raise-handle: fn:test_fn\npub fn test_fn() { }";
         fs::write_sync(&file_path, initial_code)
@@ -391,21 +441,29 @@ mod tests {
         doc["body"] = json_value!("{ println!(\"RAISE_FORGE_OK\"); }");
         manager.upsert_document("code_elements", doc).await?;
 
-        // 5. Test du Tissage (Weave)
-        let args_weave = CodeGenArgs {
-            command: CodeGenCommands::Weave {
+        // 5. Test du Tissage (Weave) - Étape 1 : Stage uniquement
+        let args_stage = CodeGenArgs {
+            command: CodeGenCommands::Stage {
                 module_handle: "mod_test_weave".to_string(),
             },
         };
-        handle(args_weave, ctx.clone()).await?;
+        handle(args_stage, ctx.clone()).await?;
 
-        // 6. Validation finale du fichier physique
+        // 6. Test du Commit (Validation finale)
+        let args_commit = CodeGenArgs {
+            command: CodeGenCommands::Commit {
+                staged_handle: "mod_test_weave".to_string(),
+            },
+        };
+        handle(args_commit, ctx.clone()).await?;
+
+        // 7. Validation finale du fichier physique
         let final_code = fs::read_to_string_sync(&file_path)
             .map_err(|e| build_error!("ERR_TEST_FS", error = e))?;
         if !final_code.contains("RAISE_FORGE_OK") {
             raise_error!(
                 "ERR_TEST_FORGE_FAIL",
-                error = "Le tissage du code a échoué."
+                error = "Le tissage du code a échoué (le commit n'a pas mis à jour le fichier)."
             );
         }
 

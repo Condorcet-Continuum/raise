@@ -2,6 +2,8 @@
 
 use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
 
+use crate::code_generator::models::StagedModule;
+use crate::code_generator::module_weaver::ModuleWeaver;
 use crate::code_generator::CodeGeneratorService;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
@@ -125,7 +127,8 @@ pub async fn weave_module(
     db: &str,
     storage: &StorageEngine,
     is_test_mode: bool,
-) -> RaiseResult<String> {
+) -> RaiseResult<StagedModule> {
+    // 🎯 NOUVEAU RETOUR
     let manager = CollectionsManager::new(storage, domain, db);
     let module_doc = match manager.get_document("modules", module_handle).await {
         Ok(Some(doc)) => doc,
@@ -144,11 +147,66 @@ pub async fn weave_module(
         service = service.with_test_mode();
     }
 
-    // 🎯 Appel délégué au service étendu
-    match service.weave_module(module_doc, &manager).await {
-        Ok(final_path) => Ok(final_path.to_string_lossy().to_string()),
-        Err(e) => raise_error!("ERR_CODEGEN_WEAVE_FAILED", error = e.to_string()),
+    // 🎯 On retourne directement le contrat de Staging (sans faire de match pour préserver l'erreur d'origine)
+    service.weave_module(module_doc, &manager).await
+}
+/// 🏗️ STAGE : Génère et persiste le contrat temporaire (Internalise ModuleWeaver)
+pub async fn stage_module(
+    module_handle: &str,
+    domain: &str,
+    db: &str,
+    storage: &StorageEngine,
+    is_test_mode: bool,
+) -> RaiseResult<String> {
+    // 1. Instanciation du manager de collections
+    let manager = CollectionsManager::new(storage, domain, db);
+
+    // 2. Génération via le weaver
+    let staged = weave_module(module_handle, domain, db, storage, is_test_mode).await?;
+
+    // 3. Persistance interne en passant la référence du manager
+    ModuleWeaver::persist_stage(&manager, &staged, "agent_orchestrator").await?;
+
+    Ok(staged.temp_path.to_string_lossy().to_string())
+}
+
+/// 🚀 COMMIT : Charge et intègre le contrat persisté (Internalise ModuleWeaver)
+pub async fn commit_module(
+    module_handle: &str,
+    domain: &str,
+    db: &str,
+    storage: &StorageEngine,
+    is_test_mode: bool,
+) -> RaiseResult<String> {
+    // 1. Instanciation du manager de collections
+    let manager = CollectionsManager::new(storage, domain, db);
+
+    // 2. Chargement du contrat en passant la référence du manager
+    let staged = ModuleWeaver::load_stage(&manager, module_handle).await?;
+
+    // 3. Intégration
+    commit_staged_module(staged, domain, db, storage, is_test_mode).await
+}
+
+pub async fn commit_staged_module(
+    staged: StagedModule,
+    domain: &str,
+    db: &str,
+    storage: &StorageEngine,
+    is_test_mode: bool,
+) -> RaiseResult<String> {
+    let manager = CollectionsManager::new(storage, domain, db);
+    let domain_root = AppConfig::get()
+        .get_path("PATH_RAISE_DOMAIN")
+        .unwrap_or_default();
+
+    let mut service = CodeGeneratorService::new(domain_root, &manager).await?;
+    if is_test_mode {
+        service = service.with_test_mode();
     }
+
+    let final_path = service.commit_staged_module(staged, &manager).await?;
+    Ok(final_path.to_string_lossy().to_string())
 }
 
 pub async fn link_module(

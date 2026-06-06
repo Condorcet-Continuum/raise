@@ -1,5 +1,44 @@
 use crate::utils::prelude::*;
 
+/// 🚦 États possibles pour le cycle de vie d'un contrat de génération.
+/// Alignement strict avec le schéma `staged-contract.schema.json`.
+#[derive(Debug, Clone, Serializable, Deserializable, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContractStatus {
+    #[default]
+    Pending,
+    Committed,
+    Rejected,
+    Expired,
+}
+
+/// 📦 Contrat de transition (Staged Contract) représentant une intention de modification.
+/// Projection mémoire du nœud `raise:StagedContract` du Jumeau Numérique.
+#[derive(Debug, Clone, Serializable, Deserializable)]
+pub struct StagedModule {
+    /// Identifiant public unique du contrat dans le graphe (ex: stage_auth_service)
+    pub handle: String,
+
+    /// Identifiant du Mandataire (Agent IA) ou du Mandant (Humain) à l'origine de l'intention
+    pub agent_handle: String,
+
+    /// L'état actuel du contrat dans jsondb
+    #[serde(default)]
+    pub contract_status: ContractStatus,
+
+    /// Le chemin temporaire où le code a été généré pour la validation du compilateur
+    pub temp_path: PathBuf,
+
+    /// Le chemin de destination final dans le workspace physique
+    pub final_path: PathBuf,
+
+    /// Le nom sémantique du module ciblé (lien vers le module_id)
+    pub module_name: String,
+
+    /// L'AST cible proposé par le Mandataire pour calculer le Diff
+    pub target_elements: Vec<CodeElement>,
+}
+
 /// 🌐 Langages cibles supportés par l'AST Weaver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serializable, Deserializable)]
 #[serde(rename_all = "snake_case")]
@@ -137,6 +176,105 @@ impl Module {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_generator::module_weaver::ModuleWeaver;
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::testing::DbSandbox;
+
+    #[async_test]
+    async fn test_staging_persistence_cycle() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let config = AppConfig::get(); // 🎯 Récupération dynamique de la config
+
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        // 🎯 FIX : Utilisation du schéma générique réservé aux tests
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        let _ = manager
+            .create_collection("staged_contracts", &generic_schema)
+            .await;
+
+        // 1. Préparation d'un contrat factice
+        let staged = StagedModule {
+            handle: "stage_test_weaver".to_string(),
+            agent_handle: "agent_smith".to_string(),
+            contract_status: ContractStatus::Pending,
+            temp_path: sandbox.storage.config.data_root.join("temp.rs"),
+            final_path: sandbox.storage.config.data_root.join("final.rs"),
+            module_name: "test_weaver".to_string(),
+            target_elements: vec![CodeElement {
+                module_id: None,
+                parent_id: None,
+                attributes: vec![],
+                docs: None,
+                elements: vec![],
+                handle: "fn:test".to_string(),
+                element_type: CodeElementType::Function,
+                visibility: Visibility::Public,
+                signature: "fn test()".to_string(),
+                body: Some("{}".to_string()),
+                dependencies: vec![],
+                metadata: UnorderedMap::new(),
+            }],
+        };
+
+        // 2. Persistance (Écriture)
+        ModuleWeaver::persist_stage(&manager, &staged, "agent_smith")
+            .await
+            .expect("La persistance du contrat a échoué");
+
+        // 3. Chargement (Lecture)
+        let loaded = ModuleWeaver::load_stage(&manager, "test_weaver")
+            .await
+            .expect("Le chargement du contrat a échoué");
+
+        // 4. Assertions strictes
+        assert_eq!(loaded.module_name, staged.module_name);
+        assert_eq!(loaded.target_elements.len(), 1);
+        assert_eq!(loaded.target_elements[0].handle, "fn:test");
+
+        Ok(())
+    }
+
+    #[async_test]
+    async fn test_load_non_existent_stage_fails() -> RaiseResult<()> {
+        let sandbox = DbSandbox::new().await?;
+        let config = AppConfig::get();
+
+        let manager = CollectionsManager::new(
+            &sandbox.storage,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+
+        let _ = manager
+            .create_collection("staged_contracts", &generic_schema)
+            .await;
+
+        // Tentative de chargement d'un module qui n'existe pas en passant le manager
+        let result = ModuleWeaver::load_stage(&manager, "ghost_module").await;
+
+        // Validation que notre façade renvoie bien l'erreur structurée
+        match result {
+            Err(AppError::Structured(err)) => {
+                assert_eq!(err.code, "ERR_STAGE_NOT_FOUND");
+            }
+            _ => panic!("Le chargement aurait dû échouer avec ERR_STAGE_NOT_FOUND"),
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_module_creation_and_serialization() {
