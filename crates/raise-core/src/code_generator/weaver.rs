@@ -32,25 +32,48 @@ impl Weavable for CodeElement {
             Visibility::Protected => "/* protected */ ", // Sémantique MBSE, commentaire en Rust
             Visibility::Private => "",
         };
+        //  Vérification pour éviter la duplication du mot-clé
+        let clean_sig = self.signature.trim_start();
+        let final_vis = if clean_sig.starts_with("pub ")
+            || clean_sig.starts_with("pub(")
+            || clean_sig.starts_with("/* protected */")
+        {
+            "" // La signature embarque déjà sa propre visibilité
+        } else {
+            vis_str
+        };
 
         // 5. Construction du bloc de code selon le type
         match self.element_type {
             CodeElementType::Function | CodeElementType::TestFunction => {
                 let body = self.body.as_deref().unwrap_or("{}");
-                buffer.push_str(&format!("{}{}\n{}", vis_str, self.signature, body));
+                buffer.push_str(&format!("{}{}\n{}", final_vis, self.signature, body));
             }
             CodeElementType::ImplBlock => {
                 let body = self.body.as_deref().unwrap_or(" {}");
                 buffer.push_str(&format!("{} {}", self.signature, body));
             }
-            CodeElementType::ImportBlock | CodeElementType::TestModule => {
-                // Pas de modificateur de visibilité, on injecte le contenu brut (ex: les `use`)
+            CodeElementType::ImportBlock => {
                 let body = self.body.as_deref().unwrap_or("");
                 buffer.push_str(&format!("{}\n", body));
             }
+            CodeElementType::TestModule => {
+                let body = self.body.as_deref().unwrap_or("{}");
+                if self.signature.is_empty() {
+                    buffer.push_str(&format!("{}\n", body));
+                } else {
+                    buffer.push_str(&format!("{} {} {}", final_vis, self.signature, body));
+                }
+            }
             _ => {
-                // Struct, Enum, Trait, Constant, etc.
-                buffer.push_str(&format!("{}{}", vis_str, self.signature));
+                if let Some(ref body_content) = self.body {
+                    buffer.push_str(&format!(
+                        "{}{}\n{}",
+                        final_vis, self.signature, body_content
+                    ));
+                } else {
+                    buffer.push_str(&format!("{}{}", final_vis, self.signature));
+                }
             }
         }
 

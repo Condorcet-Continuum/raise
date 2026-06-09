@@ -311,22 +311,61 @@ impl Reconciler {
         // =====================================================================
 
         let mut elements = Vec::new();
+        // 🎯 ÉTAPE 1 : Génération du bloc d'imports pour le Weaver
+        if !file_dependencies.is_empty() {
+            let imports_body = file_dependencies
+                .iter()
+                .map(|d| format!("use {};", d))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            elements.push(CodeElement {
+                module_id: Some(module_id.clone()),
+                parent_id: None, // C'est un élément racine du fichier
+                element_type: CodeElementType::ImportBlock,
+                handle: "sys:imports".to_string(), // Handle système réservé
+                visibility: Visibility::Private,
+                attributes: vec![],
+                docs: None,
+                signature: "".to_string(),
+                body: Some(imports_body),
+                elements: vec![],
+                dependencies: vec![],
+                metadata: UnorderedMap::new(),
+            });
+        }
         let mut i = 0;
+        // 🎯 ÉTAPE 2 : Suivi de la topologie spatiale (Parent/Enfant)
+        let mut current_brace_depth: usize = 0;
+        let mut active_parents: Vec<(usize, String)> = Vec::new();
 
         while i < tokens.len() {
+            // 1. Suivi strict de la profondeur lexicale
+            if let Token::Symbol('{') = &tokens[i] {
+                current_brace_depth += 1;
+            } else if let Token::Symbol('}') = &tokens[i] {
+                current_brace_depth = current_brace_depth.saturating_sub(1);
+                // Si on remonte au-dessus du niveau du parent actuel, on dépile (fin de scope)
+                if let Some(last) = active_parents.last() {
+                    if current_brace_depth < last.0 {
+                        active_parents.pop();
+                    }
+                }
+            }
+
+            // 2. Détection et extraction des éléments
             if let Token::LineComment(comment) = &tokens[i] {
                 if comment.starts_with("// @raise-handle:") {
                     let full_tag = comment.replace("// @raise-handle:", "").trim().to_string();
 
-                    // 🎯 L'ANCRE IMMUABLE : L'ID devient le seul vrai "handle" pour la DB
-                    let handle = if let Some(start) = full_tag.find("[id: ") {
-                        if let Some(end) = full_tag[start..].find(']') {
-                            full_tag[start + 5..start + end].to_string()
-                        } else {
-                            full_tag
-                        }
+                    // 🎯 RÈGLE D'ARCHITECTURE : Les UUID/ID sont pour la DB.
+                    // On extrait exclusivement le vrai handle sémantique (ex: impl:IndustrialPhase)
+                    let handle = if let Some(start) = full_tag.find(" [id:") {
+                        full_tag[..start].trim().to_string()
+                    } else if let Some(start) = full_tag.find("[id:") {
+                        full_tag[..start].trim().to_string()
                     } else {
-                        full_tag
+                        full_tag.clone()
                     };
 
                     i += 1; // Pointe sur le début de l'élément (docs, attributs ou signature)
@@ -334,6 +373,24 @@ impl Reconciler {
                     // 🎯 FIX : On extrait l'élément mutablement pour pouvoir y injecter nos dépendances
                     let (mut element, _next_index) =
                         Self::extract_element(&handle, &tokens, i, module_id.clone())?;
+
+                    // 🎯 INJECTION DE LA TOPOLOGIE : Assignation du parent sémantique
+                    if let Some(parent) = active_parents.last() {
+                        element.parent_id = Some(parent.1.clone());
+                        // 🛡️ PARADE ANTI-RÉÉCRITURE : On sauvegarde le handle textuel pur dans les métadonnées.
+                        // Ainsi, si JsonDb convertit 'parent_id' en UUID interne, on aura toujours cette ancre de secours.
+                        element
+                            .metadata
+                            .insert("semantic_parent_handle".to_string(), parent.1.clone());
+                    }
+
+                    // 🎯 Si l'élément est un conteneur physique, il devient le parent actif
+                    if element.element_type == CodeElementType::ImplBlock
+                        || element.element_type == CodeElementType::TestModule
+                    {
+                        // On enregistre la profondeur actuelle + 1 (l'intérieur du bloc)
+                        active_parents.push((current_brace_depth + 1, handle.clone()));
+                    }
 
                     // 💉 INJECTION DES DÉPENDANCES
                     // Le composant hérite des imports de niveau module pour son contexte IA
@@ -344,7 +401,13 @@ impl Reconciler {
                     }
 
                     // Garantie absolue que le graphe relationnel natif est vierge à l'extraction
-                    element.dependencies.clear();
+                    // element.dependencies.clear();
+
+                    // 🎯 CHRONOLOGIE : Mémoriser la position physique exacte du code source
+                    let seq_index = elements.len().to_string();
+                    element
+                        .metadata
+                        .insert("physical_index".to_string(), seq_index);
 
                     elements.push(element);
 
@@ -463,18 +526,21 @@ impl Reconciler {
             CodeElementType::Struct
         } else if signature.contains("trait ") {
             CodeElementType::Trait
-        } else if signature.contains("impl ") {
+        } else if signature.contains("impl ") || signature.contains("impl<") {
             CodeElementType::ImplBlock
         } else if signature.contains("enum ") {
             CodeElementType::Enum
         } else if signature.contains("macro_rules! ") {
             CodeElementType::Macro
+        } else if signature.contains("mod ") {
+            CodeElementType::TestModule
         } else {
             CodeElementType::Function
         };
 
         // 3. Extraction du Corps (Body)
         let mut body = None;
+        let mut internal_dependencies = Vec::new();
         if has_body {
             if let Some(mut start) = body_start_index {
                 let mut brace_count = 0;
@@ -483,6 +549,32 @@ impl Reconciler {
                 while start < tokens.len() {
                     let t = &tokens[start];
 
+                    // 🎯 INJECTION : Capture des dépendances internes au bloc
+                    // On ne capture que les imports de premier niveau (brace_count == 1)
+                    if let Token::Ident(kw) = t {
+                        if *kw == "use" && brace_count == 1 {
+                            let mut dep_str = String::new();
+                            let mut scan_idx = start + 1;
+                            while scan_idx < tokens.len() {
+                                match &tokens[scan_idx] {
+                                    Token::Symbol(';') => break,
+                                    Token::Symbol(c) => dep_str.push(*c),
+                                    Token::Whitespace(_) => dep_str.push(' '),
+                                    tok => dep_str.push_str(tok.as_str()),
+                                }
+                                scan_idx += 1;
+                            }
+                            // Nettoyage esthétique de la chaîne d'import
+                            let clean_dep = dep_str
+                                .trim()
+                                .replace(" :: ", "::")
+                                .replace(":: ", "::")
+                                .replace(" ::", "::");
+                            internal_dependencies.push(clean_dep);
+                        }
+                    }
+
+                    // Reconstruction du corps brut
                     if let Token::Symbol(sym) = t {
                         body_str.push(*sym);
                         if *sym == '{' {
@@ -513,7 +605,7 @@ impl Reconciler {
             }
         }
 
-        let element = CodeElement {
+        let mut element = CodeElement {
             module_id: Some(module_id),
             parent_id: None,
             element_type,
@@ -531,6 +623,13 @@ impl Reconciler {
             dependencies: Vec::new(),
             metadata: UnorderedMap::new(),
         };
+
+        if !internal_dependencies.is_empty() {
+            element.metadata.insert(
+                "internal_imports".to_string(),
+                internal_dependencies.join(","),
+            );
+        }
 
         Ok((element, i))
     }
@@ -652,12 +751,15 @@ impl Reconciler {
                     element_start_idx = i + 1;
                 }
                 Token::Ident(kw) => {
+                    let mut just_set_test_scope = false; // 🎯 INJECTION : Marqueur d'état immédiat
+
                     if *kw == "mod" {
                         let mut k = i + 1;
                         while k < tokens.len() {
                             match &tokens[k] {
                                 Token::Ident(n) if *n == "tests" => {
                                     test_scope_depth = Some(brace_depth);
+                                    just_set_test_scope = true;
                                     break;
                                 }
                                 Token::Whitespace(_) => k += 1,
@@ -669,6 +771,10 @@ impl Reconciler {
                     let is_target = match *kw {
                         "struct" | "enum" | "impl" | "trait" | "type" | "macro_rules" => {
                             brace_depth == 0 && test_scope_depth.is_none()
+                        }
+                        "mod" => {
+                            // 🎯 FIX : On cible le 'mod' même si on vient de basculer en mode test
+                            brace_depth == 0 && (test_scope_depth.is_none() || just_set_test_scope)
                         }
                         "fn" => {
                             brace_depth <= 1
@@ -728,6 +834,7 @@ impl Reconciler {
                                 "trait" => "trait",
                                 "type" => "type",
                                 "macro_rules" => "macro",
+                                "mod" => "mod",
                                 _ => "unknown",
                             };
 
@@ -745,28 +852,15 @@ impl Reconciler {
                                 }
                             }
 
-                            let id_marker = if let Some(existing_c) = found_existing_tag {
-                                if let Some(start) = existing_c.find("[id: ") {
-                                    if let Some(end) = existing_c[start..].find(']') {
-                                        existing_c[start..start + end + 1].to_string()
-                                    } else {
-                                        format!("[id: {}]", &UniqueId::new_v4().to_string()[0..8])
-                                    }
-                                } else {
-                                    format!("[id: {}]", &UniqueId::new_v4().to_string()[0..8])
-                                }
-                            } else {
-                                format!("[id: {}]", &UniqueId::new_v4().to_string()[0..8])
-                            };
-
                             let expected_tag_content =
-                                format!("// @raise-handle: {}:{} {}", tag_type, name, id_marker);
+                                format!("// @raise-handle: {}:{}", tag_type, name);
 
                             if let Some(existing_c) = found_existing_tag {
                                 let offset =
                                     (existing_c.as_ptr() as usize) - (content.as_ptr() as usize);
                                 used_tags.insert(offset);
 
+                                // Si l'ancien tag (avec ou sans ID) est différent du nouveau tag pur, on le remplace.
                                 if existing_c != expected_tag_content {
                                     edits.push((offset, existing_c.len(), expected_tag_content));
                                 }
@@ -1011,5 +1105,136 @@ fn broken() {
         } else {
             panic!("Le type d'erreur n'est pas AppError::Structured");
         }
+    }
+
+    #[test]
+    fn test_reconciler_extracts_test_module_with_attributes() {
+        let code = r#"
+// @raise-handle: mod:tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_test() {
+        assert_eq!(1, 1);
+    }
+}
+"#;
+        let elements = Reconciler::parse_content(code, "test_module_id".to_string()).unwrap();
+
+        // On s'attend à récupérer exactement un élément principal
+        assert_eq!(elements.len(), 1);
+        let el = &elements[0];
+
+        // Vérification de la signature sémantique et du typage
+        assert_eq!(el.handle, "mod:tests");
+        assert_eq!(el.element_type, CodeElementType::TestModule);
+
+        // Vérification cruciale : l'attribut de compilation ne doit pas être perdu
+        assert!(el.attributes.contains(&"#[cfg(test)]".to_string()));
+
+        // Vérification du corps extrait
+        let body = el.body.as_deref().unwrap();
+        assert!(body.contains("fn internal_test()"));
+        assert!(body.contains("use super::*;"));
+    }
+
+    #[async_test]
+    async fn test_auto_tagger_injects_handle_on_test_module() {
+        // Simulation d'un fichier physique sans ancre sur son module de test
+        let code = r#"
+fn core_logic() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_core() {}
+}
+"#;
+        // 🎯 FIX : Utilisation stricte de la façade fs et maintien du Guard TempDir
+        let temp_dir_guard =
+            crate::utils::io::fs::tempdir().expect("Impossible de créer le tempdir");
+        let sandbox_dir = temp_dir_guard.path().join("raise_test_tagger");
+        crate::utils::io::fs::ensure_dir_async(&sandbox_dir)
+            .await
+            .unwrap();
+
+        let path = sandbox_dir.join("test_file.rs");
+        crate::utils::io::fs::write_async(&path, code)
+            .await
+            .unwrap();
+
+        let mock_module_doc = crate::utils::data::json::json_value!({
+            "_id": "mod_test_id",
+            "handle": "mod_test",
+            "path": path.to_string_lossy().to_string()
+        });
+
+        // Exécution du Garbage Collector / Auto-tagger
+        let edits_count = Reconciler::auto_tag_module(&mock_module_doc).await.unwrap();
+
+        // On s'attend à au moins une modification (injection du handle et du cartouche)
+        assert!(edits_count > 0);
+
+        let modified_code = crate::utils::io::fs::read_to_string_async(&path)
+            .await
+            .unwrap();
+
+        // Vérification de la bonne injection de l'ancre juste au-dessus du cfg(test)
+        assert!(modified_code.contains("// @raise-handle: mod:tests\n#[cfg(test)]\nmod tests {"));
+
+        // Nettoyage implicite garanti par le trait Drop de temp_dir_guard à la fin de la portée
+    }
+
+    #[test]
+    fn test_reconciler_extracts_internal_dependencies() {
+        let code = r#"
+// @raise-handle: mod:tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::prelude::*;
+    use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn some_test() {}
+}
+"#;
+        let elements = Reconciler::parse_content(code, "test_module_id".to_string()).unwrap();
+
+        assert_eq!(
+            elements.len(),
+            1,
+            "Le module parent doit être extrait comme un seul élément unifié"
+        );
+        let el = &elements[0];
+
+        assert_eq!(el.handle, "mod:tests");
+
+        // Vérification de la remontée des dépendances dans les MÉTADONNÉES
+        let imports = el
+            .metadata
+            .get("internal_imports")
+            .expect("Les métadonnées 'internal_imports' sont absentes");
+
+        assert!(
+            imports.contains("super::*"),
+            "La dépendance relative 'super::*' n'a pas été extraite"
+        );
+        assert!(
+            imports.contains("crate::utils::prelude::*"),
+            "La dépendance absolue n'a pas été extraite"
+        );
+        assert!(
+            imports.contains("std::collections::{HashMap, HashSet}"),
+            "La dépendance destructurée n'a pas été correctement formatée"
+        );
+
+        // Vérification que le graphe strict n'a pas été pollué
+        assert!(
+            el.dependencies.is_empty(),
+            "Le vecteur de dépendances sémantiques doit rester vierge"
+        );
     }
 }

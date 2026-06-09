@@ -1,8 +1,8 @@
 // @raise-cartouche-start
 // ==============================================================================
-// 🧬 MODULE SÉMANTIQUE : mod_kernel_environment_rs [id: 9f57cb7d-9100-44fa-b64b-7921b7a05525]
+// 🧬 MODULE SÉMANTIQUE : mod_kernel_environment_rs [id: cbfaeb2d-8fc5-4eea-95b6-e602b0fcf2b9]
 // 📁 CHEMIN PHYSIQUE   : crates/raise-core/src/kernel/environment.rs
-// 📅 SYNCHRONISATION   : 2026-06-05 16:54
+// 📅 SYNCHRONISATION   : 2026-06-09 08:16
 // 🤖 IA NOTE : Composant du Jumeau Numérique RAISE (Architecture Zéro Dette).
 // ⚠️ AUTO-GÉNÉRÉ : Les ancres sémantiques (@raise-handle) sont gérées par le CLI.
 // ==============================================================================
@@ -22,7 +22,7 @@ use crate::{raise_error, user_info, user_success, user_warn};
 // 🧬 TAXONOMIE INDUSTRIELLE (Les 8 Partitions Physiques)
 // ==============================================================================
 
-// @raise-handle: enum:IndustrialPhase [id: 74952fa4]
+// @raise-handle: enum:IndustrialPhase
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndustrialPhase {
     System,
@@ -35,7 +35,7 @@ pub enum IndustrialPhase {
     Operation,
 }
 
-// @raise-handle: impl:IndustrialPhase [id: 919e58a6]
+// @raise-handle: impl:IndustrialPhase
 impl IndustrialPhase {
     pub const ALL: [IndustrialPhase; 8] = [
         Self::System,
@@ -49,9 +49,9 @@ impl IndustrialPhase {
     ];
 }
 
-// @raise-handle: impl:IndustrialPhase_FmtDisplay [id: d2fd2c63]
+// @raise-handle: impl:IndustrialPhase_FmtDisplay
 impl FmtDisplay for IndustrialPhase {
-    // @raise-handle: fn:fmt [id: bfacc3eb]
+    // @raise-handle: fn:fmt
     fn fmt(&self, f: &mut FmtCursor<'_>) -> FmtResult {
         let name = match self {
             Self::System => "system",
@@ -71,15 +71,15 @@ impl FmtDisplay for IndustrialPhase {
 // 🌍 GESTIONNAIRE DE NŒUD (L'Orchestrateur de Boot)
 // ==============================================================================
 
-// @raise-handle: struct:NodeEnvironment [id: 0e34a2ba]
+// @raise-handle: struct:NodeEnvironment
 pub struct NodeEnvironment {
     pub storage: SharedRef<StorageEngine>,
     pub local_domain: String,
 }
 
-// @raise-handle: impl:NodeEnvironment [id: 5f751081]
+// @raise-handle: impl:NodeEnvironment
 impl NodeEnvironment {
-    // @raise-handle: fn:boot_physical_node [id: a7a78d9c]
+    // @raise-handle: fn:boot_physical_node
     pub async fn boot_physical_node() -> RaiseResult<(Self, bool)> {
         let config = AppConfig::get();
 
@@ -155,7 +155,7 @@ impl NodeEnvironment {
         ))
     }
 
-    // @raise-handle: fn:ensure_partition [id: c0ad67a8]
+    // @raise-handle: fn:ensure_partition
     async fn ensure_partition(
         storage: &SharedRef<StorageEngine>,
         domain: &str,
@@ -246,7 +246,7 @@ impl NodeEnvironment {
 // 🚀 MOTEUR D'ENSEMENCEMENT (Le "Seed Script" embarqué)
 // ==============================================================================
 
-// @raise-handle: struct:SystemBootstrapper [id: 4890fb0f]
+// @raise-handle: struct:SystemBootstrapper
 pub struct SystemBootstrapper<'a> {
     manager: CollectionsManager<'a>,
     config: &'static AppConfig,
@@ -254,9 +254,9 @@ pub struct SystemBootstrapper<'a> {
     db: String,
 }
 
-// @raise-handle: impl:SystemBootstrapper [id: 4e326727]
+// @raise-handle: impl:SystemBootstrapper
 impl<'a> SystemBootstrapper<'a> {
-    // @raise-handle: fn:new [id: 2669bd20]
+    // @raise-handle: fn:new
     pub fn new(manager: CollectionsManager<'a>, domain: String, db: String) -> Self {
         Self {
             manager,
@@ -266,7 +266,7 @@ impl<'a> SystemBootstrapper<'a> {
         }
     }
 
-    // @raise-handle: fn:db_path [id: c3635f49]
+    // @raise-handle: fn:db_path
     fn db_path(&self) -> RaiseResult<PathBuf> {
         let root = match self.config.get_path("PATH_RAISE_DOMAIN") {
             Some(p) => p,
@@ -278,7 +278,7 @@ impl<'a> SystemBootstrapper<'a> {
         Ok(root.join(&self.domain).join(&self.db))
     }
 
-    // @raise-handle: fn:extract_operation_documents [id: 8ae176f5]
+    // @raise-handle: fn:extract_operation_documents
     fn extract_operation_documents(raw: JsonValue) -> Vec<JsonValue> {
         let mut docs = Vec::new();
         if let Some(arr) = raw.as_array() {
@@ -312,7 +312,7 @@ impl<'a> SystemBootstrapper<'a> {
     }
 
     // 🎯 Abstraction statique pour le réancrage universel inter-domaines
-    // @raise-handle: fn:reanchor_node [id: 6d6f535c]
+    // @raise-handle: fn:reanchor_node
     pub fn reanchor_node(doc: &mut JsonValue, domain: &str, db: &str) {
         let local_ontology = format!("db://{}/{}/ontologies/", domain, db);
         let local_prefix = format!("db://{}/{}/", domain, db);
@@ -365,12 +365,12 @@ impl<'a> SystemBootstrapper<'a> {
         }
     }
 
-    // @raise-handle: fn:reanchor_semantic_node [id: 023f9266]
+    // @raise-handle: fn:reanchor_semantic_node
     fn reanchor_semantic_node(&self, doc: &mut JsonValue) {
         Self::reanchor_node(doc, &self.domain, &self.db);
     }
 
-    // @raise-handle: fn:execute_if_needed [id: 77beaedb]
+    // @raise-handle: fn:execute_if_needed
     pub async fn execute_if_needed(&self) -> RaiseResult<bool> {
         let db_path = match self.db_path() {
             Ok(p) => p,
@@ -469,7 +469,7 @@ impl<'a> SystemBootstrapper<'a> {
     // =========================================================================
     // 🎯 ÉTAPES 1 & 2 : Importation Cross-Domain et Émancipation Native
     // =========================================================================
-    // @raise-handle: fn:step_1_and_2_native_bootstrap [id: 1cb8b587]
+    // @raise-handle: fn:step_1_and_2_native_bootstrap
     async fn step_1_and_2_native_bootstrap(&self) -> RaiseResult<()> {
         let asset_domain =
             RuntimeEnv::var("RAISE_ASSET_DOMAIN").unwrap_or_else(|_| "_system".to_string());
@@ -675,7 +675,7 @@ impl<'a> SystemBootstrapper<'a> {
     // =========================================================================
     // 🎯 ÉTAPE 3 : Alignement strict sur le CLI (Importation des Ontologies)
     // =========================================================================
-    // @raise-handle: fn:step_3_import_and_register_ontologies [id: 9483a3e8]
+    // @raise-handle: fn:step_3_import_and_register_ontologies
     async fn step_3_import_and_register_ontologies(&self) -> RaiseResult<()> {
         let factory_path = match self.config.get_path("PATH_RAISE_ASSET") {
             Some(p) => p,
@@ -828,7 +828,7 @@ impl<'a> SystemBootstrapper<'a> {
         Ok(())
     }
 
-    // @raise-handle: fn:step_4_import_locales [id: 57737955]
+    // @raise-handle: fn:step_4_import_locales
     async fn step_4_import_locales(&self) -> RaiseResult<()> {
         let factory_path = match self.config.get_path("PATH_RAISE_ASSET") {
             Some(p) => p,
@@ -880,7 +880,7 @@ impl<'a> SystemBootstrapper<'a> {
         Ok(())
     }
 
-    // @raise-handle: fn:step_5_import_seeds [id: 429f4114]
+    // @raise-handle: fn:step_5_import_seeds
     async fn step_5_import_seeds(&self) -> RaiseResult<()> {
         let factory_path = match self.config.get_path("PATH_RAISE_ASSET") {
             Some(p) => p,
@@ -919,7 +919,7 @@ impl<'a> SystemBootstrapper<'a> {
     }
 
     // 🚀 Fonction universelle d'ingestion de seeds (partagée entre master et partitions physiques)
-    // @raise-handle: fn:apply_seeds_to_db [id: b0de23c5]
+    // @raise-handle: fn:apply_seeds_to_db
     pub async fn apply_seeds_to_db(
         manager: &CollectionsManager<'_>,
         domain: &str,
@@ -992,7 +992,7 @@ impl<'a> SystemBootstrapper<'a> {
         Ok(())
     }
 
-    // @raise-handle: fn:apply_seeds_from_dir [id: 118374da]
+    // @raise-handle: fn:apply_seeds_from_dir
     async fn apply_seeds_from_dir(&self, seeds_dir: &Path) -> RaiseResult<()> {
         Self::apply_seeds_to_db(&self.manager, &self.domain, &self.db, seeds_dir).await
     }
@@ -1002,20 +1002,21 @@ impl<'a> SystemBootstrapper<'a> {
 // 🧪 TESTS UNITAIRES
 // ==============================================================================
 
+// @raise-handle: mod:tests
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::utils::core::async_test;
     use crate::utils::testing::mock::DbSandbox;
 
-    // @raise-handle: test:test_industrial_phase_taxonomy [id: c9c7aea0]
+    // @raise-handle: test:test_industrial_phase_taxonomy
     #[test]
     fn test_industrial_phase_taxonomy() {
         assert_eq!(IndustrialPhase::System.to_string(), "system");
         assert_eq!(IndustrialPhase::Raise.to_string(), "raise");
     }
 
-    // @raise-handle: test:test_ensure_partition_idempotency [id: 14b8f180]
+    // @raise-handle: test:test_ensure_partition_idempotency
     #[async_test]
     #[serial_test::serial]
     async fn test_ensure_partition_idempotency() -> RaiseResult<()> {
@@ -1032,7 +1033,7 @@ mod tests {
         Ok(())
     }
 
-    // @raise-handle: test:test_bootstrapper_early_exit_zero_debt [id: 1f12a181]
+    // @raise-handle: test:test_bootstrapper_early_exit_zero_debt
     #[async_test]
     #[serial_test::serial]
     async fn test_bootstrapper_early_exit_zero_debt() -> RaiseResult<()> {

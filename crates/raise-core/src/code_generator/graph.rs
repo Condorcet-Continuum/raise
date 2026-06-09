@@ -16,18 +16,23 @@ pub fn sort_elements_topologically(elements: Vec<CodeElement>) -> RaiseResult<Ve
     let mut visited = UniqueSet::new(); // Éléments totalement traités
     let mut visiting = UniqueSet::new(); // Éléments en cours (pour détection de cycle)
 
+    // 🎯 CORRECTION DÉFINITIVE : Sauvegarde de la séquence physique d'origine.
+    // On extrait la liste exacte des handles DANS L'ORDRE où le parseur les a lus.
+    // Cela garantit que si deux éléments n'ont pas de dépendance stricte,
+    // l'algorithme respectera naturellement l'ordre d'écriture de l'ingénieur humain.
+    let sequential_handles: Vec<String> = elements.iter().map(|e| e.handle.clone()).collect();
+
     // Indexation par handle pour un accès rapide (O(1)) via la façade RAISE
     let mut elements_map: UnorderedMap<String, CodeElement> = elements
         .into_iter()
         .map(|e| (e.handle.clone(), e))
         .collect();
 
-    let handles: Vec<String> = elements_map.keys().cloned().collect();
-
     // Notre pile d'appels explicite allouée sur le tas
     let mut stack = Vec::new();
 
-    for root_handle in handles {
+    // 🎯 On itère sur la séquence physique, et non plus sur les clés hachées de la Map
+    for root_handle in sequential_handles {
         if visited.contains(&root_handle) {
             continue; // Déjà traité par une autre branche
         }
@@ -43,10 +48,10 @@ pub fn sort_elements_topologically(elements: Vec<CodeElement>) -> RaiseResult<Ve
 
                     // 1. Détection de cycle (Ligne rouge sémantique)
                     if visiting.contains(&handle) {
-                        raise_error!(
+                        crate::raise_error!(
                             "ERR_CODEGEN_CIRCULAR_DEPENDENCY",
                             error = format!("Cycle détecté impliquant l'élément : {}", handle),
-                            context = json_value!({ "handle": handle })
+                            context = crate::utils::data::json::json_value!({ "handle": handle })
                         );
                     }
 
@@ -54,13 +59,11 @@ pub fn sort_elements_topologically(elements: Vec<CodeElement>) -> RaiseResult<Ve
                     visiting.insert(handle.clone());
 
                     // 3. Empiler la phase de retour (Processed) POUR CE NŒUD
-                    // Elle sera dépilée APRES toutes ses dépendances
                     stack.push(DfsState::Processed(handle.clone()));
 
                     // 4. Exploration des dépendances
                     if let Some(element) = elements_map.get(&handle) {
-                        // On utilise .rev() pour préserver l'ordre d'exploration exact
-                        // de l'ancienne version récursive (LIFO : le dernier empilé sera le premier dépilé)
+                        // LIFO : on empile à l'envers pour explorer dans le bon ordre
                         for dep_handle in element.dependencies.iter().rev() {
                             if elements_map.contains_key(dep_handle) {
                                 stack.push(DfsState::Processing(dep_handle.clone()));

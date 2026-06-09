@@ -293,7 +293,7 @@ mod tests {
                 "format_on_save": true,
                 "strict_mode": true,
                 "semantic_routing": {
-                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() },
+                    "software": { "aliases": ["rust", "cpp", "ts", "rs"], "collection": "code_elements", "schema_uri": generic_schema.clone() },
                     "doc": { "aliases": ["md"], "collection": "doc_elements", "schema_uri": generic_schema.clone() }
                 }
             }

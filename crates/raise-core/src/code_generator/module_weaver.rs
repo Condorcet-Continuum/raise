@@ -165,27 +165,92 @@ impl ModuleWeaver {
         let mut output = String::new();
 
         // 1. Bannière de Gouvernance
+        // Utilisation de l'horloge système pour la date de synchronisation
+        let sync_date = crate::utils::core::LocalClock::now()
+            .format("%Y-%m-%d %H:%M")
+            .to_string();
+
+        output.push_str("// @raise-cartouche-start\n");
         output.push_str(
-            "// =========================================================================\n",
+            "// ==============================================================================\n",
         );
-        output.push_str(&format!("// 🌌 RAISE GENERATED MODULE : {}\n", module.name));
-        // 🎯 FIX : On retire module.id qui n'existe plus dans le struct Module
-        output.push_str("// CE FICHIER EST SYNCHRONISÉ AVEC LE JUMEAU NUMÉRIQUE.\n");
+        output.push_str(&format!(
+            "// 🧬 MODULE SÉMANTIQUE : {} [id: généré au runtime]\n",
+            module.name
+        ));
+        output.push_str(&format!(
+            "// 📁 CHEMIN PHYSIQUE   : {}\n",
+            module.path.to_string_lossy()
+        ));
+        output.push_str(&format!("// 📅 SYNCHRONISATION   : {}\n", sync_date));
         output.push_str(
-            "// =========================================================================\n\n",
+            "// 🤖 IA NOTE : Composant du Jumeau Numérique RAISE (Architecture Zéro Dette).\n",
         );
+        output.push_str(
+            "// ⚠️ AUTO-GÉNÉRÉ : Les ancres sémantiques (@raise-handle) sont gérées par le CLI.\n",
+        );
+        output.push_str(
+            "// ==============================================================================\n",
+        );
+        output.push_str("// @raise-cartouche-end\n\n");
+
+        // 🎯 RESTAURATION DE L'ESPACE-TEMPS PHYSIQUE
+        // La base de données JSON a retourné les éléments dans un ordre aléatoire (hachage/uuid).
+        // On les réaligne chronologiquement selon leur index d'ingestion exact.
+        let mut chronologic_elements = module.elements.clone();
+        chronologic_elements.sort_by_key(|e| {
+            e.metadata
+                .get("physical_index")
+                .and_then(|idx| idx.parse::<usize>().ok())
+                .unwrap_or(usize::MAX) // Fallback sécurisé en fin de fichier si absent
+        });
 
         // 🆕 2. Partitionnement des éléments spatiaux (Haut, Milieu, Bas)
         let mut headers = Vec::new();
         let mut tests = Vec::new();
         let mut core_elements = Vec::new();
 
-        for el in module.elements.clone() {
+        let mut encapsulated_handles = Vec::new();
+
+        // ⚠️ TRÈS IMPORTANT : On itère dorénavant sur `chronologic_elements` !
+        for parent in &chronologic_elements {
+            if let Some(body) = &parent.body {
+                for child in &chronologic_elements {
+                    if parent.handle == child.handle {
+                        continue;
+                    }
+
+                    let tag = format!("raise-handle: {}", child.handle);
+                    if body.contains(&format!("{} ", tag))
+                        || body.contains(&format!("{}\n", tag))
+                        || body.ends_with(&tag)
+                        || body.contains(&format!("{} [", tag))
+                    {
+                        encapsulated_handles.push(child.handle.clone());
+                    }
+                }
+            }
+        }
+
+        // ⚠️ TRÈS IMPORTANT : Pareil ici, on boucle sur `chronologic_elements` !
+        for el in chronologic_elements {
+            if encapsulated_handles.contains(&el.handle) {
+                continue;
+            }
+
             match el.element_type {
-                // 🎯 FIX : ModuleHeader est devenu ImportBlock dans l'ontologie
                 CodeElementType::ImportBlock => headers.push(el),
                 CodeElementType::TestModule => tests.push(el),
-                _ => core_elements.push(el),
+                _ => {
+                    if el.handle.starts_with("test:")
+                        || el.element_type == CodeElementType::Function
+                            && el.attributes.iter().any(|a| a.contains("#[test]"))
+                    {
+                        tests.push(el);
+                    } else {
+                        core_elements.push(el);
+                    }
+                }
             }
         }
 
@@ -400,5 +465,54 @@ mod tests {
 
         assert!(header_pos < logic_pos);
         assert!(logic_pos < tests_pos);
+    }
+
+    #[test]
+    fn test_weaver_enforces_test_module_at_bottom() {
+        let mut module = Module::new("core_engine", std::path::PathBuf::from("engine.rs")).unwrap();
+
+        let test_el = CodeElement {
+            module_id: None,
+            parent_id: None,
+            attributes: vec!["#[cfg(test)]".to_string()],
+            docs: None,
+            elements: vec![],
+            handle: "mod:tests".to_string(),
+            element_type: CodeElementType::TestModule,
+            visibility: Visibility::Private,
+            signature: "mod tests".to_string(),
+            body: Some("{ #[test] fn it_works() {} }".to_string()),
+            dependencies: vec![],
+            metadata: UnorderedMap::new(),
+        };
+
+        let logic_el = CodeElement {
+            module_id: None,
+            parent_id: None,
+            attributes: vec![],
+            docs: None,
+            elements: vec![],
+            handle: "fn:execute".to_string(),
+            element_type: CodeElementType::Function,
+            visibility: Visibility::Public,
+            signature: "pub fn execute()".to_string(),
+            body: Some("{ println!(\"RAISE Running\"); }".to_string()),
+            dependencies: vec![],
+            metadata: UnorderedMap::new(),
+        };
+
+        module.elements = vec![test_el, logic_el];
+
+        let result = ModuleWeaver::weave_to_string(&module).expect("Le tissage a échoué");
+
+        // 🎯 FIX : Utilisation stricte des ancres sémantiques pour la vérification spatiale
+        let execute_pos = result.find("fn:execute").expect("Handle logique absent");
+        let tests_pos = result.find("mod:tests").expect("Handle de test absent");
+
+        // Vérification spatiale : l'ancre du test DOIT se trouver après l'ancre de la logique métier
+        assert!(
+            execute_pos < tests_pos,
+            "Le module de test n'a pas été relégué en bas de fichier"
+        );
     }
 }
