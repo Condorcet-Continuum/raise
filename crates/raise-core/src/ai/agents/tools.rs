@@ -155,11 +155,7 @@ pub async fn query_knowledge_graph(
     let target_domain = &config.mount_points.system.domain;
     let target_db = &config.mount_points.system.db;
 
-    let tool = QueryDbTool::new(
-        ctx.db.clone(),
-        target_domain.to_string(),
-        target_db.to_string(),
-    );
+    let tool = QueryDbTool::new(ctx.db.clone(), target_domain, target_db).await?;
     let call = McpToolCall::new(
         "query_db",
         json_value!({ "reference": reference, "as_rdf": as_rdf }),
@@ -203,11 +199,7 @@ pub async fn load_session(ctx: &AgentContext) -> RaiseResult<AgentSession> {
         .replace("_", "-")
         .to_lowercase();
 
-    let tool = QueryDbTool::new(
-        ctx.db.clone(),
-        target_domain.to_string(),
-        target_db.to_string(),
-    );
+    let tool = QueryDbTool::new(ctx.db.clone(), target_domain, target_db).await?;
     let call = McpToolCall::new(
         "query_db",
         json_value!({ "reference": format!("ref:session_agents:handle:{}", handle_slug), "as_rdf": false }),

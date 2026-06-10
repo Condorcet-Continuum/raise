@@ -329,8 +329,8 @@ mod tests {
             .upsert_document(
                 "components",
                 json_value!({
-                    "_id": "ref:components:handle:rag",
-                    "handle": "rag",
+                    "_id": "ref:components:handle:context_rag",
+                    "handle": "context_rag",
                     "name": "RAG Engine"
                 }),
             )
@@ -340,7 +340,7 @@ mod tests {
                 "service_configs",
                 json_value!({
                     "_id": "mock_rag_cfg",
-                    "component_id": "ref:components:handle:rag",
+                    "component_id": "ref:components:handle:context_rag",
                     "service_settings": {
                         "collection_name": "raise_knowledge_base"
                     }

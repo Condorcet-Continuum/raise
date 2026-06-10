@@ -14,6 +14,7 @@ pub mod weaver; // Tissage unitaire des blocs de code
 use self::diff::{DiffAction, DiffEngine};
 use self::models::{Module, StagedModule, TargetLanguage};
 use self::module_weaver::ModuleWeaver;
+use self::reconcilers::json_schema::Reconciler as JsonSchemaReconciler;
 use self::reconcilers::markdown::DocReconciler;
 use self::reconcilers::rust::Reconciler as RustReconciler;
 use crate::json_db::collections::manager::CollectionsManager;
@@ -35,6 +36,7 @@ pub struct CodeGeneratorService {
     pub format_on_save: bool,
     pub strict_mode: bool,
     pub semantic_routing: UnorderedMap<String, SemanticRoute>,
+    pub raw_settings: JsonValue,
 }
 
 impl CodeGeneratorService {
@@ -110,7 +112,38 @@ impl CodeGeneratorService {
             format_on_save,
             strict_mode,
             semantic_routing,
+            raw_settings: settings,
         })
+    }
+
+    // =========================================================================
+    // API PUBLIQUE DE CONFIGURATION (Pour les Outils IA et Agents)
+    // =========================================================================
+
+    /// 🎯 Retourne la configuration brute du moteur codegen.
+    pub fn get_engine_settings(&self) -> &JsonValue {
+        &self.raw_settings
+    }
+
+    /// 🎯 Extrait de manière déterministe le schema_uri pour un domaine (ex: "software", "doc", "rs").
+    pub fn get_schema_uri(&self, domain_or_ext: &str) -> RaiseResult<String> {
+        let (_, _, schema_uri) = self.get_route(domain_or_ext)?;
+        if schema_uri.is_empty() {
+            raise_error!(
+                "ERR_CODEGEN_NO_SCHEMA",
+                error = format!(
+                    "Aucun schema_uri n'est défini pour le domaine ou l'extension '{}'.",
+                    domain_or_ext
+                )
+            );
+        }
+        Ok(schema_uri.to_string())
+    }
+
+    /// 🎯 Extrait la collection de destination (ex: "code_elements").
+    pub fn get_collection_name(&self, domain_or_ext: &str) -> RaiseResult<String> {
+        let (_, collection, _) = self.get_route(domain_or_ext)?;
+        Ok(collection.to_string())
     }
 
     /// Résout dynamiquement la collection et le schéma cible (Fail-Fast)
@@ -277,6 +310,17 @@ impl CodeGeneratorService {
                     })
                     .collect::<Vec<_>>()
             }
+            "schema" => {
+                // Câblage pour que les contrats JSON soient ingérés comme des AST manipulables
+                let els = JsonSchemaReconciler::parse_from_file(path, module_id.clone()).await?;
+                els.into_iter()
+                    .map(|mut el| {
+                        el.metadata
+                            .insert("file_path".to_string(), path_str.to_string());
+                        crate::utils::data::json::serialize_to_value(&el).unwrap()
+                    })
+                    .collect::<Vec<_>>()
+            }
             _ => return Ok(0), // Ignore les ontologies, schémas bruts, etc.
         };
 
@@ -332,7 +376,7 @@ impl CodeGeneratorService {
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         // 🎯 Résolution dynamique, fallback de sécurité sur le code (rs) en cas d'erreur
-        let (_, collection, _) =
+        let (domain, collection, _) =
             self.get_route(extension)
                 .unwrap_or(("software", "code_elements", ""));
 
@@ -342,6 +386,85 @@ impl CodeGeneratorService {
             Err(e) => raise_error!("ERR_CODEGEN_QUERY_FAILED", error = e.to_string()),
         };
 
+        // 🎯 NOUVEAU : TRAITEMENT SPÉCIFIQUE POUR LES SCHÉMAS JSON
+        if domain == "schema" {
+            let mut schemas = Vec::new();
+            for doc in db_result.documents {
+                if let Some(meta) = doc.get("metadata") {
+                    if let Some(fp) = meta.get("file_path").and_then(|v| v.as_str()) {
+                        if fp == path_str {
+                            let el: models::JsonSchemaElement =
+                                match json::deserialize_from_value(doc) {
+                                    Ok(e) => e,
+                                    Err(err) => raise_error!(
+                                        "ERR_CODEGEN_DESERIALIZATION",
+                                        error = err.to_string()
+                                    ),
+                                };
+                            schemas.push(el);
+                        }
+                    }
+                }
+            }
+
+            if schemas.is_empty() {
+                raise_error!(
+                    "ERR_CODEGEN_NO_ELEMENTS_FOUND",
+                    error = "Aucun élément de schéma trouvé en base pour ce fichier.",
+                    context = json_value!({ "path": path_str, "module": module_name, "collection": collection })
+                );
+            }
+
+            let final_path = self.root_path.join(path);
+            let temp_path = final_path.with_extension("tmp");
+
+            if let Some(parent) = temp_path.parent() {
+                let _ = fs::create_dir_all_async(parent).await;
+            }
+
+            // 🎯 FIX CRITIQUE : Décoration et Ré-injection des métadonnées managées par le Jumeau Numérique
+            let mut schema_content = schemas[0].content.clone();
+            if let Some(obj) = schema_content.as_object_mut() {
+                // Restitution de la version de Draft JSON Schema officielle
+                let schema_url = match schemas[0].draft.as_str() {
+                    "2020-12" => "https://json-schema.org/draft/2020-12/schema",
+                    "2019-09" => "https://json-schema.org/draft/2019-09/schema",
+                    "7" => "http://json-schema.org/draft-07/schema#",
+                    "4" => "http://json-schema.org/draft-04/schema#",
+                    _ => "https://json-schema.org/draft/2020-12/schema",
+                };
+                obj.insert("$schema".to_string(), json_value!(schema_url));
+
+                // Restitution de l'URI d'identification sémantique ($id)
+                if let Some(uri) = schemas[0].metadata.get("schema_uri") {
+                    obj.insert("$id".to_string(), json_value!(uri));
+                }
+            }
+
+            let json_str = crate::utils::data::json::serialize_to_string_pretty(&schema_content)
+                .unwrap_or_else(|_| "{}".to_string());
+
+            fs::write_async(&temp_path, &json_str)
+                .await
+                .map_err(|e| build_error!("ERR_SYSTEM_IO", error = e))?;
+
+            crate::user_info!(
+                "MSG_CODEGEN_STAGED",
+                json_value!({ "module": module_name, "temp_path": temp_path.to_string_lossy() })
+            );
+
+            return Ok(StagedModule {
+                handle: format!("stage_{}", module_name),
+                agent_handle: "system".to_string(),
+                contract_status: crate::code_generator::models::ContractStatus::Pending,
+                temp_path,
+                final_path,
+                module_name,
+                target_elements: vec![],
+            });
+        }
+
+        // 🎯 TRAITEMENT STANDARD (Rust, Doc, etc.)
         let mut target_elements = Vec::new();
 
         for doc in db_result.documents {
@@ -434,23 +557,31 @@ impl CodeGeneratorService {
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<PathBuf> {
         let file_exists = staged.final_path.exists();
+        let extension = staged
+            .final_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let (domain, _, _) = self.get_route(extension).unwrap_or(("software", "", ""));
 
-        // 1. Calcul du Diff (Observabilité)
-        if file_exists {
-            let physical_elements = RustReconciler::parse_from_file(
+        // 1. Calcul du Diff (Observabilité) UNIQUEMENT pour le code logiciel
+        if file_exists && domain == "software" {
+            if let Ok(physical_elements) = RustReconciler::parse_from_file(
                 &staged.final_path,
                 format!("ref:modules:handle:{}", staged.module_name),
             )
-            .await?;
-
-            let diffs = DiffEngine::compute_diff(physical_elements, staged.target_elements.clone())
-                .unwrap_or_default();
-            for report in diffs {
-                if report.action == DiffAction::Upsert {
-                    user_info!(
-                        "MSG_CODEGEN_MODIF_INTEGRATED",
-                        json_value!({ "handle": report.handle, "reason": report.reason })
-                    );
+            .await
+            {
+                let diffs =
+                    DiffEngine::compute_diff(physical_elements, staged.target_elements.clone())
+                        .unwrap_or_default();
+                for report in diffs {
+                    if report.action == DiffAction::Upsert {
+                        crate::user_info!(
+                            "MSG_CODEGEN_MODIF_INTEGRATED",
+                            json_value!({ "handle": report.handle, "reason": report.reason })
+                        );
+                    }
                 }
             }
         }
@@ -472,15 +603,17 @@ impl CodeGeneratorService {
         }
         let _ = fs::remove_file_async(&staged.temp_path).await;
 
-        // 3 & 4. Validations strictes de la Toolchain
-        if let Err(e) = self.check_workspace(&staged.module_name).await {
-            Self::rollback(&staged.final_path, &backup_path, file_exists).await;
-            return Err(e);
-        }
+        // 3 & 4. Validations strictes de la Toolchain (UNIQUEMENT POUR LE CODE)
+        if domain == "software" {
+            if let Err(e) = self.check_workspace(&staged.module_name).await {
+                Self::rollback(&staged.final_path, &backup_path, file_exists).await;
+                return Err(e);
+            }
 
-        if let Err(e) = self.test_workspace(&staged.module_name).await {
-            Self::rollback(&staged.final_path, &backup_path, file_exists).await;
-            return Err(e);
+            if let Err(e) = self.test_workspace(&staged.module_name).await {
+                Self::rollback(&staged.final_path, &backup_path, file_exists).await;
+                return Err(e);
+            }
         }
 
         if file_exists {
@@ -500,7 +633,7 @@ impl CodeGeneratorService {
             }
         }
 
-        user_success!(
+        crate::user_success!(
             "MSG_CODEGEN_COMMIT_SUCCESS",
             json_value!({ "module": staged.module_name, "path": staged.final_path.to_string_lossy() })
         );

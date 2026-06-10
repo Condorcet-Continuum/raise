@@ -254,10 +254,11 @@ mod tests {
     use crate::CliContext;
     use raise_core::json_db::collections::manager::CollectionsManager;
     use raise_core::json_db::storage::StorageEngine;
+    use raise_core::kernel::state::RaiseKernelState;
     use raise_core::utils::context::SessionManager;
-    use raise_core::utils::testing::DbSandbox;
+    use raise_core::utils::testing::{AgentDbSandbox, DbSandbox};
 
-    /// 🎯 FIX : Injection stricte dans la partition _system, peu importe le domaine actif
+    /// 🎯 Injection stricte dans la partition _system, peu importe le domaine actif
     async fn inject_mock_codegen_config(storage: &SharedRef<StorageEngine>) -> RaiseResult<()> {
         let config = AppConfig::get();
         let sys_manager = CollectionsManager::new(
@@ -278,8 +279,6 @@ mod tests {
         let _ = sys_manager
             .create_collection("service_configs", &generic_schema)
             .await;
-
-        // 🎯 FIX : Ajout de la collection configs pour le ModelLoader
         let _ = sys_manager
             .create_collection("configs", &generic_schema)
             .await;
@@ -299,7 +298,6 @@ mod tests {
             }
         })).await?;
 
-        // 🎯 FIX : Mapping ontologique pour que le ModelLoader cherche dans la DB "mock_db"
         sys_manager
             .upsert_document(
                 "configs",
@@ -323,12 +321,9 @@ mod tests {
         let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage.clone());
         let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-        // 🎯 FIX : On injecte directement via le moteur de stockage global
         inject_mock_codegen_config(&ctx.storage).await?;
-
         let _ = DbSandbox::mock_db(&manager).await;
 
-        // 🎯 FIX : Le ModelLoader cherche les éléments sources dans la collection "components"
         manager
             .create_collection(
                 "components",
@@ -336,7 +331,6 @@ mod tests {
             )
             .await?;
 
-        // 🎯 FIX : On simule un vrai composant MBSE, pas un morceau de code !
         let mock_component = json_value!({
             "_id": "sa:Processor_A",
             "handle": "Processor_A",
@@ -375,7 +369,6 @@ mod tests {
         let ctx = CliContext::mock(AppConfig::get(), session_mgr, storage.clone());
         let manager = CollectionsManager::new(&ctx.storage, &ctx.active_domain, &ctx.active_db);
 
-        // 1. Injection du contexte système
         inject_mock_codegen_config(&ctx.storage).await?;
         let _ = DbSandbox::mock_db(&manager).await;
 
@@ -397,7 +390,6 @@ mod tests {
         fs::write_sync(&file_path, initial_code)
             .map_err(|e| build_error!("ERR_TEST_FS", error = e))?;
 
-        // 2. Création du nœud module Sémantique qui pointe vers file_path
         manager
             .create_collection(
                 "modules",
@@ -411,12 +403,11 @@ mod tests {
                 &json_value!({
                     "_id": "ref:modules:handle:mod_test_weave",
                     "handle": "mod_test_weave",
-                    "path": file_path.to_string_lossy().to_string()
+                    "path": file_path.to_string_lossy().to_string() // 🎯 Ligne 318 corrigée ici
                 }),
             )
             .await?;
 
-        // 3. Test de l'Ingestion (via le handle du module)
         let args_ingest = CodeGenArgs {
             command: CodeGenCommands::Ingest {
                 module_handle: "mod_test_weave".to_string(),
@@ -424,7 +415,6 @@ mod tests {
         };
         handle(args_ingest, ctx.clone()).await?;
 
-        // 4. Vérification en base de données et simulation d'une modification par l'IA
         let query = raise_core::json_db::query::Query::new("code_elements");
         let db_result = raise_core::json_db::query::QueryEngine::new(&manager)
             .execute_query(query)
@@ -441,7 +431,6 @@ mod tests {
         doc["body"] = json_value!("{ println!(\"RAISE_FORGE_OK\"); }");
         manager.upsert_document("code_elements", doc).await?;
 
-        // 5. Test du Tissage (Weave) - Étape 1 : Stage uniquement
         let args_stage = CodeGenArgs {
             command: CodeGenCommands::Stage {
                 module_handle: "mod_test_weave".to_string(),
@@ -449,7 +438,6 @@ mod tests {
         };
         handle(args_stage, ctx.clone()).await?;
 
-        // 6. Test du Commit (Validation finale)
         let args_commit = CodeGenArgs {
             command: CodeGenCommands::Commit {
                 staged_handle: "mod_test_weave".to_string(),
@@ -457,7 +445,6 @@ mod tests {
         };
         handle(args_commit, ctx.clone()).await?;
 
-        // 7. Validation finale du fichier physique
         let final_code = fs::read_to_string_sync(&file_path)
             .map_err(|e| build_error!("ERR_TEST_FS", error = e))?;
         if !final_code.contains("RAISE_FORGE_OK") {
@@ -466,6 +453,174 @@ mod tests {
                 error = "Le tissage du code a échoué (le commit n'a pas mis à jour le fichier)."
             );
         }
+
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_json_schema_workflow_integrity() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
+
+        // 🎯 Initialisation de sys_manager pour cibler proprement la DB système
+        let sys_manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        let ctx = CliContext {
+            config,
+            session_mgr: SessionManager::new(sandbox.db.clone()),
+            storage: sandbox.db.clone(),
+            kernel: RaiseKernelState {
+                orchestrator: None,
+                native_llm: None,
+                code_generator: None,
+            },
+            active_user: "tester".to_string(),
+            active_domain: config.mount_points.system.domain.clone(),
+            active_db: config.mount_points.system.db.clone(),
+            is_test_mode: true,
+            is_simulation: false,
+            sim_domain: "".to_string(),
+            sim_db: "".to_string(),
+        };
+
+        let schemas_dir = sandbox.domain_root.join("schemas/tools/inputs");
+        fs::ensure_dir_async(&schemas_dir).await?;
+
+        let schema_path = schemas_dir.join("blender_input.schema.json");
+        let initial_schema = r#"{
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "defect_type": { "type": "string" }
+            }
+        }"#;
+        fs::write_async(&schema_path, initial_schema).await?;
+
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            config.mount_points.system.domain, config.mount_points.system.db
+        );
+        sys_manager
+            .create_collection("modules", &generic_schema)
+            .await?;
+        sys_manager
+            .create_collection("json_schema_elements", &generic_schema)
+            .await?;
+        sys_manager
+            .create_collection("staged_contracts", &generic_schema)
+            .await?;
+        sys_manager
+            .create_collection("service_configs", &generic_schema)
+            .await?;
+        sys_manager
+            .create_collection("components", &generic_schema)
+            .await?;
+
+        sys_manager
+            .upsert_document(
+                "components",
+                json_value!({
+                    "_id": "ref:components:handle:codegen_engine",
+                    "handle": "codegen_engine"
+                }),
+            )
+            .await?;
+
+        sys_manager
+            .upsert_document(
+                "service_configs",
+                json_value!({
+                    "_id": "cfg_codegen_engine_master",
+                    "component_id": "ref:components:handle:codegen_engine",
+                    "service_settings": {
+                        "format_on_save": false,
+                        "strict_mode": true,
+                        "semantic_routing": {
+                            "schema": {
+                                "aliases": ["json"],
+                                "collection": "json_schema_elements",
+                                "schema_uri": &generic_schema
+                            }
+                        }
+                    }
+                }),
+            )
+            .await?;
+
+        let module_handle = "mod_schema_blender_input";
+        sys_manager
+            .upsert_document(
+                "modules",
+                json_value!({
+                    "_id": format!("ref:modules:handle:{}", module_handle),
+                    "handle": module_handle,
+                    "path": schema_path.to_string_lossy().to_string(),
+                    "domain": "schema"
+                }),
+            )
+            .await?;
+
+        // 4. ÉTAPE 1 : INGESTION
+        let args_ingest = CodeGenArgs {
+            command: CodeGenCommands::Ingest {
+                module_handle: module_handle.to_string(),
+            },
+        };
+        handle(args_ingest, ctx.clone()).await?;
+
+        let query = raise_core::json_db::query::Query::new("json_schema_elements");
+        let db_result = raise_core::json_db::query::QueryEngine::new(&sys_manager)
+            .execute_query(query)
+            .await?;
+
+        if db_result.documents.is_empty() {
+            raise_error!(
+                "ERR_TEST_EMPTY_DB",
+                error = "L'ingestion du schéma JSON a échoué."
+            );
+        }
+
+        // 5. ÉTAPE 2 : MUTATION IA
+        let mut doc = db_result.documents[0].clone();
+        doc["content"]["properties"]["resolution_x"] =
+            json_value!({ "type": "integer", "minimum": 1 });
+        sys_manager
+            .upsert_document("json_schema_elements", doc)
+            .await?;
+
+        // 6. ÉTAPE 3 : STAGING
+        let args_stage = CodeGenArgs {
+            command: CodeGenCommands::Stage {
+                module_handle: module_handle.to_string(),
+            },
+        };
+        handle(args_stage, ctx.clone()).await?;
+
+        // 7. ÉTAPE 4 : COMMIT
+        let args_commit = CodeGenArgs {
+            command: CodeGenCommands::Commit {
+                staged_handle: module_handle.to_string(),
+            },
+        };
+        handle(args_commit, ctx.clone()).await?;
+
+        // 8. VALIDATION FINALE
+        let final_schema_str = fs::read_to_string_async(&schema_path).await?;
+
+        assert!(
+            final_schema_str.contains("resolution_x"),
+            "Le schéma final ne contient pas la mutation appliquée par l'IA."
+        );
+        assert!(
+            final_schema_str.contains("https://json-schema.org/draft/2020-12/schema"),
+            "Le tisseur a perdu la norme JSON Schema en cours de route."
+        );
 
         Ok(())
     }

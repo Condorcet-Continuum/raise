@@ -45,6 +45,14 @@ pub enum EngineeringIntent {
     Chat,
     #[serde(rename = "unknown")]
     Unknown,
+
+    // 🎯 INJECTION : Nouvelle intention pour l'optimisation ciblée
+    #[serde(rename = "mutate_code", alias = "refactor_code")]
+    MutateCode {
+        module_name: String,
+        target_handle: String,
+        instruction: String,
+    },
 }
 
 fn default_scope() -> String {
@@ -67,9 +75,10 @@ impl EngineeringIntent {
                 _ => "ref:agents:handle:agent_dispatcher", // Fallback
             },
             Self::CreateRelationship { .. } => "ref:agents:handle:agent_system",
-            Self::GenerateCode { .. } => "ref:agents:handle:agent_software",
             Self::VerifyQuality { .. } => "ref:agents:handle:agent_quality",
             Self::Chat | Self::Unknown => "ref:agents:handle:agent_dispatcher",
+            Self::GenerateCode { .. } => "ref:agents:handle:agent_software",
+            Self::MutateCode { .. } => "ref:agents:handle:agent_software",
         }
     }
 
@@ -265,6 +274,18 @@ fn heuristic_fallback(input: &str) -> JsonValue {
     } else {
         ("SA", "Function")
     };
+
+    if lower.contains("optimise")
+        || lower.contains("refactor")
+        || lower.contains("corrige le module")
+    {
+        return json_value!({
+            "intent": "mutate_code",
+            "module_name": "unknown_module", // L'Agent devra le résoudre
+            "target_handle": "unknown_handle",
+            "instruction": input
+        });
+    }
 
     json_value!({ "intent": "create_element", "layer": layer, "element_type": etype, "name": input })
 }

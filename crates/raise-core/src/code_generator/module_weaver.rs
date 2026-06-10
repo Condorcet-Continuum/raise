@@ -1,6 +1,6 @@
 use crate::code_generator::graph::sort_elements_topologically;
 use crate::code_generator::models::{
-    CodeElement, CodeElementType, ContractStatus, Module, StagedModule,
+    CodeElement, CodeElementType, ContractStatus, JsonSchemaElement, Module, StagedModule,
 };
 use crate::code_generator::weaver::Weavable;
 use crate::json_db::collections::manager::CollectionsManager;
@@ -10,8 +10,6 @@ use crate::utils::prelude::*;
 pub struct ModuleWeaver;
 
 impl ModuleWeaver {
-    /// 💾 Persiste le contrat de préparation (StagedModule) directement dans jsondb.
-    /// Utilise le handle unique pour indexer le contrat sémantique de modification.
     pub async fn persist_stage(
         manager: &CollectionsManager<'_>,
         staged: &StagedModule,
@@ -19,7 +17,6 @@ impl ModuleWeaver {
     ) -> RaiseResult<()> {
         let contract_handle = format!("stage_{}", staged.module_name);
 
-        // 🛡️ 1. VÉRIFICATION DE CONCURRENCE (Le Verrou)
         let query = Query::new("staged_contracts");
         let db_result = match QueryEngine::new(manager).execute_query(query).await {
             Ok(res) => res,
@@ -35,7 +32,6 @@ impl ModuleWeaver {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
 
-                // Rejet strict : Le nœud d'architecture est déjà sous mutation
                 raise_error!(
                     "ERR_CODEGEN_CONFLICT",
                     error = format!(
@@ -51,7 +47,11 @@ impl ModuleWeaver {
             }
         }
 
-        // 💾 2. CRÉATION DU CONTRAT (Si la voie est libre)
+        let target_elements_val = match json::serialize_to_value(&staged.target_elements) {
+            Ok(v) => v,
+            Err(e) => raise_error!("ERR_CODEGEN_SERIALIZATION", error = e.to_string()),
+        };
+
         let doc = json_value!({
             "handle": contract_handle,
             "@type": ["raise:StagedContract", "la:LogicalArchitectureUpdate"],
@@ -65,7 +65,7 @@ impl ModuleWeaver {
             "temp_path": staged.temp_path.to_string_lossy().to_string(),
             "final_path": staged.final_path.to_string_lossy().to_string(),
             "contract_status": "pending",
-            "target_elements": json::serialize_to_value(&staged.target_elements).unwrap_or(json_value!([]))
+            "target_elements": target_elements_val
         });
 
         match manager.upsert_document("staged_contracts", doc).await {
@@ -78,8 +78,6 @@ impl ModuleWeaver {
         }
     }
 
-    /// 📤 Charge un contrat existant en statut "pending" depuis jsondb.
-    /// Garantit le fail-fast si aucun contrat n'est actif pour ce module.
     pub async fn load_stage(
         manager: &CollectionsManager<'_>,
         module_name: &str,
@@ -104,12 +102,10 @@ impl ModuleWeaver {
 
         let doc = match found_doc {
             Some(d) => d,
-            None => {
-                raise_error!(
-                    "ERR_STAGE_NOT_FOUND",
-                    context = json_value!({ "module": module_name })
-                )
-            }
+            None => raise_error!(
+                "ERR_STAGE_NOT_FOUND",
+                context = json_value!({ "module": module_name })
+            ),
         };
 
         let temp_path = PathBuf::from(
@@ -160,12 +156,9 @@ impl ModuleWeaver {
             target_elements,
         })
     }
-    /// 🚀 Tisse un module complet. Structure mathématique pure : Tri -> Itération -> Concaténation.
+
     pub fn weave_to_string(module: &Module) -> RaiseResult<String> {
         let mut output = String::new();
-
-        // 1. Bannière de Gouvernance
-        // Utilisation de l'horloge système pour la date de synchronisation
         let sync_date = crate::utils::core::LocalClock::now()
             .format("%Y-%m-%d %H:%M")
             .to_string();
@@ -194,32 +187,25 @@ impl ModuleWeaver {
         );
         output.push_str("// @raise-cartouche-end\n\n");
 
-        // 🎯 RESTAURATION DE L'ESPACE-TEMPS PHYSIQUE
-        // La base de données JSON a retourné les éléments dans un ordre aléatoire (hachage/uuid).
-        // On les réaligne chronologiquement selon leur index d'ingestion exact.
         let mut chronologic_elements = module.elements.clone();
         chronologic_elements.sort_by_key(|e| {
             e.metadata
                 .get("physical_index")
                 .and_then(|idx| idx.parse::<usize>().ok())
-                .unwrap_or(usize::MAX) // Fallback sécurisé en fin de fichier si absent
+                .unwrap_or(usize::MAX)
         });
 
-        // 🆕 2. Partitionnement des éléments spatiaux (Haut, Milieu, Bas)
         let mut headers = Vec::new();
         let mut tests = Vec::new();
         let mut core_elements = Vec::new();
-
         let mut encapsulated_handles = Vec::new();
 
-        // ⚠️ TRÈS IMPORTANT : On itère dorénavant sur `chronologic_elements` !
         for parent in &chronologic_elements {
             if let Some(body) = &parent.body {
                 for child in &chronologic_elements {
                     if parent.handle == child.handle {
                         continue;
                     }
-
                     let tag = format!("raise-handle: {}", child.handle);
                     if body.contains(&format!("{} ", tag))
                         || body.contains(&format!("{}\n", tag))
@@ -232,12 +218,10 @@ impl ModuleWeaver {
             }
         }
 
-        // ⚠️ TRÈS IMPORTANT : Pareil ici, on boucle sur `chronologic_elements` !
         for el in chronologic_elements {
             if encapsulated_handles.contains(&el.handle) {
                 continue;
             }
-
             match el.element_type {
                 CodeElementType::ImportBlock => headers.push(el),
                 CodeElementType::TestModule => tests.push(el),
@@ -254,7 +238,6 @@ impl ModuleWeaver {
             }
         }
 
-        // 3. Tri Topologique uniquement sur le cœur du code (Structs, Enums, Fns...)
         let sorted_core = match sort_elements_topologically(core_elements) {
             Ok(elements) => elements,
             Err(e) => raise_error!(
@@ -264,12 +247,10 @@ impl ModuleWeaver {
             ),
         };
 
-        // 4. Recomposition ordonnée : Headers -> Core -> Tests
         let mut final_sequence = headers;
         final_sequence.extend(sorted_core);
         final_sequence.extend(tests);
 
-        // 5. Tissage Séquentiel
         for element in final_sequence {
             match element.weave() {
                 Ok(element_code) => {
@@ -292,14 +273,47 @@ impl ModuleWeaver {
         Ok(output)
     }
 
-    /// 💾 Persistance Physique
+    // =========================================================================
+    // 🎯 INJECTION ZÉRO DETTE : Tissage des JSON Schema Elements
+    // =========================================================================
+
+    /// 🚀 Tisse un schéma JSON formel à partir du Méta-Modèle.
+    pub fn weave_json_schema(schema_el: &JsonSchemaElement) -> RaiseResult<String> {
+        let mut final_schema = schema_el.content.clone();
+
+        if let Some(obj) = final_schema.as_object_mut() {
+            // Injection du standard formel JSON Schema
+            obj.insert(
+                "$schema".to_string(),
+                json_value!(format!(
+                    "https://json-schema.org/draft/{}/schema",
+                    schema_el.draft
+                )),
+            );
+
+            // L'ID du schéma devient l'URI défini dans le Jumeau Numérique
+            if let Some(uri) = schema_el.metadata.get("schema_uri") {
+                if !obj.contains_key("$id") {
+                    obj.insert("$id".to_string(), json_value!(uri.clone()));
+                }
+            }
+        }
+
+        // Tissage pur : on sérialise formatté pour garantir la lisibilité
+        match json::serialize_to_string_pretty(&final_schema) {
+            Ok(json_str) => Ok(json_str),
+            Err(e) => raise_error!(
+                "ERR_CODEGEN_JSON_WEAVE_FAILED",
+                error = e.to_string(),
+                context = json_value!({"handle": schema_el.handle})
+            ),
+        }
+    }
+
     pub async fn sync_to_disk(module: &Module, _root_path: &Path) -> RaiseResult<PathBuf> {
         let content = Self::weave_to_string(module)?;
-
-        // Calcul du chemin
         let file_path = module.path.clone();
 
-        // Assurer l'existence du dossier parent
         if let Some(parent) = file_path.parent() {
             fs::ensure_dir_async(parent).await?;
         }
@@ -321,16 +335,12 @@ impl ModuleWeaver {
         Ok(file_path)
     }
 
-    /// 🧪 Tisse le module et l'écrit dans le dossier de staging défini par le .env
     pub async fn weave_to_temp_file(module: &Module) -> RaiseResult<PathBuf> {
         let content = Self::weave_to_string(module)?;
-
-        // 🎯 1. Utilisation exclusive de AppConfig et de la Façade OS
         let temp_dir = AppConfig::get()
             .get_path("PATH_TMP_FILE")
             .unwrap_or_else(|| os_temp_dir().join("raise_staging"));
 
-        // 🎯 2. Assurer que le dossier cible existe (Façade FS)
         if let Err(e) = fs::ensure_dir_async(&temp_dir).await {
             raise_error!(
                 "ERR_CODEGEN_TEMP_DIR",
@@ -339,16 +349,15 @@ impl ModuleWeaver {
             );
         }
 
-        // 🎯 3. Génération d'un nom unique via l'horloge sémantique (Façade Core : UtcClock)
         let timestamp = UtcClock::now().timestamp_millis();
         let file_name = module
             .path
             .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unnamed_module".to_string());
+
         let temp_path = temp_dir.join(format!("{}_{}", timestamp, file_name));
 
-        // 🎯 4. Écriture physique asynchrone (Façade FS)
         match fs::write_async(&temp_path, content.as_bytes()).await {
             Ok(_) => Ok(temp_path),
             Err(e) => raise_error!(
@@ -363,20 +372,18 @@ impl ModuleWeaver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_generator::models::{CodeElement, Visibility};
+    use crate::code_generator::models::{CodeElement, CompositionStrategy, SchemaType, Visibility};
 
     #[test]
-    fn test_strict_module_weave_logic() {
-        let mut module = Module::new("core_engine", PathBuf::from("engine.rs")).unwrap();
+    fn test_strict_module_weave_logic() -> RaiseResult<()> {
+        let mut module = Module::new("core_engine", PathBuf::from("engine.rs"))?;
 
         let e1 = CodeElement {
-            // 🎯 NOUVEAUX CHAMPS IA & TOPOLOGIE
             module_id: None,
             parent_id: None,
             attributes: vec![],
             docs: None,
             elements: vec![],
-            // Champs classiques
             handle: "fn:main".to_string(),
             element_type: CodeElementType::Function,
             visibility: Visibility::Public,
@@ -403,14 +410,15 @@ mod tests {
 
         module.elements = vec![e1, e2];
 
-        let result = ModuleWeaver::weave_to_string(&module).expect("Le tissage a échoué");
+        let result = ModuleWeaver::weave_to_string(&module)?;
         assert!(result.contains("fn run()"));
         assert!(result.contains("pub fn main()"));
+        Ok(())
     }
 
     #[test]
-    fn test_strict_spatial_ordering_for_ai() {
-        let mut module = Module::new("test_mod", PathBuf::from("test.rs")).unwrap();
+    fn test_strict_spatial_ordering_for_ai() -> RaiseResult<()> {
+        let mut module = Module::new("test_mod", PathBuf::from("test.rs"))?;
 
         module.elements.push(CodeElement {
             module_id: None,
@@ -457,19 +465,29 @@ mod tests {
             metadata: UnorderedMap::new(),
         });
 
-        let result = ModuleWeaver::weave_to_string(&module).unwrap();
+        let result = ModuleWeaver::weave_to_string(&module)?;
 
-        let header_pos = result.find("sys:header").unwrap();
-        let logic_pos = result.find("fn:logic").unwrap();
-        let tests_pos = result.find("sys:tests").unwrap();
+        let header_pos = match result.find("sys:header") {
+            Some(p) => p,
+            None => raise_error!("ERR_TEST_FAIL", error = "Header introuvable"),
+        };
+        let logic_pos = match result.find("fn:logic") {
+            Some(p) => p,
+            None => raise_error!("ERR_TEST_FAIL", error = "Logic introuvable"),
+        };
+        let tests_pos = match result.find("sys:tests") {
+            Some(p) => p,
+            None => raise_error!("ERR_TEST_FAIL", error = "Tests introuvables"),
+        };
 
         assert!(header_pos < logic_pos);
         assert!(logic_pos < tests_pos);
+        Ok(())
     }
 
     #[test]
-    fn test_weaver_enforces_test_module_at_bottom() {
-        let mut module = Module::new("core_engine", std::path::PathBuf::from("engine.rs")).unwrap();
+    fn test_weaver_enforces_test_module_at_bottom() -> RaiseResult<()> {
+        let mut module = Module::new("core_engine", std::path::PathBuf::from("engine.rs"))?;
 
         let test_el = CodeElement {
             module_id: None,
@@ -503,16 +521,51 @@ mod tests {
 
         module.elements = vec![test_el, logic_el];
 
-        let result = ModuleWeaver::weave_to_string(&module).expect("Le tissage a échoué");
+        let result = ModuleWeaver::weave_to_string(&module)?;
 
-        // 🎯 FIX : Utilisation stricte des ancres sémantiques pour la vérification spatiale
-        let execute_pos = result.find("fn:execute").expect("Handle logique absent");
-        let tests_pos = result.find("mod:tests").expect("Handle de test absent");
+        let execute_pos = match result.find("fn:execute") {
+            Some(p) => p,
+            None => raise_error!("ERR_TEST_FAIL", error = "Logique introuvable"),
+        };
+        let tests_pos = match result.find("mod:tests") {
+            Some(p) => p,
+            None => raise_error!("ERR_TEST_FAIL", error = "Tests introuvables"),
+        };
 
-        // Vérification spatiale : l'ancre du test DOIT se trouver après l'ancre de la logique métier
         assert!(
             execute_pos < tests_pos,
             "Le module de test n'a pas été relégué en bas de fichier"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_weave_json_schema_success() -> RaiseResult<()> {
+        let mut metadata = UnorderedMap::new();
+        metadata.insert(
+            "schema_uri".to_string(),
+            "db://test/schema.json".to_string(),
+        );
+
+        let schema_el = JsonSchemaElement {
+            module_id: None,
+            parent_id: None,
+            handle: "schema_test".to_string(),
+            draft: "2020-12".to_string(),
+            schema_type: SchemaType::Object,
+            composition_strategy: CompositionStrategy::None,
+            content: json_value!({ "properties": { "name": { "type": "string" } } }),
+            external_dependencies: vec![],
+            target_binding: None,
+            validation_config: None,
+            metadata,
+        };
+
+        let result = ModuleWeaver::weave_json_schema(&schema_el)?;
+
+        assert!(result.contains("\"$schema\": \"https://json-schema.org/draft/2020-12/schema\""));
+        assert!(result.contains("\"$id\": \"db://test/schema.json\""));
+        assert!(result.contains("\"name\""));
+        Ok(())
     }
 }

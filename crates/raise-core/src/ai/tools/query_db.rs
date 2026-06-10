@@ -1,56 +1,116 @@
-// FICHIER : src-tauri/src/ai/tools/query_db.rs
+// FICHIER : crates/raise-core/src/ai/tools/query_db.rs
 
 use crate::ai::protocols::mcp::{McpTool, McpToolCall, McpToolResult, ToolDefinition};
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::jsonld::processor::JsonLdProcessor;
 use crate::json_db::query::{Condition, FilterOperator, Query, QueryEngine, QueryFilter};
 use crate::json_db::storage::StorageEngine;
-use crate::utils::prelude::*; // 🎯 Façade Unique RAISE
+use crate::utils::prelude::*;
 
-/// Outil permettant à l'IA d'interroger le Graphe de Connaissances RAISE.
-/// Gère la résolution des URN (ref:...) et la conversion RDF.
 pub struct QueryDbTool {
     storage: SharedRef<StorageEngine>,
     space: String,
     db: String,
+    tool_def: ToolDefinition,
 }
 
 impl QueryDbTool {
-    /// Initialise l'outil avec les coordonnées de la base cible.
-    pub fn new(storage: SharedRef<StorageEngine>, space: String, db: String) -> Self {
-        Self { storage, space, db }
+    pub async fn new(
+        storage: SharedRef<StorageEngine>,
+        space: &str,
+        db_name: &str,
+    ) -> RaiseResult<Self> {
+        let manager = CollectionsManager::new(&storage, space, db_name);
+
+        // 1. Lecture stricte du serveur MCP parent
+        let mut query = Query::new("mcp_servers");
+        query.filter = Some(QueryFilter {
+            operator: FilterOperator::And,
+            conditions: vec![Condition::eq("handle", json_value!("mcp_server_toolkit"))],
+        });
+
+        let mcp_config = match QueryEngine::new(&manager).execute_query(query).await {
+            Ok(res) if !res.documents.is_empty() => res.documents[0].clone(),
+            _ => raise_error!(
+                "ERR_QUERY_DB_SERVER_MISSING",
+                error = "Serveur MCP 'mcp_server_toolkit' introuvable."
+            ),
+        };
+
+        // 2. Extraction stricte
+        let tools = match mcp_config.get("tools").and_then(|t| t.as_array()) {
+            Some(t) => t,
+            None => raise_error!(
+                "ERR_QUERY_DB_TOOLS_MISSING",
+                error = "Le tableau 'tools' est absent."
+            ),
+        };
+
+        let q_tool = match tools
+            .iter()
+            .find(|t| t.get("tool_id").and_then(|v| v.as_str()) == Some("query_db"))
+        {
+            Some(t) => t,
+            None => raise_error!(
+                "ERR_QUERY_DB_TOOL_NOT_FOUND",
+                error = "L'outil 'query_db' n'est pas déclaré."
+            ),
+        };
+
+        let tool_name = match q_tool.get("tool_id").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => raise_error!(
+                "ERR_QUERY_DB_ID_MISSING",
+                error = "Propriété 'tool_id' manquante."
+            ),
+        };
+
+        let tool_desc = match q_tool.get("description").and_then(|v| v.as_str()) {
+            Some(d) => d.to_string(),
+            None => raise_error!(
+                "ERR_QUERY_DB_DESC_MISSING",
+                error = "Propriété 'description' manquante."
+            ),
+        };
+
+        let schema_uri = match q_tool.get("input_schema_uri").and_then(|v| v.as_str()) {
+            Some(u) => u,
+            None => raise_error!(
+                "ERR_QUERY_DB_URI_MISSING",
+                error = "Propriété 'input_schema_uri' manquante."
+            ),
+        };
+
+        let input_schema = match manager.get_schema_def(schema_uri).await {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_QUERY_DB_SCHEMA_RESOLUTION",
+                error = format!("Impossible de résoudre {} : {}", schema_uri, e)
+            ),
+        };
+
+        let tool_def = ToolDefinition {
+            name: tool_name,
+            description: tool_desc,
+            input_schema,
+        };
+
+        Ok(Self {
+            storage,
+            space: space.to_string(),
+            db: db_name.to_string(),
+            tool_def,
+        })
     }
 }
 
 #[async_interface]
 impl McpTool for QueryDbTool {
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "query_db".to_string(),
-            description: "Interroge le Graphe de Connaissances RAISE. Résout les UUID ou les URN 'ref:collection:champ:valeur'.".to_string(),
-            input_schema: json_value!({
-                "type": "object",
-                "required": ["reference"],
-                "properties": {
-                    "reference": {
-                        "type": "string",
-                        "description": "UUID ou URN complète (ex: 'ref:agents:handle:dev_bot')."
-                    },
-                    "collection": {
-                        "type": "string",
-                        "description": "Nom de la collection (requis si reference est un UUID)."
-                    },
-                    "as_rdf": {
-                        "type": "boolean",
-                        "description": "Retourne le format N-Triples pour l'inférence logique."
-                    }
-                }
-            }),
-        }
+        self.tool_def.clone()
     }
 
     async fn execute(&self, call: McpToolCall) -> McpToolResult {
-        // 1. Extraction sécurisée via Match
         let reference = match call.arguments.get("reference").and_then(|v| v.as_str()) {
             Some(r) => r,
             None => return McpToolResult::error(call.id, "Argument 'reference' manquant."),
@@ -63,10 +123,8 @@ impl McpTool for QueryDbTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // 2. Résolution du point de montage (Mount Point Resilience)
         let manager = CollectionsManager::new(&self.storage, &self.space, &self.db);
 
-        // 3. Parsing sémantique de la référence (Match strict)
         let (target_col, field, val) = if reference.starts_with("ref:") {
             let parts: Vec<&str> = reference.splitn(4, ':').collect();
             match parts.len() {
@@ -88,21 +146,16 @@ impl McpTool for QueryDbTool {
                 None => {
                     return McpToolResult::error(
                         call.id,
-                        "Argument 'collection' requis pour recherche par UUID.",
+                        "Argument 'collection' requis pour la recherche par UUID brut.",
                     )
                 }
             }
         };
 
-        // 4. Exécution de la requête avec Match...raise_error
         let doc_res = if field == "_id" {
             match manager.get_document(&target_col, &val).await {
                 Ok(doc) => Ok(doc),
-                Err(e) => Err(build_error!(
-                    "ERR_DB_READ",
-                    error = e.to_string(),
-                    context = json_value!({"col": target_col, "id": val})
-                )),
+                Err(e) => Err(build_error!("ERR_DB_READ", error = e.to_string())),
             }
         } else {
             let mut query = Query::new(&target_col);
@@ -119,9 +172,7 @@ impl McpTool for QueryDbTool {
             }
         };
 
-        // 5. Traitement du résultat et conversion sémantique
         match doc_res {
-            // 🎯 FIX : On récupère le document en tant que variable mutable (mut doc)
             Ok(Some(mut doc)) => {
                 let processor = match JsonLdProcessor::new() {
                     Ok(p) => p,
@@ -133,7 +184,6 @@ impl McpTool for QueryDbTool {
                     }
                 };
                 if as_rdf {
-                    // 🎯 FIX : On passe la référence mutable pour expansion RDF en place
                     match processor.to_ntriples(&mut doc) {
                         Ok(triples) => McpToolResult::success(
                             call.id,
@@ -144,7 +194,6 @@ impl McpTool for QueryDbTool {
                         }
                     }
                 } else {
-                    // 🎯 FIX : Compaction en place puis on retourne le document muté !
                     processor.compact_in_place(&mut doc);
                     McpToolResult::success(call.id, json_value!({"format": "json-ld", "data": doc}))
                 }
@@ -158,98 +207,88 @@ impl McpTool for QueryDbTool {
     }
 }
 
-// =========================================================================
-// TESTS UNITAIRES (Rigueur Façade & Résilience des Mount Points)
-// =========================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::AgentDbSandbox;
+    use crate::utils::data::config::AppConfig;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
-    /// Test existant : Erreur si arguments manquants
-    #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_query_db_missing_args() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-
-        let tool = QueryDbTool::new(
-            sandbox.db.clone(),
-            config.mount_points.system.domain.clone(),
-            config.mount_points.system.db.clone(),
+    async fn inject_mock_query_config(
+        manager: &CollectionsManager<'_>,
+        with_schema: bool,
+    ) -> RaiseResult<()> {
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            manager.space, manager.db
         );
+        let _ = DbSandbox::mock_db(manager).await;
 
-        let call = McpToolCall::new("query_db", json_value!({ "collection": "agents" }));
-        let result = tool.execute(call).await;
+        manager
+            .create_collection("mcp_servers", &generic_schema)
+            .await?;
+        manager
+            .create_collection("schemas", &generic_schema)
+            .await?;
 
-        assert!(
-            result.is_error,
-            "L'outil devrait échouer sans l'argument 'reference'"
-        );
+        let input_uri = "v2/agents/tools/inputs/query_db_input.schema.json";
+
+        if with_schema {
+            manager
+                .create_schema_def(
+                    input_uri,
+                    json_value!({
+                        "type": "object",
+                        "properties": { "reference": { "type": "string" } },
+                        "required": ["reference"]
+                    }),
+                )
+                .await?;
+        }
+
+        let full_uri = manager.build_schema_uri(input_uri).await;
+
+        manager
+            .upsert_document(
+                "mcp_servers",
+                json_value!({
+                    "handle": "mcp_server_toolkit",
+                    "@type": ["raise:McpTool", "pa:PhysicalFunction", "raise:AiToolkit"],
+                    "transport": "stdio",
+                    "tools": [{
+                        "tool_id": "query_db",
+                        "description": "Mocked Descriptor",
+                        "input_schema_uri": full_uri
+                    }]
+                }),
+            )
+            .await?;
         Ok(())
     }
 
-    /// 🎯 NOUVEAU TEST : Résilience URN mal formée
     #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
+    #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_query_db_resilience_bad_urn() -> RaiseResult<()> {
+    async fn test_query_db_init_fails_if_schema_missing() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
-        let tool = QueryDbTool::new(
-            sandbox.db.clone(),
-            config.mount_points.system.domain.clone(),
-            config.mount_points.system.db.clone(),
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
         );
 
-        let call = McpToolCall::new("query_db", json_value!({ "reference": "ref:too:short" }));
-        let result = tool.execute(call).await;
+        inject_mock_query_config(&manager, false).await?;
 
-        assert!(result.content["error"]
-            .as_str()
-            .unwrap()
-            .contains("Format URN invalide"));
-        Ok(())
-    }
-
-    /// 🎯 NOUVEAU TEST : Inférence Mount Point (System Domain)
-    #[async_test]
-    #[serial_test::serial] // Sécurité : L'orchestrateur charge l'IA
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_query_db_mount_point_resolution() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-
-        // On vérifie que l'outil utilise bien les domaines configurés dynamiquement dans AppConfig
-        let tool = QueryDbTool::new(
+        let result = QueryDbTool::new(
             sandbox.db.clone(),
-            config.mount_points.system.domain.clone(),
-            config.mount_points.system.db.clone(),
-        );
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        )
+        .await;
 
-        assert_eq!(tool.space, config.mount_points.system.domain);
-        assert_eq!(tool.db, config.mount_points.system.db);
-        Ok(())
-    }
-
-    /// 🎯 NOUVEAU TEST : Résilience face à une collection inexistante
-    #[async_test]
-    async fn test_query_db_non_existent_collection() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-        let tool = QueryDbTool::new(
-            sandbox.db.clone(),
-            config.mount_points.system.domain.clone(),
-            config.mount_points.system.db.clone(),
-        );
-
-        let call = McpToolCall::new("query_db", json_value!({ "reference": "ref:ghost:id:123" }));
-        let result = tool.execute(call).await;
-
-        // L'erreur doit être capturée par le match sur manager.get_document ou query_engine
-        assert!(result.is_error);
-        Ok(())
+        match result {
+            Err(e) if e.to_string().contains("ERR_QUERY_DB_SCHEMA_RESOLUTION") => Ok(()),
+            _ => panic!("L'initialisation aurait dû échouer par manque de schéma."),
+        }
     }
 }

@@ -1,25 +1,20 @@
-// FICHIER : src-tauri/src/ai/tools/codegen_tool.rs
+// FICHIER : crates/raise-core/src/ai/tools/codegen_tool.rs
 
 use crate::ai::protocols::mcp::{McpTool, McpToolCall, McpToolResult, ToolDefinition};
-use crate::code_generator::analyzers::semantic_analyzer::SemanticAnalyzer;
-use crate::code_generator::analyzers::Analyzer;
-use crate::code_generator::models::{
-    CodeElement, CodeElementType, Module, TargetLanguage, Visibility,
-};
+use crate::code_generator::models::{CodeElement, CodeElementType, Module, Visibility};
 use crate::code_generator::CodeGeneratorService;
 use crate::json_db::collections::manager::CollectionsManager;
 use crate::json_db::storage::StorageEngine;
+use crate::utils::data::config::AppConfig;
 use crate::utils::prelude::*; // 🎯 Façade Unique
 
 pub struct CodeGenTool {
     service: CodeGeneratorService,
-    db: SharedRef<StorageEngine>,
-    space: String,
-    db_name: String,
+    tool_def: ToolDefinition, // Cache de la définition générée dynamiquement via les schémas
 }
 
 impl CodeGenTool {
-    /// Initialise l'outil de génération de code.
+    /// Initialise l'outil de génération de code de manière 100% stricte (Zéro Dette).
     pub async fn new(
         domain_root: PathBuf,
         db: SharedRef<StorageEngine>,
@@ -27,191 +22,334 @@ impl CodeGenTool {
         db_name: &str,
     ) -> RaiseResult<Self> {
         let manager = CollectionsManager::new(&db, space, db_name);
-        // 🎯 L'outil IA lit maintenant son propre routage !
         let service = CodeGeneratorService::new(domain_root, &manager).await?;
 
-        Ok(Self {
-            service,
-            db,
-            space: space.to_string(),
-            db_name: db_name.to_string(),
-        })
-    }
+        // 1. Lecture stricte
+        let mcp_config =
+            match AppConfig::get_runtime_settings(&manager, "ref:components:handle:codegen_engine")
+                .await
+            {
+                Ok(doc) => doc,
+                Err(e) => raise_error!(
+                    "ERR_CODEGEN_CONFIG_MISSING",
+                    error = e,
+                    context = json_value!({ "component": "codegen_engine" })
+                ),
+            };
 
-    /// Récupère un composant Arcadia à travers les collections d'architecture.
-    async fn fetch_component(&self, id: &str) -> RaiseResult<JsonValue> {
-        let manager = CollectionsManager::new(&self.db, &self.space, &self.db_name);
-        let collections = ["pa_components", "la_components", "sa_components"];
+        // 2. Extraction stricte du tableau tools
+        let tools = match mcp_config.get("tools").and_then(|t| t.as_array()) {
+            Some(t) => t,
+            None => raise_error!(
+                "ERR_CODEGEN_TOOLS_MISSING",
+                error = "Tableau 'tools' absent."
+            ),
+        };
 
-        for col in collections {
-            match manager.get_document(col, id).await {
-                Ok(Some(doc)) => return Ok(doc),
-                Ok(None) => continue,
-                Err(e) => {
-                    user_error!(
-                        "ERR_DB_READ_FAILED",
-                        json_value!({ "col": col, "error": e.to_string() })
-                    );
-                }
+        // 3. Identification stricte de l'outil
+        let mutate_tool = match tools
+            .iter()
+            .find(|t| t.get("tool_id").and_then(|v| v.as_str()) == Some("mutate_ast_node"))
+        {
+            Some(t) => t,
+            None => raise_error!(
+                "ERR_CODEGEN_TOOL_NOT_FOUND",
+                error = "Outil 'mutate_ast_node' introuvable dans la configuration."
+            ),
+        };
+
+        let tool_name = match mutate_tool.get("tool_id").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => raise_error!("ERR_CODEGEN_ID_MISSING", error = "tool_id manquant."),
+        };
+
+        let tool_desc = match mutate_tool.get("description").and_then(|v| v.as_str()) {
+            Some(d) => d.to_string(),
+            None => raise_error!("ERR_CODEGEN_DESC_MISSING", error = "description manquante."),
+        };
+
+        // 4. Résolution stricte du schéma
+        let schema_uri = match mutate_tool.get("input_schema_uri").and_then(|v| v.as_str()) {
+            Some(u) => u,
+            None => raise_error!(
+                "ERR_CODEGEN_INPUT_URI_MISSING",
+                error = "input_schema_uri manquante."
+            ),
+        };
+
+        let mut schema_doc = match manager.get_schema_def(schema_uri).await {
+            Ok(s) => s,
+            Err(e) => raise_error!(
+                "ERR_CODEGEN_SCHEMA_RESOLUTION",
+                error = format!("Impossible de résoudre {} : {}", schema_uri, e)
+            ),
+        };
+
+        // 5. Résolution des propriétés héritées (On injecte la cible sémantique et physique)
+        if let Some(props) = schema_doc
+            .get_mut("properties")
+            .and_then(|p| p.as_object_mut())
+        {
+            if !props.contains_key("handle") {
+                props.insert(
+                    "handle".to_string(),
+                    json_value!({
+                        "type": "string",
+                        "description": "Ancre sémantique unique (ex: fn:boot_physical_node)"
+                    }),
+                );
+            }
+            if !props.contains_key("module_name") {
+                props.insert(
+                    "module_name".to_string(),
+                    json_value!({
+                        "type": "string",
+                        "description": "Nom du module d'orchestration cible (ex: mod_kernel_environment_rs)"
+                    }),
+                );
             }
         }
 
-        raise_error!(
-            "ERR_DB_COMPONENT_NOT_FOUND",
-            error = format!(
-                "Composant ID '{}' introuvable dans les collections d'ingénierie.",
-                id
-            ),
-            context = json_value!({ "id": id, "searched_collections": collections })
-        )
-    }
-
-    /// Détermine le langage cible via les métadonnées d'implémentation.
-    fn determine_language(&self, doc: &JsonValue) -> RaiseResult<TargetLanguage> {
-        let tech = doc
-            .get("implementation")
-            .and_then(|i| i.get("technology"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("unknown");
-
-        match tech {
-            "rust" => Ok(TargetLanguage::Rust),
-            "cpp" => Ok(TargetLanguage::Cpp),
-            "ts" => Ok(TargetLanguage::TypeScript),
-            _ => raise_error!(
-                "ERR_CODEGEN_UNSUPPORTED_TECH",
-                error = format!(
-                    "La technologie '{}' n'est pas supportée par le générateur.",
-                    tech
-                ),
-                context = json_value!({ "tech": tech })
-            ),
+        if let Some(req) = schema_doc
+            .get_mut("required")
+            .and_then(|r| r.as_array_mut())
+        {
+            if !req.contains(&json_value!("handle")) {
+                req.push(json_value!("handle"));
+            }
+            if !req.contains(&json_value!("module_name")) {
+                req.push(json_value!("module_name"));
+            }
         }
+
+        let tool_def = ToolDefinition {
+            name: tool_name,
+            description: tool_desc,
+            input_schema: schema_doc,
+        };
+
+        Ok(Self { service, tool_def })
     }
 }
 
 #[async_interface]
 impl McpTool for CodeGenTool {
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "generate_component_code".into(),
-            description: "Synchronise le composant Arcadia avec le code source physique via analyse sémantique.".into(),
-            input_schema: json_value!({
-                "type": "object",
-                "properties": { "component_id": { "type": "string" } },
-                "required": ["component_id"]
-            }),
-        }
+        self.tool_def.clone()
     }
 
     async fn execute(&self, call: McpToolCall) -> McpToolResult {
-        let component_id = match call.arguments["component_id"].as_str() {
-            Some(id) => id,
-            None => {
+        let args = &call.arguments;
+
+        // 🎯 EXTRACTION STRICTE ZÉRO DETTE (On remonte les erreurs au LLM au lieu de deviner)
+        let module_name = match args.get("module_name").and_then(|v| v.as_str()) {
+            Some(v) if !v.is_empty() => v,
+            _ => return McpToolResult::error(call.id, "Argument 'module_name' manquant ou vide."),
+        };
+
+        let handle = match args.get("handle").and_then(|v| v.as_str()) {
+            Some(v) if !v.is_empty() => v,
+            _ => return McpToolResult::error(call.id, "Argument 'handle' manquant ou vide."),
+        };
+
+        let el_type_str = match args.get("element_type").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => return McpToolResult::error(call.id, "Argument 'element_type' manquant."),
+        };
+
+        let element_type = match el_type_str {
+            "struct" => CodeElementType::Struct,
+            "impl_block" => CodeElementType::ImplBlock,
+            "enum" => CodeElementType::Enum,
+            "trait" => CodeElementType::Trait,
+            "test_function" => CodeElementType::TestFunction,
+            "macro" => CodeElementType::Macro,
+            "constant" => CodeElementType::Macro,
+            "type_alias" => CodeElementType::Macro,
+            "function" => CodeElementType::Function,
+            _ => {
                 return McpToolResult::error(
                     call.id,
-                    "ID de composant manquant dans les arguments.",
+                    &format!("Type d'élément '{}' non supporté.", el_type_str),
                 )
             }
         };
 
-        let doc = match self.fetch_component(component_id).await {
-            Ok(d) => d,
-            Err(e) => return McpToolResult::error(call.id, &e.to_string()),
+        let vis_str = match args.get("visibility").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => return McpToolResult::error(call.id, "Argument 'visibility' manquant."),
         };
 
-        let _lang = match self.determine_language(&doc) {
-            Ok(l) => l,
-            Err(e) => return McpToolResult::error(call.id, &e.to_string()),
+        let visibility = match vis_str {
+            "public" => Visibility::Public,
+            "crate" => Visibility::Crate,
+            "protected" => Visibility::Protected,
+            "private" => Visibility::Private,
+            _ => {
+                return McpToolResult::error(
+                    call.id,
+                    &format!("Visibilité '{}' non supportée.", vis_str),
+                )
+            }
         };
 
-        let name = doc["name"].as_str().unwrap_or("component");
-        let mut module = match Module::new(name, PathBuf::from(format!("{}.rs", name))) {
+        let signature = match args.get("signature").and_then(|v| v.as_str()) {
+            Some(v) => v.to_string(),
+            None => return McpToolResult::error(call.id, "Argument 'signature' manquant."),
+        };
+
+        let body = args
+            .get("body")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let schema_uri = match self.service.get_schema_uri("software") {
+            Ok(uri) => uri,
+            Err(e) => {
+                return McpToolResult::error(
+                    call.id,
+                    &format!("Erreur de résolution du schéma sémantique software : {}", e),
+                )
+            }
+        };
+
+        let mut meta = UnorderedMap::new();
+        if !schema_uri.is_empty() {
+            meta.insert("$schema".to_string(), schema_uri);
+        }
+
+        // Création de l'élément muté
+        let mutated_element = CodeElement {
+            module_id: None,
+            parent_id: args
+                .get("parent_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            element_type,
+            handle: handle.to_string(),
+            visibility,
+            attributes: args
+                .get("attributes")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            docs: Some("🤖 Muté par l'Agent IA (Zéro Dette)".to_string()),
+            signature,
+            body,
+            elements: vec![],
+            dependencies: args
+                .get("dependencies")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            metadata: meta,
+        };
+
+        let mut target_module = match Module::new(
+            module_name,
+            PathBuf::from(format!("{}_staged.rs", module_name)),
+        ) {
             Ok(m) => m,
             Err(e) => return McpToolResult::error(call.id, &e.to_string()),
         };
 
-        let analyzer = SemanticAnalyzer::new();
-        let analysis = match analyzer.analyze(&doc) {
-            Ok(a) => a,
-            Err(e) => return McpToolResult::error(call.id, &e.to_string()),
-        };
+        target_module.elements.push(mutated_element);
 
-        module.elements.push(CodeElement {
-            handle: format!("comp:{}", component_id),
-            element_type: CodeElementType::Function,
-            visibility: Visibility::Public,
-            signature: format!("fn {}_logic()", name),
-            body: Some(" { println!(\"RAISE Execution Logic\"); } ".to_string()),
-            dependencies: analysis.dependencies,
-            metadata: analysis.metadata,
-            module_id: None,
-            parent_id: None,
-            attributes: vec![],
-            docs: Some(format!(
-                "Généré automatiquement pour le composant Arcadia : {}",
-                name
-            )),
-            elements: vec![],
-        });
-
-        match self.service.stage_module(module).await {
-            Ok(staged) => {
-                // Succès : Le fichier est généré et formaté en zone temporaire.
-                McpToolResult::success(
-                    call.id,
-                    json_value!({ "path": staged.temp_path.to_string_lossy() }),
-                )
-            }
-            Err(e) => {
-                // Échec : Le code généré est invalide ou l'I/O a échoué.
-                McpToolResult::error(call.id, &format!("Échec de la génération (Stage) : {}", e))
-            }
+        match self.service.stage_module(target_module).await {
+            Ok(staged) => McpToolResult::success(
+                call.id,
+                json_value!({
+                    "status": "Contrat de mutation généré avec succès",
+                    "temp_path": staged.temp_path.to_string_lossy(),
+                    "action_required": "Exécute 'raise-cli code-gen stage' pour appliquer la mutation physique."
+                }),
+            ),
+            Err(e) => McpToolResult::error(call.id, &format!("Échec du Staging : {}", e)),
         }
     }
 }
 
 // =========================================================================
-// TESTS UNITAIRES ET DE RÉSILIENCE
+// TESTS UNITAIRES (Validation Stricte Zéro Dette)
 // =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::testing::mock::{AgentDbSandbox, DbSandbox};
+    use crate::json_db::collections::manager::CollectionsManager;
+    use crate::utils::data::config::AppConfig;
+    use crate::utils::data::json::json_value;
+    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
 
-    async fn inject_mock_codegen_config(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
+    async fn inject_mock_codegen_config(
+        manager: &CollectionsManager<'_>,
+        with_schema: bool,
+    ) -> RaiseResult<()> {
         let config = AppConfig::get();
         let generic_schema = format!(
             "db://{}/{}/schemas/v1/db/generic.schema.json",
             config.mount_points.system.domain, config.mount_points.system.db
         );
         let _ = DbSandbox::mock_db(manager).await;
+
         let _ = manager
             .create_collection("components", &generic_schema)
             .await;
         let _ = manager
             .create_collection("service_configs", &generic_schema)
             .await;
+        let _ = manager.create_collection("schemas", &generic_schema).await;
+
         manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
+
+        let input_uri = "v2/dapps/services/elements/code_element.schema.json";
+
+        if with_schema {
+            manager
+                .create_schema_def(
+                    input_uri,
+                    json_value!({
+                        "type": "object",
+                        "properties": {}
+                    }),
+                )
+                .await?;
+        }
+
+        let full_uri = manager.build_schema_uri(input_uri).await;
+
         manager.upsert_document("service_configs", json_value!({
             "_id": "mock_codegen",
             "component_id": "ref:components:handle:codegen_engine",
             "service_settings": {
-                "format_on_save": true,
+                "format_on_save": false,
                 "strict_mode": true,
                 "semantic_routing": {
-                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() }
-                }
+                    "software": { "aliases": ["rust"], "collection": "code_elements", "schema_uri": generic_schema.clone() }
+                },
+                "tools": [{
+                    "tool_id": "mutate_ast_node",
+                    "description": "Mutate AST",
+                    "input_schema_uri": full_uri
+                }]
             }
         })).await?;
+
         Ok(())
     }
 
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_codegen_tool_execution_flow() -> RaiseResult<()> {
+    async fn test_codegen_init_fails_if_schema_missing() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
@@ -220,121 +358,27 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        inject_mock_codegen_config(&manager).await?;
+        // SANS SCHÉMA
+        inject_mock_codegen_config(&manager, false).await?;
 
-        let comp_id = "test-comp-01";
-        let generic_schema_uri = "db://_system/_system/schemas/v1/db/generic.schema.json";
-
-        manager
-            .create_collection("pa_components", generic_schema_uri)
-            .await?;
-
-        // 🎯 FIX : Utilisation stricte du champ "type" pour l'analyseur MBSE
-        manager
-            .upsert_document(
-                "pa_components",
-                json_value!({
-                    "_id": comp_id,
-                    "name": "EngineController",
-                    "type": "PhysicalComponent",
-                    "implementation": { "technology": "rust" }
-                }),
-            )
-            .await?;
-
-        let gen_path = sandbox.domain_root.join("src-gen");
-        fs::ensure_dir_async(&gen_path).await?;
-
-        let tool = CodeGenTool::new(
-            gen_path,
+        let result = CodeGenTool::new(
+            sandbox.domain_root.clone(),
             sandbox.db.clone(),
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         )
-        .await?;
+        .await;
 
-        let call = McpToolCall::new(
-            "generate_component_code",
-            json_value!({ "component_id": comp_id }),
-        );
-        let result = tool.execute(call).await;
-
-        if result.is_error {
-            panic!("L'exécution a échoué : {}", result.content["error"]);
-        }
-
-        assert!(result.content["path"]
-            .as_str()
-            .unwrap()
-            .contains("EngineController.rs"));
-        Ok(())
-    }
-
-    #[async_test]
-    #[serial_test::serial]
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_determine_language_logic() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
-        inject_mock_codegen_config(&manager).await?;
-
-        let tool = CodeGenTool::new(
-            PathBuf::from("/tmp"),
-            sandbox.db.clone(),
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        )
-        .await?;
-
-        let doc_rust = json_value!({ "implementation": { "technology": "rust" } });
-        let doc_cpp = json_value!({ "implementation": { "technology": "cpp" } });
-
-        assert_eq!(tool.determine_language(&doc_rust)?, TargetLanguage::Rust);
-        assert_eq!(tool.determine_language(&doc_cpp)?, TargetLanguage::Cpp);
-        Ok(())
-    }
-
-    #[async_test]
-    #[serial_test::serial]
-    #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_codegen_unsupported_technology() -> RaiseResult<()> {
-        let sandbox = AgentDbSandbox::new().await?;
-        let config = AppConfig::get();
-        let manager = CollectionsManager::new(
-            &sandbox.db,
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        );
-        inject_mock_codegen_config(&manager).await?;
-
-        let tool = CodeGenTool::new(
-            PathBuf::from("/tmp"),
-            sandbox.db.clone(),
-            &config.mount_points.system.domain,
-            &config.mount_points.system.db,
-        )
-        .await?;
-        let doc_fortran = json_value!({ "implementation": { "technology": "fortran" } });
-
-        let result = tool.determine_language(&doc_fortran);
         match result {
-            Err(AppError::Structured(data)) => {
-                assert_eq!(data.code, "ERR_CODEGEN_UNSUPPORTED_TECH")
-            }
-            _ => panic!("Le moteur aurait dû lever ERR_CODEGEN_UNSUPPORTED_TECH"),
+            Err(e) if e.to_string().contains("ERR_CODEGEN_SCHEMA_RESOLUTION") => Ok(()),
+            _ => panic!("L'initialisation aurait dû échouer par manque de schéma."),
         }
-        Ok(())
     }
 
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
-    async fn test_fetch_component_error_handling() -> RaiseResult<()> {
+    async fn test_codegen_tool_dynamic_definition() -> RaiseResult<()> {
         let sandbox = AgentDbSandbox::new().await?;
         let config = AppConfig::get();
         let manager = CollectionsManager::new(
@@ -342,7 +386,9 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-        inject_mock_codegen_config(&manager).await?;
+
+        // AVEC SCHÉMA
+        inject_mock_codegen_config(&manager, true).await?;
 
         let tool = CodeGenTool::new(
             sandbox.domain_root.clone(),
@@ -352,12 +398,106 @@ mod tests {
         )
         .await?;
 
-        let result = tool.fetch_component("ghost_id").await;
-        assert!(result.is_err());
-        match result {
-            Err(AppError::Structured(data)) => assert_eq!(data.code, "ERR_DB_COMPONENT_NOT_FOUND"),
-            _ => panic!("Type d'erreur incorrect pour composant manquant"),
-        }
+        let def = tool.definition();
+        assert_eq!(def.name, "mutate_ast_node");
+
+        let props = def
+            .input_schema
+            .get("properties")
+            .expect("Le schéma MCP doit avoir 'properties'");
+        assert!(props.get("module_name").is_some());
+        assert!(props.get("handle").is_some());
+
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_codegen_tool_rejects_missing_arguments() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        inject_mock_codegen_config(&manager, true).await?;
+
+        let tool = CodeGenTool::new(
+            sandbox.domain_root.clone(),
+            sandbox.db.clone(),
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        )
+        .await?;
+
+        let call = McpToolCall::new(
+            "mutate_ast_node",
+            json_value!({
+                "module_name": "mod_kernel_environment_rs",
+                "body": "{ println!(\"test\"); }"
+            }),
+        );
+
+        let result = tool.execute(call).await;
+
+        assert!(
+            result.is_error,
+            "L'outil aurait dû rejeter la requête incomplète"
+        );
+        let error_msg = result.content.to_string();
+        // Le premier argument manquant sera signalé (handle)
+        assert!(error_msg.contains("manquant"));
+
+        Ok(())
+    }
+
+    #[async_test]
+    #[serial_test::serial]
+    #[cfg_attr(not(feature = "cuda"), ignore)]
+    async fn test_codegen_tool_successful_mutation_staging() -> RaiseResult<()> {
+        let sandbox = AgentDbSandbox::new().await?;
+        let config = AppConfig::get();
+        let manager = CollectionsManager::new(
+            &sandbox.db,
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        );
+
+        inject_mock_codegen_config(&manager, true).await?;
+
+        let tool = CodeGenTool::new(
+            sandbox.domain_root.clone(),
+            sandbox.db.clone(),
+            &config.mount_points.system.domain,
+            &config.mount_points.system.db,
+        )
+        .await?;
+
+        let call = McpToolCall::new(
+            "mutate_ast_node",
+            json_value!({
+                "module_name": "mod_kernel_math_rs",
+                "handle": "fn:calculate_entropy",
+                "element_type": "function",
+                "visibility": "public",
+                "signature": "pub fn calculate_entropy(data: &[u8]) -> f64",
+                "body": "{\n    0.42 // Implémentation factice pour le test\n}",
+                "dependencies": ["ref:code_elements:handle:sys:imports"],
+                "attributes": ["#[inline]", "#[allow(dead_code)]"]
+            }),
+        );
+
+        let result = tool.execute(call).await;
+
+        assert!(!result.is_error, "Le staging a échoué: {}", result.content);
+
+        let json_str = result.content.to_string();
+        assert!(json_str.contains("Contrat de mutation généré avec succès"));
+        assert!(json_str.contains("mod_kernel_math_rs"));
+
         Ok(())
     }
 }

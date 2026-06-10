@@ -29,8 +29,11 @@ impl RagRetriever {
         manager: &CollectionsManager<'_>,
     ) -> RaiseResult<Self> {
         // 🎯 GOUVERNANCE STRICTE : Vérification de l'activation du composant RAG
-        let _settings = match AppConfig::get_runtime_settings(manager, "ref:components:handle:rag")
-            .await
+        let _settings = match AppConfig::get_runtime_settings(
+            manager,
+            "ref:components:handle:context_rag",
+        )
+        .await
         {
             Ok(s) => s,
             Err(e) => raise_error!(
@@ -234,7 +237,7 @@ mod tests {
                 "components",
                 json_value!({
                     "_id": "comp_rag_id",
-                    "handle": "rag",
+                    "handle": "context_rag",
                     "name": "RAG Engine"
                 }),
             )
@@ -263,7 +266,7 @@ mod tests {
                 "service_configs",
                 json_value!({
                     "_id": "mock_rag_cfg",
-                    "component_id": "ref:components:handle:rag",
+                    "component_id": "ref:components:handle:context_rag",
                     "service_settings": {
                         "collection_name": "raise_knowledge_base"
                     }
