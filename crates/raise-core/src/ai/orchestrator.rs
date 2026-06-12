@@ -1,4 +1,4 @@
-// FICHIER : src-tauri/src/ai/orchestrator.rs
+// FICHIER : crates/raise-core/src/ai/orchestrator.rs
 
 use crate::ai::context::{
     conversation_manager::ConversationSession, memory_store::MemoryStore, rag::RagRetriever,
@@ -300,109 +300,6 @@ mod tests {
         }
     }
 
-    /// 🎯  Injecte les configurations système requises par les moteurs IA
-    /// avant de les initialiser dans le bac à sable.
-    async fn inject_ai_mocks(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
-        let config = AppConfig::get();
-        let generic_schema = format!(
-            "db://{}/{}/schemas/v1/db/generic.schema.json",
-            config.mount_points.system.domain, config.mount_points.system.db
-        );
-
-        // 🎯 FIX : Calcul du schéma attendu par la mémoire
-        let session_schema_uri = format!(
-            "db://{}/{}/schemas/v2/agents/memory/chat_session.schema.json",
-            config.mount_points.system.domain, config.mount_points.system.db
-        );
-
-        let _ = DbSandbox::mock_db(manager).await;
-
-        let _ = manager
-            .create_collection("components", &generic_schema)
-            .await;
-        let _ = manager
-            .create_collection("service_configs", &generic_schema)
-            .await;
-
-        // 1. Mock du RAG Retriever
-        manager
-            .upsert_document(
-                "components",
-                json_value!({
-                    "_id": "ref:components:handle:context_rag",
-                    "handle": "context_rag",
-                    "name": "RAG Engine"
-                }),
-            )
-            .await?;
-        manager
-            .upsert_document(
-                "service_configs",
-                json_value!({
-                    "_id": "mock_rag_cfg",
-                    "component_id": "ref:components:handle:context_rag",
-                    "service_settings": {
-                        "collection_name": "raise_knowledge_base"
-                    }
-                }),
-            )
-            .await?;
-
-        // 2. Mock du World Model (Neuro-Symbolique)
-        manager
-            .upsert_document(
-                "components",
-                json_value!({
-                    "_id": "ref:components:handle:ai_world_model",
-                    "handle": "ai_world_model",
-                    "name": "World Model Engine"
-                }),
-            )
-            .await?;
-        manager
-            .upsert_document(
-                "service_configs",
-                json_value!({
-                    "_id": "mock_wm_cfg",
-                    "component_id": "ref:components:handle:ai_world_model",
-                    "service_settings": {
-                        "vocab_size": 1000,
-                        "active": true
-                    }
-                }),
-            )
-            .await?;
-
-        // 3. Mock de la Mémoire Conversationnelle (Memory Store)
-        manager
-            .upsert_document(
-                "components",
-                json_value!({
-                    "_id": "ref:components:handle:ai_memory_store",
-                    "handle": "ai_memory_store",
-                    "name": "Conversation Memory Store"
-                }),
-            )
-            .await?;
-        manager
-            .upsert_document(
-                "service_configs",
-                json_value!({
-                    "_id": "mock_memory_cfg",
-                    "component_id": "ref:components:handle:ai_memory_store",
-                    "service_settings": {
-                        "max_history_tokens": 4096,
-                        "collection_name": "raise_conversation_history",
-                        "schema_uri": session_schema_uri, // 🎯 LE DERNIER FIX EST ICI
-                        "active": true
-                    }
-                }),
-            )
-            .await?;
-
-        Ok(())
-    }
-
     #[async_test]
     #[serial_test::serial]
     #[cfg_attr(not(feature = "cuda"), ignore)]
@@ -417,8 +314,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // 🎯 On simule la présence des composants système
-        inject_ai_mocks(&manager).await?;
+        // L'injection de la stack IA se fait désormais automatiquement via le sandbox !
 
         // 1. TEST D'INITIALISATION RÉSILIENTE
         let mut orch =
@@ -458,8 +354,7 @@ mod tests {
             &config.mount_points.system.db,
         );
 
-        // 🎯 On simule la présence des composants système
-        inject_ai_mocks(&manager).await?;
+        // L'injection de la stack IA se fait désormais automatiquement via le sandbox !
 
         // Création d'un fichier Safetensors invalide (corrompu)
         let wm_dir = sandbox

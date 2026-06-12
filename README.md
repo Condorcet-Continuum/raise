@@ -1,91 +1,164 @@
-# 🚀 R.A.I.S.E. Engine
+# 🚀 R.A.I.S.E. Open Core Framework
 
-**Rationalized Advanced Intelligence System Engine.** *Sovereign Neuro-Symbolic Intelligence for Critical Engineering.*
+**Rationalized Advanced Intelligence System Engine.** *Sovereign Infrastructure and "Local-First" Architecture for Critical Engineering.*
 
-[](https://www.google.com/search?q=https://github.com/Condorcet-Continuum/raise/actions)
-[](https://www.rust-lang.org/)
-[](https://www.google.com/search?q=https://github.com/Condorcet-Continuum/raise)
+---
 
------
+> [!IMPORTANT]  
+> **🌟 UPDATE v0.3.0 (Architecture Shift):** RAISE has solidified its foundation as an **Open Core Framework**. This repository contains the highly secure infrastructure chassis (Rust, Wasm, Tauri). Cognitive intelligence modules, multi-agent solvers, and proprietary business logic are designed to be plugged into this public core via strict, isolated interfaces.
 
-> [\!IMPORTANT]
-> **🌟 UPDATE v0.2.0:** RAISE has successfully transitioned from a conceptual architecture to a fully integrated **Neuro-Symbolic Pipeline**. The engine now features real-time topological simulation, evolutionary optimization, and verified code generation.
+## 💡 Vision: Sovereign Critical Engineering
 
-## 💡 Vision: The Neuro-Symbolic Duality
+In critical engineering (Aerospace, Defense, Energy), sovereignty, data integrity, and strict decoupling are non-negotiable. RAISE provides a modern infrastructure aligning with Industry 4.0 standards (MBSE 2.0, SysML v2, RAMI 4.0) through a **100% Air-Gap** capable architecture.
 
-In critical engineering (Aerospace, Defense, Energy), "guessing" is not an option. RAISE orchestrates a perfect marriage between two cognitive worlds:
+The public framework acts as an impenetrable shield and orchestrator, ready to host specialized cognitive engines without compromising the host system.
 
-  * **The Neural Brain (LLM/GNN):** Handles complex reasoning, multi-agent planning, and **Topological Intuition** via Graph Neural Networks.
-  * **The Symbolic Safeguard (Rust Engine):** Enforces industrial standards, logical constraints, and **Deterministic Validation** through a high-performance Rules Engine.
+---
 
------
+## 🗺️ Architecture Overview
+
+The following diagram illustrates the strict decoupling between the public infrastructure (Open Core) and the isolated abstraction layers designed to host proprietary cognitive engines.
+
+```mermaid
+flowchart TB
+    subgraph ClientLayer ["🖥️ Client Interfaces (Multi-Target Deployments)"]
+        direction LR
+        CLI["raise-cli<br/>(DevSecOps / CI Automation)"]
+        UI["raise-desktop<br/>(Tauri Secure Native UI)"]
+        EDGE["raise-edge<br/>(Embedded / Tactical Systems)"]
+    end
+
+    subgraph CoreLayer ["🛡️ raise-core (Rust Immutable Infrastructure)"]
+        direction TB
+        KERNEL["Micro-Kernel<br/>(Async Orchestrator)"]
+        DB["json_db<br/>(Handle-Based Integrity)"]
+        MBSE["model_engine<br/>(SysML v2 / Arcadia)"]
+        RULES["rules_engine<br/>(Deterministic Logic)"]
+
+        KERNEL <--> DB
+        KERNEL <--> MBSE
+        KERNEL <--> RULES
+    end
+
+    subgraph IsolationLayer ["🧩 Abstraction & Sandboxing Layer"]
+        direction TB
+        WASM["Wasm Runtime<br/>(Isolated Plugin Execution)"]
+        STUBS["Cognitive Stubs<br/>(ai, agents, genetics APIs)"]
+        WASM <--> STUBS
+    end
+
+    subgraph PrivateIP ["🔒 Proprietary Business Logic (Air-Gapped)"]
+        COGNITIVE["Private Cognitive Block<br/>(Enterprise IP, LLM, Rulesets)"]
+    end
+
+    %% Routing
+    CLI --> KERNEL
+    UI --> KERNEL
+    EDGE --> KERNEL
+
+    KERNEL <--> WASM
+    
+    %% Strict API Contract boundary
+    STUBS -. "Strict Schema Contracts" .-> COGNITIVE
+
+    %% Styling
+    classDef core fill:#003366,stroke:#00AEEF,stroke-width:2px,color:#fff;
+    classDef client fill:#1e293b,stroke:#64748b,stroke-width:1px,color:#fff;
+    classDef isolate fill:#0f172a,stroke:#f59e0b,stroke-width:2px,stroke-dasharray: 5 5,color:#fff;
+    classDef privateIP fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fff;
+
+    class KERNEL,DB,MBSE,RULES core;
+    class CLI,UI,EDGE client;
+    class WASM,STUBS isolate;
+    class COGNITIVE privateIP;
+
+```
+
+---
 
 ## 🏗️ Architectural Pillars (Zero-Debt Implementation)
 
-### 1\. Topological Intuition (World Model)
+### 1. Absolute Data Integrity (Handle-Based DB)
 
-RAISE doesn't just read documentation; it "feels" the system architecture.
+RAISE abandons fragile internal identifiers.
 
-  - **Graph Neural Network (GNN):** Uses Candle-based embeddings to predict the impact of architectural changes.
-  - **Sparse Message Passing:** High-efficiency topological simulation for large-scale system graphs.
+* **Deterministic Relationships:** The internal `json_db` engine strictly utilizes explicit **Handles** instead of volatile `_id` or auto-generated UUIDs.
+* **Strict Data Agents:** Data agents operate exclusively with explicit schema arguments to guarantee end-to-end data validation.
 
-### 2\. Evolutionary Exploration (Genetic Engine)
+### 2. The Fortress Dogma (Rust Core)
 
-The engine explores thousands of potential design solutions in parallel.
+The engine is built on Rust to ensure absolute memory safety and high-performance topological simulation.
 
-  - **NSGA-II Algorithm:** Solves multi-objective optimization (e.g., Weight vs. Cost vs. Performance).
-  - **Async/Sync Isolation:** Leverages a custom bridge between **Tokio** (Async I/O) and **Rayon** (Parallel CPU) to maintain 100% UI responsiveness.
+* **Production Purity:** RAISE enforces a strict zero-tolerance policy for testing artifacts. **Absolutely no test conditions are included in production code.** The runtime is pure, deterministic, and industrial-grade.
+* **Asynchronous Micro-Kernel:** Efficient orchestrator built to handle non-blocking messages across highly decoupled modules.
 
-### 3\. Automated Ingestion & Digital Twin
+### 3. Wasm Sandboxing & Extensibility
 
-Bridge the gap between legacy engineering and AI.
+How do we execute proprietary, critical AI models safely?
 
-  - **Capella & SysML v2 Support:** Native ingestion of industrial modeling formats into a sovereign JSON-LD Knowledge Graph.
-  - **Semantic Grounding:** Continuous alignment between AI intent and physical/logical constraints.
+* **Isolated Plugins:** Extensibility is managed through WebAssembly (Wasm) sandboxes. This protects the core runtime from plugin panics or memory leaks.
+* **Cognitive Stubs:** The `src/` directory includes abstract interfaces (`ai`, `agents`, `genetics`, `blockchain`). These are pure structural contracts (APIs/Traits) waiting to be implemented by private, domain-specific intellectual property.
 
-### 4\. Autonomous Code Factory (Module Weaver)
+### 4. Context-Aware Toolchain (DevSecOps)
 
-RAISE doesn't just write scripts; it manufactures verified systems.
+* **`raise-desktop`:** A secure, lightweight, native user interface powered by Tauri.
+* **`raise-cli`:** Designed for CI/CD automation. **Smart Fallback:** By default, if the `--domain` or `--db` arguments are not explicitly specified during a command, the CLI automatically falls back to the `current_domain` and `current_db` of the active session.
 
-  - **Ontology Weaver:** Transforms validated Graph nodes into formal Rust AST.
-  - **Self-Correcting Toolchain:** Integrated feedback loop with the Rust compiler for zero-error delivery.
+---
 
------
+## 📂 Repository Topology
+
+```text
+raise/
+├── raise-cli/        # DevSecOps command-line automation
+├── raise-desktop/    # Tauri-based secure local interface
+├── raise-edge/       # Lightweight deployments for constrained environments
+└── raise-core/       # The Core Infrastructure
+    └── src/
+        ├── kernel/           # Core orchestrator
+        ├── json_db/          # Handle-based local data store
+        ├── rules_engine/     # Deterministic logical validation
+        ├── model_engine/     # MBSE 2.0 / SysML v2 data structures
+        ├── plugins/          # WebAssembly isolation layer
+        ├── code_generator/   # Ast-to-Source code weaving
+        └── [ai/ agents/]     # API Stubs for future cognitive extensions
+
+```
+
+---
 
 ## 🛡️ Sovereignty & Trust
 
-  - **Offline-First:** Local LLM execution (Llama 3/Qwen), local embeddings (Candle), and local vector store.
-  - **Traceability (XAI):** Every decision is anchored in a **XaiFrame**, providing a complete audit trail of the AI's "Thinking Trace".
-  - **Cryptographic Governance:** Policies are enforced via signed **Mandates**.
+* **Local-First / Offline-First:** Zero dependency on external SaaS or Cloud APIs. The entire infrastructure is designed to operate in highly classified, completely disconnected zones.
+* **Zero-Trust Ready:** Verification at every step, enforced by the schema-driven data agents and immutable state management.
 
------
+---
 
 ## 🚀 Getting Started
 
+### 1. Clone the Sovereign Core
+
 ```bash
-# 1. Clone the sovereign core
 git clone https://github.com/Condorcet-Continuum/raise.git
 cd raise
 
-# 2. Install UI dependencies
-npm install
-
-# 3. Launch the Neuro-Symbolic Engine
-cargo tauri dev
 ```
 
-### 🧪 Verifying the Engine
-
-To run the full suite of 29+ validated engineering tests:
+### 2. Build the DevSecOps CLI
 
 ```bash
-cargo test -p raise --lib --features cuda genetics::
+cd crates/raise-cli
+cargo build --release
+
 ```
 
------
+### 3. Launch the Secure Desktop Environment (Tauri)
 
-<p align="center"\>
-<em\>Sovereign Intelligence for Critical Engineering.</em\>
-</p\>
- 
- 
+```bash
+cd crates/raise-desktop
+npm install
+cargo tauri dev
+
+```
+
+---

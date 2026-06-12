@@ -235,61 +235,8 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::model_engine::types::ProjectModel;
     use crate::plugins::manager::PluginManager;
-    use crate::utils::testing::{AgentDbSandbox, DbSandbox}; // 🎯 Ajout de DbSandbox
+    use crate::utils::testing::AgentDbSandbox; // 🎯 Ajout de DbSandbox
     use crate::workflow_engine::critic::WorkflowCritic;
-
-    /// 🎯 HELPER ZÉRO DETTE : Injecte les autorisations et configurations requises
-    /// pour permettre à l'Orchestrateur de s'initialiser dans les tests du workflow.
-    async fn inject_ai_mocks(manager: &CollectionsManager<'_>) -> RaiseResult<()> {
-        let config = AppConfig::get();
-        let generic_schema = format!(
-            "db://{}/{}/schemas/v1/db/generic.schema.json",
-            config.mount_points.system.domain, config.mount_points.system.db
-        );
-        let session_schema_uri = format!(
-            "db://{}/{}/schemas/v2/agents/memory/chat_session.schema.json",
-            config.mount_points.system.domain, config.mount_points.system.db
-        );
-
-        let _ = DbSandbox::mock_db(manager).await;
-
-        let _ = manager
-            .create_collection("components", &generic_schema)
-            .await;
-        let _ = manager
-            .create_collection("service_configs", &generic_schema)
-            .await;
-
-        manager
-            .upsert_document(
-                "components",
-                json_value!({ "_id": "ref:components:handle:rag", "handle": "rag" }),
-            )
-            .await?;
-        manager.upsert_document("service_configs", json_value!({ "_id": "mock_rag", "component_id": "ref:components:handle:rag", "service_settings": { "collection_name": "raise_knowledge_base" } })).await?;
-
-        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:ai_world_model", "handle": "ai_world_model" })).await?;
-        manager.upsert_document("service_configs", json_value!({ "_id": "mock_wm", "component_id": "ref:components:handle:ai_world_model", "service_settings": { "vocab_size": 1000, "active": true } })).await?;
-
-        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:ai_memory_store", "handle": "ai_memory_store" })).await?;
-        manager.upsert_document("service_configs", json_value!({ "_id": "mock_mem", "component_id": "ref:components:handle:ai_memory_store", "service_settings": { "max_history_tokens": 4096, "collection_name": "raise_conversation_history", "schema_uri": session_schema_uri, "active": true } })).await?;
-
-        // 🎯 FIX CRITIQUE : Ajout de la configuration pour le CodeGeneratorService
-        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
-        manager.upsert_document("service_configs", json_value!({
-            "_id": "mock_codegen",
-            "component_id": "ref:components:handle:codegen_engine",
-            "service_settings": {
-                "format_on_save": true,
-                "strict_mode": true,
-                "semantic_routing": {
-                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema.clone() }
-                }
-            }
-        })).await?;
-
-        Ok(())
-    }
 
     async fn setup_task_test_context<'a>(
         storage: SharedRef<crate::json_db::storage::StorageEngine>,
@@ -309,9 +256,6 @@ mod tests {
             &config.mount_points.system.domain,
             &config.mount_points.system.db,
         );
-
-        // 🎯 FIX CRITIQUE : Préparation du terrain pour l'IA
-        inject_ai_mocks(&manager).await?;
 
         let orch = AiOrchestrator::new(
             ProjectModel::default(),

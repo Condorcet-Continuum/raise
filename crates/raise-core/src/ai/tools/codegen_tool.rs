@@ -287,7 +287,7 @@ mod tests {
     use crate::json_db::collections::manager::CollectionsManager;
     use crate::utils::data::config::AppConfig;
     use crate::utils::data::json::json_value;
-    use crate::utils::testing::{AgentDbSandbox, DbSandbox};
+    use crate::utils::testing::AgentDbSandbox;
 
     async fn inject_mock_codegen_config(
         manager: &CollectionsManager<'_>,
@@ -298,17 +298,6 @@ mod tests {
             "db://{}/{}/schemas/v1/db/generic.schema.json",
             config.mount_points.system.domain, config.mount_points.system.db
         );
-        let _ = DbSandbox::mock_db(manager).await;
-
-        let _ = manager
-            .create_collection("components", &generic_schema)
-            .await;
-        let _ = manager
-            .create_collection("service_configs", &generic_schema)
-            .await;
-        let _ = manager.create_collection("schemas", &generic_schema).await;
-
-        manager.upsert_document("components", json_value!({ "_id": "ref:components:handle:codegen_engine", "handle": "codegen_engine" })).await?;
 
         let input_uri = "v2/dapps/services/elements/code_element.schema.json";
 
@@ -326,8 +315,9 @@ mod tests {
 
         let full_uri = manager.build_schema_uri(input_uri).await;
 
+        // 🎯 FIX CRITIQUE : On écrase l'ID généré par AgentDbSandbox pour fusionner les configs
         manager.upsert_document("service_configs", json_value!({
-            "_id": "mock_codegen",
+            "_id": "cfg_codegen_engine_test",
             "component_id": "ref:components:handle:codegen_engine",
             "service_settings": {
                 "format_on_save": false,

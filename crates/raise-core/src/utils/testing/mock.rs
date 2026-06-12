@@ -238,11 +238,8 @@ pub async fn insert_mock_db(
     collection: &str,
     doc: &JsonValue,
 ) -> RaiseResult<()> {
-    // On tente l'insertion brute
     if let Err(e) = manager.insert_raw(collection, doc).await {
-        // En cas de collision concurrentielle, on l'avale silencieusement
         if !e.to_string().contains("ERR_DB_DUPLICATE_HANDLE") {
-            // Si c'est une vraie erreur inattendue, on la fait remonter
             return Err(e);
         }
     }
@@ -315,7 +312,7 @@ pub fn create_default_test_config() -> AppConfig {
             log_level: "debug".to_string(),
             vector_store_provider: "memory".to_string(),
             language: "en".to_string(),
-            use_gpu: false, // 🎯 FIX : Initialisation du champ Core
+            use_gpu: false,
         },
 
         system_assets: SystemAssets {
@@ -357,10 +354,12 @@ pub fn create_default_test_config() -> AppConfig {
         active_components: vec![
             "ref:components:handle:ai_llm".to_string(),
             "ref:components:handle:ai_nlp".to_string(),
-            "ref:components:handle:rag".to_string(),
+            "ref:components:handle:context_rag".to_string(), // 🎯 FIX
             "ref:components:handle:ai_graph_store".to_string(),
             "ref:components:handle:ai_world_model".to_string(),
             "ref:components:handle:ai_voice".to_string(),
+            "ref:components:handle:ai_memory_store".to_string(), // 🎯 FIX
+            "ref:components:handle:codegen_engine".to_string(),  // 🎯 FIX
         ],
 
         workstation: None,
@@ -425,20 +424,19 @@ pub fn load_test_sandbox() -> RaiseResult<AppConfig> {
     config.mount_points.system.domain = BOOTSTRAP_DOMAIN.to_string();
     config.mount_points.system.db = BOOTSTRAP_DB.to_string();
 
-    // On dresse la liste de survie absolue pour que les tests IA fonctionnent
     let required_ai_components = vec![
         "ref:components:handle:ai_llm",
         "ref:components:handle:ai_nlp",
-        "ref:components:handle:rag",
+        "ref:components:handle:context_rag", // 🎯 FIX
         "ref:components:handle:ai_graph_store",
         "ref:components:handle:ai_world_model",
         "ref:components:handle:ai_voice",
+        "ref:components:handle:ai_memory_store", // 🎯 FIX
+        "ref:components:handle:codegen_engine",  // 🎯 FIX
     ];
 
-    // On inspecte la config qu'on vient de charger depuis le fichier JSON...
     for comp in required_ai_components {
         if !config.active_components.contains(&comp.to_string()) {
-            // ... S'il en manque un, on le force brutalement dedans !
             config.active_components.push(comp.to_string());
         }
     }
@@ -572,7 +570,7 @@ pub async fn inject_mock_schema_to_index(
 pub async fn inject_v2_schema_mock(
     db_cfg: &JsonDbConfig,
     sys_doc: &mut JsonValue,
-    logical_path: &str, // ex: "assurance/quality_report"
+    logical_path: &str,
 ) {
     if sys_doc.get("schemas").is_none() {
         *sys_doc = json_value!({ "schemas": { "v1": {}, "v2": {} } });
@@ -885,7 +883,6 @@ pub async fn inject_mock_config() {
     if VocabularyRegistry::global().is_err() {
         let registry = VocabularyRegistry::new();
 
-        // On crée un mini-contexte JSON-LD valide
         let mock_ontology = json_value!({
             "@context": {
                 "oa": "https://raise.io/oa#",
@@ -896,12 +893,10 @@ pub async fn inject_mock_config() {
             }
         });
 
-        // On utilise la VRAIE fonction de production pour hydrater l'état RCU !
         let _ = registry
             .load_layer_from_json("system_mock", &mock_ontology)
             .await;
 
-        // On verrouille l'instance dans le singleton global
         VocabularyRegistry::set_global_instance(registry);
     }
 }
@@ -911,13 +906,11 @@ pub async fn inject_test_catalog(manager: &CollectionsManager<'_>) -> RaiseResul
         BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
     );
 
-    // 1. Création des collections de gouvernance (Zéro Dette : on ignore si elles existent déjà)
     let _ = manager.create_collection("domains", &schema_uri).await;
     let _ = manager.create_collection("databases", &schema_uri).await;
 
     let config = AppConfig::get();
 
-    // 2. Injection du domaine Système
     let sys_domain_handle = &config.mount_points.system.domain;
     let sys_domain_id = format!("dom_{}", sys_domain_handle);
 
@@ -933,7 +926,6 @@ pub async fn inject_test_catalog(manager: &CollectionsManager<'_>) -> RaiseResul
         )
         .await?;
 
-    // 3. Injection de la base de données Système
     manager
         .upsert_document(
             "databases",
@@ -947,7 +939,6 @@ pub async fn inject_test_catalog(manager: &CollectionsManager<'_>) -> RaiseResul
         )
         .await?;
 
-    // 4. Injection automatique du domaine métier 'modeling' défini dans la config
     let mod_domain_handle = &config.mount_points.modeling.domain;
     if mod_domain_handle != sys_domain_handle {
         let mod_domain_id = format!("dom_{}", mod_domain_handle);
@@ -997,7 +988,6 @@ pub async fn inject_system_ontologies(manager: &CollectionsManager<'_>) -> Raise
         BOOTSTRAP_DOMAIN, BOOTSTRAP_DB
     );
 
-    // 1. Schéma DDL de l'Ontologie (Basé sur la Production)
     let schema_doc = json_value!({
         "$id": schema_uri.clone(),
         "type": "object",
@@ -1015,10 +1005,8 @@ pub async fn inject_system_ontologies(manager: &CollectionsManager<'_>) -> Raise
         .create_schema_def("v2/system/db/ontology.schema.json", schema_doc)
         .await;
 
-    // 2. Création de la collection système
     let _ = manager.create_collection("_ontologies", &schema_uri).await;
 
-    // 3. Injection du Dataset (Subset de raise.jsonld pour les tests)
     let raise_onto = json_value!({
         "_id": "ontology_raise",
         "handle": "onto-raise-core",
@@ -1043,7 +1031,6 @@ pub async fn inject_system_ontologies(manager: &CollectionsManager<'_>) -> Raise
     });
     insert_mock_db(manager, "_ontologies", &raise_onto).await?;
 
-    // 4. Inscription DDL dans le Jeton Système
     let ddl = DdlHandler::new(manager);
     let _ = ddl
         .register_ontology(
@@ -1053,7 +1040,6 @@ pub async fn inject_system_ontologies(manager: &CollectionsManager<'_>) -> Raise
         )
         .await;
 
-    // 5. Hydratation dynamique du Cerveau Sémantique avec la DB !
     let _ = VocabularyRegistry::init_from_db(manager).await;
 
     Ok(())
@@ -1113,8 +1099,6 @@ impl DbSandbox {
             )
             .await;
 
-        // On injecte la collection et la dApp 'raise_core'
-        // pour que TransactionManager::resolve_all_refs ne panique pas !
         let _ = mgr
             .create_collection(
                 "dapps",
@@ -1144,7 +1128,6 @@ impl DbSandbox {
         );
         let res = manager.init_db_with_schema(&uri).await;
 
-        //  Injection de la dApp dans les tests qui appellent mock_db manuellement
         let base_uri = format!("db://{}/{}", BOOTSTRAP_DOMAIN, BOOTSTRAP_DB);
         manager
             .create_collection(
@@ -1194,10 +1177,11 @@ impl AgentDbSandbox {
             ),
         }
 
-        // 🎯  Injection du catalogue de gouvernance pour activer find_global_document
         inject_test_catalog(&temp_manager).await?;
 
-        // INJECTION SYSTÉMATIQUE DE LA STACK IA COMPLÈTE
+        // 🎯 INJECTION SYSTÉMATIQUE DE LA STACK IA COMPLÈTE
+        // Plus besoin de `inject_ai_mocks` dans chaque fichier !
+
         // 1. LLM & NLP (Modèles de base)
         inject_mock_component(
             &temp_manager,
@@ -1221,11 +1205,15 @@ impl AgentDbSandbox {
         )
         .await?;
 
-        // 2. RAG & Graph Store (Mémoire) { "model_name": "minilm" }
+        // 2. RAG & Graph Store (Mémoire)
         inject_mock_component(
             &temp_manager,
-            "ai_context_rag",
-            json_value!({"model_name": "minilm", "provider": "mock" }),
+            "context_rag", // 🎯 FIX NOMENCLATURE : "context_rag"
+            json_value!({
+                "model_name": "minilm",
+                "provider": "mock",
+                "collection_name": "raise_knowledge_base" // 🎯 FIX : Intégré depuis les anciens helpers
+            }),
         )
         .await?;
 
@@ -1236,16 +1224,35 @@ impl AgentDbSandbox {
         )
         .await?;
 
+        let session_schema_uri = format!(
+            "db://{}/{}/schemas/v2/agents/memory/chat_session.schema.json",
+            base.config.mount_points.system.domain, base.config.mount_points.system.db
+        );
+
+        // 🎯 FIX : Ajout explicite du Memory Store pour l'historique IA
+        inject_mock_component(
+            &temp_manager,
+            "ai_memory_store",
+            json_value!({
+                "max_history_tokens": 4096,
+                "collection_name": "raise_conversation_history",
+                "schema_uri": session_schema_uri,
+                "active": true
+            }),
+        )
+        .await?;
+
         // 3. World Model (Modèle du monde pour les agents)
         inject_mock_component(
             &temp_manager,
             "ai_world_model",
             json_value!({
-                "vocab_size": 16,
+                "vocab_size": 1000, // 🎯 FIX : Correspondance avec les anciens helpers (1000 au lieu de 16)
                 "embedding_dim": 16,
                 "action_dim": 8,
                 "hidden_dim": 32,
-                "use_gpu": true
+                "use_gpu": true,
+                "active": true
             }),
         )
         .await?;
@@ -1283,8 +1290,25 @@ impl AgentDbSandbox {
         )
         .await?;
 
-        // 4. Injection des Fallbacks Cloud pour satisfaire le Gatekeeper dans les tests
-        // (Garantit que LlmClient peut tester son routage de secours sans crasher)
+        // 🎯 FIX : Ajout du moteur CodeGen pour `task.rs`
+        let generic_schema = format!(
+            "db://{}/{}/schemas/v1/db/generic.schema.json",
+            base.config.mount_points.system.domain, base.config.mount_points.system.db
+        );
+        inject_mock_component(
+            &temp_manager,
+            "codegen_engine",
+            json_value!({
+                "format_on_save": true,
+                "strict_mode": true,
+                "semantic_routing": {
+                    "software": { "aliases": ["rust", "cpp", "ts"], "collection": "code_elements", "schema_uri": generic_schema }
+                }
+            }),
+        )
+        .await?;
+
+        // 4. Injection des Fallbacks Cloud
         for provider in ["mistral_ai", "anthropic_claude", "google_gemini"] {
             let config_doc = json_value!({
                 "_id": format!("cfg_{}_test", provider),
@@ -1301,14 +1325,11 @@ impl AgentDbSandbox {
             insert_mock_db(&temp_manager, "service_configs", &config_doc).await?;
         }
 
-        // 🎯 INITIALISATION / RÉCUPÉRATION DU MOTEUR PARTAGÉ
         let shared_engine = SHARED_LLM_ENGINE
             .get_or_try_init(|| async {
-                // 1. Détection de l'environnement GitHub Actions
                 let is_ci = std::env::var("GITHUB_ACTIONS").is_ok();
 
                 if is_ci {
-                    // 🎯 SUR GITHUB : On tente le moteur, sinon on Mock sans broncher
                     match NativeTensorEngine::new(&temp_manager).await {
                         Ok(engine) => {
                             let engine_trait: SharedRef<AsyncMutex<dyn LlmEngine>> =
@@ -1325,8 +1346,6 @@ impl AgentDbSandbox {
                         }
                     }
                 } else {
-                    // 🎯 EN LOCAL : On veut que ça pète si le vrai moteur ne charge pas !
-                    // On ne catch pas l'erreur, on la laisse remonter.
                     let engine = NativeTensorEngine::new(&temp_manager).await?;
                     let engine_trait: SharedRef<AsyncMutex<dyn LlmEngine>> =
                         SharedRef::new(AsyncMutex::new(engine));
